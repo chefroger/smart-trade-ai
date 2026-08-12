@@ -45,6 +45,17 @@ _latest_version_cache: dict = {"value": None, "ts": 0.0}
 _LATEST_VERSION_TTL = 600  # 10 分钟
 
 
+def _ver_tuple(s: str) -> tuple:
+    """把 '0.6.8' / 'v0.6.8' / '0.6.8-rc1' 解析为可比较的整数元组。"""
+    parts = []
+    for p in s.lstrip("vV").replace("-", ".").split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
 def _install_cors(app: FastAPI, port: int) -> None:
     """根据实际监听端口注册 CORS 中间件（仅本机）。"""
     app.add_middleware(
@@ -468,6 +479,10 @@ def create_app() -> FastAPI:
             if latest:
                 _latest_version_cache["value"] = latest
                 _latest_version_cache["ts"] = time.monotonic()
+
+            # 本地版本已领先于 GitHub release 时不显示"有新版"
+            if latest and _ver_tuple(latest) <= _ver_tuple(version):
+                latest = None
 
         return {
             "status": "ok",

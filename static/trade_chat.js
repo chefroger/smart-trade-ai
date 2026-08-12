@@ -775,11 +775,64 @@ function saveState() {
 function loadSavedCid() { return parseInt(sessionStorage.getItem('trade_cid') || '0') || null; }
 
 // ═════════════════════ API ═════════════════════
+let _authRecovering = false;
+
+// 把请求体里 id 类字段的空字符串规范化为 null，避免后端 422 int_parsing
+function normalizeBody(body) {
+    if (!body || typeof body !== 'object') return body;
+    var out = {};
+    var idFields = ['library_id', 'customer_id', 'company_id'];
+    for (var k in body) {
+        if (body[k] === '' && (idFields.indexOf(k) >= 0 || /(^|_)(id|ids)$/i.test(k))) {
+            out[k] = null;
+        } else {
+            out[k] = body[k];
+        }
+    }
+    return out;
+}
+
+// 401 自动恢复：token 失效（服务重启）→ 重取新 token；公司缺失 → 重载公司列表
+async function recoverAuth(method, path, body) {
+    if (_authRecovering) return null;
+    _authRecovering = true;
+    try {
+        // 服务重启后旧页面 token 失效：重新拉取 /trade 提取新 token
+        var fresh = await fetch('/trade?_=' + Date.now(), { cache: 'no-store' });
+        if (fresh.ok) {
+            var html = await fresh.text();
+            var m = html.match(/(?:const|let|var)\s+TOKEN\s*=\s*"([^"]+)"/);
+            if (m && m[1] && m[1] !== TOKEN) {
+                TOKEN = m[1];
+                var retry = await api(method, path, body);
+                if (retry !== null) return retry;
+            }
+        }
+        // token 没变 → 可能是 X-Company-ID 缺失/失效 → 重载公司
+        var prevCid = currentCompanyId;
+        currentCompanyId = null;
+        await loadCompanies();
+        if (prevCid && !companies.find(function(c) { return c.id === prevCid; })) {
+            toast(t('toast.no_company'));
+            return null;
+        }
+        if (currentCompanyId) {
+            var retry2 = await api(method, path, body);
+            if (retry2 !== null) return retry2;
+        }
+        return null;
+    } catch (e) {
+        return null;
+    } finally {
+        _authRecovering = false;
+    }
+}
+
 async function api(method, path, body) {
     const opts = { method, headers: {} };
     if (TOKEN) opts.headers['X-Hermes-Session-Token'] = TOKEN;
     if (currentCompanyId) opts.headers['X-Company-ID'] = String(currentCompanyId);
-    if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+    if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(normalizeBody(body)); }
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 120000);
     opts.signal = ctrl.signal;
@@ -789,7 +842,12 @@ async function api(method, path, body) {
         if (!r.ok) {
             const err = await r.json().catch(() => ({}));
             const msg = err.detail || `请求失败 (${r.status})`;
-            if (r.status === 401) toast(t('toast.no_company'));
+            if (r.status === 401) {
+                // 自动恢复一次：重取 token / 重载公司
+                const recovered = await recoverAuth(method, path, body);
+                if (recovered !== null) return recovered;
+                toast(t('toast.no_company'));
+            }
             else if (r.status === 402) showLicenseExpired(msg);
             else if (r.status === 404) toast(msg);
             else if (r.status === 409) toast(msg);

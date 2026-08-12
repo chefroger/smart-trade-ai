@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ── Company ────────────────────────────────────────────────────────────────────
 
@@ -164,6 +164,13 @@ class ConversationSave(BaseModel):
     library_name: str = Field("", description="文档库名称（用于上下文标注）")
     context: str = Field("", description="聊天上下文 (daily/lead/platform/...)")
 
+    @field_validator("library_id", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
 
 class ConversationUpdate(BaseModel):
     response: str = Field(..., description="更新后的回复内容")
@@ -177,3 +184,11 @@ class ChatRequest(BaseModel):
     customer_id: int | None = Field(None, description="关联的客户 ID")
     context: str = Field("", description="聊天上下文 (daily/lead/platform/...)")
     language: str = Field("zh", description="界面语言 zh/en")
+
+    @field_validator("library_id", "customer_id", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):
+        """前端 select 未选中时可能传空字符串 ''，统一转 None 避免 422 int_parsing。"""
+        if v == "" or v is None:
+            return None
+        return v
