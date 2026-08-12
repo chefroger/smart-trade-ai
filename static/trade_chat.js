@@ -1359,7 +1359,7 @@ function renderChatViewInto(container, ctx, name) {
             <div class="chat-input-inner">
                 <textarea id="msg-input" aria-label="输入消息" placeholder="${t('chat.ph.' + ctx)}" rows="1"
                     onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"
-                    oninput="this.style.height='24px';this.style.height=(this.scrollHeight>120?120:this.scrollHeight)+'px';"></textarea>
+                    oninput="this.style.height='24px';this.style.height=(this.scrollHeight>80?80:this.scrollHeight)+'px';"></textarea>
                 <button onclick="sendMsg()" id="send-btn" title="发送">↑</button>
                 <button id="stop-btn" class="hidden" title="停止">■</button>
             </div>

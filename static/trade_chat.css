@@ -193,8 +193,9 @@ body {
 }
 .chat-input-inner textarea {
     flex: 1; border: none; outline: none; resize: none; font-size: 15px;
-    font-family: inherit; line-height: 1.5; height: 24px; min-height: 24px; max-height: 120px; padding: 0;
-    background: transparent; color: var(--text-primary);
+    font-family: inherit; line-height: 1.5; height: 24px; min-height: 24px; max-height: 80px;
+    padding: 0; background: transparent; color: var(--text-primary);
+    overflow-y: auto;
 }
 .chat-input-inner textarea::placeholder { color: var(--text-muted); }
 .chat-input-inner button {
