@@ -41,7 +41,8 @@ def _validate_root_path(rp: str) -> str:
         raise ValueError(f"root_path 必须是绝对路径: {rp}")
 
     # 禁止指向根目录或家目录本身（精确匹配）
-    if rp_path == Path("/") or rp_path == Path.home():
+    # 根目录跨平台判断：父目录等于自身（Unix: / 的 parent 是 /；Windows: C:\ 的 parent 是 C:\）
+    if rp_path.parent == rp_path or rp_path == Path.home():
         raise ValueError("root_path 不能指向根目录或家目录本身")
 
     # 禁止指向敏感数据目录及其所有子目录

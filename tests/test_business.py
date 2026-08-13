@@ -425,7 +425,7 @@ class TestRootPathValidation:
     """测试文档库 root_path 校验逻辑（P0-1 回归测试）。"""
 
     def test_forbidden_dirs_rejected(self):
-        """敏感数据目录必须被拒绝。"""
+        """敏感数据目录必须被拒绝（跨平台：家目录下的敏感子目录 + 家目录本身 + 根目录）。"""
         from pathlib import Path
 
         from trade.library import _validate_root_path
@@ -436,26 +436,23 @@ class TestRootPathValidation:
             str(home / ".ssh" / "known_hosts"),
             str(home / ".hermes"),
             str(home / ".trade"),
-            "/etc",
-            "/etc/passwd",
-            str(home),
-            "/",
+            str(home),          # 家目录本身
+            str(Path(home.anchor).resolve()),  # 根目录（跨平台）
         ]
         for p in forbidden:
             with pytest.raises(ValueError, match="敏感|根目录|家目录"):
                 _validate_root_path(p)
 
-    def test_legal_dirs_allowed(self):
-        """合法目录必须放行，包括测试常用的 /tmp 子目录。"""
+    def test_legal_dirs_allowed(self, tmp_path):
+        """合法目录必须放行（跨平台：家目录下的普通子目录 + pytest 临时目录）。"""
         from pathlib import Path
 
         from trade.library import _validate_root_path
 
         home = Path.home()
         legal = [
-            "/tmp/test",
-            "/tmp/products",
             str(home / "Documents" / "client-files"),
+            str(tmp_path / "subdir"),
         ]
         for p in legal:
             result = _validate_root_path(p)
