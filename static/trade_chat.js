@@ -2851,7 +2851,7 @@ function renderTasksViewInto(container) {
             <div class="task-card-header">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                     <input type="checkbox" class="task-template-check" data-id="${t.id}" ${t.required ? 'checked disabled' : ''}>
-                    <span class="task-card-name">${t.name}</span>
+                    <span class="task-card-name">${esc(t.name)}</span>
                     ${t.required ? '<span style="font-size:10px;color:var(--accent);background:#FEF3C7;padding:1px 6px;border-radius:999px;">必选</span>' : ''}
                     ${isCustom ? '<span style="font-size:10px;color:var(--primary);background:#EFF6FF;padding:1px 6px;border-radius:999px;">自定义</span>' : ''}
                 </label>
