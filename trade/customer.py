@@ -308,7 +308,11 @@ def get_libraries(customer_id: int, company_id: int) -> list[dict]:
 
 
 def admin_get(customer_id: int) -> dict | None:
-    """管理员查询——不限制 company_id。仅用于内部维护和测试。"""
+    """管理员查询——不限制 company_id。**仅用于测试验证物理删除**。
+
+    ⚠️ 生产代码禁止调用：此函数绕过租户隔离，是潜在越权入口。
+    测试用它验证 purge 后客户行确实被物理删除（而非因 company 过滤查不到）。
+    """
     conn = get_connection()
     try:
         row = conn.execute(

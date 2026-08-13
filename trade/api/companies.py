@@ -139,13 +139,22 @@ def switch_company(
         raise HTTPException(status_code=401, detail="Missing session token")
 
     old_cid = None
-    # 尝试从 headers 获取当前活跃公司（可能不存在于首次切换）
+    # 从 headers 获取当前活跃公司；切换请求必须显式声明来源公司
     x_cid = request.headers.get("X-Company-ID", "")
     if x_cid:
         try:
             old_cid = int(x_cid)
         except ValueError:
-            pass
+            raise HTTPException(status_code=401, detail="X-Company-ID must be an integer.")
+
+    # 安全校验：切换请求的 X-Company-ID 必须等于目标公司
+    # （前端 onCompanyChange 已先将 currentCompanyId 置为目标公司，再发起切换）
+    # 防止未带 header 的请求任意绑定任意公司（首次绑定前的窗口期任选公司）
+    if old_cid != company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="X-Company-ID header must match the target company for switch.",
+        )
 
     set_active_company(token, company_id)
 

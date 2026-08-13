@@ -33,11 +33,11 @@ _JOBS_FILE = _HERMES_HOME / "cron" / "jobs.json"
 
 
 @router.get("/cron/today")
-def get_today_cron():
+def get_today_cron(cid: int = Depends(require_company)):
     """返回今日 cron 任务清单（已执行 + 待执行）。
 
     任务来源: jobs.json 中已激活的定时任务。如果 jobs.json 不存在或为空，
-    回退到内置标准任务列表。
+    回退到内置标准任务列表。要求公司上下文（require_company）。
     """
     today = date.today().isoformat()
     now = datetime.now()
@@ -168,10 +168,11 @@ def _cron_to_time(expr: str) -> str:
 
 
 @router.get("/cron/jobs")
-def get_active_jobs():
+def get_active_jobs(cid: int = Depends(require_company)):
     """返回 Hermes cron 中已激活的定时任务列表。
 
     从 ~/.hermes/cron/jobs.json 读取，返回任务名称、调度时间、下次执行时间。
+    要求公司上下文（require_company）。
     """
     if not _JOBS_FILE.is_file():
         return []
