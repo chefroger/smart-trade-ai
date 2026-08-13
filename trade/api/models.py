@@ -138,6 +138,14 @@ class OrderCreate(BaseModel):
     payment_terms: str | None = Field(None, description="付款方式")
     notes: str | None = Field(None, description="备注")
 
+    @field_validator("quantity", "unit_price", "total_amount", mode="before")
+    @classmethod
+    def _negative_to_zero(cls, v):
+        """前端可能传负数（无 min 约束），负值转 0 避免 ge=0 校验 422。"""
+        if isinstance(v, (int, float)) and v < 0:
+            return 0
+        return v
+
 
 class OrderUpdate(BaseModel):
     customer_id: int | None = Field(None, description="客户 ID")
@@ -152,6 +160,14 @@ class OrderUpdate(BaseModel):
     delivery_date: str | None = Field(None, description="交期")
     payment_terms: str | None = Field(None, description="付款方式")
     notes: str | None = Field(None, description="备注")
+
+    @field_validator("quantity", "unit_price", "total_amount", mode="before")
+    @classmethod
+    def _negative_to_zero(cls, v):
+        """前端可能传负数（无 min 约束），负值转 0 避免 ge=0 校验 422。"""
+        if isinstance(v, (int, float)) and v < 0:
+            return 0
+        return v
 
 
 # ── Conversation ───────────────────────────────────────────────────────────────

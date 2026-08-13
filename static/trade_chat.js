@@ -147,7 +147,7 @@ const I18N = {
         'cust.field.order_fail':'订单加载失败',
         // order modal
         'order.cust_label':'客户 *','order.cust_select':'-- 选择客户 --',
-        'order.status_quoting':'报价中','order.status_ordered':'已下单','order.status_shipped':'已出货','order.status_done':'已完成',
+        'order.status_quoting':'报价中','order.status_ordered':'已下单','order.status_shipped':'已出货','order.status_done':'已完成','order.status_cancelled':'已取消',
         'order.btn_delete':'🗑 删除','order.confirm_delete':'确定删除此订单？',
         'order.created':'订单已创建','order.updated':'订单已更新','order.deleted':'订单已删除',
         // history
@@ -320,7 +320,7 @@ const I18N = {
         'cust.field.follow':'AI Follow-up','cust.field.no_orders':'No orders yet. Click "+ New Order" to add.',
         'cust.field.order_fail':'Failed to load orders',
         'order.cust_label':'Customer *','order.cust_select':'-- Select Customer --',
-        'order.status_quoting':'Quoting','order.status_ordered':'Ordered','order.status_shipped':'Shipped','order.status_done':'Completed',
+        'order.status_quoting':'Quoting','order.status_ordered':'Ordered','order.status_shipped':'Shipped','order.status_done':'Completed','order.status_cancelled':'Cancelled',
         'order.btn_delete':'🗑 Delete','order.confirm_delete':'Delete this order?',
         'order.created':'Order created','order.updated':'Order updated','order.deleted':'Order deleted',
         'hist.delete_title':'Delete','hist.confirm_delete':'Delete this conversation? This cannot be undone.',
@@ -2548,7 +2548,7 @@ function showOrderEditModal(oid, presetCid) {
     backdrop.className = 'modal-backdrop';
     backdrop.id = 'order-modal-backdrop';
     backdrop.onclick = e => { if (e.target===backdrop) backdrop.remove(); };
-    var stLabels = [t('order.status_quoting'),t('order.status_ordered'),t('order.status_shipped'),t('order.status_done')];
+    var stLabels = [t('order.status_quoting'),t('order.status_ordered'),t('order.status_shipped'),t('order.status_done'),t('order.status_cancelled')];
     backdrop.innerHTML = '<div class="modal" style="max-width:520px;width:95%;" onclick="event.stopPropagation()">' +
         '<h3>' + (isEdit ? t('order.edit_title') : t('order.title')) + '</h3>' +
         '<input type="hidden" id="order-edit-id" value="'+(oid||'')+'">' +
@@ -2561,15 +2561,15 @@ function showOrderEditModal(oid, presetCid) {
             '<div class="form-group"><label for="order-no">'+t('order.no')+'</label><input type="text" id="order-no" placeholder="PO-2026-001"></div>' +
         '</div>' +
         '<div class="form-row">' +
-            '<div class="form-group"><label for="order-qty">'+t('order.qty')+'</label><input type="number" id="order-qty" placeholder="1000" step="any"></div>' +
+            '<div class="form-group"><label for="order-qty">'+t('order.qty')+'</label><input type="number" id="order-qty" placeholder="1000" step="any" min="0"></div>' +
             '<div class="form-group"><label for="order-unit">'+t('order.unit')+'</label><input type="text" id="order-unit" value="'+(currentLang==='en'?'set':'套')+'"></div>' +
         '</div>' +
         '<div class="form-row">' +
-            '<div class="form-group"><label for="order-price">'+t('order.price')+'</label><input type="number" id="order-price" placeholder="0.35" step="any"></div>' +
+            '<div class="form-group"><label for="order-price">'+t('order.price')+'</label><input type="number" id="order-price" placeholder="0.35" step="any" min="0"></div>' +
             '<div class="form-group"><label for="order-currency">'+t('order.currency')+'</label><select id="order-currency"><option>USD</option><option>EUR</option><option>CNY</option></select></div>' +
         '</div>' +
         '<div class="form-row">' +
-            '<div class="form-group"><label for="order-total">'+t('order.amount')+'</label><input type="number" id="order-total" placeholder="3500" step="any"></div>' +
+            '<div class="form-group"><label for="order-total">'+t('order.amount')+'</label><input type="number" id="order-total" placeholder="3500" step="any" min="0"></div>' +
             '<div class="form-group"><label for="order-status">'+t('order.status')+'</label><select id="order-status">'+stLabels.map(function(s){return '<option>'+s+'</option>';}).join('')+'</select></div>' +
         '</div>' +
         '<div class="form-row">' +
