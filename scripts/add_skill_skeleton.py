@@ -3,7 +3,6 @@
 每个骨架含 README.md（约定说明）+ .gitkeep（保留空目录）。
 """
 from pathlib import Path
-import sys
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 

@@ -12,9 +12,8 @@
 - 通用兜底：基于 description 拆解
 - "不要用于"基于 category 互斥关系
 """
-from pathlib import Path
 import re
-import sys
+from pathlib import Path
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
@@ -266,24 +265,24 @@ def _format_when_to_use(items: list[str]) -> str:
 
 def patch_skill(skill_md: Path) -> bool:
     """在 SKILL.md frontmatter 中插入 when_to_use 字段。
-    
+
     插入位置：description 之后、triggers 之前。
     如果已有 when_to_use，跳过。
     """
     text = skill_md.read_text(encoding="utf-8")
-    
+
     # 已有 when_to_use → 跳过
     if re.search(r"^when_to_use:", text, re.MULTILINE):
         return False
-    
+
     skill_name = skill_md.parent.name
     if skill_name not in WHEN_TO_USE:
         print(f"⚠️  跳过（无配置）: {skill_name}")
         return False
-    
+
     items = WHEN_TO_USE[skill_name]
     when_block = _format_when_to_use(items)
-    
+
     # 在 `description: ...` 这一行后插入 when_to_use
     # description 是单行（项目约定）
     pattern = re.compile(r"^(description:[^\n]*\n)", re.MULTILINE)
@@ -291,10 +290,10 @@ def patch_skill(skill_md: Path) -> bool:
     if not match:
         print(f"⚠️  找不到 description: {skill_name}")
         return False
-    
+
     # 插入
     new_text = text[:match.end()] + when_block + "\n" + text[match.end():]
-    
+
     skill_md.write_text(new_text, encoding="utf-8")
     return True
 
