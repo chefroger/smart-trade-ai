@@ -426,8 +426,9 @@ class TestRootPathValidation:
 
     def test_forbidden_dirs_rejected(self):
         """敏感数据目录必须被拒绝。"""
-        from trade.library import _validate_root_path
         from pathlib import Path
+
+        from trade.library import _validate_root_path
 
         home = Path.home()
         forbidden = [
@@ -446,8 +447,9 @@ class TestRootPathValidation:
 
     def test_legal_dirs_allowed(self):
         """合法目录必须放行，包括测试常用的 /tmp 子目录。"""
-        from trade.library import _validate_root_path
         from pathlib import Path
+
+        from trade.library import _validate_root_path
 
         home = Path.home()
         legal = [

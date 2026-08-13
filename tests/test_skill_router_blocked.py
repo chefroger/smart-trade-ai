@@ -120,8 +120,8 @@ class TestQAPairs:
         assert len(pairs) == 15
         # 验证结构完整性
         for p in pairs:
-            assert p["q"], f"QA pair missing question"
-            assert p["a"], f"QA pair missing answer"
+            assert p["q"], "QA pair missing question"
+            assert p["a"], "QA pair missing answer"
             assert isinstance(p["tags"], list)
             assert isinstance(p["keywords"], list)
 
