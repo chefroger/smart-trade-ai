@@ -349,6 +349,22 @@ def purge(company_id: int) -> bool:
     slug = company["slug"] if company else None
     data_dir_str = tc["data_dir"] if tc else None
 
+    # 提取桌面工作目录路径（存于 extra1 JSON）
+    work_dir_str = ""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT extra1 FROM trade_companies WHERE company_id = ?",
+            (company_id,),
+        ).fetchone()
+        if row and row["extra1"]:
+            try:
+                work_dir_str = _json.loads(row["extra1"]).get("work_dir", "") or ""
+            except (ValueError, TypeError):
+                work_dir_str = ""
+    finally:
+        conn.close()
+
     # 写入审计日志（不可逆操作前的最终记录）
     _write_audit_log(company_id, "purge", "物理删除公司及所有数据")
 
@@ -381,6 +397,21 @@ def purge(company_id: int) -> bool:
                         shutil.rmtree(slug_dir)
                     except OSError:
                         pass
+            # 清理桌面工作目录（仅当位于桌面目录下，防止误删用户数据）
+            if work_dir_str:
+                work_path = Path(work_dir_str)
+                if work_path.exists():
+                    try:
+                        from trade.company.workdir import _get_desktop_path
+                        desktop = _get_desktop_path().resolve()
+                        work_path.resolve().relative_to(desktop)
+                    except ValueError:
+                        pass  # 不在桌面下，跳过清理
+                    else:
+                        try:
+                            shutil.rmtree(work_path)
+                        except OSError:
+                            pass
         return n > 0
     finally:
         conn.close()

@@ -201,7 +201,7 @@ def link_library(order_id: int, library_id: int, *, company_id: int | None = Non
 
 
 def unlink_library(order_id: int, library_id: int, *, company_id: int | None = None) -> bool:
-    """取消订单的文档库关联。指定 company_id 时先校验订单归属。"""
+    """取消订单的文档库关联。指定 company_id 时先校验订单与库的归属。"""
     conn = get_connection()
     try:
         if company_id is not None:
@@ -210,6 +210,13 @@ def unlink_library(order_id: int, library_id: int, *, company_id: int | None = N
                 (order_id, company_id),
             ).fetchone()
             if not row:
+                return False
+            # 校验 library 也归属该公司，防止解绑他公司的库
+            lib = conn.execute(
+                "SELECT 1 FROM libraries WHERE id = ? AND company_id = ?",
+                (library_id, company_id),
+            ).fetchone()
+            if not lib:
                 return False
         cur = conn.execute(
             "DELETE FROM order_libraries WHERE order_id = ? AND library_id = ?",

@@ -15,8 +15,8 @@ from trade.database import get_connection
 
 logger = logging.getLogger(__name__)
 
-# 对话清理节流：同一天内最多运行一次，避免每次保存都扫描全表
-_last_purge_date: str = ""
+# 对话清理节流：每家公司每天最多运行一次，避免每次保存都扫描全表
+_last_purge_date: dict[int, str] = {}
 
 
 def purge_old_conversations(company_id: int, days: int = 365, min_total: int = 30000) -> int:
@@ -279,13 +279,13 @@ def save_with_context(
         except Exception as exc:
             logger.debug("Memory retain skipped: %s", exc)
 
-    # 每天运行一次对话清理，删除 365 天前的旧记录（仅当总量超过 30000 条时触发）
+    # 每天运行一次对话清理（每家公司独立节流），删除 365 天前的旧记录（仅当总量超过 30000 条时触发）
     if company_id:
         global _last_purge_date
         from datetime import date as _date
         _today = _date.today().isoformat()
-        if _last_purge_date != _today:
-            _last_purge_date = _today
+        if _last_purge_date.get(company_id) != _today:
+            _last_purge_date[company_id] = _today
             try:
                 purge_old_conversations(company_id, days=365, min_total=30000)
             except Exception:

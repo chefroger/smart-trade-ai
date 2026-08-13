@@ -419,3 +419,42 @@ class TestOnboarding:
         from trade import onboarding
         # company_id fixture 已创建了公司，所以 onboarding 标志应为 True
         assert onboarding.is_onboarding_done() is True
+
+
+class TestRootPathValidation:
+    """测试文档库 root_path 校验逻辑（P0-1 回归测试）。"""
+
+    def test_forbidden_dirs_rejected(self):
+        """敏感数据目录必须被拒绝。"""
+        from trade.library import _validate_root_path
+        from pathlib import Path
+
+        home = Path.home()
+        forbidden = [
+            str(home / ".ssh"),
+            str(home / ".ssh" / "known_hosts"),
+            str(home / ".hermes"),
+            str(home / ".trade"),
+            "/etc",
+            "/etc/passwd",
+            str(home),
+            "/",
+        ]
+        for p in forbidden:
+            with pytest.raises(ValueError, match="敏感|根目录|家目录"):
+                _validate_root_path(p)
+
+    def test_legal_dirs_allowed(self):
+        """合法目录必须放行，包括测试常用的 /tmp 子目录。"""
+        from trade.library import _validate_root_path
+        from pathlib import Path
+
+        home = Path.home()
+        legal = [
+            "/tmp/test",
+            "/tmp/products",
+            str(home / "Documents" / "client-files"),
+        ]
+        for p in legal:
+            result = _validate_root_path(p)
+            assert Path(result).is_absolute()

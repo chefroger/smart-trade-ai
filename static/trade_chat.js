@@ -2021,12 +2021,14 @@ async function sendMsg() {
     if (query === '显示工作清单' || query === '工作清单' || query === '今日任务') {
         addMsg('user', query, null);
         input.value = '';
+        input.style.height = '24px';  // 复位输入框高度
         await loadCronStatus();
         return;
     }
 
     addMsg('user', query, null);
     input.value = '';
+    input.style.height = '24px';  // 复位输入框高度
     const sendBtn = ct.querySelector('#send-btn');
     if (sendBtn) sendBtn.disabled = true;
 

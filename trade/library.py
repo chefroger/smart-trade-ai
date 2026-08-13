@@ -12,36 +12,46 @@ from pathlib import Path
 
 from trade.database import get_connection
 
-# 禁止作为 root_path 的敏感目录（含 Windows 路径）
+# 禁止作为 root_path 的敏感数据目录（含 Windows 路径）
+# 注意：这些目录连同其子目录都会被禁止（如 .ssh/known_hosts）。
+# 只列真正含敏感数据的目录（密钥/配置/业务数据），
+# 不列 /tmp /var 等共享临时目录——它们不敏感且会误伤正常路径。
 _LOCAL_APP = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
 _FORBIDDEN_DIRS = [
-    Path.home() / ".hermes",
-    Path.home() / ".trade",
-    Path.home() / ".ssh",
-    Path(_LOCAL_APP) / "hermes",    # Windows Hermes 路径
-    Path(_LOCAL_APP) / "trade",     # Windows Trade 路径
-    Path("/etc"),
-    Path("/var"),
-    Path("/tmp"),
-    Path("/root"),
-    Path.home(),                     # 禁止指向整个家目录
-    Path("/"),                       # 禁止指向根目录
+    (Path.home() / ".hermes").resolve(),
+    (Path.home() / ".trade").resolve(),
+    (Path.home() / ".ssh").resolve(),
+    (Path(_LOCAL_APP) / "hermes").resolve(),    # Windows Hermes 路径
+    (Path(_LOCAL_APP) / "trade").resolve(),     # Windows Trade 路径
+    Path("/etc").resolve(),
+    Path("/root").resolve(),
 ]
 
 
 def _validate_root_path(rp: str) -> str:
-    """验证 root_path 合法：不包含 .. , 是绝对路径, 不在禁止目录列表中。"""
+    """验证 root_path 合法：不包含 .. , 是绝对路径, 不在禁止目录列表中。
+
+    家目录和根目录本身禁止（精确匹配），但其下非敏感子目录允许
+    （如 ~/Documents/client-files 合法，~/ 或 / 本身非法）。
+    """
     if ".." in rp:
         raise ValueError("root_path 不能包含 '..'")
     rp_path = Path(rp).resolve()
     if not rp_path.is_absolute():
         raise ValueError(f"root_path 必须是绝对路径: {rp}")
+
+    # 禁止指向根目录或家目录本身（精确匹配）
+    if rp_path == Path("/") or rp_path == Path.home():
+        raise ValueError("root_path 不能指向根目录或家目录本身")
+
+    # 禁止指向敏感数据目录及其所有子目录
     for forbidden in _FORBIDDEN_DIRS:
         try:
             rp_path.relative_to(forbidden)
-            raise ValueError(f"root_path 不能指向系统敏感目录: {forbidden}")
         except ValueError:
-            continue
+            continue  # 不在该禁止目录下，检查下一个
+        # relative_to 成功 → rp_path 位于 forbidden 之内（含本身）
+        raise ValueError(f"root_path 不能指向系统敏感目录: {forbidden}")
     return rp
 
 
