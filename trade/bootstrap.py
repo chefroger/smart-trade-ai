@@ -393,7 +393,7 @@ def sync_b2b_skills():
 
 
 def background_github_skills_sync():
-    """后台 daemon 线程：启动后静默同步一次，此后每天凌晨 3 点定时同步。
+    """后台 daemon 线程：启动后静默同步一次，此后每天中午 12:30 定时同步。
 
     失败不影响服务运行，仅记录日志。
     更新后 skill_router 的 mtime 缓存自动失效，下次请求热加载新内容，无需重启。
@@ -414,10 +414,10 @@ def background_github_skills_sync():
     def _run():
         _time.sleep(10)  # 首次：等服务完全就绪
         _sync_once()
-        # 此后：每天凌晨 3 点定时同步
+        # 此后：每天中午 12:30 定时同步（夜里电脑可能关机，选白天时段）
         while True:
             now = _dt.datetime.now()
-            next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
+            next_run = now.replace(hour=12, minute=30, second=0, microsecond=0)
             if next_run <= now:
                 next_run += _dt.timedelta(days=1)
             _time.sleep((next_run - now).total_seconds())
