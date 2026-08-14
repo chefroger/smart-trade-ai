@@ -393,20 +393,35 @@ def sync_b2b_skills():
 
 
 def background_github_skills_sync():
-    """后台线程：服务启动后从 GitHub 静默拉取最新 SKILL.md。
+    """后台 daemon 线程：启动后静默同步一次，此后每天凌晨 3 点定时同步。
 
     失败不影响服务运行，仅记录日志。
+    更新后 skill_router 的 mtime 缓存自动失效，下次请求热加载新内容，无需重启。
     """
+    import datetime as _dt
     import threading
     import time as _time
 
-    def _run():
-        _time.sleep(10)  # 等服务完全就绪
+    def _sync_once():
         try:
             from trade.post_install import update_skills
             update_skills()
+        except SystemExit:
+            pass  # update_skills 内部 sys.exit 转为静默返回
         except Exception:
             pass  # 静默失败，不影响主服务
+
+    def _run():
+        _time.sleep(10)  # 首次：等服务完全就绪
+        _sync_once()
+        # 此后：每天凌晨 3 点定时同步
+        while True:
+            now = _dt.datetime.now()
+            next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
+            if next_run <= now:
+                next_run += _dt.timedelta(days=1)
+            _time.sleep((next_run - now).total_seconds())
+            _sync_once()
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
