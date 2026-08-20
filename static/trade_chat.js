@@ -1268,12 +1268,6 @@ function navToView(view, chatCtx, chatName) {
                        document.querySelector(`.nav-item[data-view="${view}"]`);
     if (activeItem) activeItem.classList.add('active');
 
-    // 保存当前视图的滚动位置，切换回来时恢复
-    if (currentChatContext && currentChatContainer) {
-        var msgs = currentChatContainer.querySelector('#chat-messages');
-        if (msgs) sessionStorage.setItem('scroll_' + currentChatContext, msgs.scrollTop);
-    }
-
     // 隐藏所有视图，并清除非缓存内容（如 empty state）
     const main = $('main-content');
     for (const key in viewCache) {
@@ -1321,6 +1315,11 @@ function navToView(view, chatCtx, chatName) {
     // 记录当前活跃的 chat 容器
     if (view === 'chat') {
         currentChatContainer = viewCache[cacheKey].element;
+        // 切换到聊天视图时直接滚动到底部（最新消息）
+        requestAnimationFrame(() => {
+            const msg = currentChatContainer?.querySelector('#chat-messages');
+            if (msg) msg.scrollTop = msg.scrollHeight;
+        });
         // 绑定滚动监听——每次激活聊天视图都重新挂载浮标
         setTimeout(() => {
             const msg = currentChatContainer?.querySelector('#chat-messages');
@@ -1995,9 +1994,8 @@ async function loadChatHistory() {
         if (c.query) addMsg('user', c.query, filesRead, false);
         if (c.response) addMsg('assistant', c.response, null, false);
     });
-    // 恢复上次浏览位置，首次加载滚到底部（最新消息）
-    var savedPos = sessionStorage.getItem('scroll_' + currentChatContext);
-    container.scrollTop = savedPos ? parseInt(savedPos) : container.scrollHeight;
+    // 加载历史后直接滚动到底部（最新消息）
+    container.scrollTop = container.scrollHeight;
 }
 
 // ═════════════════════ SSE STREAMING ═════════════════════
