@@ -167,7 +167,7 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 访问 [Releases](https://github.com/chefroger/smart-trade-ai/releases) 下载最新版，或指定版本：
 
 ```bash
-git clone --branch v0.4.4 https://github.com/chefroger/smart-trade-ai.git ~/.trade/smart-trade-ai
+git clone --branch v0.6.7 https://github.com/chefroger/smart-trade-ai.git ~/.trade/smart-trade-ai
 cd ~/.trade/smart-trade-ai && pip install -e ".[docs]"
 install-trade-skills
 python server.py
@@ -269,6 +269,7 @@ python server.py
 | 询盘分析会 | 周度询盘复盘，逐人点评，重点询盘分析，输出跟进行动表 |
 | 销冠经验库 | 将资深销售的隐性经验转化为SOP/话术库/新人培训体系 |
 | 商业提案生成 | 三档方案对比 + ROI分析 + 实施路线图，支持客户提案 |
+| 工程图纸分析 | 分析客户发来的 PDF 工程图纸，提取零件名/材料/尺寸/公差（实验性，结果需人工核实） |
 | Skill 生成器 | 用自然语言描述需求，自动生成新 skill 并注册到系统 |
 
 ---
@@ -298,7 +299,7 @@ python server.py
 
 - **AI 引擎**: [Hermes Agent](https://github.com/NousResearch/hermes-agent)（MIT 开源）
 - **后端**: FastAPI + SQLite + uvicorn
-- **前端**: 原生 JavaScript SPA（单文件，零构建工具依赖）
+- **前端**: 原生 JavaScript SPA（HTML/CSS/JS 三文件，零构建工具依赖）
 - **LLM**: 兼容 OpenAI / Anthropic / DeepSeek / MiniMax / Ollama 等
 - **文档解析**: PyMuPDF / python-docx / openpyxl / python-pptx
 

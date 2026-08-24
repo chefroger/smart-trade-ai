@@ -120,7 +120,7 @@ The script handles: Python check → Hermes Agent → Smart Trade AI → 38 skil
 Visit [Releases](https://github.com/chefroger/smart-trade-ai/releases) or specify a version:
 
 ```bash
-git clone --branch v0.4.4 https://github.com/chefroger/smart-trade-ai.git ~/.trade/smart-trade-ai
+git clone --branch v0.6.7 https://github.com/chefroger/smart-trade-ai.git ~/.trade/smart-trade-ai
 cd ~/.trade/smart-trade-ai && pip install -e ".[docs]"
 install-trade-skills
 python server.py
@@ -230,6 +230,7 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 | Sales Playbook | Turn top sales experience into SOPs / scripts / onboarding path / pitfall checklist |
 | Business Proposal | 3-tier proposal comparison + ROI analysis + implementation roadmap for clients |
 | Skill Generator | Describe what you need, auto-generates a new B2B skill + registers it |
+| Tech Drawing Analysis | Extract part name / material / dimensions / tolerances from customer engineering-drawing PDFs (experimental — verify manually) |
 | Auto Customer Dev | One-click end-to-end pipeline: search → vet → score → email → save → log |
 | ~~Auto SMTP Email~~ | ~~Preview-then-send via SMTP — disabled, AI does not send emails on behalf of users~~ |
 
@@ -252,7 +253,7 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 
 - **AI Engine**: [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT licensed)
 - **Backend**: FastAPI + SQLite + uvicorn
-- **Frontend**: Vanilla JavaScript SPA (single file, zero build dependencies)
+- **Frontend**: Vanilla JavaScript SPA (HTML/CSS/JS, zero build dependencies)
 - **LLM**: Compatible with OpenAI / Anthropic / DeepSeek / MiniMax / Ollama etc.
 - **Document Parsing**: PyMuPDF / python-docx / openpyxl / python-pptx
 
