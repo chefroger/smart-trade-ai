@@ -20,7 +20,7 @@ dependencies = [
   "packaging>=23.0,<27.0",
   # Hermes Agent — AI engine, tools, memory, skills.
   # Pin to exact git tag for deterministic installs.
-  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@v2026.8.19",
+  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@v2026.8.27",
   # LLM Provider SDKs — Hermes uses openai SDK as universal HTTP wire format
   # for ALL providers (OpenAI / DeepSeek / MiniMax / GLM / Kimi / OpenRouter / etc.),
   # and anthropic SDK for native Anthropic provider. Both are REQUIRED, not optional.
