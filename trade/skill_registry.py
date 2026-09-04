@@ -919,6 +919,14 @@ STOP RULE（防止无效搜索）:
 - 提供 3-5 个主题行变体
 - 不编造数据，不知道的就省略
 - 一份邮件一种语言，不混用
+
+**Anti-Spam 语义规避（防 AI 腔指纹，强制）**：
+- 禁 AI 腔开头（"Hope this email finds you well" / "Dear Sir/Madam"）与学术过渡词（Furthermore / Moreover / In addition / It is worth noting / Therefore）
+- 禁词给替换：cheap/best price → cost-effective/competitive margin；free sample → complimentary evaluation
+- Subject 4-6 词、无感叹号/全大写/销售腔，可伪装同行探讨（"Question about {客户公司名}'s packaging supply"）
+- 短句为主、长短交错、主动语态，像 native 商务人士手写
+- CTA 禁止直接约会议（30-min call），用回复式低摩擦引导
+- 批量多封时每封角度/句式要不同，防内容哈希识别群发模板
 """,
     },
     {

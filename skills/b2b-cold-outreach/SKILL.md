@@ -81,6 +81,27 @@ injection_prompt: |
   **SPAM 过滤高危词（禁止使用）**：
   Free, Discount, Cheap, Check, Opportunity, Act Now, Limited Time, Best Price, Incredible Deal, Special Promotion, Satisfaction Guaranteed, Risk Free, 100% Free, Call Now, Order Now, No Obligation
 
+  **Anti-Spam 语义规避（防 AI 腔指纹，生成时强制）**：
+  海外邮箱（Gmail/Outlook）会对邮件做语义级文本审计，LLM 生成的邮件常因过度礼貌套话、空洞夸张词、句式雷同被识别为模板群发。除词汇黑名单外，还必须做到：
+
+  1. **禁 AI 腔开头与学术过渡词**：
+     - 禁用开头："Hope this email finds you well" / "Dear Sir/Madam" / "Allow me to introduce myself" / "I know you are busy"
+     - 禁用过渡词：Furthermore / Moreover / In addition / Therefore / Additionally / It is worth noting / Crucial / Testament
+     - 开门见山：第一句直接讲对方的业务、行业变化或痛点，不讲自己
+
+  2. **禁词替换表**（不是简单删掉，而是给替代说法）：
+     - cheap / best price → cost-effective / competitive margin
+     - free sample → complimentary evaluation
+     - guarantee / risk-free → 改为具体数字+条件陈述（如 "MOQ 300 pcs with trial pricing"）
+
+  3. **Subject 硬约束**：4-6 个单词，无感叹号、无全大写、无明显销售倾向；可伪装成同行探讨（"Question about {客户公司名}'s packaging supply" / "{客户公司名} + {行业政策} response"）
+
+  4. **句式像人写**：短句为主、长短句交错、多用主动语态、口语化但保持专业度（professional yet conversational），避免每段结构雷同
+
+  5. **低摩擦 CTA**：禁止直接约会议（"Can we have a 30-min call next Tuesday" 属高侵入请求，易引发反感与举报）；改用回复式引导（"Are you open to looking at a 1-page compliance report next week?" / "Reply 'yes' and I'll send over our price list."）
+
+  6. **批量发送防指纹**：同一批客户需要多封邮件时，各封的切入角度与句式要足够不同，避免内容哈希被识别为同一模板群发
+
   **好标题策略**：
   - Re: {客户公司名} / {知名客户} vendor - {产品} / {我方公司名}（借势法）
   - {产品} solution for {客户痛点}（痛点切入法）
