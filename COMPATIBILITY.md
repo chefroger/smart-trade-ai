@@ -21,6 +21,7 @@
 | 0.20.5 | ✅ 兼容 | 2026-08-24 | AI | v2026.8.19 版本（0.20.4~0.20.5 两个 patch rollup，共 963 commits）。`compare/v2026.8.16.2...v2026.8.19` 确认 Trade 7 个耦合点入口零变更；新增 keyless 免费 tier、cron 持久记忆等均不涉及 Trade 耦合点。无 breaking change，仍在 `<0.21.0` 范围内，`_MAX_HERMES_VERSION` 无需改动。仅更新 pyproject.toml git pin。 |
 | 0.20.6 | ✅ 兼容 | 2026-08-31 | AI | v2026.8.27 版本（0.20.5→0.20.6 单个 patch rollup，共 1376 commits）。`compare/v2026.8.19...v2026.8.27` 确认 Trade 7 个耦合点入口零变更；web_search TTL 缓存、updater 经 control socket 暂停 gateway、新模型（GLM-5.3-Flash/MiniMax M3 free）等均不涉及 Trade 耦合点。无 breaking change，仍在 `<0.21.0` 范围内，`_MAX_HERMES_VERSION` 无需改动。仅更新 pyproject.toml git pin。 |
 | 0.21.0 | ✅ 兼容 | 2026-09-03 | AI | v2026.8.31 "The Pantheon" 版本（自 0.20.0 共 ~5800 commits / ~2475 PRs，含 Bot Mode、gateway 消息平台、CLI 大改）。`compare/v2026.8.27...v2026.8.31` 确认 Trade 7 个耦合点入口零变更（run_agent.py / hermes_cli.config/auth/models/env_loader / hermes_constants 全未动）；agent/ 内部 54 文件变更不涉及 Trade；skills/memory 写保护属 Hermes 工具层，不影响 Trade 外部文件复制式 skills 安装。需更新 `_MAX_HERMES_VERSION` 到 0.22.0 + pyproject.toml git pin。 |
+| 0.21.1 | ✅ 兼容 | 2026-09-08 | AI | v2026.9.7 版本（0.21.0→0.21.1 patch rollup，共 5995 commits / ~632 PRs：代码模块化、性能优化、provider/模型更新、cron 与 delegation 修复）。`compare/v2026.8.31...v2026.9.7` 确认 Trade 7 个耦合点入口零变更。无 breaking change，仍在 `<0.22.0` 范围内，`_MAX_HERMES_VERSION` 无需改动。仅更新 pyproject.toml git pin。 |
 
 ## 升级检查流程
 
