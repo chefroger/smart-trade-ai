@@ -179,6 +179,7 @@ class ConversationSave(BaseModel):
     files_read: list[dict] = Field(default_factory=list, description="读取的文件列表")
     library_name: str = Field("", description="文档库名称（用于上下文标注）")
     context: str = Field("", description="聊天上下文 (daily/lead/platform/...)")
+    skill: str = Field("", description="本次匹配到的技能名（供质量统计，可选）")
 
     @field_validator("library_id", mode="before")
     @classmethod

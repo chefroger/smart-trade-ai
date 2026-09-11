@@ -385,6 +385,11 @@ body {
 .file-preview-header h3 { font-size: 14px; font-weight: 600; }
 
 /* ── Conversation History ──────────────────────────────────────────── */
+/* 质量概览条 — 近 30 天评分统计（低分技能提示） */
+.quality-bar {
+    padding: 8px 14px; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary);
+    background: var(--bg-card); border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+}
 .conv-list { display: flex; flex-direction: column; gap: 6px; }
 .conv-list-item {
     padding: 12px 16px; background: var(--bg-card); border-radius: var(--radius);

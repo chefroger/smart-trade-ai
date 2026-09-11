@@ -113,6 +113,8 @@ const I18N = {
         // history
         'history.title':'对话记录',
         'history.no_records':'暂无对话记录',
+        // quality stats（近 30 天评分概览）
+        'quality.rated':'近30天评分','quality.avg':'均分','quality.worst':'待改进',
         // orders
         'order.title':'新增订单','order.edit_title':'编辑订单',
         'order.no':'订单号','order.product':'产品名称 *','order.qty':'数量',
@@ -291,6 +293,8 @@ const I18N = {
         'task.batch':'Batch Generate','task.running':'● Running','task.paused':'○ Paused',
         'history.title':'Chat History',
         'history.no_records':'No chat history',
+        // quality stats（30-day rating overview）
+        'quality.rated':'Ratings (30d)','quality.avg':'Avg','quality.worst':'Needs work',
         'order.title':'New Order','order.edit_title':'Edit Order',
         'order.no':'Order No.','order.product':'Product *','order.qty':'Qty',
         'order.unit':'Unit','order.price':'Unit Price','order.currency':'Currency',
@@ -3346,11 +3350,29 @@ async function renderHistoryViewInto(container) {
             </div>
         </div>
         <div class="panel-body">
+            <div class="quality-bar" id="quality-bar" style="display:none;"></div>
             <div class="conv-list" id="conv-list">
                 <div class="loading-row"><div class="spinner"></div>加载对话记录...</div>
             </div>
         </div>`;
     await loadConversations();
+    loadQualityStats();
+}
+
+// 质量概览（rating 闭环）：近 30 天评分总数 / 均分 / 低分最多的技能
+async function loadQualityStats() {
+    const bar = $('quality-bar');
+    if (!bar || !currentCompanyId) return;
+    const s = await api('GET', '/api/trade/conversations/quality-stats?days=30');
+    // 无评分数据时不占位（新用户/未评分公司）
+    if (!s || !s.total_rated) { bar.style.display = 'none'; return; }
+    // by_skill 已按「低分优先」排序，取第一个有低分的技能作为待改进项
+    const worst = (s.by_skill || []).find(x => x.low_count > 0);
+    let txt = `📊 ${t('quality.rated')} ${s.total_rated} · ${t('quality.avg')} ${s.avg_rating}`;
+    if (worst) txt += ` · ${t('quality.worst')} ${worst.skill} (👎×${worst.low_count})`;
+    // 用 textContent 赋值，避免技能名/上下文注入 HTML
+    bar.textContent = txt;
+    bar.style.display = 'block';
 }
 
 let allConversations = [];

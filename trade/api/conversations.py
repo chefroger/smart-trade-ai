@@ -3,6 +3,7 @@ Trade AI Assistant — 对话记录 API 路由。
 
 端点：
   GET    /conversations                   — 列出当前公司的对话
+  GET    /conversations/quality-stats     — 评分质量统计（低分技能/场景排行）
   POST   /conversations                   — 保存对话回合
   GET    /conversations/{conversation_id}  — 获取单条对话
   PUT    /conversations/{conversation_id}  — 更新对话回复
@@ -36,6 +37,20 @@ def list_conversations(
     return chat_memory.list_by_company(x_company_id, limit)
 
 
+@router.get("/conversations/quality-stats")
+def get_quality_stats(
+    days: int = 30,
+    x_company_id: int = Depends(require_company),
+):
+    """聚合当前公司近 N 天的对话评分，返回按技能/场景聚合的均分与低分排行。
+
+    用于质量追踪：快速看到哪些技能或入口场景的回复评分偏低，作为优化输入。
+    注意：此路由必须声明在 /conversations/{conversation_id} 之前，
+    否则 "quality-stats" 会被当作 conversation_id 解析。
+    """
+    return chat_memory.get_quality_stats(x_company_id, days=days)
+
+
 @router.post("/conversations")
 def save_conversation(
     payload: ConversationSave,
@@ -53,6 +68,7 @@ def save_conversation(
         query=payload.query, response=payload.response,
         files_read=payload.files_read, library_name=lib_name,
         context=payload.context or "",
+        skill=payload.skill or "",
     )
 
 

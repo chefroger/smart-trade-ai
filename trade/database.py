@@ -131,8 +131,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     context     TEXT    DEFAULT '',    -- chat context: daily|lead|platform|social|linkedin|customs|docs|docgen|osint
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     extra1      TEXT    DEFAULT '{}',  -- spare: {"tokens_used":0, "model":"", "duration_ms":0}
-    extra2      TEXT    DEFAULT '{}',  -- spare: {"rating":null, "feedback":""}
-    extra3      TEXT    DEFAULT '{}'   -- spare: {"tools_used":[], "iterations":0}
+    extra2      TEXT    DEFAULT '{}',  -- spare: {"rating":null, "feedback":"", "rated_at":""}
+    extra3      TEXT    DEFAULT '{}'   -- spare: {"skill":""} 对话匹配到的技能名（供质量统计聚合）
 );
 
 -- Orders (lightweight order tracking per customer)

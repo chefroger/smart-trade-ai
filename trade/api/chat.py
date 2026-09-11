@@ -128,7 +128,7 @@ async def trade_chat(
     )
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
-    _extract_and_cache_skill(cid, full_query, skill_hint)
+    current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
 
     _MAX_AGENT_RETRIES = 2  # 最多重试 2 次（共 3 次尝试），与 SSE 流式端点保持一致
 
@@ -181,6 +181,7 @@ async def trade_chat(
         company_id=cid, library_id=payload.library_id, query=query,
         response=response, library_name=lib_name,
         context=payload.context or "",
+        skill=current_skill or "",
     )
     return {"response": response, "conversation": conv}
 
@@ -219,7 +220,7 @@ async def trade_chat_stream(
     )
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
-    _extract_and_cache_skill(cid, full_query, skill_hint)
+    current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
 
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -296,6 +297,7 @@ async def trade_chat_stream(
                         query=query, response=result or "",
                         library_name=lib_name,
                         context=payload.context or "",
+                        skill=current_skill or "",
                     )
                     if conv:
                         conv_id = conv.get("id")

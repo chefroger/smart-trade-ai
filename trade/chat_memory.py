@@ -57,15 +57,21 @@ def save(
     library_id: int | None = None,
     files_read: list[dict] | None = None,
     context: str = "",
+    skill: str = "",
 ) -> dict:
-    """保存一条对话记录，作用域限定到指定公司。返回新插入的行，以字典形式呈现。"""
+    """保存一条对话记录，作用域限定到指定公司。返回新插入的行，以字典形式呈现。
+
+    skill 参数记录本次查询匹配到的技能名（存入 extra3），供质量统计按技能聚合评分。
+    """
     if company_id is None:
         raise ValueError("company_id is required for conversation isolation")
     conn = get_connection()
     try:
+        # extra3 记录匹配到的 skill（空则不写，保持旧行为兼容）
+        extra3 = json.dumps({"skill": skill}, ensure_ascii=False) if skill else "{}"
         cur = conn.execute(
-            "INSERT INTO conversations (company_id, library_id, query, response, files_read, context) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO conversations (company_id, library_id, query, response, files_read, context, extra3) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 company_id,
                 library_id,
@@ -73,6 +79,7 @@ def save(
                 response,
                 json.dumps(files_read or [], ensure_ascii=False),
                 context,
+                extra3,
             ),
         )
         new_id = cur.lastrowid
@@ -215,6 +222,87 @@ def add_rating(
         conn.close()
 
 
+# ── 质量统计（rating 闭环） ──────────────────────────────────────────
+
+# 低分阈值：rating ≤ 2 视为"需要关注的回复"（前端 👍=4 / 👎=2）
+_LOW_RATING_THRESHOLD = 2
+
+
+def get_quality_stats(company_id: int, days: int = 30) -> dict:
+    """聚合指定公司近 N 天的对话评分，用于发现需要优化的技能/场景。
+
+    只统计窗口期内已评分的记录（extra2.rating 非空）。分组维度：
+      - by_skill:   按对话匹配到的技能（extra3.skill）聚合
+      - by_context: 按聊天入口场景（daily/lead/osint 等）聚合
+    两组均按「低分优先、其次均分升序」排序，方便直接看到最需要关注的项。
+
+    days 会被收窄到 1-365，防止异常参数导致全表扫描或空窗口。
+    """
+    if company_id is None:
+        raise ValueError("company_id is required for conversation isolation")
+    days = max(1, min(int(days), 365))
+    window = f"-{days} days"
+
+    # 公共过滤条件：窗口内 + extra2 是合法 JSON 且已有评分
+    # （json_valid 保护历史脏数据，避免 json_extract 抛 malformed JSON 错误）
+    _WHERE = (
+        "WHERE company_id = ? AND created_at >= datetime('now', 'localtime', ?) "
+        "AND json_valid(extra2) AND json_extract(extra2, '$.rating') IS NOT NULL"
+    )
+    _AGG = (
+        "COUNT(*) AS rated, "
+        "ROUND(AVG(json_extract(extra2, '$.rating')), 2) AS avg_rating, "
+        "SUM(CASE WHEN json_extract(extra2, '$.rating') <= ? THEN 1 ELSE 0 END) AS low_count"
+    )
+    _ORDER = "ORDER BY low_count DESC, avg_rating ASC"
+
+    conn = get_connection()
+    try:
+        # 总体：已评分数 / 均分 / 低分数
+        total_row = conn.execute(
+            f"SELECT {_AGG} FROM conversations {_WHERE}",
+            (_LOW_RATING_THRESHOLD, company_id, window),
+        ).fetchone()
+        total_rated = total_row["rated"] or 0
+
+        # 按技能聚合：extra3 缺失/非法时归入「未匹配技能」，不丢行
+        by_skill = conn.execute(
+            "SELECT COALESCE(NULLIF(json_extract("
+            "  CASE WHEN json_valid(extra3) THEN extra3 ELSE '{}' END, '$.skill'), ''), "
+            "  '(未匹配技能)') AS grp, "
+            f"{_AGG} FROM conversations {_WHERE} "
+            f"GROUP BY grp {_ORDER}",
+            (_LOW_RATING_THRESHOLD, company_id, window),
+        ).fetchall()
+
+        # 按聊天入口聚合
+        by_context = conn.execute(
+            "SELECT COALESCE(NULLIF(context, ''), '(未指定)') AS grp, "
+            f"{_AGG} FROM conversations {_WHERE} "
+            f"GROUP BY grp {_ORDER}",
+            (_LOW_RATING_THRESHOLD, company_id, window),
+        ).fetchall()
+
+        return {
+            "days": days,
+            "total_rated": total_rated,
+            "avg_rating": total_row["avg_rating"],
+            "low_count": total_row["low_count"] or 0,
+            "by_skill": [
+                {"skill": r["grp"], "rated": r["rated"],
+                 "avg_rating": r["avg_rating"], "low_count": r["low_count"] or 0}
+                for r in by_skill
+            ],
+            "by_context": [
+                {"context": r["grp"], "rated": r["rated"],
+                 "avg_rating": r["avg_rating"], "low_count": r["low_count"] or 0}
+                for r in by_context
+            ],
+        }
+    finally:
+        conn.close()
+
+
 # ── Hindsight 集成 ───────────────────────────────────────────────────
 
 def save_with_context(
@@ -228,12 +316,14 @@ def save_with_context(
     customer_name: str = "",
     retain_to_memory: bool = True,
     context: str = "",
+    skill: str = "",
 ) -> dict:
     """保存一条对话记录到 SQLite，并可选择同步到 Hindsight 长期记忆。
 
     这是 B2B 对话日志记录推荐使用的入口函数。
+    skill 记录本次匹配到的技能名，供质量统计（get_quality_stats）按技能聚合评分。
     """
-    result = save(company_id, query, response, library_id, files_read, context=context)
+    result = save(company_id, query, response, library_id, files_read, context=context, skill=skill)
 
     if retain_to_memory:
         # 只有当调用方要求保留到记忆时才执行，避免不必要的 I/O
