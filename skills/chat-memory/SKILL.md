@@ -40,7 +40,7 @@ triggers:
   - 查一下之前
   - 帮我查
   - 看到过
-category: b2b-sales
+category: 系统工具
 version: "1.0.0"
 author: Foreign Trade Assistant
 injection_prompt: |

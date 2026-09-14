@@ -20,7 +20,7 @@ triggers:
   - mail out
   - 帮我发
   - 发出去
-category: email
+category: 系统工具
 version: 1.0.0
 author: Trade
 injection_prompt: |

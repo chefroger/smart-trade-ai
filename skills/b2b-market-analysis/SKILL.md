@@ -29,7 +29,7 @@ triggers:
   - export strategy
   - market intelligence
   - region analysis
-category: 市场分析
+category: 数据分析
 version: 1.1.0
 author: Foreign Trade Assistant
 injection_prompt: |

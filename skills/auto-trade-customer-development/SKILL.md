@@ -20,7 +20,7 @@ triggers:
   - 一条龙开发客户
   - 帮我跑一轮客户开发
   - 跑一批客户
-category: orchestration
+category: 自动化
 version: 1.0.0
 author: Trade
 injection_prompt: |

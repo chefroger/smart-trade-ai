@@ -18,7 +18,7 @@ triggers:
   - 阿里店铺
   - 平台上排名
   # ... (see skill_registry.py for full list)
-category: 客户开发
+category: 平台运营
 version: 1.4.0
 author: Foreign Trade Assistant
 injection_prompt: |

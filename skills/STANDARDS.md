@@ -2,7 +2,7 @@
 
 > 本规范参考 [Anthropic Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) 与 [agentskills.io/specification](https://agentskills.io/specification) 的目录结构，同时保留 smart-trade-ai 的项目惯例。
 
-**适用范围**：smart-trade-ai 仓库下 `skills/` 目录的 37 个 skill。
+**适用范围**：smart-trade-ai 仓库下 `skills/` 目录的 38 个 skill。
 
 ---
 
@@ -102,7 +102,9 @@ injection_prompt: |
 - ✅ **有**（推荐）：当 skill 需要注入"我是谁 / 怎么做"的长指令到 system prompt 时
 - ✅ **省略**：当 skill 只需在 README 末尾的 body 提供文档 / 输出格式（Agent 自行遵循）即可
 
-> 项目当前状态：12 个 skill 省略了 injection_prompt（body 直接是文档），22 个有 injection_prompt。两种形态都允许。
+> 项目当前状态（2026-09-14 统计）：6 个 skill 省略了 injection_prompt（body 直接是文档，依赖 `skill_registry.py` 的 `augment_prompt` 作运行时注入），32 个有 injection_prompt。两种形态都允许。
+>
+> ⚠️ 注意：SKILL.md 的 injection_prompt 一旦存在，运行时会**优先于** registry 的 `augment_prompt`（见 `skill_router.load_injection_prompt`）。修改 prompt 规则时必须同步两处，或确认只改生效的那处。
 
 ---
 
@@ -138,25 +140,28 @@ injection_prompt: |
 - [ ] `description` 是**单行**
 - [ ] `when_to_use` 含 3-10 条触发场景 + 至少 1 条 "不要用于"
 - [ ] `triggers` 至少 5 个关键词
-- [ ] `category` 命中以下枚举之一：`客户开发` / `客户管理` / `文档管理` / `数据分析` / `平台运营` / `营销推广` / `履约运营` / `合规风控` / `自动化` / `系统工具`
+- [ ] `category` 命中以下枚举之一：`客户开发` / `客户管理` / `文档管理` / `数据分析` / `平台运营` / `内容营销` / `销售转化` / `履约运营` / `合规风控` / `自动化` / `系统工具`
 - [ ] `version` 递增（修改时）
 - [ ] `scripts/README.md` + `references/README.md` + `assets/README.md` 至少存在 3 个目录占位（即使内容为空）
 - [ ] 没有 broken 相对路径（`./references/` 或 `references/`）
 
 ---
 
-## 7. 当前覆盖率（v0.6.8）
+## 7. 当前覆盖率（2026-09-14 统计）
 
 | 项 | 状态 |
 |----|------|
-| 37 个 skill 目录 | ✅ |
-| 37 个 `SKILL.md` frontmatter 完整（name/description/triggers/category/version/author） | ✅ |
-| 22 个含 `injection_prompt` | ✅ |
-| 12 个 body 直接是文档（无 injection_prompt） | ✅ |
-| 37 个含 `when_to_use`（Anthropic 推荐） | 🔄 待补 |
-| 37 个含 `scripts/` + `references/` + `assets/` 骨架目录 | 🔄 待补 |
+| 38 个 skill 目录，全部注册于 `skill_registry.py` | ✅ |
+| 38 个 `SKILL.md` frontmatter 完整 + YAML 可解析 | ✅（2026-09-14 修复 3 个损坏文件：b2b-customs-data / b2b-doc-generation / b2b-osint） |
+| 38 个 `description` 均为单行 | ✅ |
+| 38 个含 `when_to_use`（Anthropic 推荐） | ✅ |
+| 32 个含 `injection_prompt` / 6 个用 registry `augment_prompt` | ✅ |
+| 38 个 skill 至少有一处可注入内容（SKILL.md 或 registry） | ✅ |
+| 38 个含 `scripts/` + `references/` + `assets/` 骨架目录 | ✅（2026-09-14 补齐 4 个：b2b-guarantee-proposal / b2b-inquiry-meeting / b2b-sales-playbook / b2b-tech-drawing） |
+| `category` 值统一到枚举内 | ✅（2026-09-14 修正 9 个零散值；枚举更新为：客户开发 / 客户管理 / 文档管理 / 数据分析 / 平台运营 / 内容营销 / 销售转化 / 履约运营 / 合规风控 / 自动化 / 系统工具） |
 
 ---
 
 **修订历史**
 - 2026-07-27: 首次发布（v0.6.8）
+- 2026-09-14: 全量体检后更新统计；修复 3 个结构损坏的 SKILL.md；补充 injection_prompt 与 augment_prompt 的优先级说明

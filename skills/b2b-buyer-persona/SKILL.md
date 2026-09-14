@@ -30,7 +30,7 @@ triggers:
   - role-based email
   - tailor message
   - customize for role
-category: 客户分析
+category: 客户管理
 version: 1.0.0
 author: Foreign Trade Assistant
 injection_prompt: |

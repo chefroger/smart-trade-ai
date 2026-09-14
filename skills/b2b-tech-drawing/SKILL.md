@@ -26,7 +26,7 @@ triggers:
   - casting drawing
   - blueprint
   - mechanical drawing
-category: 工具
+category: 数据分析
 version: 1.0.0
 author: Foreign Trade Assistant
 injection_prompt: |

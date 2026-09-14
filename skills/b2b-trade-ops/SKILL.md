@@ -41,7 +41,7 @@ triggers:
   - 催一下
   - 货到哪里了
   - 交期确认
-category: operations
+category: 履约运营
 version: 1.0.0
 author: Foreign Trade Assistant
 injection_prompt: |

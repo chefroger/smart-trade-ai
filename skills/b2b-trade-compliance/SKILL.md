@@ -44,7 +44,7 @@ triggers:
   - 电商上架
   - Amazon上架
   - 合规检查
-category: compliance
+category: 合规风控
 version: 1.0.0
 author: Foreign Trade Assistant
 injection_prompt: |
