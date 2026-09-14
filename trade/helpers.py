@@ -18,6 +18,49 @@ from trade import prompts as _prompts
 from trade import skill_router as _skill_router
 from trade.order import search_orders
 
+# ── 一致性温度分流 ────────────────────────────────────────────────────────────
+# 创作类 skill 豁免清单：输出需要多样性（A/B 变体、内容创意），保持 provider 默认温度。
+# 其余 skill（分析/提取/清单类）与无匹配的通用对话 → 低温，减少数据漂移。
+_CREATIVE_SKILLS = frozenset({
+    "b2b-cold-outreach", "b2b-email-imitation", "b2b-social-media",
+    "b2b-seo-aeo", "b2b-short-video", "b2b-kol-imitation",
+    "b2b-linkedin-marketing", "b2b-product-description",
+    "b2b-guarantee-proposal", "b2b-sales-playbook",
+    "b2b-inquiry-training", "b2b-sales-pipeline",
+})
+
+# 支持自定义 temperature 的 provider 白名单（常规 chat-completions 类）。
+# Kimi/Moonshot（服务端管理温度）与 Anthropic 新模型（拒绝非默认采样参数）
+# 在 Hermes 内有 OMIT_TEMPERATURE / fixed_temperature 契约，且主对话路径没有
+# "参数不支持时自动降级重试"（error_classifier 将其判为不可重试的确定性错误），
+# 强行传 temperature 会直接报错 —— 故仅对白名单内的 provider 生效。
+_TEMP_SAFE_PROVIDERS = frozenset({
+    "deepseek", "openai", "zai", "zhipu", "qwen", "dashscope",
+    "ollama", "lmstudio", "minimax", "openrouter", "nous", "groq",
+})
+
+# 分析/提取类任务的默认温度（可用 TRADE_CONSISTENCY_TEMPERATURE 环境变量覆盖）
+_DEFAULT_CONSISTENCY_TEMPERATURE = "0.1"
+
+
+def _consistency_request_overrides(skill_name: str | None, provider: str) -> dict | None:
+    """按 skill 类型与 provider 决定是否注入一致性 temperature。
+
+    - 创作类 skill（_CREATIVE_SKILLS）→ None（用 provider 默认温度，保多样性）
+    - 白名单外 provider → None（避免触发 OMIT/fixed 契约报错）
+    - 其余（分析/提取/清单类 + 无匹配通用对话）→ {"temperature": 低温}
+    """
+    if skill_name in _CREATIVE_SKILLS:
+        return None
+    if (provider or "").strip().lower() not in _TEMP_SAFE_PROVIDERS:
+        return None
+    try:
+        temp = float(os.environ.get(
+            "TRADE_CONSISTENCY_TEMPERATURE", _DEFAULT_CONSISTENCY_TEMPERATURE))
+    except ValueError:
+        temp = 0.1  # 环境变量值非法时回退默认
+    return {"temperature": temp}
+
 
 def _json_loads(raw):
     """安全解析 JSON 字符串，失败时返回空字典。
@@ -201,6 +244,7 @@ def create_agent(
     tool_complete_callback=None,
     *,
     ephemeral_system_prompt: str | None = None,
+    skill_name: str | None = None,
 ):
     """创建 Hermes AIAgent 实例的统一入口。
 
@@ -212,6 +256,8 @@ def create_agent(
         tool_complete_callback: Hermes 工具完成回调
         ephemeral_system_prompt: 临时 system prompt（OSINT 等 skill 的指令，
                                  通过 Hermes 原生 system 层传入，不混入 user message）
+        skill_name: 本次匹配到的 skill 名 —— 用于一致性温度分流（分析/提取类低温
+                    保数据稳定，创作类保持默认温度）。见 _consistency_request_overrides。
 
     Returns:
         AIAgent 实例，已配置好 quiet_mode / max_iterations / provider 等参数。
@@ -226,6 +272,9 @@ def create_agent(
     err = check_provider()
     if err:
         raise RuntimeError(err)
+
+    # 一致性温度：按 skill 类型 + provider 白名单决定是否注入（None = 不传，用 provider 默认）
+    request_overrides = _consistency_request_overrides(skill_name, kwargs["provider"])
 
     # toolsets 可通过 TRADE_ENABLED_TOOLSETS 环境变量覆盖（逗号分隔）
     _toolsets = os.environ.get("TRADE_ENABLED_TOOLSETS", "").strip()
@@ -248,6 +297,7 @@ def create_agent(
         tool_complete_callback=tool_complete_callback,
         enabled_toolsets=enabled_toolsets,
         ephemeral_system_prompt=ephemeral_system_prompt,
+        request_overrides=request_overrides,
     )
 
 

@@ -136,7 +136,10 @@ async def trade_chat(
         last_error = ""
         for attempt in range(_MAX_AGENT_RETRIES + 1):
             try:
-                agent = create_agent(ephemeral_system_prompt=skill_hint)
+                agent = create_agent(
+                    ephemeral_system_prompt=skill_hint,
+                    skill_name=current_skill,
+                )
                 result = agent.chat(full_query)
                 if result:
                     return result
@@ -271,6 +274,7 @@ async def trade_chat_stream(
                     tool_start_callback=_tool_start,
                     tool_complete_callback=_tool_complete,
                     ephemeral_system_prompt=skill_hint,
+                    skill_name=current_skill,
                 )
                 start = time.time()
                 result = agent.chat(full_query)
