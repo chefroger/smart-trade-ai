@@ -29,13 +29,16 @@ _CREATIVE_SKILLS = frozenset({
     "b2b-inquiry-training", "b2b-sales-pipeline",
 })
 
-# 支持自定义 temperature 的 provider 白名单（常规 chat-completions 类）。
-# Kimi/Moonshot（服务端管理温度）与 Anthropic 新模型（拒绝非默认采样参数）
-# 在 Hermes 内有 OMIT_TEMPERATURE / fixed_temperature 契约，且主对话路径没有
-# "参数不支持时自动降级重试"（error_classifier 将其判为不可重试的确定性错误），
-# 强行传 temperature 会直接报错 —— 故仅对白名单内的 provider 生效。
+# 支持自定义 temperature 的 provider 白名单（常规 chat-completions 类，传了确实生效）。
+# 白名单外有两种情况，都不能传 temperature：
+#   1. 会报错型：Kimi/Moonshot（服务端管理温度）与 Anthropic 新模型（拒绝非默认采样参数）
+#      在 Hermes 内有 OMIT_TEMPERATURE / fixed_temperature 契约，且主对话路径没有
+#      "参数不支持时自动降级重试"（error_classifier 判为不可重试的确定性错误），强传即报错。
+#   2. 静默忽略型：deepseek-flash 的 thinking mode 默认开启，而 thinking mode 下
+#      temperature / presence_penalty / frequency_penalty 被静默忽略（不报错、也不生效）。
+#      传 0.1 只会制造"有低温保障"的假象，实际没被消费，故 deepseek 不在白名单内。
 _TEMP_SAFE_PROVIDERS = frozenset({
-    "deepseek", "openai", "zai", "zhipu", "qwen", "dashscope",
+    "openai", "zai", "zhipu", "qwen", "dashscope",
     "ollama", "lmstudio", "minimax", "openrouter", "nous", "groq",
 })
 
@@ -47,8 +50,13 @@ def _consistency_request_overrides(skill_name: str | None, provider: str) -> dic
     """按 skill 类型与 provider 决定是否注入一致性 temperature。
 
     - 创作类 skill（_CREATIVE_SKILLS）→ None（用 provider 默认温度，保多样性）
-    - 白名单外 provider → None（避免触发 OMIT/fixed 契约报错）
+    - 白名单外 provider → None（会报错型如 Kimi/Anthropic；静默忽略型如 deepseek）
     - 其余（分析/提取/清单类 + 无匹配通用对话）→ {"temperature": 低温}
+
+    注意：temperature 只是"锦上添花"的一致性辅助，不是主防线。分析/提取类任务的
+    确定性主防线在 prompt 层（STOP RULE / 清单协议 / 事实核查）与代码校验层
+    （三道防线），它们不依赖 provider 的采样参数契约——尤其是 deepseek 这类
+    thinking mode 下 temperature 被静默忽略的 provider。
     """
     if skill_name in _CREATIVE_SKILLS:
         return None
