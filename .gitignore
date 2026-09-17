@@ -55,7 +55,6 @@ skills-lock.json
 .coverage
 AGENTS.md
 CLAUDE.md
-AGENTS.md
 
 # 内部设计文档（本地保留，不入库）
 CHANGELOG.md
