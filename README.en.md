@@ -286,11 +286,10 @@ ruff check trade/ server.py  # Lint
 
 ## Documentation
 
-- [Product Requirements (en)](项目需求文档.en.md)
-- [Business Overview (en)](业务概览.en.md)
-- [Data Directory Structure (en)](Trade数据目录结构设计.en.md)
+- [User Guide (zh)](TRADE-GUIDE.md) — getting started, all 38 skills explained, FAQ
+- [Windows Installation Guide (zh)](docs/index.md) — 20-minute setup for beginners
+- [LinkedIn Guide (zh)](docs/linkedin-guide.md) — free vs. Sales Navigator feature tiers
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Hermes version compatibility
-- [Database Schema](docs/database-schema.md)
 
 ---
 

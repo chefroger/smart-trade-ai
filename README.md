@@ -334,13 +334,10 @@ ruff check trade/ server.py  # 代码检查
 
 ## 文档
 
+- [使用说明书](TRADE-GUIDE.md) — 从零上手：界面认知、38 个技能全解、日常用法、常见问题
 - [Windows 安装教程](docs/index.md) — 零基础用户 20 分钟快速安装指南
-- [项目需求文档](项目需求文档.md) ([English](项目需求文档.en.md))
-- [业务概览](业务概览.md) ([English](业务概览.en.md))
-- [Trade 数据目录结构设计](Trade数据目录结构设计.md) ([English](Trade数据目录结构设计.en.md))
-- [使用说明书](使用说明书.md) ([English](使用说明书.en.md))
+- [LinkedIn 获客功能使用说明](docs/linkedin-guide.md) — 免费会员 / 高级会员（Sales Navigator）功能分级与使用示例
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Hermes 版本兼容性记录
-- [数据库 Schema](docs/database-schema.md)
 
 ---
 
