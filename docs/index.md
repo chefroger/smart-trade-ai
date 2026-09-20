@@ -532,3 +532,9 @@ Trade 会自动识别你的意图，匹配合适的技能。以下是全部 38 �
 | b2b-lead-generation | b2b-customer-mgmt |
 | b2b-trade-ops | b2b-customer-mgmt |
 | auto-trade-customer-development | b2b-lead-generation, b2b-osint, ~~auto-smtp-email~~ |
+
+---
+
+## 相关使用指南
+
+- **[LinkedIn 获客功能使用说明](linkedin-guide.md)** — 免费会员 / 高级会员（Sales Navigator）功能分级，含六步客户开发流程与使用示例
