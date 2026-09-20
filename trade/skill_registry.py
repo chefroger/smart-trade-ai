@@ -42,7 +42,7 @@ _SKILLS: list[dict] = [
             # English
             "due diligence", "osint", "company verification", "domain age",
             "risk assessment", "check company", "check domain",
-            "whois lookup", "sanctions check", "osint check",
+            "whois lookup", "sanctions check", "osint check", "company background", "check this company",
             # Fragments
             "帮我背调", "查一下这个公司", "域名老不老", "邮箱是真的假的",
         ],
@@ -202,7 +202,7 @@ STOP RULE（防止无效搜索）:
             "邮箱查社交", "邮箱情报", "邮箱是真的吗", "邮箱真实性",
             # English
             "email intel", "email lookup", "email profile", "email search",
-            "email verification", "邮箱 osint",
+            "email verification", "email address", "邮箱 osint",
             # Chinese slang / fragments
             "查一下这个邮箱", "帮我查邮箱", "查邮箱背景", "邮箱查一下",
             # English slang
@@ -273,10 +273,10 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-lead-generation",
         "triggers": [
             # Chinese
-            "找客户", "开发客户", "客户开发", "找潜在客户", "开发信",
-            "询盘", "客户跟进", "客户分析", "报价", "谈判", "成交",
-            "报价单", "报价模板", "价格谈判", "报价技巧",
-            "付款方式", "付款条件", "交期", "催单", "催款",
+            "找客户", "开发客户", "客户开发", "找潜在客户", "新客户",
+            "询盘", "客户跟进", "客户分析", "报价谈判", "谈判", "成交",
+            "价格谈判", "报价技巧",
+            "付款方式", "付款条件", "交期", "催单",
             # 邮件主题 + 多语言
             "邮件主题", "主题行优化", "邮件标题", "邮件标题优化",
             "多语言开发信", "多语言邮件", "阿拉伯语开发信", "西班牙语开发信",
@@ -287,9 +287,9 @@ STOP RULE（防止无效搜索）:
             "俄罗斯客户", "日本客户", "韩国客户",
             # English
             "lead generation", "find customers", "customer development",
-            "cold email", "outreach", "prospect", "prospecting",
+            "outreach", "prospect", "prospecting",
             "lead gen", "leadgen",
-            "follow up", "follow-up", "quotation", "quote", "negotiation",
+            "follow up", "follow-up", "negotiation",
             "closing", "rfq", "inquiry",
             "payment terms", "delivery time", "lead time negotiation",
             "price negotiation", "target price",
@@ -300,7 +300,7 @@ STOP RULE（防止无效搜索）:
             "french email", "portuguese email", "russian email",
             "japanese email", "korean email",
             # English fragments
-            "find buyers", "get customers", "look for customers",
+            "find buyers", "get customers", "look for customers", "new customers",
             # Fragments
             "有新客户吗", "怎么找客户", "客户资源", "客户名单",
             "帮我写开发信", "写一封邮件", "客户案例", "买家",
@@ -337,9 +337,9 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-document",
         "triggers": [
             "读报价单", "对比报价", "提取合同条款", "分析PI", "看装箱单",
-            "产品规格书", "贸易单据", "报价分析", "合同条款提取", "PI分析",
+            "产品规格书", "贸易单据", "报价分析", "报价单文档", "合同条款提取", "合同", "PI分析",
             "invoice analysis", "quotation comparison", "trade document",
-            "packing list analysis", "contract terms",
+            "packing list analysis", "contract terms", "contract", "contract review",
         ],
         "aliases": [],
         "input_fmt": "外贸单据文件路径（报价单/合同/PI/装箱单/产品规格书）",
@@ -370,9 +370,9 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-doc-generation",
         "triggers": [
-            "做报价单", "生成PI", "形式发票", "出合同", "外贸合同",
+            "做报价单", "报价单", "报价模板", "生成PI", "形式发票", "出合同", "外贸合同",
             "装箱单模板", "商业提案", "报价单模板", "外贸单证", "生成商业计划书",
-            "proforma invoice", "quotation template", "commercial proposal",
+            "proforma invoice", "quotation", "quote", "quotation template", "commercial proposal",
             "packing list template", "sales contract",
         ],
         "aliases": [],
@@ -431,9 +431,9 @@ STOP RULE（防止无效搜索）:
             # English
             "platform diagnosis", "alibaba optimization", "made-in-china",
             "keyword optimization", "product title", "ranking",
-            "search ranking", "seo", "product listing", "alibaba international",
+            "search ranking", "seo", "product listing", "alibaba international", "alibaba",
             # Fragments
-            "阿里店铺", "平台上排名", "关键词排名", "搜索排名",
+            "阿里店铺", "阿里国际站", "平台上排名", "关键词排名", "搜索排名",
         ],
         "aliases": [],
         "input_fmt": "B2B平台产品链接 或 平台名称 + 产品关键词",
@@ -645,10 +645,10 @@ STOP RULE（防止无效搜索）:
             # English
             "daily tasks", "automation", "scheduled tasks", "scheduled posting",
             "morning brief", "daily summary", "weekly report", "daily report",
-            "cron job", "recurring task", "automated workflow",
+            "cron job", "recurring task", "automated workflow", "exchange rate", "market news",
             # Fragments
             "每天自动", "自动发内容", "定时发", "每天发什么",
-            "早报", "晚报", "自动生成报告",
+            "早报", "晚报", "自动生成报告", "汇率", "市场新闻",
         ],
         "aliases": [],
         "input_fmt": "任务类型（早报/晚报/定时发布/周报）+ 发送频率 + 目标平台",
@@ -686,7 +686,7 @@ STOP RULE（防止无效搜索）:
             "key account", "account management", "vip customer",
             "order tracking", "order status", "shipment tracking",
             # Fragments
-            "客户列表", "所有客户", "新客户", "大客户维护",
+            "客户列表", "所有客户", "大客户维护",
         ],
         "aliases": ["b2b-lead-generation"],
         "input_fmt": "客户名称 或 操作类型（查看列表/更新状态/查看详情）",
@@ -758,7 +758,9 @@ STOP RULE（防止无效搜索）:
         "triggers": ["之前", "上次", "以前", "那天", "上周", "历史", "记录", "对话", "说过", "聊过", "讨论过",
                      "还记得", "记不记得", "回忆", "翻看", "回去看", "过去", "往事", "旧", "曾经",
                      "上次聊天", "上次对话", "之前提到", "之前说过", "历史记录", "历史对话",
-                     "聊天记录", "对话记录", "聊天历史", "帮我找", "查一下之前", "帮我查", "看到过"],
+                     "聊天记录", "对话记录", "聊天历史", "查一下之前", "帮我查", "看到过",
+            # English
+            "what did we discuss", "previous conversation", "chat history", "last time"],
         "aliases": ["memory", "记忆", "历史对话", "聊天记忆", "会话历史"],
         "input_fmt": "用户的查询意图（查询历史/时间范围）",
         "output_fmt": "历史对话列表（带时间戳）",

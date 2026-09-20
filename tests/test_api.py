@@ -214,15 +214,17 @@ class TestSkillRouter:
 
     def test_match_lead_generation(self):
         from trade.skill_router import match_skill
+        # "写开发信" 属冷邮件撰写场景——b2b-cold-outreach 是专职写邮件的技能，
+        # b2b-lead-generation 是"找客户"全链路（2026-09 触发词路由调优后归属调整）
         result = match_skill("帮我写一封开发信给欧洲客户")
         assert result is not None
-        assert result["name"] == "b2b-lead-generation"
+        assert result["name"] == "b2b-cold-outreach"
 
     def test_match_document_analysis(self):
         from trade.skill_router import match_skill
         result = match_skill("分析这份产品报价单文档")
         assert result is not None
-        assert result["name"] in ("b2b-document", "b2b-lead-generation")
+        assert result["name"] == "b2b-document"
 
     def test_match_platform_diagnosis(self):
         from trade.skill_router import match_skill

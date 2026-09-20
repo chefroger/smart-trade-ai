@@ -183,18 +183,23 @@ _BOUNDARY_WEIGHT = 3   # 词边界匹配（如独立词"背景调查"）
 _SUBSTRING_WEIGHT = 1  # 宽松子串匹配（如"做一下背景调查再联系"）
 
 # ── 预编译触发词正则（模块加载时一次性构建，避免每次 query 重复 re.compile）──
-# 结构：[(skill_idx, skill_name, [(trigger_text, boundary_re, substring_re), ...]), ...]
-_PRECOMPILED: list[tuple[int, str, list[tuple[str, re.Pattern, re.Pattern]]]] = []
+# 结构：[(skill_idx, skill_name, [(trigger_text, boundary_re, substring_re_or_None), ...]), ...]
+_PRECOMPILED: list[tuple[int, str, list[tuple[str, re.Pattern, re.Pattern | None]]]] = []
 for _idx, _skill in enumerate(_SKILLS):
     _triggers = _skill.get("triggers", [])
     if _triggers:
-        _patterns: list[tuple[str, re.Pattern, re.Pattern]] = []
+        _patterns: list[tuple[str, re.Pattern, re.Pattern | None]] = []
         for _kw in _triggers:
             _esc = re.escape(_kw)
+            # ≤2 字符的纯 ASCII 触发词（缩写类：DA/BL/LC/DP 等）禁止子串匹配——
+            # "DA" 会命中 today/data/update、"BL" 会命中 able/table，全是噪音。
+            # 中文触发词（isascii=False）不受影响，保持子串匹配；
+            # 3 字符的英文缩写（FOB/CIF/ETA）保留子串，以支持 "FOB上海" 混排场景。
+            _disable_substring = len(_kw) <= 2 and _kw.isascii()
             _patterns.append((
                 _kw,
                 re.compile(r'\b' + _esc + r'\b', re.IGNORECASE),
-                re.compile(_esc, re.IGNORECASE),
+                None if _disable_substring else re.compile(_esc, re.IGNORECASE),
             ))
         _PRECOMPILED.append((_idx, _skill["name"], _patterns))
 
@@ -263,8 +268,9 @@ def _score_skills(query: str) -> list[dict]:
                 boundary_hits += 1
                 triggers_matched.append(kw)
                 continue  # 词边界命中后不再尝试子串（避免重复计数）
-            # 宽松子串匹配
-            if substring_re.search(normed):
+            # 宽松子串匹配（substring_re 为 None 表示该触发词被禁止子串匹配，
+            # 见预编译处对 ≤2 字符 ASCII 缩写触发词的处理）
+            if substring_re is not None and substring_re.search(normed):
                 total_score += _SUBSTRING_WEIGHT
                 substring_hits += 1
                 triggers_matched.append(kw)
