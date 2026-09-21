@@ -135,7 +135,7 @@ Buying Behavior: Quality-focused, requires certifications, longer sales cycle
 - `B2B Sourcing Expert | Connecting Worldwide Buyers with Top-Tier Manufacturers | Certified Supply Chain Partner`
 - `[Product] Supplier | Your Reliable China Sourcing Partner | ISO Certified Factory`
 
-### Section 3: About Section (3,000 characters max)
+### Section 3: About Section (2,600 characters max)
 
 **Structure**:
 
@@ -175,8 +175,8 @@ I specialize in:
 ### Company Page Sections
 
 1. **Name**: `[Your Brand] — Professional [Product] Manufacturer`
-2. **Tagline**: `[X] Years of Excellence in [Industry] | Your Trusted [Product] Partner`
-3. **About**: Similar structure to personal profile, company-focused
+2. **Tagline**（官方上限 120 字符）: `[X] Years of Excellence in [Industry] | Your Trusted [Product] Partner`
+3. **About**（官方上限 2000 字符）: Similar structure to personal profile, company-focused
 4. **Products**: Add all product categories with descriptions and images
 5. **Media**: Factory photos, certifications, team, trade show presence
 
@@ -572,7 +572,7 @@ Sales Navigator 的核心工作流围绕四类对象：
 
 **输出规格**：生成 **3 个不同版本**（供 A/B 选择）；每条控制 **60-80 词**；素材变量：公司名称 / 对方主营 / 联系人 / 职位 / 你方产品 / 合作切入口（来自第⑤步）。
 
-> 核心心法：**第一条消息不是介绍自己，而是让客户看懂"你为什么找到他"。**（与 Add Note 铁则、"第一句讲客户不讲自己"一致）
+> 核心心法：**第一条消息不是介绍自己，而是让客户看懂"你为什么找到他"。**（与连接邀请铁则、"第一句讲客户不讲自己"一致）
 
 ## Quality Standards
 
@@ -580,7 +580,7 @@ Sales Navigator 的核心工作流围绕四类对象：
 2. **Industry-specific**: Use actual product terminology from user's资料. Adapt examples to their industry
 3. **Platform-native**: Content should feel natural for LinkedIn, not repurposed blog content
 4. **Visual requirement**: Every post should have an image/video or clear visual description
-5. **Character limits**: Respect LinkedIn limits — headline 220 chars, connection note 300 chars, article title 100 chars
+5. **Character limits**: Respect LinkedIn limits — headline 220 chars, About 2,600 chars, connection note 200 chars, article title 100 chars
 6. **Hashtag strategy**: Use 3-5 relevant hashtags per post, mix broad (#B2B #Sourcing) with specific (#Machinery #Electronics)
 7. **客户价值优先**: 每篇内容先想「读这篇文章的人最关心什么」——不是你的产品有多好，而是你能让TA的工作更容易、更挣钱、更少风险。产品参数是支撑证据，不是主角。
 
