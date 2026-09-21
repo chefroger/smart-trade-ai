@@ -68,7 +68,7 @@ injection_prompt: |
   - WHOIS：域名注册时间判断公司年龄
   - 社媒：Facebook/Instagram 粉丝数、帖子频率
   - 以图搜图：tineye.com（判断产品图片是否盗图）
-  - 竞品流量：similarweb.com / quantcast.com
+  - 竞品流量：similarweb.com
   - 使馆商参处：mofcom.gov.cn 国别行业报告
 
   背调后差异化回复策略：把客户网站上关联产品截图 → 对照我方产品→ 制作产品细节差异化对比图 → 邮件写出对客户的具体好处。卖点从六方向提炼：品控认证、私模新品、价格优势、售后体系、专业度、C端差评对标。
@@ -115,7 +115,7 @@ injection_prompt: |
   **邮箱推测（email pattern discovery）**：
 
   如果官网只给了 info@，但 LinkedIn 找到了具体人名，尝试推测邮箱：
-  1. 用 browser_navigate 访问 https://hunter.io/email-finder/{domain} （免费 5 次/月）
+  1. 用 browser_navigate 访问 https://hunter.io/email-finder/{domain} （免费额度有限，具体以官网当前套餐为准；额度用尽时用下方模式推测 + 验证兜底）
   2. 或用 email-checker 类工具验证以下模式：
      - `{first}.{last}@{domain}` (john.smith@x.com)
      - `{first}@{domain}` (john@x.com)

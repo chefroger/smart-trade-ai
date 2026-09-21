@@ -57,7 +57,7 @@ injection_prompt: |
 ### 执行步骤
 
 1. 使用 `web_search` 搜索以下信息（逐项搜索，每项至少 2 次不同关键词）：
-   - 当日美元/欧元/英镑兑人民币汇率（搜索 "USD CNY exchange rate today 2026"）
+   - 当日美元/欧元/英镑兑人民币汇率（搜索 "USD CNY exchange rate today"）
    - 当日金价、铜价、铝价、原油价（搜索 "gold price today" / "copper LME price" / "crude oil price today"）
    - 目标市场新闻（搜索每个目标市场的 top business news today）
    - 如果用户配置了产品行业（如 "电力金具"），搜索该行业的今日新闻

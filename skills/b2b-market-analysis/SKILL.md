@@ -63,7 +63,7 @@ injection_prompt: |
   - `"{product} manufacturers in {country}"` — 该市场的主要供应商
   - `"top {product} suppliers {country}"` — 行业排名/目录
   - `"{product} {country} importers buyers"` — 采购商视角看竞品
-  - `"{product} price list {country} 2026"` — 竞品定价线索
+  - `"{product} price list {country} {current_year}"` — 竞品定价线索（用当前年份，勿写死）
 
   #### 2.2 竞品网站分析
   找到 3-5 个主要竞争对手的官网，用 web_fetch 提取：
