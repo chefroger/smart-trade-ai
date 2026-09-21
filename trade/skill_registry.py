@@ -464,15 +464,21 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-linkedin-marketing",
         "triggers": [
             # Chinese
-            "LinkedIn营销", "领英营销", "LinkedIn策略", "领英开发客户",
-            "LinkedIn内容", "领英帖子", "LinkedIn profile", "领英账号",
+            "LinkedIn营销", "领英营销", "LinkedIn策略", "领英开发客户", "领英客户开发",
+            "LinkedIn内容", "领英帖子", "LinkedIn profile", "领英账号", "领英主页",
             "LinkedIn开发信", "领英InMail",
+            # Chinese — 连接邀请 / 开发动作
+            "领英连接邀请", "连接邀请", "领英留言", "领英加好友", "领英开发",
+            "加好友", "领英好友",
             # English
             "linkedin marketing", "linkedin strategy", "linkedin content",
             "linkedin post", "linkedin outreach", "linkedin profile optimization",
             "linkedin company page", "linkedin personal branding",
+            "linkedin connection", "linkedin message", "add note",
+            # Sales Navigator（产品名，用户常直接问）
+            "sales navigator", "领英销售导航",
             # Fragments
-            "发领英", "写领英", "领英怎么发",
+            "发领英", "写领英", "领英怎么发", "领英怎么用",
         ],
         "aliases": [],
         "input_fmt": "LinkedIn目标（个人品牌/公司主页/开发客户）+ 产品/行业信息 + 用户会员套餐",
