@@ -582,10 +582,10 @@ def build_query(
         )
 
     if library_id:
-        # 用户明确选择了文档库 → 强制完整读取
+        # 用户明确选择了文档库 → 强制完整读取，并保留用户指定路径的更高优先级指令
         lib = _lib.get(library_id, company_id=company_id)
         if lib:
-            doc_context = (
+            doc_context += (
                 f"\n## 文档库上下文（强制扫描）\n"
                 f"用户正在文档库「{lib['name']}」({lib['root_path']}) 中提问。\n"
                 f"**你必须先扫描此目录中的所有文件：**\n"
