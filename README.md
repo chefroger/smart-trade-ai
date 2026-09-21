@@ -336,7 +336,7 @@ ruff check trade/ server.py  # 代码检查
 
 - [使用说明书](TRADE-GUIDE.md) — 从零上手：界面认知、38 个技能全解、日常用法、常见问题
 - [Windows 安装教程](docs/index.md) — 零基础用户 20 分钟快速安装指南
-- [LinkedIn 获客功能使用说明](docs/linkedin-guide.md) — 免费会员 / 高级会员（Sales Navigator）功能分级与使用示例
+- [LinkedIn 获客功能使用说明](docs/linkedin-guide.md) — 免费 / Premium / Sales Navigator（Core·Advanced·Advanced Plus）功能分级与使用示例
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Hermes 版本兼容性记录
 
 ---

@@ -220,7 +220,7 @@ author: Foreign Trade Assistant
   9. 动态和文章（SEO 权重高，长尾关键词可排谷歌首页）
   10. 自建公司主页和 Group（followers 里全是精准客户）
 
-  **领英安全规则**：一天加好友不超过 100 个；新号先内部互加 50 人再开发；绝对不加国内同行（防举报封号）；界面语言切换为英文（功能更全）。
+  **领英安全规则**：官方邀请限制数值不公开（超限后账号被限制发邀请约 1 周）；以下为经验安全值（非官方）：一天加好友不超过 100 个；新号先内部互加 50 人再开发；绝对不加国内同行（防举报封号）；界面语言切换为英文（功能更全）。连接邀请留言上限 200 字符。
 
   **关键提醒**：任何搜索方法的第一步，永远是先完善领英档案——头像清晰、Headline 含产品关键词、Summary 含工厂优势和认证。
 
@@ -296,7 +296,7 @@ Best,
 [Your name]
 ```
 
-#### Template 3: LinkedIn Connection Note (≤300 chars)
+#### Template 3: LinkedIn Connection Note (≤200 chars — 官方上限)
 
 ```
 Hi [Name]! I help [industry] buyers avoid [specific pain point — e.g., "inconsistent quality across shipments"]. Built a process that [your unique value]. Open to connecting!

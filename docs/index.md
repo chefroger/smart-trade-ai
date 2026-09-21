@@ -471,7 +471,7 @@ Trade 会自动识别你的意图，匹配合适的技能。以下是全部 38 �
 | 4 | **b2b-document** | 本地文档分析与提取 | 分析一下这份报价单 / 帮我看看这个合同有什么问题 |
 | 5 | **b2b-doc-generation** | 生成报价/合同/提案文件 | 帮我生成一份 PDF 报价单 / 做一份产品介绍 PPT |
 | 6 | **b2b-platform** | B2B 平台店铺诊断优化 | 帮我看看这个阿里国际站产品页 / 优化一下产品标题 |
-| 7 | **b2b-linkedin-marketing** | LinkedIn 营销策略与内容 | 帮我想一下领英发什么内容 / 写一个 LinkedIn Add Note |
+| 7 | **b2b-linkedin-marketing** | LinkedIn 营销策略与内容 | 帮我想一下领英发什么内容 / 写一条领英连接邀请留言 |
 | 8 | **b2b-social-media** | 社媒营销（FB/Ins/TikTok/YT） | 帮我做一个 Facebook 内容计划 / 写一个 TikTok 脚本 |
 | 9 | **b2b-customs-data** | 海关数据分析找采购商 | 帮我看看谁在进口这个产品 / 分析一下这个 HS 编码 |
 | 10 | **b2b-onboarding** | 新公司全套部署方案 | 我刚做外贸，帮我制定一个营销方案 / 新公司怎么开始 |
@@ -541,4 +541,4 @@ Trade 会自动识别你的意图，匹配合适的技能。以下是全部 38 �
 
 ## 相关使用指南
 
-- **[LinkedIn 获客功能使用说明](linkedin-guide.md)** — 免费会员 / 高级会员（Sales Navigator）功能分级，含六步客户开发流程与使用示例
+- **[LinkedIn 获客功能使用说明](linkedin-guide.md)** — 免费 / Premium / Sales Navigator（Core·Advanced·Advanced Plus）功能分级，含六步客户开发流程与使用示例

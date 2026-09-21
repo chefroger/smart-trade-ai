@@ -288,7 +288,7 @@ ruff check trade/ server.py  # Lint
 
 - [User Guide (zh)](TRADE-GUIDE.md) — getting started, all 38 skills explained, FAQ
 - [Windows Installation Guide (zh)](docs/index.md) — 20-minute setup for beginners
-- [LinkedIn Guide (zh)](docs/linkedin-guide.md) — free vs. Sales Navigator feature tiers
+- [LinkedIn Guide (zh)](docs/linkedin-guide.md) — Free / Premium / Sales Navigator (Core · Advanced · Advanced Plus) feature tiers
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Hermes version compatibility
 
 ---

@@ -130,13 +130,10 @@ What I specialize in:
 ### Name
 [Company Name] — [Product Category] Manufacturer
 
-### Tagline
+### Tagline（官方上限 120 字符）
 [X] Years of Excellence | Your Trusted [Product] Partner
 
-### About (Beginnings page — 140 characters)
-[Concise value proposition]
-
-### About (Main — 2000 chars)
+### About（官方上限 2000 字符）
 [Full company story, similar to company profile above]
 
 ### Featured
@@ -261,7 +258,7 @@ Best regards,
 [Phone] | [WeChat/WhatsApp]
 ```
 
-### LinkedIn Connection Template
+### LinkedIn Connection Template（连接邀请留言，官方上限 200 字符）
 
 ```
 Hi [Name]! Great connecting with professionals in the [industry] space. I help B2B companies source [product] from verified manufacturers with [specific advantage]. Would love to connect and share insights!
@@ -273,7 +270,7 @@ Hi [Name]! Great connecting with professionals in the [industry] space. I help B
 |-----|---------|---------|
 | Day 1 | Email | Initial cold email |
 | Day 3 | Email | Reminder + new value |
-| Day 7 | LinkedIn | InMail with question |
+| Day 7 | LinkedIn | Connection note（InMail 需 Sales Navigator 套餐） |
 | Day 14 | Email | Different angle |
 | Day 30 | Email | Break-up email |
 
