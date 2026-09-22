@@ -88,6 +88,16 @@ def test_blocked_alias_does_not_resolve_to_another_skill():
     assert match_skill("用 auto-smtp-email") is None
 
 
+def test_document_skill_does_not_include_generation_instructions():
+    """文档分析 skill 不应包含与其职责冲突的文档生成指令。"""
+    from pathlib import Path
+
+    text = Path("skills/b2b-document/SKILL.md").read_text(encoding="utf-8")
+
+    assert "## Document Generation" not in text
+    assert "When the user asks you to create a business document" not in text
+
+
 def test_qa_cache_reloads_when_reference_file_changes(monkeypatch, tmp_path):
     """QA 文件更新后，mtime 缓存不能继续返回旧内容。"""
     import os

@@ -166,41 +166,6 @@ Cognee stores extracted facts as entities and relationships in a knowledge graph
 ### Recall Before Analysis
 Use `cognee_recall` at the start of a new task to check for relevant past context. This connects new questions to previous findings without the user needing to repeat context.
 
-## Document Generation
-
-When the user asks you to create a business document (PPTX, DOCX, XLSX, or report), follow these rules:
-
-### Language Consistency (Critical)
-- **One document, one language.** If the target audience is English-speaking (Middle East, Europe, Americas, Southeast Asia), the ENTIRE document must be in English — titles, body, tables, footnotes, everything. If the audience is Chinese-speaking, use Chinese throughout. Never produce mixed-language output.
-- Product model numbers and SKU codes stay in their original form regardless of language.
-
-### Presentation (PPTX) Quality
-1. Plan the slide structure before writing code. 10-12 slides for a product catalog, 6-8 for a company intro.
-2. Choose a color palette with 2-3 colors that fit the industry (not generic blue).
-3. Every slide needs visual elements: colored accent bars, card backgrounds, tables, or icons. Never plain white slide + text only.
-4. Typography: titles 36-44pt bold, section headers 18-24pt, body 12-16pt. Consistent font family throughout.
-5. Tables: bold headers with dark background, alternating row fills, all columns populated with real data.
-6. Vary slide layouts. Don't repeat the same layout across slides.
-7. Left-align body text; center only cover text and section titles.
-8. After generating, read back the file to verify content is complete and formatting is correct.
-
-### Document (DOCX) Quality
-1. Use consistent heading styles (Heading 1, 2, 3) for hierarchy.
-2. Tables should have borders, bold headers, and consistent column widths.
-3. Include a header/footer with company name and page numbers.
-4. Use the same language policy as PPTX — no mixed-language output.
-
-### Spreadsheet (XLSX) Quality
-1. Freeze the header row. Apply auto-filter to columns where applicable.
-2. Format numbers consistently: currency with symbol, percentages with % sign, dates in ISO format.
-3. Use cell borders and alternating row colors for readability.
-4. Include a summary sheet if the workbook has multiple data sheets.
-
-### General Output Rules
-- **No placeholder text**: Never output "XXX", "Lorem ipsum", "[TBD]", or fake phone numbers. If a value is truly unknown, omit that field.
-- **Verify after generating**: Read back the output file to check for truncation, missing data, or layout issues.
-- **Cite sources**: When data comes from specific files, note the source filename.
-
 ## Privacy & Confidentiality
 
 B2B documents often contain sensitive information:
