@@ -35,7 +35,7 @@ _SKILLS: list[dict] = [
         "name": "b2b-osint",
         "triggers": [
             # Chinese
-            "背景调查", "背调", "尽职调查", "查一下这家公司", "查一下这个域名",
+            "背景调查", "背调", "尽职调查", "查一下这家公司", "查一下这个公司", "帮我查一下公司", "查一下公司的背景", "查一下这个域名",
             "域名注册时间", "制裁名单", "OFAC", "企业邮箱验证",
             "查公司", "风险评估", "客户真实性", "这个公司是真的吗",
             "公司查一下", "whois", "骗子特征",
@@ -44,7 +44,7 @@ _SKILLS: list[dict] = [
             "risk assessment", "check company", "check domain",
             "whois lookup", "sanctions check", "osint check", "company background", "check this company",
             # Fragments
-            "帮我背调", "查一下这个公司", "域名老不老", "邮箱是真的假的",
+            "帮我背调", "域名老不老", "邮箱是真的假的",
         ],
         "aliases": ["b2b-email-intel"],
         "input_fmt": "邮箱地址 / 域名 / 公司名（自动识别类型）",
@@ -198,11 +198,11 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-email-intel",
         "triggers": [
             # Chinese
-            "背景调查", "邮箱查询", "邮箱注册", "邮箱查注册", "邮箱查平台",
+            "邮箱查询", "邮箱注册", "邮箱查注册", "邮箱查平台", "帮我查一下邮箱",
             "邮箱查社交", "邮箱情报", "邮箱是真的吗", "邮箱真实性",
             # English
             "email intel", "email lookup", "email profile", "email search",
-            "email verification", "email address", "邮箱 osint",
+            "email verification", "email address", "check whether this email is real", "is this email real", "邮箱 osint",
             # Chinese slang / fragments
             "查一下这个邮箱", "帮我查邮箱", "查邮箱背景", "邮箱查一下",
             # English slang
@@ -274,8 +274,8 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             # Chinese
             "找客户", "开发客户", "客户开发", "找潜在客户", "新客户",
-            "询盘", "客户跟进", "客户分析", "报价谈判", "谈判", "成交",
-            "价格谈判", "报价技巧",
+            "询盘", "报价谈判", "谈判", "成交",
+            "价格谈判", "报价技巧", "报价",
             "付款方式", "付款条件", "交期", "催单",
             # 邮件主题 + 多语言
             "邮件主题", "主题行优化", "邮件标题", "邮件标题优化",
@@ -285,9 +285,10 @@ STOP RULE（防止无效搜索）:
             "西班牙", "拉美客户", "墨西哥客户", "巴西客户",
             "德国客户", "法国客户", "欧洲客户",
             "俄罗斯客户", "日本客户", "韩国客户",
+            "冷 outreach", "冷开发信",
             # English
             "lead generation", "find customers", "customer development",
-            "outreach", "prospect", "prospecting",
+            "prospect", "prospecting",
             "lead gen", "leadgen",
             "follow up", "follow-up", "negotiation",
             "closing", "rfq", "inquiry",
@@ -303,7 +304,7 @@ STOP RULE（防止无效搜索）:
             "find buyers", "get customers", "look for customers", "new customers",
             # Fragments
             "有新客户吗", "怎么找客户", "客户资源", "客户名单",
-            "帮我写开发信", "写一封邮件", "客户案例", "买家",
+            "帮我写开发信", "写一封邮件", "客户案例", "帮我找德国的客户", "找德国客户", "找客户给我", "帮我找客户",
             "buyer", "purchasing manager", "procurement",
             "帮我回复", "怎么回这封", "怎么报价", "报多少",
             "能便宜点吗", "目标价", "怎么谈",
@@ -336,9 +337,9 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-document",
         "triggers": [
-            "读报价单", "对比报价", "提取合同条款", "分析PI", "看装箱单",
-            "产品规格书", "贸易单据", "报价分析", "报价单文档", "合同条款提取", "合同", "PI分析",
-            "invoice analysis", "quotation comparison", "trade document",
+            "读报价单", "对比报价", "提取合同条款", "分析PI", "看装箱单", "分析这份报价单", "查看报价单", "分析报价单",
+            "产品规格书", "贸易单据", "报价分析", "报价单文档", "分析这份产品报价单文档", "合同条款提取", "合同", "PI分析",
+            "invoice analysis", "quotation comparison", "analyze this quotation document", "quotation document", "trade document",
             "packing list analysis", "contract terms", "contract", "contract review",
         ],
         "aliases": [],
@@ -371,7 +372,7 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-doc-generation",
         "triggers": [
             "做报价单", "报价单", "报价模板", "生成PI", "形式发票", "出合同", "外贸合同",
-            "装箱单模板", "商业提案", "报价单模板", "外贸单证", "生成商业计划书",
+            "装箱单模板", "报价单模板", "外贸单证", "生成商业计划书",
             "proforma invoice", "quotation", "quote", "quotation template", "commercial proposal",
             "packing list template", "sales contract",
         ],
@@ -427,7 +428,7 @@ STOP RULE（防止无效搜索）:
             # Chinese
             "网站诊断", "平台诊断", "阿里国际站优化", "中国制造网", "独立站优化", "官网优化",
             "产品链接分析", "关键词优化", "产品标题", "排名", "曝光",
-            "询盘", "曝光量", "点击率",
+            "曝光量", "点击率",
             # English
             "platform diagnosis", "alibaba optimization", "made-in-china",
             "keyword optimization", "product title", "ranking",
@@ -478,7 +479,7 @@ STOP RULE（防止无效搜索）:
             # Sales Navigator（产品名，用户常直接问）
             "sales navigator", "领英销售导航",
             # Fragments
-            "发领英", "写领英", "领英怎么发", "领英怎么用",
+            "发领英", "写领英", "领英怎么发", "领英怎么用", "LinkedIn", "领英",
         ],
         "aliases": [],
         "input_fmt": "LinkedIn目标（个人品牌/公司主页/开发客户）+ 产品/行业信息 + 用户会员套餐",
@@ -537,7 +538,7 @@ STOP RULE（防止无效搜索）:
             "内容日历", "同行社媒分析", "发帖",
             # English
             "social media marketing", "facebook marketing", "instagram marketing",
-            "tiktok marketing", "youtube marketing", "content calendar",
+            "tiktok marketing", "youtube marketing", "content calendar", "social media competitor analysis",
             "competitor social media", "social media strategy",
             # Fragments
             "FB发帖", "ins怎么发", "TikTok内容", "油管内容",
@@ -573,7 +574,7 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             # Chinese
             "海关数据", "进出口记录", "广交会数据", "贸易数据挖掘",
-            "采购商分析", "供应商分析", "市场调研", "竞争对手分析",
+            "采购商分析", "供应商分析", "海关竞争对手分析", "海关竞争对手",
             "查采购商", "找买家", "进出口数据",
             # English
             "customs data", "import export records", "trade data mining",
@@ -613,8 +614,8 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-onboarding",
         "triggers": [
             # Chinese
-            "新公司", "部署", "全套方案", "公司介绍", "产品介绍",
-            "营销方案", "营销定位", "市场定位", "竞争对手分析",
+            "新公司", "部署", "全套方案", "公司介绍",
+            "营销方案", "营销定位", "市场定位", "新公司竞争对手分析",
             "开始使用", "首次设置",
             # English
             "new company", "deploy", "setup", "marketing plan",
@@ -655,7 +656,7 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             # Chinese
             "每日任务", "自动化", "定时任务", "定时发布", "Cron",
-            "早安简报", "工作总结", "晚间总结", "周报", "日报",
+            "早安简报", "工作总结", "晚间总结", "周报", "日报", "每日简报", "设置每日简报", "每日早报",
             "定时提醒", "自动发送",
             # English
             "daily tasks", "automation", "scheduled tasks", "scheduled posting",
@@ -773,7 +774,7 @@ STOP RULE（防止无效搜索）:
         "triggers": ["之前", "上次", "以前", "那天", "上周", "历史", "记录", "对话", "说过", "聊过", "讨论过",
                      "还记得", "记不记得", "回忆", "翻看", "回去看", "过去", "往事", "旧", "曾经",
                      "上次聊天", "上次对话", "之前提到", "之前说过", "历史记录", "历史对话",
-                     "聊天记录", "对话记录", "聊天历史", "查一下之前", "帮我查", "看到过",
+                     "聊天记录", "对话记录", "聊天历史", "查一下之前", "看到过", "帮我查", "查一下之前说过的", "上次推荐", "这周谈过",
             # English
             "what did we discuss", "previous conversation", "chat history", "last time"],
         "aliases": ["memory", "记忆", "历史对话", "聊天记忆", "会话历史"],
@@ -789,7 +790,8 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             # Chinese
             "生成skill", "创建skill", "新建技能", "做个skill", "写个skill",
-            "生成技能", "新增技能", "创建一个skill",
+            "生成技能", "新增技能", "创建一个skill", "做一个skill", "做一个新的skill",
+            "创建一个新的 skill", "生成一个新的技能", "做个新技能",
             # English
             "create skill", "generate skill", "new skill",
         ],
@@ -808,7 +810,7 @@ STOP RULE（防止无效搜索）:
             "索赔", "投诉", "质量投诉", "货有问题", "客户投诉",
             "退货", "退款", "理赔", "赔偿",
             # Chinese — 展会
-            "展会邀请", "邀请函", "广交会", "展会邀约", "参展",
+            "邀请函", "广交会", "参展",
             "邀请客户来展会",
             # Chinese — 验厂
             "验厂", "客户要来工厂", "验厂邀请", "工厂审核", "audit",
@@ -918,10 +920,11 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-cold-outreach",
         "triggers": [
             # Chinese
-            "开发信", "产品推广信", "推广邮件", "跟进信", "写一封开发信",
+            "开发信", "产品推广信", "推广邮件", "跟进信", "写一封开发信", "帮我写一封冷邮件", "写一封冷邮件",
             "产品推广", "写推广邮件", "写跟进邮件",
             # English
             "cold email", "development letter", "promotion letter",
+            "cold outreach email", "outreach email", "write an outreach email", "write a cold email",
             "follow-up email", "product promotion", "outreach",
         ],
         "aliases": [],
@@ -970,14 +973,13 @@ STOP RULE（防止无效搜索）:
         "name": "auto-trade-customer-development",
         "triggers": [
             # Chinese
-            "全自动客户开发", "一键开发客户", "端到端客户开发",
+            "全自动客户开发", "一键开发客户", "端到端客户开发", "一键全自动开发客户", "全自动客户开发流水线",
             "客户开发流水线", "自动开发客户", "全流程客户开发",
             "编排客户开发", "一条龙开发客户", "帮我跑一轮客户开发",
             "跑一批客户", "全自动开发", "全自动化客户开发",
             # English
-            "auto customer development", "end to end lead generation",
-            "full pipeline outreach", "automated outreach pipeline",
-            "orchestrated lead gen",
+            "auto customer development", "end to end lead generation", "auto lead generation",
+            "full pipeline outreach", "automated outreach pipeline", "orchestrated lead gen",
         ],
         "aliases": ["b2b-lead-generation", "b2b-osint", "auto-smtp-email"],
         "input_fmt": (
@@ -1086,12 +1088,12 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-buyer-persona",
         "triggers": [
             # Chinese
-            "买家画像", "客户画像", "角色分析", "人物画像",
+            "买家画像", "客户画像", "角色分析", "人物画像", "分析一下买家画像", "分析买家画像",
             "采购角色", "决策者分析", "客户分层", "买家角色",
             "按角色写", "给采购写", "给工程师写", "给老板写",
             "针对不同角色", "价值主张定制",
             # English
-            "buyer persona", "customer analysis", "decision maker analysis",
+            "buyer persona", "customer analysis", "decision maker analysis", "analyze buyer persona",
             "procurement manager", "technical buyer", "stakeholder mapping",
             "role-based email", "tailor message", "customize for role",
         ],
@@ -1105,9 +1107,9 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-market-analysis",
         "triggers": [
             # Chinese
-            "市场分析", "目标市场", "市场调研", "进入市场",
+            "市场分析", "目标市场", "市场调研", "进入市场", "分析一个市场", "分析市场", "分析这家公司的市场", "做市场分析",
             "作战地图", "出口分析", "国家分析", "区域分析",
-            "竞品分析", "市场机会", "市场研究", "出口国分析",
+            "竞品分析", "竞争对手分析", "市场机会", "市场研究", "出口国分析",
             # English
             "market analysis", "market research", "country analysis",
             "go to market", "target market", "market entry",
@@ -1146,11 +1148,11 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             # Chinese
             "询盘训练", "回复练习", "模拟买家", "询盘回复",
-            "训练回复", "练询盘", "模拟客户", "反对意见",
+            "训练回复", "练询盘", "模拟客户", "实践回复难询盘", "反对意见",
             "客户刁难", "谈判练习", "话术训练", "销售人员训练",
             "回复优化", "询盘模拟", "不匹配询盘",
             # English
-            "inquiry training", "practice reply", "role play buyer",
+            "inquiry training", "practice replying", "practice replying to a difficult inquiry", "practice reply", "role play buyer",
             "objection handling", "sales training", "improve reply",
         ],
         "aliases": [],
@@ -1229,7 +1231,7 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-product-description",
         "triggers": [
-            "产品描述", "产品介绍", "产品文案", "Sales Kit",
+            "产品描述", "产品介绍", "产品文案", "Sales Kit", "产品资料",
             "销售资料", "产品卖点", "产品说明", "产品推广",
             "product description", "product copy", "sales kit",
             "value proposition", "product selling points",
@@ -1257,11 +1259,11 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-customer-intel",
         "triggers": [
-            "客户画像", "深度画像", "客户分析", "了解客户",
+            "客户画像", "深度画像", "客户分析", "分析一下这个客户", "了解客户",
             "客户情报", "客户档案", "怎么跟这个客户谈",
             "客户偏好", "送礼建议", "回扣怎么给", "记住客户",
             "客户家底", "客户决策风格", "深入了解客户",
-            "customer intel", "customer profile", "know your customer",
+            "customer intel", "customer profile", "customer dossier", "customer insight", "client analysis", "what do we know about", "know your customer",
             "deep profile", "buyer intelligence",
         ],
         "aliases": ["b2b-customer-mgmt", "b2b-buyer-persona"],
@@ -1304,7 +1306,7 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-guarantee-proposal",
         "triggers": [
-            "商业提案", "战略建议书", "商业计划书", "投资回报分析",
+            "商业提案", "做一个商业提案", "战略建议书", "business case", "商业计划书", "客户商业提案", "提案生成", "生成商业提案", "投资回报分析",
             "方案建议书", "客户提案", "保效方案", "ROI分析",
             "增长方案", "市场进入方案", "品牌升级方案",
             "business proposal", "strategic proposal",
@@ -1336,9 +1338,9 @@ STOP RULE（防止无效搜索）:
 # 预编译正则（import 时一次性构建，避免每次匹配都编译）
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 显示 skill 调用模式："用 b2b-xxx" 或 "load skill b2b-xxx"
+# 显式 skill 调用模式："用 b2b-xxx"、"用 memory" 或 "load skill b2b-xxx"
 _EXPLICIT_RE = re.compile(
-    r'(?:用|使用|调用|加载|load?\s*(?:skill)?)\s*b2b-[\w-]+',
+    r'(?:用|使用|调用|加载|load?\s*(?:skill)?)\s*(?P<skill>[\w\u4e00-\u9fff-]+)',
     re.IGNORECASE,
 )
 

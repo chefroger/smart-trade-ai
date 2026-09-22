@@ -25,49 +25,34 @@ version: 1.0.0
 author: Foreign Trade Assistant
 ---
 
+## 输出要求
 
-### ✅ 已找到的注册账号
+只输出基于本次实际检测结果的报告，不要使用固定的"已找到账号"示例，不要把示例姓名、平台、URL或真实性评分当成真实结果。
 
-| 平台 | 账号 | 公开档案 |
-|------|------|---------|
-| GitHub | johnsmith-dev | https://github.com/johnsmith-dev |
-| LinkedIn | John Smith | https://www.linkedin.com/in/johnsmith |
-| Twitter | @johnsmith_dev | https://twitter.com/johnsmith_dev |
-| Stack Overflow | johnsmith | https://stackoverflow.com/users/johnsmith |
-| Instagram | johnsmith_dev | https://www.instagram.com/johnsmith_dev |
-| Facebook | John Smith | https://www.facebook.com/johnsmith |
-| ZoomInfo | john.smith@techcorp.com | 商务档案 |
+### 输出格式
 
-### ⚠️ 受限平台（IP 被限制）
+```markdown
+## 邮箱背景调查报告
 
-| 平台 | 状态 |
-|------|------|
-| Instagram | 触发了反爬限制 |
-| TikTok | 触发了反爬限制 |
+- 邮箱：[用户提供的邮箱]
+- 企业邮箱判断：[企业域名 / 公共邮箱 / 无法判断] + 依据
 
-### ❌ 未注册的知名平台
+### 实际检测结果
+| 平台 | 状态 | 公开档案 | 证据/限制 |
+|------|------|----------|----------|
+| GitHub | [已注册/未发现/请求受限/未检测] | [实际 URL 或 N/A] | [本次检测证据] |
 
-Twitter, Instagram, TikTok 等核心社交平台均返回「未注册」。
+### 汇总分析
+- 检测成功：[实际数量] / [本次尝试的平台数量]
+- 受限或未检测平台：[实际列表]
+- 结论：[高/中/低/无法判断] + 证据
 
----
-
-### 📋 汇总分析
-
-**真实性评估**：高
-- 在 7 个平台有活跃注册，包括专业社交平台 LinkedIn
-- GitHub 账号显示为技术开发者身份
-- 未发现虚假邮箱的典型特征（仅注册一两个平台）
-
-**客户画像**：
-- **技术背景**：GitHub + Stack Overflow 活跃用户
-- **商务活跃**：LinkedIn 有完整职业档案
-- **建议切入点**：技术合作 + 产品技术对接
-
-**风险提示**：
-- 部分平台受 IP 限速影响，建议更换出口 IP 后再次查询
-- 建议同步在 LinkedIn 直接搜索公司名称验证身份
+### 风险提示
+- 速率限制、隐私保护或平台响应异常必须单独标注
+- 单个平台命中不能证明邮箱属于真实买家；不能仅凭注册平台数量给出高可信度结论
 ```
 
+**重要边界**：平台接口可能变更、限速或返回不完整结果；"未发现"不等于"不存在"，"已注册"也不等于邮箱所有者身份已验证。
 ## 技术实现
 
 内部使用 [holehe](https://github.com/megadose/holehe) 开源工具，通过以下方式获取信息：

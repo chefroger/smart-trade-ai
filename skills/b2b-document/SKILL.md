@@ -5,8 +5,7 @@ when_to_use:
   - "用户提供了外贸单据（报价单 / 合同 / PI / 装箱单 / 产品规格书）要求提取关键信息"
   - "需要对比多份报价单的价格差异"
   - "从合同或 PI 中提取付款条件、交期、贸易术语"
-  - "让 Hermes 内置 read_file 读文件即可，不需要本技能"
-  - "不要用于：生成新文档（用 b2b-doc-generation）；普通 PDF/Word 阅读（用 Hermes 内置 office skills）"
+  - "不要用于：生成新文档（用 b2b-doc-generation）；普通非贸易文档阅读（用 Hermes 内置 office skills）"
 triggers:
   - 读报价单
   - 对比报价
@@ -20,7 +19,7 @@ triggers:
   - quotation comparison
   # ... (see skill_registry.py for full list)
 category: 文档管理
-version: 1.0.0
+version: 1.0.1
 author: Foreign Trade Assistant
 ---
 ---|------|-------------|-----|------|---------|------|

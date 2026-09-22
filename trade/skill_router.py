@@ -28,6 +28,22 @@ from trade.skill_registry import (
     skill_names,
 )
 
+
+def _resolve_explicit_skill(token: str) -> str | None:
+    """把显式 skill 名或唯一 alias 解析为注册表中的 skill 名。"""
+    normalized = token.strip().lower().replace("_", "-")
+    names = {name.lower(): name for name in skill_names()}
+    if normalized in names:
+        return names[normalized]
+
+    matches = [
+        skill["name"]
+        for skill in _SKILLS
+        if any(str(alias).lower() == normalized for alias in skill.get("aliases", []))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 _injection_cache_lock = threading.Lock()
 try:
     _INJECTION_CACHE_MAX = int(os.environ.get("TRADE_SKILL_CACHE_MAX", "128"))
@@ -225,27 +241,18 @@ def _score_skills(query: str) -> list[dict]:
     # ── 策略 1：显式 skill 调用（得分 9999，确保绝对优先）──
     explicit_match = _EXPLICIT_RE.search(query)
     if explicit_match:
-        matched_text = explicit_match.group(0)
-        normalized_match = matched_text.lower().replace(" ", "-").replace("_", "-")
-        candidates = re.findall(r'b2b-[\w-]+', normalized_match)
-        if candidates:
-            skill_name_candidate = next(
-                (name for c in candidates
-                 for name in skill_names()
-                 if name == c),
-                None,
-            )
-            if skill_name_candidate:
-                from trade.skill_registry import _BLOCKED_SKILLS
-                if skill_name_candidate in _BLOCKED_SKILLS:
-                    return []  # 显式调用被封禁的 skill，返回空（不触发）
-                return [{
-                    "skill_name": skill_name_candidate,
-                    "score": _EXPLICIT_SCORE,
-                    "triggers_matched": [],
-                    "word_boundary_hits": 0,
-                    "substring_hits": 0,
-                }]
+        skill_name_candidate = _resolve_explicit_skill(explicit_match.group("skill"))
+        if skill_name_candidate:
+            from trade.skill_registry import _BLOCKED_SKILLS
+            if skill_name_candidate in _BLOCKED_SKILLS:
+                return []  # 显式调用被封禁的 skill，返回空（不触发）
+            return [{
+                "skill_name": skill_name_candidate,
+                "score": _EXPLICIT_SCORE,
+                "triggers_matched": [],
+                "word_boundary_hits": 0,
+                "substring_hits": 0,
+            }]
 
     # ── 策略 2：逐触发词评分（使用预编译正则 _PRECOMPILED，无 re.compile 开销）──
     normed = _norm(query)
@@ -282,13 +289,19 @@ def _score_skills(query: str) -> list[dict]:
                 "triggers_matched": triggers_matched,
                 "word_boundary_hits": boundary_hits,
                 "substring_hits": substring_hits,
-                "_order": idx,  # 注册顺序（用于等同分时打破平局）
+                "_max_trigger_length": max((len(t) for t in triggers_matched), default=0),
+                "_order": idx,  # 注册顺序（用于完全相同时打破平局）
             })
 
-    # 按 (-score, 注册顺序) 降序排列，确保确定性
-    results.sort(key=lambda r: (-r["score"], r["_order"]))
+    # 优先选择完整短语命中；分数相同或无完整短语时再比较得分和触发词长度。
+    # 这样“end to end lead generation”不会被其中的泛化短词“lead generation”抢走。
+    for r in results:
+        r["_phrase_bonus"] = 1 if any(len(t.split()) >= 3 for t in r["triggers_matched"]) else 0
+    results.sort(key=lambda r: (-r["_phrase_bonus"], -r["score"], -r["_max_trigger_length"], r["_order"]))
     # 移除内部排序键
     for r in results:
+        del r["_phrase_bonus"]
+        del r["_max_trigger_length"]
         del r["_order"]
 
     return results
@@ -332,7 +345,7 @@ def match_skill(query: str) -> dict | None:
 # QA 对检索（从 references/qa_pairs.md 加载结构化知识）
 # ─────────────────────────────────────────────────────────────────────────────
 
-_QA_CACHE: dict[str, list[dict]] = {}  # skill_name → [{"q":..., "a":..., "keywords":[...], "tags":[...]}]
+_QA_CACHE: dict[str, tuple[float, list[dict]]] = {}  # skill_name → (mtime, pairs)
 _QA_CACHE_LOCK = threading.Lock()
 
 
@@ -402,10 +415,6 @@ def _load_qa_pairs(skill_name: str) -> list[dict]:
     查找顺序：Hermes 已安装 skills 路径 → 源码 skills/ 目录（开发环境回退）。
     生产环境通过 install-trade-skills 将 references/ 同步到 ~/.hermes/skills/。
     """
-    with _QA_CACHE_LOCK:
-        if skill_name in _QA_CACHE:
-            return _QA_CACHE[skill_name]
-
     qa_path = None
 
     # 1. 优先 Hermes 已安装路径（生产环境）
@@ -430,13 +439,23 @@ def _load_qa_pairs(skill_name: str) -> list[dict]:
         return []
 
     try:
+        mtime = qa_path.stat().st_mtime
+    except OSError:
+        return []
+
+    with _QA_CACHE_LOCK:
+        cached = _QA_CACHE.get(skill_name)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+
+    try:
         content = qa_path.read_text(encoding="utf-8")
     except OSError:
         return []
 
     pairs = _parse_qa_pairs(content)
     with _QA_CACHE_LOCK:
-        _QA_CACHE[skill_name] = pairs
+        _QA_CACHE[skill_name] = (mtime, pairs)
     return pairs
 
 
@@ -534,7 +553,8 @@ def augment_query(
     from trade.skill_registry import _BLOCKED_SKILLS
 
     if skill_name:
-        skill = get_skill_by_name(skill_name)
+        resolved_name = _resolve_explicit_skill(skill_name) or skill_name
+        skill = get_skill_by_name(resolved_name)
         if skill and skill["name"] in _BLOCKED_SKILLS:
             skill = None
     else:
