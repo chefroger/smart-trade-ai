@@ -510,18 +510,23 @@ STOP RULE（防止无效搜索）:
    - Headline：职务 + 公司 + 核心价值主张（≤220字符）
    - About：用第一人称，讲清楚"我能帮谁解决什么问题"（≤2600字符）
    - Experience：每个条目讲成就而非职责（用数据），标题≤100字符、描述≤2000字符
-6. **会员能力分级（先确认用户套餐，再给方案）**：LinkedIn 付费版本分多档——免费 Basic / Premium Business / Sales Navigator（Core/Advanced/Advanced Plus），**不是"免费/高级"两级**。先问清用户属于哪一档；不给用户推荐其套餐没有的功能（找不到的菜单不要提），每个付费功能给出免费替代路径：
+6. **会员能力分级（先确认用户套餐，再给方案）**：LinkedIn 付费版本分多档——免费 Basic / Premium Business / Sales Navigator（Core/Advanced/Advanced Plus），**不是"免费/高级"两级**。先问清用户属于哪一档；用户说功能找不到时按"①套餐档位 → ②渠道版本（企业合同版与个人版功能范围不同）→ ③引导在账户中查找"排查，先怀疑版本不要怀疑操作。不给用户推荐其套餐没有的功能（找不到的菜单不要提），每个付费功能给出免费替代路径：
    - [SN] Saved Searches 保存搜索（Lead/Account 各上限50条；新增匹配每周邮件+Alerts 推送）
    - [SN] Personas 画像（职能/职位/职级/地区 四类条件组合，最多5个，仅用于 Lead Search）
    - [SN][Advanced+] CSV 批量导入 Account Lists（≤1000家/表，必填 Account Name，不建议填网址；仅 Advanced/Advanced Plus）
    - [SN] Account IQ 账户洞察（战略重点/财务/增长信号；非所有公司都有完整数据）
-   - [SN] Relationship Explorer（推荐最多8位联系人 + Best Path In）/ Relationship Maps（角色标记 Decision Maker/Champion/Evaluator/Procurement/Influencer，每账户10张图×30人，与同事共享需 Advanced+）
+   - [SN] Relationship Explorer（推荐最多8位联系人 + Best Path In + 共同联系人写介绍信）/ Relationship Maps（角色标记 Decision Maker/Champion/Evaluator/Procurement/Influencer，每账户10张图×30人，与同事共享需 Advanced+）
    - [SN][Advanced+] Buyer Intent（公司主页/官网/广告互动信号；分公开/私有信号，仅作优先级参考，不能断言"高购买意愿"）
    - [SN] Smart Links（可追踪查看者身份/点击/停留时长/访问时间；**看不到转发链**）
    - [SN] InMail（50条/月，累计上限150，90天内回复/接受/拒绝返还）
+   - [SN] Products & Services 优势描述（个人设置上传约5000字符，按市场建多版本，配合 AI 分析"如何搞定此人"）
    - [免费] 免费替代：固化搜索词文档 / 关注+互动+200字符连接邀请留言 / 发送资料后主动跟进 / 公开信息手工梳理
-7. **账号风控**：共享账号=永久封号；非正规渠道买"个人版"=高风险；短时大量加人→账号被限制发邀请（官方限制约1周，不支持人工解封）；官方邀请限制数值不公开，"一天加好友≤100"为经验安全值
-8. 返回：完整内容日历（周计划）+ 5条立即可发的帖子""",
+7. **专项打法（录像提炼，用户问到时使用）**：
+   - 大客户五步法：①从已成交大客户出发用「查看类似公司」找双胞胎公司 ②Account IQ 看战略/挑战/财务 ③Relationship Maps 锁定决策者（不找采购）④Buyer Intent 看信号 ⑤共同联系人写介绍信；思维="这家公司怎么赚钱→战略重心→挑战→我的方案解战略痛点"
+   - 群搜索三步法：免费版加群 → [SN] 复制群名筛群 → 按职务筛人
+   - 增长动态数据 → 生成谈判开场话题
+8. **账号风控**：共享账号=永久封号；非正规渠道买"个人版"=高风险；短时大量加人→账号被限制发邀请（官方限制约1周，不支持人工解封）；官方邀请限制数值不公开，"一天加好友≤100"为经验安全值。**防骗**：第三方售卖的"领英数据/能接入领英的CRM"都是假的（违法），主动劝阻用户
+9. 返回：完整内容日历（周计划）+ 5条立即可发的帖子""",
     },
     {
         "name": "b2b-social-media",
