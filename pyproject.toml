@@ -32,6 +32,11 @@ dependencies = [
   # in Hermes' own dependencies so every install/upgrade path is covered; keep the
   # pin in lockstep with Hermes tools/lazy_deps.py.
   "firecrawl-anydoc==0.2.4",
+  # PDF page-level probing. Hermes prefers poppler's `pdftotext` (a system package) and
+  # falls back to pypdfium2 when it is absent — without either, page counts and
+  # scanned-page detection degrade to "unknown" and PDFs can never be verified.
+  # Pure-wheel, no system libraries.
+  "pypdfium2>=4.30.0,<6.0",
   # OCR (Tesseract) — scan-to-text for documents, invoices, packing lists
   "pytesseract>=0.3.10",
   # Document extraction (used by read_file tool in Hermes)

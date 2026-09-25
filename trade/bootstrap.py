@@ -429,47 +429,83 @@ def background_github_skills_sync():
 
 # ── 文档解析依赖 ─────────────────────────────────────────────────────────
 
-# Hermes 用它解析 PDF 与旧版 Office 文档。缺失时 Hermes 不报错，
-# 而是把 PDF 当纯文本读成乱码，用户拿到的是垃圾内容。
-_DOCUMENT_DEP_FEATURE = "tool.doc_extract"
+# PDF / 旧版 Office 解析必需。两者缺失时 Hermes 不报错，而是把 PDF 当纯文本
+# 读成乱码，用户拿到的是垃圾内容；页数与扫描页检测也会退化成「未知」。
+# anydoc 走 Hermes 自己的懒加载机制（与其 pyproject 保持一致），
+# pypdfium2 不是 Hermes 的懒加载项，直接 pip 安装。
+_HERMES_DOC_FEATURE = "tool.doc_extract"
+_REQUIRED_DOC_MODULES: tuple[tuple[str, str], ...] = (
+    ("anydoc", "firecrawl-anydoc==0.2.4"),
+    ("pypdfium2", "pypdfium2>=4.30.0,<6.0"),
+)
 
 
-def _document_deps_missing() -> bool:
-    """检查 Hermes 文档解析依赖是否缺失。"""
+def _importable(name: str) -> bool:
+    """模块是否可导入（不触发网络，只做导入探测）。"""
+    import importlib.util
     try:
-        from tools import lazy_deps
-    except ImportError:
-        return False  # Hermes 不可用时交给版本检查报错，这里不重复告警
-    try:
-        return not lazy_deps.is_available(_DOCUMENT_DEP_FEATURE)
-    except Exception:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
         return False
+
+
+def _document_deps_missing() -> list[tuple[str, str]]:
+    """返回缺失的 (模块名, pip 规格) 列表。"""
+    return [(module, spec) for module, spec in _REQUIRED_DOC_MODULES if not _importable(module)]
+
+
+def _pip_install(specs: tuple[str, ...] | list[str]) -> None:
+    """用当前解释器安装依赖。"""
+    import subprocess
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", *specs],
+        capture_output=True, timeout=600, check=True,
+    )
 
 
 def _install_document_deps() -> None:
     """强制安装缺失的文档解析依赖；失败只记录，不影响启动。"""
+    missing = _document_deps_missing()
+    if not missing:
+        return
+    modules = {module for module, _ in missing}
+    # anydoc 优先交给 Hermes，复用它的 venv/uv 与约束逻辑。
+    pip_specs: list[str] = []
+    for module, spec in missing:
+        if module == "anydoc":
+            try:
+                from tools import lazy_deps
+                lazy_deps.ensure(_HERMES_DOC_FEATURE, prompt=False)
+                modules.discard("anydoc")
+                continue
+            except Exception as exc:
+                print(f"  Documents: Hermes 安装 {spec} 失败（{exc}），改用 pip")
+        pip_specs.append(spec)
+    if not pip_specs:
+        return
     try:
-        from tools import lazy_deps
-        lazy_deps.ensure(_DOCUMENT_DEP_FEATURE, prompt=False)
+        _pip_install(pip_specs)
     except Exception as exc:
-        print(f"  Documents: firecrawl-anydoc 安装失败（{exc}）—— PDF 将无法解析")
+        print(f"  Documents: 安装 {', '.join(pip_specs)} 失败（{exc}）—— PDF 可能无法解析")
 
 
 def ensure_document_deps():
-    """确保 Hermes 文档解析依赖已安装。
+    """确保 PDF 解析依赖已安装。
 
-    Hermes 把它列为 core 依赖，但精简安装或旧环境可能缺失。
-    缺失时后台补齐，不阻塞服务启动。
+    Hermes 把 anydoc 列为 core 依赖，但精简安装或旧环境可能缺失；
+    pypdfium2 是页数与扫描页检测的回退路径。缺失时后台补齐，不阻塞启动。
     """
-    if not _document_deps_missing():
+    missing = _document_deps_missing()
+    if not missing:
         return
-    print("  Documents: 缺少 firecrawl-anydoc（PDF 解析必需），后台安装中...")
+    names = "、".join(module for module, _ in missing)
+    print(f"  Documents: 缺少 {names}（PDF 解析必需），后台安装中...")
     import threading
 
     def _run():
         _install_document_deps()
         if not _document_deps_missing():
-            print("  Documents: firecrawl-anydoc 安装完成")
+            print("  Documents: 文档解析依赖已就绪")
 
     threading.Thread(target=_run, daemon=True).start()
 

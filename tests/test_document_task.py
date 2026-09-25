@@ -105,20 +105,54 @@ def test_binary_document_read_as_plain_text_is_disclosed(tmp_path):
 
 
 def test_pdf_with_page_metadata_counts_as_complete(tmp_path):
-    """PDF 走了解析器并有页数证据时才算完整读取。"""
+    """PDF 走了解析器、有页数且无扫描页时才算完整读取。"""
     (tmp_path / "真实合同.pdf").write_bytes(b"%PDF-1.4 ...")
     task = DocumentTask.from_root(tmp_path)
 
     result = task.evaluate({
         str((tmp_path / "真实合同.pdf").resolve()): {
             "status": "complete", "complete": True,
-            "document_metadata": {"kind": "pdf", "pages": 3},
+            "document_metadata": {"kind": "pdf", "pages": 3, "scanned_pages": []},
         },
     })
 
     assert result.status == "complete"
     assert result.complete == ["真实合同.pdf"]
     assert result.skipped == []
+
+
+def test_pdf_with_scanned_pages_is_disclosed(tmp_path):
+    """扫描页没有文字层，其内容不在提取结果里，不能算已完整读取。"""
+    (tmp_path / "扫描合同.pdf").write_bytes(b"%PDF-1.4 ...")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "扫描合同.pdf").resolve()): {
+            "status": "complete", "complete": True,
+            "document_metadata": {"kind": "pdf", "pages": 4, "scanned_pages": [2, 3]},
+        },
+    })
+
+    assert result.status == "complete"
+    assert result.complete == []
+    assert result.missing == []
+    assert result.skipped == [{"file": "扫描合同.pdf", "reason": "scanned_pages"}]
+
+
+def test_fully_scanned_pdf_is_disclosed(tmp_path):
+    """整份都是扫描件时同样披露，不判成 agent 漏读。"""
+    (tmp_path / "扫描件.pdf").write_bytes(b"%PDF-1.4 ...")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "扫描件.pdf").resolve()): {
+            "status": "complete", "complete": True,
+            "document_metadata": {"kind": "pdf", "pages": 2, "scanned_pages": [1, 2]},
+        },
+    })
+
+    assert result.status == "complete"
+    assert result.skipped == [{"file": "扫描件.pdf", "reason": "scanned_pages"}]
 
 
 def test_pdf_without_page_count_is_not_complete(tmp_path):

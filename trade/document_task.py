@@ -222,6 +222,12 @@ class DocumentTask:
                     "file": item.relative_path,
                     "reason": "no_page_coverage",
                 })
+            elif expected_kind == "pdf" and metadata.get("scanned_pages"):
+                # 扫描页没有文字层，其内容不在提取结果里——读到了不等于看全了。
+                unreadable.append({
+                    "file": item.relative_path,
+                    "reason": "scanned_pages",
+                })
             else:
                 complete.append(item.relative_path)
 
@@ -261,6 +267,7 @@ _REASON_LABELS = {
     "not_parsed_as_ppt": "演示文稿未能解析",
     "no_sheet_coverage": "未能确认全部工作表已读取",
     "no_page_coverage": "未能确认全部页面已读取",
+    "scanned_pages": "含扫描页（图片，无文字层），这部分内容无法读取",
 }
 
 
