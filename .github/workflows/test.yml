@@ -45,7 +45,7 @@ jobs:
           pip install fastapi "uvicorn[standard]" pydantic pyyaml packaging python-multipart
           pip install pymupdf openpyxl python-docx python-pptx xlrd beautifulsoup4
           pip install cryptography psutil dnspython
-          pip install openai==2.24.0 anthropic==0.87.0 pytesseract
+          pip install openai==2.24.0 anthropic==0.87.0
           pip install -e . --no-deps
 
       - name: Run tests

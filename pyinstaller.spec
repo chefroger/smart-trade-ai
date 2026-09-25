@@ -58,7 +58,7 @@ _hidden_imports = [
     "hermes_cli.env_loader", "hermes_cli.models",
     "hermes_constants", "run_agent",
     "openai", "anthropic",  # LLM Provider SDKs — required, not optional
-    "pytesseract",  # OCR — Python wrapper for Tesseract
+    "pymupdf", "anydoc", "pypdfium2",  # 文档解析 / 图纸渲染（扫描件走 vision）
     "psutil", "dnspython",  # Process management / DNS lookups
     "fastapi", "uvicorn", "uvicorn.loops", "uvicorn.loops.auto",
     "uvicorn.protocols", "uvicorn.protocols.http",

@@ -1800,11 +1800,11 @@ function _showDropModal(files) {
             toast(t('toast.imported', {n: result.uploaded, dir: subdir}));
             const input = document.getElementById('msg-input');
             if (input) {
-                // 检查是否有图片文件，提示 Agent 使用 vision 或 OCR
+                // 检查是否有图片文件，提示 Agent 使用 vision 识别
                 const hasImages = _pendingDropFiles.some(f => _isImageFile(f._relPath || f.name));
                 let hint = `[已导入 ${result.uploaded} 个文件到「${result.target_path}」，请递归读取该目录下的所有文件并分析`;
                 if (hasImages) {
-                    hint += `。图片文件请优先使用 vision 工具识别文字内容；如无 vision 能力，执行 tesseract <图片路径> stdout -l chi_sim+eng 进行 OCR 识别`;
+                    hint += `。图片文件请使用 vision 工具识别文字内容`;
                 }
                 hint += ']\n\n';
                 input.value = hint + input.value;

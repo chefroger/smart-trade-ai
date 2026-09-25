@@ -37,8 +37,10 @@ dependencies = [
   # scanned-page detection degrade to "unknown" and PDFs can never be verified.
   # Pure-wheel, no system libraries.
   "pypdfium2>=4.30.0,<6.0",
-  # OCR (Tesseract) — scan-to-text for documents, invoices, packing lists
-  "pytesseract>=0.3.10",
+  # NOTE: scanned pages / images are read through the vision path (see trade/tech_drawing.py
+  # and Hermes vision_analyze). Tesseract was dropped: it needs a separate system install
+  # while the recommended DeepSeek Flash model already reads images, and one OCR path keeps
+  # results consistent.
   # Document extraction (used by read_file tool in Hermes)
   # These are OPTIONAL — install with `pip install -e ".[docs]"` if you need document parsing
   "beautifulsoup4>=4.12.0,<5.0",

@@ -125,23 +125,9 @@ install_macos() {
         log_ok "ffmpeg 已安装: $(ffmpeg -version | head -1)"
     fi
 
-    # OCR — Tesseract（文档扫描、发票识别、装箱单读取）
-    log_step "6" "Tesseract OCR（文档扫描 & 文字识别）"
-    if ! command -v tesseract &>/dev/null; then
-        log_warn "Tesseract 未安装（OCR 功能不可用：发票/装箱单/扫描件无法识别文字）"
-        log_info "使用 Homebrew 安装: brew install tesseract"
-        log_info "中文语言包: brew install tesseract-lang"
-        log_info "也可手动下载: https://github.com/tesseract-ocr/tesseract"
-    else
-        log_ok "Tesseract 已安装: $(tesseract --version 2>&1 | head -1)"
-        # 检查中文语言包
-        if tesseract --list-langs 2>&1 | grep -q chi_sim; then
-            log_ok "中文语言包 (chi_sim) 已安装"
-        else
-            log_warn "中文语言包未安装，无法识别中文文档"
-            log_info "安装: brew install tesseract-lang"
-        fi
-    fi
+    # 扫描件识别走 vision（由模型完成），无需安装 tesseract
+    log_step "6" "扫描件识别：由 vision 处理（无需额外安装）"
+    log_info "推荐模型 DeepSeek V4 Flash 自带看图能力；扫描件/图片直接走 vision"
 
     log_step "7" "Playwright Chromium（可选，浏览器自动化工具需要）"
     log_info "如有需要，运行: npx playwright install --with-deps chromium"
@@ -199,21 +185,9 @@ install_debian() {
         sudo apt-get install -y -qq ffmpeg || log_warn "ffmpeg 安装失败"
     fi
 
-    log_step "7" "Tesseract OCR（文档扫描 & 文字识别）"
-    if command -v tesseract &>/dev/null; then
-        log_ok "Tesseract 已安装: $(tesseract --version 2>&1 | head -1)"
-        if tesseract --list-langs 2>&1 | grep -q chi_sim; then
-            log_ok "中文语言包 (chi_sim) 已安装"
-        else
-            log_warn "中文语言包未安装，请运行: sudo apt install tesseract-ocr-chi-sim"
-        fi
-    else
-        log_warn "Tesseract 未安装（OCR 功能不可用）"
-        log_info "安装: sudo apt install tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng"
-        sudo apt-get update -qq && sudo apt-get install -y -qq \
-            tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng || \
-            log_warn "Tesseract 安装失败，请手动安装"
-    fi
+    # 扫描件识别走 vision（由模型完成），无需安装 tesseract
+    log_step "7" "扫描件识别：由 vision 处理（无需额外安装）"
+    log_info "推荐模型 DeepSeek V4 Flash 自带看图能力；扫描件/图片直接走 vision"
 }
 
 # Fedora/RHEL/CentOS
