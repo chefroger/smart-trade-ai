@@ -171,6 +171,46 @@ def test_pdf_without_page_count_is_not_complete(tmp_path):
     assert any(item["file"] == "真实合同.pdf" for item in result.skipped)
 
 
+def test_callback_evidence_does_not_require_structured_metadata(tmp_path):
+    """回调来源的证据没有页数/Sheet 元数据，不能因此把正常文件判成未解析。"""
+    (tmp_path / "报价.xlsx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "合同.pdf").write_bytes(b"%PDF-1.4")
+    task = DocumentTask.from_root(tmp_path)
+    evidence = {
+        str((tmp_path / "报价.xlsx").resolve()): {
+            "status": "complete", "complete": True, "source": "callbacks",
+            "document_metadata": {"kind": "xlsx"},
+        },
+        str((tmp_path / "合同.pdf").resolve()): {
+            "status": "complete", "complete": True, "source": "callbacks",
+            "document_metadata": {"kind": "pdf"},
+        },
+    }
+
+    result = task.evaluate(evidence)
+
+    assert result.status == "complete"
+    assert set(result.complete) == {"报价.xlsx", "合同.pdf"}
+    assert result.skipped == []
+
+
+def test_callback_evidence_still_detects_unparsed_document(tmp_path):
+    """回调来源也能识别「文档没走解析器」——例如没解析就直接读成文本的 PDF。"""
+    (tmp_path / "合同.pdf").write_bytes(b"%PDF-1.4")
+    task = DocumentTask.from_root(tmp_path)
+    evidence = {
+        str((tmp_path / "合同.pdf").resolve()): {
+            "status": "complete", "complete": True, "source": "callbacks",
+            "document_metadata": {},          # 没有 kind = 没走解析器
+        },
+    }
+
+    result = task.evaluate(evidence)
+
+    assert result.complete == []
+    assert result.skipped == [{"file": "合同.pdf", "reason": "not_parsed_as_pdf"}]
+
+
 def test_agent_skipping_a_readable_file_still_blocks(tmp_path):
     """Hermes 能读、但 agent 完全没读的文件仍算不通过。"""
     (tmp_path / "notes.txt").write_text("a", encoding="utf-8")

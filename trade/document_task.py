@@ -194,6 +194,10 @@ class DocumentTask:
             record = normalized.get(key, {})
             metadata = record.get("document_metadata") or {}
             expected_kind = item.path.suffix.lower().lstrip(".")
+            # 回调来源的证据只有「是否走了解析器」，没有页数/Sheet/扫描页这些
+            # 结构化元数据（那些要靠 Hermes 的读取快照）。对这类证据只校验
+            # kind，不做更细的校验，否则会把读得好好的文件误判成未解析。
+            has_structured_metadata = record.get("source") != "callbacks"
             # 有读取记录、但需要解析器的格式没有解析证据：Hermes 多半把它当纯文本
             # 读了（例如缺 firecrawl-anydoc 时的 PDF）。这不是 agent 的疏漏，
             # 无论读到多少都按「无法解析」披露，而不是判成不通过。
@@ -212,17 +216,17 @@ class DocumentTask:
                 })
             elif record.get("complete") is not True:
                 missing.append(item.relative_path)
-            elif expected_kind == "xlsx" and not metadata.get("sheets"):
+            elif has_structured_metadata and expected_kind == "xlsx" and not metadata.get("sheets"):
                 unreadable.append({
                     "file": item.relative_path,
                     "reason": "no_sheet_coverage",
                 })
-            elif expected_kind == "pdf" and not metadata.get("pages"):
+            elif has_structured_metadata and expected_kind == "pdf" and not metadata.get("pages"):
                 unreadable.append({
                     "file": item.relative_path,
                     "reason": "no_page_coverage",
                 })
-            elif expected_kind == "pdf" and metadata.get("scanned_pages"):
+            elif has_structured_metadata and expected_kind == "pdf" and metadata.get("scanned_pages"):
                 # 扫描页没有文字层，其内容不在提取结果里——读到了不等于看全了。
                 unreadable.append({
                     "file": item.relative_path,

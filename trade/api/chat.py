@@ -28,6 +28,7 @@ from trade.document_task import (
 )
 from trade.helpers import build_query, create_agent
 from trade.hermes_compat import release_read_coverage, snapshot_read_coverage
+from trade.read_evidence import ReadEvidenceCollector
 
 _log = logging.getLogger(__name__)
 
@@ -104,6 +105,24 @@ def _extract_and_cache_skill(cid: int, full_query: str, skill_hint: str | None) 
             _last_skill_per_company[cid] = current_skill
     return current_skill
 
+def _document_gate(document_task, request_task_id: str, collector):
+    """取读取证据并判定完成度；两份来源都没有证据时返回 None（降级放行）。
+
+    优先用 Hermes 的读取快照（含页数/Sheet/扫描页等结构化信息）。公开版
+    Hermes 没有这个对外接口，回退到工具回调自收集的证据，这样不依赖
+    Hermes 上游改动也能做完整性判定。
+    """
+    hermes_evidence = snapshot_read_coverage(request_task_id)
+    if hermes_evidence:
+        return document_task.evaluate(hermes_evidence)
+    if collector is not None:
+        collected = collector.snapshot()
+        if collected:
+            return document_task.evaluate(collected)
+    _log.warning("No read evidence available; document gate skipped")
+    return None
+
+
 # ── 同步聊天 ──────────────────────────────────────────────────────────────
 
 @router.post("/chat")
@@ -149,6 +168,8 @@ async def trade_chat(
     _MAX_AGENT_RETRIES = 2  # 最多重试 2 次（共 3 次尝试），与 SSE 流式端点保持一致
 
     request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
+    # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
+    evidence = ReadEvidenceCollector() if document_task else None
 
     def _call_agent() -> tuple[str, bool]:
         """返回 (回复文本, 是否成功)；失败文本不得用于门禁判定。"""
@@ -158,6 +179,8 @@ async def trade_chat(
                 agent = create_agent(
                     ephemeral_system_prompt=skill_hint,
                     skill_name=current_skill,
+                    tool_start_callback=evidence.on_start if evidence else None,
+                    tool_complete_callback=evidence.on_complete if evidence else None,
                 )
                 if document_task and request_task_id:
                     result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
@@ -203,16 +226,11 @@ async def trade_chat(
     if document_task and request_task_id:
         try:
             if agent_ok:
-                evidence = snapshot_read_coverage(request_task_id)
-                if evidence is None:
-                    # Hermes 尚未提供读取证据接口：降级为普通问答，不阻断用户。
-                    _log.warning("Read coverage API unavailable; document gate skipped")
-                else:
-                    gate_result = document_task.evaluate(evidence)
-                    if gate_result.status == "incomplete":
-                        # 不通过时把原因作为回答返回，既不丢用户提问也不给不完整结论。
-                        incomplete = True
-                        response = format_incomplete_report(gate_result)
+                gate_result = _document_gate(document_task, request_task_id, evidence)
+                if gate_result is not None and gate_result.status == "incomplete":
+                    # 不通过时把原因作为回答返回，既不丢用户提问也不给不完整结论。
+                    incomplete = True
+                    response = format_incomplete_report(gate_result)
         finally:
             # 释放 Hermes 侧该请求的读取记录，避免长驻进程内无限累积。
             release_read_coverage(request_task_id)
@@ -285,6 +303,8 @@ async def trade_chat_stream(
                           document_task.truncated, len(document_task.files))
                 document_task = None
     request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
+    # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
+    evidence = ReadEvidenceCollector() if document_task else None
 
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -304,9 +324,14 @@ async def trade_chat_stream(
         loop.call_soon_threadsafe(_safe_put, event_type, data or {})
 
     def _tool_start(tc_id, name, args):
+        if evidence is not None:
+            evidence.on_start(tc_id, name, args)
         _emit_threadsafe("tool_start", {"tool_call_id": tc_id, "name": name, "args": args})
 
     def _tool_complete(tc_id, name, args, result):
+        # 证据收集与 SSE 推送解耦：队列满丢事件不影响完整性判定。
+        if evidence is not None:
+            evidence.on_complete(tc_id, name, args, result)
         preview = ""
         if isinstance(result, str):
             preview = result[:300]
@@ -354,12 +379,8 @@ async def trade_chat_stream(
                 gate_result = None
                 if document_task and request_task_id and result:
                     try:
-                        evidence = snapshot_read_coverage(request_task_id)
-                        if evidence is None:
-                            # Hermes 尚未提供读取证据接口：降级为普通问答，不阻断用户。
-                            _log.warning("Read coverage API unavailable; document gate skipped")
-                        else:
-                            gate_result = document_task.evaluate(evidence)
+                        gate_result = _document_gate(document_task, request_task_id, evidence)
+                        if gate_result is not None:
                             if gate_result.status == "incomplete":
                                 # 不通过时把原因作为回答下发，不报错也不给不完整结论。
                                 result = format_incomplete_report(gate_result)

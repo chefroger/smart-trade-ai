@@ -152,6 +152,113 @@ async def test_error_response_is_not_saved_as_complete_analysis(env, agent_stub)
     assert saved[0]["files_read"] is None
 
 
+def _agent_reporting_reads(reads, captured):
+    """替身 agent：运行期间通过回调上报指定的读取结果。"""
+    import json
+
+    class _Agent:
+        def run_conversation(self, *_a, **_k):
+            callback = captured.get("tool_complete_callback")
+            for path, payload in reads:
+                callback("1", "read_file", {"path": str(path)}, json.dumps(payload))
+            return {"final_response": "分析完成"}
+
+        def chat(self, *_a, **_k):
+            return "分析完成"
+
+    return _Agent()
+
+
+@pytest.mark.asyncio
+async def test_gate_falls_back_to_callbacks_without_hermes_api(env):
+    """公开版 Hermes 没有读取快照接口时，用工具回调自收集的证据做门禁。"""
+    import trade.api.chat as chat
+    from trade.api.models import ChatRequest
+
+    captured = {}
+    saved = []
+    reads = [
+        (env["dir"] / "合同.txt", {"total_lines": 2, "truncated": False}),
+        (env["dir"] / "报价.xlsx", {"total_lines": 5, "truncated": False,
+                                    "extracted_document": True}),
+    ]
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return _agent_reporting_reads(reads, captured)
+
+    with patch.object(chat, "create_agent", side_effect=_create), \
+         patch.object(chat, "build_query", return_value=("Q", "H")), \
+         patch.object(chat, "snapshot_read_coverage", return_value=None), \
+         patch("trade.license.check_license", return_value=(True, "")), \
+         patch.object(chat.chat_memory, "save_with_context",
+                      side_effect=lambda **k: saved.append(k) or {"id": 1}):
+        payload = ChatRequest(query=STRICT_QUERY, library_id=env["library"]["id"])
+        result = await chat.trade_chat(payload, env["cid"])
+
+    assert result["response"] == "分析完成"
+    assert set(saved[0]["files_read"] and [f["file"] for f in saved[0]["files_read"]]) == {
+        "合同.txt", "报价.xlsx"}
+
+
+@pytest.mark.asyncio
+async def test_callback_gate_blocks_skipped_file(env):
+    """回调路径同样能发现 agent 漏读：只读了其中一个文件就判不通过。"""
+    import trade.api.chat as chat
+    from trade.api.models import ChatRequest
+
+    captured = {}
+    saved = []
+    reads = [(env["dir"] / "合同.txt", {"total_lines": 2, "truncated": False})]
+
+    with patch.object(chat, "create_agent",
+                      side_effect=lambda **kw: (captured.update(kw),
+                                                _agent_reporting_reads(reads, captured))[1]), \
+         patch.object(chat, "build_query", return_value=("Q", "H")), \
+         patch.object(chat, "snapshot_read_coverage", return_value=None), \
+         patch("trade.license.check_license", return_value=(True, "")), \
+         patch.object(chat.chat_memory, "save_with_context",
+                      side_effect=lambda **k: saved.append(k) or {"id": 1}):
+        payload = ChatRequest(query=STRICT_QUERY, library_id=env["library"]["id"])
+        result = await chat.trade_chat(payload, env["cid"])
+
+    assert "报价.xlsx" in result["response"]
+    assert result["analysis_incomplete"] is True
+
+
+@pytest.mark.asyncio
+async def test_hermes_snapshot_wins_over_callbacks(env):
+    """Hermes 快照可用时优先用它（信息更全，含扫描页等结构化字段）。"""
+    import trade.api.chat as chat
+    from trade.api.models import ChatRequest
+
+    captured = {}
+    saved = []
+    # 回调只上报读了合同.txt；快照里两个文件都读完 —— 应以快照为准
+    reads = [(env["dir"] / "合同.txt", {"total_lines": 2, "truncated": False})]
+    snapshot = {
+        str((env["dir"] / "合同.txt").resolve()): {
+            "status": "complete", "complete": True, "source": "hermes"},
+        str((env["dir"] / "报价.xlsx").resolve()): {
+            "status": "complete", "complete": True, "source": "hermes",
+            "document_metadata": {"kind": "xlsx", "sheets": ["Sheet1"]}},
+    }
+
+    with patch.object(chat, "create_agent",
+                      side_effect=lambda **kw: (captured.update(kw),
+                                                _agent_reporting_reads(reads, captured))[1]), \
+         patch.object(chat, "build_query", return_value=("Q", "H")), \
+         patch.object(chat, "snapshot_read_coverage", return_value=snapshot), \
+         patch("trade.license.check_license", return_value=(True, "")), \
+         patch.object(chat.chat_memory, "save_with_context",
+                      side_effect=lambda **k: saved.append(k) or {"id": 1}):
+        payload = ChatRequest(query=STRICT_QUERY, library_id=env["library"]["id"])
+        result = await chat.trade_chat(payload, env["cid"])
+
+    assert result["response"] == "分析完成"
+    assert "analysis_incomplete" not in result
+
+
 @pytest.mark.asyncio
 async def test_normal_chat_skips_gate(env, agent_stub):
     """普通提问不启用门禁，保持原有行为。"""
