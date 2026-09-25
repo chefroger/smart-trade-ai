@@ -21,7 +21,9 @@ from trade import chat_memory
 from trade import library as library_module
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
+from trade.document_task import DocumentTask, should_enforce_document_gate
 from trade.helpers import build_query, create_agent
+from trade.hermes_compat import snapshot_read_coverage
 
 _log = logging.getLogger(__name__)
 
@@ -129,8 +131,15 @@ async def trade_chat(
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
     current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
+    document_task = None
+    if payload.library_id and should_enforce_document_gate(query, has_library=True):
+        library = library_module.get(payload.library_id, company_id=cid)
+        if library:
+            document_task = DocumentTask.from_root(library["root_path"])
 
     _MAX_AGENT_RETRIES = 2  # 最多重试 2 次（共 3 次尝试），与 SSE 流式端点保持一致
+
+    request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
 
     def _call_agent():
         last_error = ""
@@ -140,7 +149,10 @@ async def trade_chat(
                     ephemeral_system_prompt=skill_hint,
                     skill_name=current_skill,
                 )
-                result = agent.chat(full_query)
+                if document_task and request_task_id:
+                    result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
+                else:
+                    result = agent.chat(full_query)
                 if result:
                     return result
                 if attempt < _MAX_AGENT_RETRIES:
@@ -174,6 +186,23 @@ async def trade_chat(
     except TimeoutError:
         response = "⏰ Agent 执行时间过长（超过 10 分钟），已自动中止。请简化问题后重试。"
 
+    gate_result = None
+    if document_task and request_task_id:
+        evidence = snapshot_read_coverage(request_task_id)
+        if evidence is None:
+            raise HTTPException(status_code=503, detail={
+                "code": "FILE_ANALYSIS_EVIDENCE_UNAVAILABLE",
+                "message": "当前 Hermes 未提供文件读取完成证据，无法确认完整分析。",
+            })
+        gate_result = document_task.evaluate(evidence)
+        if gate_result.status != "complete":
+            raise HTTPException(status_code=409, detail={
+                "code": "FILE_ANALYSIS_INCOMPLETE",
+                "message": "文件尚未全部读取完成，未返回分析结论。",
+                "missing": gate_result.missing,
+                "errors": gate_result.errors,
+            })
+
     lib_name = ""
     if payload.library_id:
         lib = library_module.get(payload.library_id, company_id=cid)
@@ -183,6 +212,8 @@ async def trade_chat(
     conv = chat_memory.save_with_context(
         company_id=cid, library_id=payload.library_id, query=query,
         response=response, library_name=lib_name,
+        files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
+                    if gate_result else None),
         context=payload.context or "",
         skill=current_skill or "",
     )
@@ -224,6 +255,12 @@ async def trade_chat_stream(
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
     current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
+    document_task = None
+    if payload.library_id and should_enforce_document_gate(query, has_library=True):
+        library = library_module.get(payload.library_id, company_id=cid)
+        if library:
+            document_task = DocumentTask.from_root(library["root_path"])
+    request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
 
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -277,7 +314,10 @@ async def trade_chat_stream(
                     skill_name=current_skill,
                 )
                 start = time.time()
-                result = agent.chat(full_query)
+                if document_task and request_task_id:
+                    result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
+                else:
+                    result = agent.chat(full_query)
                 elapsed = time.time() - start
 
                 if not result and attempt < _MAX_AGENT_RETRIES:
@@ -286,6 +326,32 @@ async def trade_chat_stream(
                     _log.warning("Agent returned empty in stream, retry %d/%d", attempt + 1, _MAX_AGENT_RETRIES)
                     time.sleep(2 ** attempt)
                     continue
+
+                gate_result = None
+                if document_task and request_task_id:
+                    evidence = snapshot_read_coverage(request_task_id)
+                    if evidence is None:
+                        _emit_threadsafe("error", {
+                            "code": "FILE_ANALYSIS_EVIDENCE_UNAVAILABLE",
+                            "message": "当前 Hermes 未提供文件读取完成证据，无法确认完整分析。",
+                        })
+                        return None
+                    gate_result = document_task.evaluate(evidence)
+                    if gate_result.status != "complete":
+                        _emit_threadsafe("analysis_gate", {
+                            "status": gate_result.status,
+                            "missing": gate_result.missing,
+                            "errors": gate_result.errors,
+                        })
+                        _emit_threadsafe("error", {
+                            "code": "FILE_ANALYSIS_INCOMPLETE",
+                            "message": "文件尚未全部读取完成，未返回分析结论。",
+                            "missing": gate_result.missing,
+                        })
+                        return None
+                    _emit_threadsafe("analysis_gate", {
+                        "status": "complete", "files": gate_result.complete,
+                    })
 
                 lib_name = ""
                 if payload.library_id:
@@ -300,6 +366,8 @@ async def trade_chat_stream(
                         company_id=cid, library_id=payload.library_id,
                         query=query, response=result or "",
                         library_name=lib_name,
+                        files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
+                                    if gate_result else None),
                         context=payload.context or "",
                         skill=current_skill or "",
                     )

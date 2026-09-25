@@ -2132,6 +2132,12 @@ async function sendMsg() {
                     case 'thinking':
                         if (!progDiv.querySelector('.thinking-msg')) { const t=document.createElement('div'); t.className='thinking-msg'; t.style.cssText='font-size:12px;color:var(--text-muted);padding:4px 0;'; t.textContent='💭 '+(data.message||'思考中...'); progDiv.appendChild(t); }
                         break;
+                    case 'analysis_gate':
+                        if (data.status !== 'complete') {
+                            const missing = (data.missing||[]).join(', ') || '未提供详细清单';
+                            const gate = document.createElement('div'); gate.className='thinking-msg'; gate.style.cssText='font-size:12px;color:var(--accent-red);padding:4px 0;'; gate.textContent='⚠ 文件尚未完整读取：'+missing; progDiv.appendChild(gate);
+                        }
+                        break;
                     case 'response': responseText = data.text||''; responseConvId = data.conversation_id || null; _currentConvId = data.conversation_id || null; break;
                     case 'error': progDiv.innerHTML=`<div class="msg-avatar" style="background:var(--accent-red);color:#fff;">⚠</div><div class="msg-body" style="color:var(--accent-red);">${esc(data.message)}</div>`; sendBtn.disabled = false; return;
                     }

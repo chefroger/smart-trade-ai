@@ -122,6 +122,17 @@ class TestSmokeChatModule:
             agent = create_agent()
             assert agent.chat("hi") == "ok"
 
+            # Hermes 新参数默认不传，避免旧版 AIAgent 构造失败。
+            captured = {}
+            class _CaptureAgent:
+                def __init__(self, **kw):
+                    captured.update(kw)
+            run_agent.AIAgent = _CaptureAgent
+            create_agent(cwd="/tmp/work", connection_callback=lambda *_: None, side_agent=True)
+            assert captured["cwd"] == "/tmp/work"
+            assert captured["side_agent"] is True
+            assert "connection_callback" in captured
+
             # create_agent should NOT set HERMES_YOLO_MODE (moved to server.py startup)
             assert os.environ.get("HERMES_YOLO_MODE", "") != "true"
 

@@ -9,13 +9,10 @@ Trade AI Assistant — 记忆与模型 API 路由。
 
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, Depends
 
 from trade import chat_memory
 from trade.api.deps import opt_company
-from trade.helpers import _parse_model_config_str
 
 router = APIRouter(tags=["memory"])
 
@@ -66,43 +63,14 @@ def list_providers():
     返回每个提供商的模型列表、API Key 配置状态。
     """
     try:
-        from hermes_cli.auth import PROVIDER_REGISTRY
-        from hermes_cli.config import load_config
+        from trade.hermes_compat import current_model_config, list_provider_records
 
-        cfg = load_config()
-        model_cfg = cfg.get("model", {})
-        active_provider = ""
-        active_model = ""
-        # 兼容 v0.13 (dict) 和 v0.14+ (str) 两种 config.model 格式
-        if isinstance(model_cfg, dict):
-            active_provider = model_cfg.get("provider", "")
-            active_model = model_cfg.get("default", "")
-        elif isinstance(model_cfg, str) and model_cfg.strip():
-            # v0.14 flat format — 复用 helpers 的统一解析函数
-            active_provider, active_model, _ = _parse_model_config_str(model_cfg)
-
+        active_provider, active_model = current_model_config()
         providers = []
-        for pid, pconfig in PROVIDER_REGISTRY.items():
-            # 检查 API Key 是否已配置
-            has_key = False
-            if pconfig.auth_type == "api_key":
-                for env_name in pconfig.api_key_env_vars:
-                    if os.getenv(env_name):
-                        has_key = True
-                        break
-
-            # 获取该提供商的模型列表（v0.14 移除了 name_to_models，使用 _PROVIDER_MODELS）
-            try:
-                from hermes_cli.models import _PROVIDER_MODELS
-                models = _PROVIDER_MODELS.get(pid, [])
-            except Exception:
-                models = []
-
+        for record in list_provider_records():
+            pid = record["id"]
             providers.append({
-                "id": pid,
-                "name": pconfig.name or pid,
-                "has_key": has_key,
-                "models": models[:10],
+                **record,
                 "is_active": pid == active_provider,
                 "active_model": active_model if pid == active_provider else "",
             })

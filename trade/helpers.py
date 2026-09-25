@@ -127,31 +127,16 @@ def check_provider() -> str | None:
     如果缺少配置则返回错误信息字符串，配置正常则返回 None。
     必须在 ``import run_agent``（该操作会触发 .env 加载）之后调用。
     """
-    from hermes_cli.config import load_config
+    from trade.hermes_compat import current_model_config, provider_is_configured
 
-    cfg = load_config()
-    model_cfg = cfg.get("model", "")
-    # 兼容 v0.13 (dict) 和 v0.14+ (str) 两种 config.model 格式
-    if isinstance(model_cfg, dict):
-        # v0.13 字典格式：检查 default model 和 provider 是否都已配置
-        if not model_cfg.get("default") and not model_cfg.get("provider"):
-            return "未配置 AI 模型。请先运行 trade setup 选择模型。"
-    elif isinstance(model_cfg, str):
-        # v0.14+ 字符串格式：检查是否为空字符串
-        if not model_cfg.strip():
-            return "未配置 AI 模型。请先运行 trade setup 选择模型。"
+    provider, model = current_model_config()
+    if not provider and not model:
+        return "未配置 AI 模型。请先运行 trade setup 选择模型。"
 
-    has_key = any(
-        os.getenv(k)
-        for k in (
-            "OPENAI_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY",
-            "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "DEEPSEEK_API_KEY",
-            "GLM_API_KEY", "KIMI_API_KEY", "DASHSCOPE_API_KEY",
-            "LLM_API_KEY", "HF_TOKEN",
-        )
-    )
-    if not has_key:
-        # 所有已知的 API Key 环境变量均未设置，无法调用 LLM
+    configured = provider_is_configured(provider) if provider else None
+    if configured is False:
+        return "未检测到当前 Provider 的认证信息。请在 ~/.hermes/.env 中设置，或运行 trade setup 重新配置。"
+    if configured is None and not os.getenv("LLM_API_KEY"):
         return "未检测到 API Key。请在 ~/.hermes/.env 中设置，或运行 trade setup 重新配置。"
 
     # 检查 openai SDK 是否可导入 — Hermes 用此 SDK 作为所有 provider 的通用 HTTP 客户端
@@ -188,19 +173,12 @@ def get_agent_kwargs() -> dict:
     """
     from hermes_cli.config import load_config
 
-    cfg = load_config()
-    model_cfg = cfg.get("model", {})
+    from trade.hermes_compat import current_model_config
 
-    # 兼容 v0.13 (dict: {"provider":"...", "default":"...", "base_url":"..."})
-    #     和 v0.14+ (str: "provider:model" 或 "provider/model")
-    if isinstance(model_cfg, dict):
-        provider = model_cfg.get("provider", "")
-        model = model_cfg.get("default", "")
-        base_url = model_cfg.get("base_url", "")
-    elif isinstance(model_cfg, str) and model_cfg.strip():
-        provider, model, base_url = _parse_model_config_str(model_cfg)
-    else:
-        provider = model = base_url = ""
+    cfg = load_config()
+    provider, model = current_model_config()
+    model_cfg = cfg.get("model", {})
+    base_url = model_cfg.get("base_url", "") if isinstance(model_cfg, dict) else ""
 
     # ── base_url: from PROVIDER_REGISTRY, env var overrides config.yaml ──
     env_url = ""
@@ -253,6 +231,9 @@ def create_agent(
     *,
     ephemeral_system_prompt: str | None = None,
     skill_name: str | None = None,
+    cwd: str | None = None,
+    connection_callback=None,
+    side_agent: bool | None = None,
 ):
     """创建 Hermes AIAgent 实例的统一入口。
 
@@ -265,7 +246,10 @@ def create_agent(
         ephemeral_system_prompt: 临时 system prompt（OSINT 等 skill 的指令，
                                  通过 Hermes 原生 system 层传入，不混入 user message）
         skill_name: 本次匹配到的 skill 名 —— 用于一致性温度分流（分析/提取类低温
-                    保数据稳定，创作类保持默认温度）。见 _consistency_request_overrides。
+                                 保数据稳定，创作类保持默认温度）。见 _consistency_request_overrides。
+        cwd: 可选的服务端工作目录，仅显式传入时使用。
+        connection_callback: 可选的 Hermes 连接状态回调。
+        side_agent: 可选的 Hermes side-agent 标志。
 
     Returns:
         AIAgent 实例，已配置好 quiet_mode / max_iterations / provider 等参数。
@@ -294,19 +278,27 @@ def create_agent(
         enabled_toolsets = ["web", "search", "file", "terminal", "code_execution",
                             "browser", "skills", "memory", "cronjob", "todo"]
 
-    return AIAgent(
-        quiet_mode=True,
-        max_iterations=int(os.environ.get("TRADE_MAX_ITERATIONS", "90")),
-        provider=kwargs["provider"] or None,
-        base_url=kwargs["base_url"] or None,
-        model=kwargs["model"] or None,
-        api_key=kwargs["api_key"] or None,
-        tool_start_callback=tool_start_callback,
-        tool_complete_callback=tool_complete_callback,
-        enabled_toolsets=enabled_toolsets,
-        ephemeral_system_prompt=ephemeral_system_prompt,
-        request_overrides=request_overrides,
-    )
+    agent_kwargs = {
+        "quiet_mode": True,
+        "max_iterations": int(os.environ.get("TRADE_MAX_ITERATIONS", "90")),
+        "provider": kwargs["provider"] or None,
+        "base_url": kwargs["base_url"] or None,
+        "model": kwargs["model"] or None,
+        "api_key": kwargs["api_key"] or None,
+        "tool_start_callback": tool_start_callback,
+        "tool_complete_callback": tool_complete_callback,
+        "enabled_toolsets": enabled_toolsets,
+        "ephemeral_system_prompt": ephemeral_system_prompt,
+        "request_overrides": request_overrides,
+    }
+    # 仅在调用方显式传入时透传 Hermes 新参数，兼容旧版 AIAgent。
+    if cwd is not None:
+        agent_kwargs["cwd"] = cwd
+    if connection_callback is not None:
+        agent_kwargs["connection_callback"] = connection_callback
+    if side_agent is not None:
+        agent_kwargs["side_agent"] = side_agent
+    return AIAgent(**agent_kwargs)
 
 
 # ── Token estimation helpers ──────────────────────────────────────────────────
