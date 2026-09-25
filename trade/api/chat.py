@@ -21,9 +21,13 @@ from trade import chat_memory
 from trade import library as library_module
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
-from trade.document_task import DocumentTask, should_enforce_document_gate
+from trade.document_task import (
+    DocumentTask,
+    format_incomplete_report,
+    should_enforce_document_gate,
+)
 from trade.helpers import build_query, create_agent
-from trade.hermes_compat import snapshot_read_coverage
+from trade.hermes_compat import release_read_coverage, snapshot_read_coverage
 
 _log = logging.getLogger(__name__)
 
@@ -132,16 +136,22 @@ async def trade_chat(
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
     current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
     document_task = None
-    if payload.library_id and should_enforce_document_gate(query, has_library=True):
+    if payload.library_id and should_enforce_document_gate(query):
         library = library_module.get(payload.library_id, company_id=cid)
         if library:
             document_task = DocumentTask.from_root(library["root_path"])
+            if document_task.truncated or not document_task.files:
+                # 目录过大或没有可分析文件：无法可靠判定完整性，退回普通问答。
+                _log.info("Document gate skipped (truncated=%s, files=%d)",
+                          document_task.truncated, len(document_task.files))
+                document_task = None
 
     _MAX_AGENT_RETRIES = 2  # 最多重试 2 次（共 3 次尝试），与 SSE 流式端点保持一致
 
     request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
 
-    def _call_agent():
+    def _call_agent() -> tuple[str, bool]:
+        """返回 (回复文本, 是否成功)；失败文本不得用于门禁判定。"""
         last_error = ""
         for attempt in range(_MAX_AGENT_RETRIES + 1):
             try:
@@ -154,54 +164,58 @@ async def trade_chat(
                 else:
                     result = agent.chat(full_query)
                 if result:
-                    return result
+                    return result, True
                 if attempt < _MAX_AGENT_RETRIES:
                     _log.warning("Agent returned empty, retry %d/%d", attempt + 1, _MAX_AGENT_RETRIES)
                     time.sleep(2 ** attempt)
                     continue
-                return "Agent 返回了空响应。"
+                return "Agent 返回了空响应。", False
             except ImportError:
-                return "⚠️ AI Agent 模块未加载。"
+                return "⚠️ AI Agent 模块未加载。", False
             except RuntimeError as e:
                 last_error = str(e)
                 if attempt < _MAX_AGENT_RETRIES:
                     _log.warning("Agent RuntimeError, retry %d/%d: %s", attempt + 1, _MAX_AGENT_RETRIES, e)
                     time.sleep(2 ** attempt)
                     continue
-                return f"⚠️ {e}"
+                return f"⚠️ {e}", False
             except Exception as e:
                 last_error = str(e) or f"Agent call failed (attempt {attempt + 1})"
                 _log.exception("Agent call failed (attempt %d/%d)", attempt + 1, _MAX_AGENT_RETRIES)
                 if attempt < _MAX_AGENT_RETRIES:
                     time.sleep(2 ** attempt)
                     continue
-        return f"⚠️ Agent 调用失败: {last_error}" if last_error else "⚠️ Agent 调用失败，请稍后重试。"
+        fallback = f"⚠️ Agent 调用失败: {last_error}" if last_error else "⚠️ Agent 调用失败，请稍后重试。"
+        return fallback, False
 
     loop = asyncio.get_running_loop()
+    agent_ok = True
     try:
-        response = await asyncio.wait_for(
+        response, agent_ok = await asyncio.wait_for(
             loop.run_in_executor(None, _call_agent),
             timeout=600,
         )
     except TimeoutError:
-        response = "⏰ Agent 执行时间过长（超过 10 分钟），已自动中止。请简化问题后重试。"
+        response, agent_ok = "⏰ Agent 执行时间过长（超过 10 分钟），已自动中止。请简化问题后重试。", False
 
     gate_result = None
+    incomplete = False
     if document_task and request_task_id:
-        evidence = snapshot_read_coverage(request_task_id)
-        if evidence is None:
-            raise HTTPException(status_code=503, detail={
-                "code": "FILE_ANALYSIS_EVIDENCE_UNAVAILABLE",
-                "message": "当前 Hermes 未提供文件读取完成证据，无法确认完整分析。",
-            })
-        gate_result = document_task.evaluate(evidence)
-        if gate_result.status != "complete":
-            raise HTTPException(status_code=409, detail={
-                "code": "FILE_ANALYSIS_INCOMPLETE",
-                "message": "文件尚未全部读取完成，未返回分析结论。",
-                "missing": gate_result.missing,
-                "errors": gate_result.errors,
-            })
+        try:
+            if agent_ok:
+                evidence = snapshot_read_coverage(request_task_id)
+                if evidence is None:
+                    # Hermes 尚未提供读取证据接口：降级为普通问答，不阻断用户。
+                    _log.warning("Read coverage API unavailable; document gate skipped")
+                else:
+                    gate_result = document_task.evaluate(evidence)
+                    if gate_result.status == "incomplete":
+                        # 不通过时把原因作为回答返回，既不丢用户提问也不给不完整结论。
+                        incomplete = True
+                        response = format_incomplete_report(gate_result)
+        finally:
+            # 释放 Hermes 侧该请求的读取记录，避免长驻进程内无限累积。
+            release_read_coverage(request_task_id)
 
     lib_name = ""
     if payload.library_id:
@@ -217,7 +231,12 @@ async def trade_chat(
         context=payload.context or "",
         skill=current_skill or "",
     )
-    return {"response": response, "conversation": conv}
+    payload_out = {"response": response, "conversation": conv}
+    if gate_result is not None:
+        payload_out["analysis_skipped"] = gate_result.skipped
+        if incomplete:
+            payload_out["analysis_incomplete"] = True
+    return payload_out
 
 
 # ── SSE 流式聊天 ──────────────────────────────────────────────────────────
@@ -256,10 +275,15 @@ async def trade_chat_stream(
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
     current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
     document_task = None
-    if payload.library_id and should_enforce_document_gate(query, has_library=True):
+    if payload.library_id and should_enforce_document_gate(query):
         library = library_module.get(payload.library_id, company_id=cid)
         if library:
             document_task = DocumentTask.from_root(library["root_path"])
+            if document_task.truncated or not document_task.files:
+                # 目录过大或没有可分析文件：无法可靠判定完整性，退回普通问答。
+                _log.info("Document gate skipped (truncated=%s, files=%d)",
+                          document_task.truncated, len(document_task.files))
+                document_task = None
     request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
 
     loop = asyncio.get_running_loop()
@@ -328,30 +352,27 @@ async def trade_chat_stream(
                     continue
 
                 gate_result = None
-                if document_task and request_task_id:
-                    evidence = snapshot_read_coverage(request_task_id)
-                    if evidence is None:
-                        _emit_threadsafe("error", {
-                            "code": "FILE_ANALYSIS_EVIDENCE_UNAVAILABLE",
-                            "message": "当前 Hermes 未提供文件读取完成证据，无法确认完整分析。",
-                        })
-                        return None
-                    gate_result = document_task.evaluate(evidence)
-                    if gate_result.status != "complete":
-                        _emit_threadsafe("analysis_gate", {
-                            "status": gate_result.status,
-                            "missing": gate_result.missing,
-                            "errors": gate_result.errors,
-                        })
-                        _emit_threadsafe("error", {
-                            "code": "FILE_ANALYSIS_INCOMPLETE",
-                            "message": "文件尚未全部读取完成，未返回分析结论。",
-                            "missing": gate_result.missing,
-                        })
-                        return None
-                    _emit_threadsafe("analysis_gate", {
-                        "status": "complete", "files": gate_result.complete,
-                    })
+                if document_task and request_task_id and result:
+                    try:
+                        evidence = snapshot_read_coverage(request_task_id)
+                        if evidence is None:
+                            # Hermes 尚未提供读取证据接口：降级为普通问答，不阻断用户。
+                            _log.warning("Read coverage API unavailable; document gate skipped")
+                        else:
+                            gate_result = document_task.evaluate(evidence)
+                            if gate_result.status == "incomplete":
+                                # 不通过时把原因作为回答下发，不报错也不给不完整结论。
+                                result = format_incomplete_report(gate_result)
+                            _emit_threadsafe("analysis_gate", {
+                                "status": gate_result.status,
+                                "files": gate_result.complete,
+                                "missing": gate_result.missing,
+                                "errors": gate_result.errors,
+                                "skipped": gate_result.skipped,
+                            })
+                    finally:
+                        # 释放 Hermes 侧该请求的读取记录，避免长驻进程内无限累积。
+                        release_read_coverage(request_task_id)
 
                 lib_name = ""
                 if payload.library_id:

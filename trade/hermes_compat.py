@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import Any
@@ -138,6 +139,20 @@ def snapshot_read_coverage(task_id: str) -> dict[str, dict[str, Any]] | None:
         return None
     snapshot = _snapshot(task_id)
     return snapshot if isinstance(snapshot, dict) else None
+
+
+def release_read_coverage(task_id: str) -> None:
+    """释放指定 task 的读取记录；旧版 Hermes 没有该接口时静默跳过。"""
+    if not task_id:
+        return
+    try:
+        from tools.file_read_coverage import release_read_coverage as _release
+    except (ImportError, AttributeError):
+        return
+    try:
+        _release(task_id)
+    except Exception:
+        logging.getLogger(__name__).debug("release_read_coverage failed", exc_info=True)
 
 
 def provider_is_configured(provider: str) -> bool | None:

@@ -2132,12 +2132,18 @@ async function sendMsg() {
                     case 'thinking':
                         if (!progDiv.querySelector('.thinking-msg')) { const t=document.createElement('div'); t.className='thinking-msg'; t.style.cssText='font-size:12px;color:var(--text-muted);padding:4px 0;'; t.textContent='💭 '+(data.message||'思考中...'); progDiv.appendChild(t); }
                         break;
-                    case 'analysis_gate':
-                        if (data.status !== 'complete') {
-                            const missing = (data.missing||[]).join(', ') || '未提供详细清单';
-                            const gate = document.createElement('div'); gate.className='thinking-msg'; gate.style.cssText='font-size:12px;color:var(--accent-red);padding:4px 0;'; gate.textContent='⚠ 文件尚未完整读取：'+missing; progDiv.appendChild(gate);
-                        }
+                    case 'analysis_gate': {
+                        // 不通过时正文会给出完整原因，这里只做一行进度提示。
+                        const files = (data.files||[]).length;
+                        const skipped = (data.skipped||[]);
+                        const note = document.createElement('div'); note.className='thinking-msg';
+                        const ok = data.status === 'complete';
+                        note.style.cssText = 'font-size:12px;color:'+(ok?'var(--text-muted)':'var(--accent-red)')+';padding:4px 0;';
+                        note.textContent = (ok ? '✓ 已完整读取 ' : '⚠ 完整读取未通过，已完整读取 ') + files + ' 个文件'
+                            + (skipped.length ? '；未纳入：' + skipped.map(function(s){return s.file;}).join(', ') : '');
+                        progDiv.appendChild(note);
                         break;
+                    }
                     case 'response': responseText = data.text||''; responseConvId = data.conversation_id || null; _currentConvId = data.conversation_id || null; break;
                     case 'error': progDiv.innerHTML=`<div class="msg-avatar" style="background:var(--accent-red);color:#fff;">⚠</div><div class="msg-body" style="color:var(--accent-red);">${esc(data.message)}</div>`; sendBtn.disabled = false; return;
                     }
