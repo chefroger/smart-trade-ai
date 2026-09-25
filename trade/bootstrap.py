@@ -427,6 +427,53 @@ def background_github_skills_sync():
     t.start()
 
 
+# ── 文档解析依赖 ─────────────────────────────────────────────────────────
+
+# Hermes 用它解析 PDF 与旧版 Office 文档。缺失时 Hermes 不报错，
+# 而是把 PDF 当纯文本读成乱码，用户拿到的是垃圾内容。
+_DOCUMENT_DEP_FEATURE = "tool.doc_extract"
+
+
+def _document_deps_missing() -> bool:
+    """检查 Hermes 文档解析依赖是否缺失。"""
+    try:
+        from tools import lazy_deps
+    except ImportError:
+        return False  # Hermes 不可用时交给版本检查报错，这里不重复告警
+    try:
+        return not lazy_deps.is_available(_DOCUMENT_DEP_FEATURE)
+    except Exception:
+        return False
+
+
+def _install_document_deps() -> None:
+    """强制安装缺失的文档解析依赖；失败只记录，不影响启动。"""
+    try:
+        from tools import lazy_deps
+        lazy_deps.ensure(_DOCUMENT_DEP_FEATURE, prompt=False)
+    except Exception as exc:
+        print(f"  Documents: firecrawl-anydoc 安装失败（{exc}）—— PDF 将无法解析")
+
+
+def ensure_document_deps():
+    """确保 Hermes 文档解析依赖已安装。
+
+    Hermes 把它列为 core 依赖，但精简安装或旧环境可能缺失。
+    缺失时后台补齐，不阻塞服务启动。
+    """
+    if not _document_deps_missing():
+        return
+    print("  Documents: 缺少 firecrawl-anydoc（PDF 解析必需），后台安装中...")
+    import threading
+
+    def _run():
+        _install_document_deps()
+        if not _document_deps_missing():
+            print("  Documents: firecrawl-anydoc 安装完成")
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 # ── 一键 setup ───────────────────────────────────────────────────────────
 
 
@@ -454,3 +501,4 @@ def setup():
 
     load_env_and_set_yolo()
     sync_b2b_skills()
+    ensure_document_deps()

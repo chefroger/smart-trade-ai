@@ -20,6 +20,13 @@ _ANALYZABLE_EXTENSIONS = frozenset({
     ".ipynb",
 })
 
+# 必须由解析器处理、不能按纯文本判断完整性的格式。
+# 这些格式若没有解析证据，说明读取路径没有真正解析文件。
+_PARSED_DOCUMENT_KINDS = frozenset({
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "odt", "ods", "odp", "rtf", "epub", "ipynb",
+})
+
 # 临时文件与办公软件锁文件：可能随时消失，不纳入强制范围。
 _TEMP_EXTENSIONS = frozenset({".tmp", ".temp", ".swp", ".swo", ".bak", ".crdownload", ".part"})
 
@@ -173,24 +180,48 @@ class DocumentTask:
         complete: list[str] = []
         missing: list[str] = []
         errors: list[str] = []
+        # 文件本身读不出来（损坏/二进制/需要 OCR）不是 agent 的疏漏：
+        # 照常给分析结果，只把这些文件列进披露。
+        unreadable: list[dict] = [
+            {"file": item.relative_path, "reason": item.reason} for item in self.skipped]
         for item in self.files:
             if self._fingerprint_changed(item):
                 missing.append(item.relative_path)
                 errors.append(f"{item.relative_path}: changed_during_analysis")
                 continue
-            record = normalized.get(str(item.path), {})
-            if record.get("complete") is not True:
-                missing.append(item.relative_path)
-                if record.get("error"):
-                    errors.append(f"{item.relative_path}: {record['error']}")
-                continue
+            key = str(item.path)
+            touched = key in normalized
+            record = normalized.get(key, {})
             metadata = record.get("document_metadata") or {}
-            if metadata.get("kind") == "xlsx" and not metadata.get("sheets"):
+            expected_kind = item.path.suffix.lower().lstrip(".")
+            # 有读取记录、但需要解析器的格式没有解析证据：Hermes 多半把它当纯文本
+            # 读了（例如缺 firecrawl-anydoc 时的 PDF）。这不是 agent 的疏漏，
+            # 无论读到多少都按「无法解析」披露，而不是判成不通过。
+            # 完全没有读取记录时仍然是 agent 漏读，必须判不通过。
+            if (touched and expected_kind in _PARSED_DOCUMENT_KINDS
+                    and record.get("status") != "failed"
+                    and metadata.get("kind") != expected_kind):
+                unreadable.append({
+                    "file": item.relative_path,
+                    "reason": f"not_parsed_as_{expected_kind}",
+                })
+            elif record.get("status") == "failed":
+                unreadable.append({
+                    "file": item.relative_path,
+                    "reason": str(record.get("error") or "unreadable"),
+                })
+            elif record.get("complete") is not True:
                 missing.append(item.relative_path)
-                errors.append(f"{item.relative_path}: no sheet coverage metadata")
-            elif metadata.get("kind") == "pdf" and not metadata.get("pages"):
-                missing.append(item.relative_path)
-                errors.append(f"{item.relative_path}: no page coverage metadata")
+            elif expected_kind == "xlsx" and not metadata.get("sheets"):
+                unreadable.append({
+                    "file": item.relative_path,
+                    "reason": "no_sheet_coverage",
+                })
+            elif expected_kind == "pdf" and not metadata.get("pages"):
+                unreadable.append({
+                    "file": item.relative_path,
+                    "reason": "no_page_coverage",
+                })
             else:
                 complete.append(item.relative_path)
 
@@ -207,7 +238,7 @@ class DocumentTask:
             complete=complete,
             missing=missing,
             errors=errors,
-            skipped=[{"file": item.relative_path, "reason": item.reason} for item in self.skipped],
+            skipped=unreadable,
         )
 
 
@@ -221,8 +252,15 @@ _REASON_LABELS = {
     "unsupported_type": "格式不支持完整读取",
     "stat_failed": "文件无法访问",
     "changed_during_analysis": "分析期间被修改或删除",
-    "no sheet coverage metadata": "未能确认全部工作表已读取",
-    "no page coverage metadata": "未能确认全部页面已读取",
+    "not_parsed_as_pdf": "PDF 未能解析（可能缺少文档解析依赖）",
+    "not_parsed_as_docx": "Word 文档未能解析",
+    "not_parsed_as_doc": "Word 文档未能解析",
+    "not_parsed_as_xlsx": "Excel 未能解析",
+    "not_parsed_as_xls": "Excel 未能解析",
+    "not_parsed_as_pptx": "演示文稿未能解析",
+    "not_parsed_as_ppt": "演示文稿未能解析",
+    "no_sheet_coverage": "未能确认全部工作表已读取",
+    "no_page_coverage": "未能确认全部页面已读取",
 }
 
 

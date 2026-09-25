@@ -69,6 +69,88 @@ def test_gate_normalizes_path_aliases(tmp_path):
     assert result.status == "complete"
 
 
+def test_unreadable_file_is_disclosed_not_blocking(tmp_path):
+    """文件本身读不出来（损坏/二进制）时照常给结果，只在披露里列出。"""
+    (tmp_path / "notes.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "合同.xlsx").write_bytes(b"PK\x03\x04broken")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "notes.txt").resolve()): {"status": "complete", "complete": True},
+        str((tmp_path / "合同.xlsx").resolve()): {
+            "status": "failed", "complete": False, "error": "document extraction failed"},
+    })
+
+    assert result.status == "complete"
+    assert result.complete == ["notes.txt"]
+    assert result.missing == []
+    assert {"file": "合同.xlsx", "reason": "document extraction failed"} in result.skipped
+
+
+def test_binary_document_read_as_plain_text_is_disclosed(tmp_path):
+    """PDF/Office 未走解析器（被当纯文本读出）时披露，不误判为已完整读取。"""
+    (tmp_path / "notes.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "真实合同.pdf").write_bytes(b"%PDF-1.4 ...")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "notes.txt").resolve()): {"status": "complete", "complete": True},
+        # 纯文本读取：没有 document_metadata，说明解析器没参与
+        str((tmp_path / "真实合同.pdf").resolve()): {"status": "complete", "complete": True},
+    })
+
+    assert result.status == "complete"
+    assert result.complete == ["notes.txt"]
+    assert any(item["file"] == "真实合同.pdf" for item in result.skipped)
+
+
+def test_pdf_with_page_metadata_counts_as_complete(tmp_path):
+    """PDF 走了解析器并有页数证据时才算完整读取。"""
+    (tmp_path / "真实合同.pdf").write_bytes(b"%PDF-1.4 ...")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "真实合同.pdf").resolve()): {
+            "status": "complete", "complete": True,
+            "document_metadata": {"kind": "pdf", "pages": 3},
+        },
+    })
+
+    assert result.status == "complete"
+    assert result.complete == ["真实合同.pdf"]
+    assert result.skipped == []
+
+
+def test_pdf_without_page_count_is_not_complete(tmp_path):
+    """解析器认得 PDF 但拿不到页数时，不能算完整读取。"""
+    (tmp_path / "真实合同.pdf").write_bytes(b"%PDF-1.4 ...")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "真实合同.pdf").resolve()): {
+            "status": "complete", "complete": True,
+            "document_metadata": {"kind": "pdf", "pages": None},
+        },
+    })
+
+    assert result.complete == []
+    assert any(item["file"] == "真实合同.pdf" for item in result.skipped)
+
+
+def test_agent_skipping_a_readable_file_still_blocks(tmp_path):
+    """Hermes 能读、但 agent 完全没读的文件仍算不通过。"""
+    (tmp_path / "notes.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "合同.xlsx").write_bytes(b"PK\x03\x04")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "notes.txt").resolve()): {"status": "complete", "complete": True},
+    })
+
+    assert result.status == "incomplete"
+    assert result.missing == ["合同.xlsx"]
+
+
 def test_gate_untracked_when_no_evidence_at_all(tmp_path):
     """完全没有读取证据（例如全程用 terminal 读）时不判失败，避免误拦。"""
     (tmp_path / "a.txt").write_text("a", encoding="utf-8")

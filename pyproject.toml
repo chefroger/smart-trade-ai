@@ -26,6 +26,12 @@ dependencies = [
   # and anthropic SDK for native Anthropic provider. Both are REQUIRED, not optional.
   "openai==2.24.0",
   "anthropic==0.87.0",
+  # Document extraction — REQUIRED, not optional. Hermes uses this to parse PDF
+  # and legacy Office files. Without it Hermes decodes PDFs as plain text (garbage,
+  # no error), so trade users silently get unusable output. Declared here as well as
+  # in Hermes' own dependencies so every install/upgrade path is covered; keep the
+  # pin in lockstep with Hermes tools/lazy_deps.py.
+  "firecrawl-anydoc==0.2.4",
   # OCR (Tesseract) — scan-to-text for documents, invoices, packing lists
   "pytesseract>=0.3.10",
   # Document extraction (used by read_file tool in Hermes)

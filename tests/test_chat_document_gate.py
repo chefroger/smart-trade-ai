@@ -34,6 +34,8 @@ def env(monkeypatch, tmp_path):
 
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
+    # 纯文本：不依赖文档解析器，适合验证「agent 漏读」判定
+    (lib_dir / "合同.txt").write_text("甲\n乙\n", encoding="utf-8")
     (lib_dir / "报价.xlsx").write_bytes(b"PK\x03\x04demo")
     (lib_dir / ".DS_Store").write_bytes(b"\x00\x01")
 
@@ -87,15 +89,19 @@ async def test_complete_evidence_returns_answer_and_audit(env, agent_stub):
     """可分析文件全部读完时返回答案，并记录读取清单与跳过文件。"""
     saved = []
     evidence = {
+        str((env["dir"] / "合同.txt").resolve()): {"status": "complete", "complete": True},
         str((env["dir"] / "报价.xlsx").resolve()): {
-            "complete": True,
+            "status": "complete", "complete": True,
             "document_metadata": {"kind": "xlsx", "sheets": ["Sheet1"]},
         },
     }
     result = await _call_chat(env, agent_stub, STRICT_QUERY, evidence, saved)
 
     assert result["response"] == "分析完成"
-    assert saved[0]["files_read"] == [{"file": "报价.xlsx", "status": "complete"}]
+    assert saved[0]["files_read"] == [
+        {"file": "合同.txt", "status": "complete"},
+        {"file": "报价.xlsx", "status": "complete"},
+    ]
     assert result["analysis_skipped"] == [
         {"file": ".DS_Store", "reason": "hidden_file"}]
 
@@ -134,8 +140,9 @@ async def test_error_response_is_not_saved_as_complete_analysis(env, agent_stub)
     agent_stub.run_conversation.return_value = {"final_response": ""}
     saved = []
     evidence = {
+        str((env["dir"] / "合同.txt").resolve()): {"status": "complete", "complete": True},
         str((env["dir"] / "报价.xlsx").resolve()): {
-            "complete": True,
+            "status": "complete", "complete": True,
             "document_metadata": {"kind": "xlsx", "sheets": ["Sheet1"]},
         },
     }
@@ -162,8 +169,9 @@ async def test_gate_releases_hermes_task_record(env, agent_stub):
 
     released = []
     evidence = {
+        str((env["dir"] / "合同.txt").resolve()): {"status": "complete", "complete": True},
         str((env["dir"] / "报价.xlsx").resolve()): {
-            "complete": True,
+            "status": "complete", "complete": True,
             "document_metadata": {"kind": "xlsx", "sheets": ["Sheet1"]},
         },
     }
@@ -223,7 +231,12 @@ async def test_stream_degrades_when_evidence_api_missing(env, agent_stub):
 @pytest.mark.asyncio
 async def test_stream_incomplete_returns_reason_as_response(env, agent_stub):
     """SSE 未读完时把原因作为回答下发，不报错也不给分析结论。"""
-    evidence = {str((env["dir"] / ".." / "other.txt").resolve()): {"complete": True}}
+    evidence = {
+        str((env["dir"] / "报价.xlsx").resolve()): {
+            "status": "complete", "complete": True,
+            "document_metadata": {"kind": "xlsx", "sheets": ["Sheet1"]},
+        },
+    }
     events = await _collect_stream(env, agent_stub, STRICT_QUERY, evidence)
     names = [name for name, _ in events]
     payloads = dict(events)
@@ -231,15 +244,16 @@ async def test_stream_incomplete_returns_reason_as_response(env, agent_stub):
     assert "analysis_gate" in names
     assert "response" in names
     assert "error" not in names
-    assert "报价.xlsx" in payloads["response"]
+    assert "合同.txt" in payloads["response"]
 
 
 @pytest.mark.asyncio
 async def test_stream_complete_emits_gate_then_response(env, agent_stub):
     """SSE 读完时先通过门禁，再下发回答。"""
     evidence = {
+        str((env["dir"] / "合同.txt").resolve()): {"status": "complete", "complete": True},
         str((env["dir"] / "报价.xlsx").resolve()): {
-            "complete": True,
+            "status": "complete", "complete": True,
             "document_metadata": {"kind": "xlsx", "sheets": ["Sheet1"]},
         },
     }
