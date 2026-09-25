@@ -12,6 +12,16 @@ pydantic>=2.0
 # LLM Provider SDKs (required — Hermes uses openai for all providers)
 openai==2.24.0
 anthropic==0.87.0
+# Document parsing — required, not optional. Hermes uses anydoc to parse PDF and
+# legacy Office files; without it PDFs are decoded as plain text (garbage).
+# pypdfium2 is the fallback for page-count / scanned-page detection (poppler is a
+# system package that is not installable everywhere). Keep the anydoc pin in
+# lockstep with hermes-agent's tools/lazy_deps.py.
+firecrawl-anydoc==0.2.4
+pypdfium2>=4.30.0,<6.0
+# 注意：hermes-agent 不在本文件里。它由安装脚本单独 git clone + editable 安装
+# （scripts/install.sh Step 2），Trade 用 --no-deps 安装自身。Hermes 的 setup.py
+# 已明确拒绝通过 pip 构建，所以不能让 pip 去解析它。
 # Process management
 psutil>=5.9.0,<8.0
 # DNS — OSINT email verification

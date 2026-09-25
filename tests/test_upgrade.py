@@ -397,6 +397,48 @@ class TestUpdateTrade:
             for c in subprocess_calls
         )
 
+    def test_pip_step_must_skip_dependencies(self, tmp_path, monkeypatch):
+        """pip 装 Trade 自身时必须带 --no-deps，并单独按 requirements.txt 装依赖。
+
+        Hermes 的 setup.py 明确拒绝通过 pip 构建，pyproject 里一旦再声明它，
+        不带 --no-deps 的 pip install 就会整次失败——升级会卡在旧版本。
+        """
+        from trade.post_install import update as update_module
+
+        fake_trade_dir = tmp_path / "foreign-trade-assistant"
+        fake_trade_dir.mkdir()
+        (fake_trade_dir / ".trade-template").mkdir()
+        (fake_trade_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+
+        monkeypatch.setattr(update_module, "_get_trade_home", lambda: tmp_path)
+
+        subprocess_calls = []
+        def fake_run(cmd, *args, **kwargs):
+            subprocess_calls.append(cmd)
+            return self._make_completed(0, stdout="ok")
+
+        monkeypatch.setattr(update_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(update_module, "install_skills", lambda: None)
+        monkeypatch.setattr(update_module, "update_skills", lambda: None)
+        monkeypatch.setattr(update_module, "_sync_trade_template", lambda s, d: None)
+        monkeypatch.setattr(update_module, "_ensure_auto_start", lambda d: None)
+
+        import trade.database as db_module
+        monkeypatch.setattr(db_module, "init_db", lambda: tmp_path / "trade.db")
+
+        update_module.update_trade()
+
+        installs = [c for c in subprocess_calls if c[0:4] == [sys.executable, "-m", "pip", "install"]]
+        editable = [c for c in installs if "-e" in c]
+        assert editable, "没有执行 pip install -e"
+        assert all("--no-deps" in c for c in editable), "pip install -e 缺少 --no-deps"
+        assert any("-r" in c for c in installs), "没有按 requirements.txt 安装依赖"
+        # 不能出现不带 --no-deps 的解析式安装（会去构建 hermes-agent）
+        assert not [
+            c for c in subprocess_calls
+            if c[0] == "git" and len(c) > 2 and c[1] == "clone" and "hermes" in " ".join(c)
+        ], "升级过程不应尝试重新克隆 hermes-agent"
+
     def test_update_trade_pip_install_failure(self, tmp_path, monkeypatch):
         """pip install 失败时，update_trade 应继续执行后续步骤但不退出。"""
         from trade.post_install import update as update_module

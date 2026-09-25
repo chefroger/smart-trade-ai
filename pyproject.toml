@@ -18,9 +18,14 @@ dependencies = [
   # Explicit — needed for SKILL.md frontmatter parsing and version checks
   "pyyaml>=6.0,<7.0",
   "packaging>=23.0,<27.0",
-  # Hermes Agent — AI engine, tools, memory, skills.
-  # Pin to exact git tag for deterministic installs.
-  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@v2026.9.21",
+  # Hermes Agent — NOT declared here on purpose.
+  # Hermes's setup.py refuses to build wheels/sdists for pip ("Building wheels or
+  # sdists for hermes-agent is not supported"); declaring it makes `pip install`
+  # fail outright. It is installed separately as an editable checkout by
+  # scripts/install.sh (Step 2), and Trade installs itself with --no-deps.
+  # Tested version: v2026.9.21 (0.21.4) — see COMPATIBILITY.md. The installed
+  # version is enforced at runtime by pre_install_check.py and
+  # bootstrap.check_hermes_version().
   # LLM Provider SDKs — Hermes uses openai SDK as universal HTTP wire format
   # for ALL providers (OpenAI / DeepSeek / MiniMax / GLM / Kimi / OpenRouter / etc.),
   # and anthropic SDK for native Anthropic provider. Both are REQUIRED, not optional.

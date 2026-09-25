@@ -376,8 +376,23 @@ def update_trade() -> dict:
         errors.append(msg)
 
     # ── Step 4: pip install ───────────────────────────────────────────────
+    # 与 install.sh Step 3 保持一致：先按 requirements.txt 装依赖，再用
+    # --no-deps 装 Trade 自身。不能不带 --no-deps——Hermes 的 setup.py 已
+    # 明确拒绝通过 pip 构建（直接抛 RuntimeError），它由安装脚本单独
+    # editable 安装；让 pip 去解析这个依赖会让整次升级失败。
     _emit("→ Step 4/7: pip install ...")
-    pip_args = [sys.executable, "-m", "pip", "install", "-e", str(trade_dir)]
+    req_file = trade_dir / "requirements.txt"
+    if req_file.is_file():
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", str(req_file)],
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip()
+            _emit(f"  ❌ 依赖安装失败: {err}")
+            errors.append(f"pip install -r requirements.txt failed: {err[:200]}")
+            return {"ok": False, "version": "", "error": err[:200], "errors": errors, "messages": messages}
+    pip_args = [sys.executable, "-m", "pip", "install", "-e", str(trade_dir), "--no-deps"]
     result = subprocess.run(pip_args, capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
         err = result.stderr.strip()
