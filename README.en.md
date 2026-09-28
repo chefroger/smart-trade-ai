@@ -56,7 +56,7 @@ Recommended plan:
 
 | Plan | Model | Best For | Sign Up |
 |------|-------|----------|---------|
-| **Recommended** | DeepSeek V4 Flash | Daily chat, doc analysis, cold emails | [platform.deepseek.com](https://platform.deepseek.com) → Top-up → API Keys |
+| **Recommended** | `deepseek-flash` | Daily chat, doc analysis, cold emails | [platform.deepseek.com](https://platform.deepseek.com) → Top-up → API Keys |
 
 > All testing for this project was done on DeepSeek, so DeepSeek is the only recommended option. The tool itself is compatible with other OpenAI-wire-format models (see Tech Stack), but has not been verified on them.
 
@@ -260,7 +260,7 @@ If you really need to reach the UI from another device, set `TRADE_ALLOW_REMOTE_
 - **AI Engine**: [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT licensed)
 - **Backend**: FastAPI + SQLite + uvicorn
 - **Frontend**: Vanilla JavaScript SPA (HTML/CSS/JS, zero build dependencies)
-- **LLM**: DeepSeek V4 Flash recommended; compatible with OpenAI / Anthropic / GLM / Kimi / Ollama etc.
+- **LLM**: `deepseek-flash` recommended; compatible with OpenAI / Anthropic / GLM / Kimi / Ollama etc.
 - **Document Parsing**: PyMuPDF / python-docx / openpyxl / python-pptx
 
 ---

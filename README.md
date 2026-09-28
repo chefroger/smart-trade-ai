@@ -56,7 +56,7 @@
 
 | 方案 | 模型 | 适合场景 | 注册地址 |
 |------|------|---------|---------|
-| **推荐** | DeepSeek V4 Flash | 日常对话、文档分析、开发信 | [platform.deepseek.com](https://platform.deepseek.com) → 充值 → API Keys |
+| **推荐** | `deepseek-flash` | 日常对话、文档分析、开发信 | [platform.deepseek.com](https://platform.deepseek.com) → 充值 → API Keys |
 
 > 本项目全部测试均在 DeepSeek 上完成，因此只推荐 DeepSeek。工具本身兼容其它 OpenAI 接口的模型（见下方技术栈），但未在其它模型上验证过。
 
@@ -302,7 +302,7 @@ python server.py
 - **AI 引擎**: [Hermes Agent](https://github.com/NousResearch/hermes-agent)（MIT 开源）
 - **后端**: FastAPI + SQLite + uvicorn
 - **前端**: 原生 JavaScript SPA（HTML/CSS/JS 三文件，零构建工具依赖）
-- **LLM**: 推荐 DeepSeek V4 Flash；兼容 OpenAI / Anthropic / GLM / Kimi / Ollama 等
+- **LLM**: 推荐 `deepseek-flash`；兼容 OpenAI / Anthropic / GLM / Kimi / Ollama 等
 - **文档解析**: PyMuPDF / python-docx / openpyxl / python-pptx
 
 ---

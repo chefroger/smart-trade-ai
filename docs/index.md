@@ -114,7 +114,7 @@ hermes setup
 
 出现交互配置界面后：
 1. 用键盘 **上下方向键** 选择「**DeepSeek**」→ 按回车
-2. 选择模型时，选「**deepseek-v4-flash**」→ 按回车
+2. 选择模型时，选「**deepseek-flash**」→ 按回车
 3. 粘贴你的 **DeepSeek API Key** → 按回车
 4. 搜索服务选「**Tavily**」→ 按回车
 5. 粘贴你的 **Tavily API Key** → 按回车
@@ -267,7 +267,7 @@ hermes setup
 这时会出现交互配置界面，按以下步骤操作：
 
 1. 用键盘的 **上下方向键** 选择「**DeepSeek**」→ 按回车
-2. 选择模型时，选「**deepseek-v4-flash**」（即 DeepSeek V4 Flash）→ 按回车
+2. 选择模型时，选「**deepseek-flash**」→ 按回车
 3. 粘贴你的 **DeepSeek API Key**（从桌面的 `apikey.txt` 复制）→ 按回车
 4. 搜索服务选「**Tavily**」→ 按回车
 5. 粘贴你的 **Tavily API Key** → 按回车
