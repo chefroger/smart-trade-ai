@@ -704,7 +704,8 @@ class TestVersionMarker:
         from trade import app as app_mod
 
         pyproject = Path(app_mod.__file__).resolve().parent.parent / "pyproject.toml"
-        expected = tomllib.loads(pyproject.read_text())["project"]["version"]
+        # 显式 utf-8：pyproject.toml 含中文注释，Windows 默认 cp1252 会读失败
+        expected = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
 
         assert app_mod._running_code_version() == expected
 
@@ -716,7 +717,7 @@ class TestVersionMarker:
 
         marker = app_mod._get_trade_data_dir() / "version.txt"
         assert marker.is_file(), "版本标记文件应被写出"
-        assert marker.read_text().strip() == app_mod._running_code_version()
+        assert marker.read_text(encoding="utf-8").strip() == app_mod._running_code_version()
 
     def test_reported_version_prefers_marker_and_never_rewrites(self):
         """上报版本以 version.txt 为准，且不得被磁盘上的 pyproject 反写。"""
@@ -724,13 +725,13 @@ class TestVersionMarker:
 
         marker = app_mod._get_trade_data_dir() / "version.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("9.9.9-sentinel")
+        marker.write_text("9.9.9-sentinel", encoding="utf-8")
 
         reported = app_mod._resolve_reported_version()
 
         assert reported == "9.9.9-sentinel", \
             "version.txt 应优先于磁盘 pyproject，否则未重启也会显示新版本号"
-        assert marker.read_text().strip() == "9.9.9-sentinel", \
+        assert marker.read_text(encoding="utf-8").strip() == "9.9.9-sentinel", \
             "/api/status 不得把 pyproject 的版本号反写进 version.txt"
 
     def test_reported_version_falls_back_readonly(self):
