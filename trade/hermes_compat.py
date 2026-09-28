@@ -5,7 +5,91 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any
+
+# ── Hermes 版本识别 ──────────────────────────────────────────────────────────
+# 上游 main 把 hermes_cli.__version__ 改为惰性实现：只读安装印章
+# install-stamp.json，读不到就返回 "0.0.0"（见 hermes_cli/__init__.py 的
+# __getattr__，那是给旧更新器留的兼容面）。官方新口径是
+# hermes_cli.version_info.get_version_info()：安装印章 → live git → unknown，
+# 且明确选择降级而不是崩。
+# Trade 只拿这个版本做启动门禁，所以必须区分「真实版本」与「识别不到」。
+
+# 不是真实版本号的占位值（上游无安装印章时返回 0.0.0）
+_VERSION_PLACEHOLDERS = frozenset({"", "0.0.0", "0.0.0.0", "unknown", "none", "dev"})
+
+
+def _public_version_info() -> str | None:
+    """新版 Hermes 的 base_version；接口不存在时返回 None。"""
+    try:
+        from hermes_cli.version_info import get_version_info
+    except (ImportError, AttributeError):
+        return None
+    try:
+        base = getattr(get_version_info(), "base_version", "") or ""
+    except Exception:
+        # 版本识别失败不应影响启动，交给调用方按「未知」处理
+        return None
+    return str(base) or None
+
+
+def _legacy_version() -> str | None:
+    """旧版 Hermes 的 hermes_cli.__version__ 字面量；不存在时返回 None。"""
+    try:
+        from hermes_cli import __version__ as version
+    except (ImportError, AttributeError):
+        return None
+    return str(version) or None
+
+
+def _checkout_version() -> str | None:
+    """读 Hermes checkout 自带 pyproject.toml 的 version；读不到返回 None。"""
+    try:
+        import hermes_cli
+        pyproject = Path(hermes_cli.__file__).resolve().parent.parent / "pyproject.toml"
+        if not pyproject.is_file():
+            return None
+        import tomllib
+        # 显式 utf-8：Windows 默认 cp1252
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        return str(data.get("project", {}).get("version", "")) or None
+    except Exception:
+        return None
+
+
+def _is_real_version(value: str | None) -> bool:
+    """判断是否是可用于 PEP 440 比较的真实版本号。"""
+    if not value or value.strip().lower() in _VERSION_PLACEHOLDERS:
+        return False
+    try:
+        from packaging.version import InvalidVersion, Version
+    except ImportError:
+        # 无法校验时保守认为可用，交给上层比较
+        return True
+    try:
+        Version(value.strip())
+    except InvalidVersion:
+        return False
+    return True
+
+
+def hermes_version() -> str | None:
+    """返回可比较的 Hermes 版本号；识别不到时返回 None。
+
+    解析顺序（与上游 get_version_info 的口径一致）：
+      1. hermes_cli.version_info.get_version_info().base_version（新版）
+      2. hermes_cli.__version__（旧版字面量）
+      3. checkout 里的 pyproject.toml（上游把版本号挪走时的兜底）
+
+    占位值（0.0.0）与无法解析的字符串一律按「未知」返回 None ——
+    调用方据此放宽门禁，而不是把识别失败当成版本不兼容。
+    """
+    for probe in (_public_version_info, _legacy_version, _checkout_version):
+        value = probe()
+        if _is_real_version(value):
+            return str(value).strip()
+    return None
 
 
 def _public_provider_catalog() -> list[Any] | None:

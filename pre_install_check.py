@@ -31,6 +31,9 @@ import urllib.request
 # (Prior to v0.4.0, the chefroger/hermes-agent fork was used; now migrated to upstream.)
 MIN_COMPATIBLE_VERSION = "0.13.0"
 
+# 不是真实版本号的占位值：上游 main 在缺少安装印章时会把 __version__ 报成 "0.0.0"
+_VERSION_PLACEHOLDERS = {"", "0.0.0", "0.0.0.0", "unknown", "none", "dev"}
+
 # If hermes-agent is installed from a different source,
 # it may be incompatible even if version number looks OK.
 # List of known-incompatible package names (PyPI releases from other sources).
@@ -56,6 +59,33 @@ def _parse_version(version_str: str) -> tuple[int, int, int]:
         return (int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
     except (ValueError, IndexError):
         return (0, 0, 0)
+
+
+def _judge_installed_version(installed: str | None, required: str) -> str:
+    """判定已安装的 Hermes 版本，返回 'ok' / 'too_old' / 'unknown'。
+
+    'unknown' 覆盖三种「识别不到」的情形 —— 这几种都不能当成版本过旧，
+    否则会卡死安装流程，而且给出的提示是误导的：
+      1. 占位值：上游 main 无安装印章时把 __version__ 报成 "0.0.0"
+      2. 带后缀的派生版本：如 "0.21.4+5045"、"v0.21.5-490-gabc1234"
+      3. 无法解析的字符串：如 "git.abc1234"
+    """
+    raw = str(installed or "").strip()
+    # 先去 PEP 440 本地版本段（+5045）与 git 后缀（-490-gabc1234）再判
+    base = raw.lstrip("v").split("+", 1)[0].split("-", 1)[0].strip()
+    if (
+        not base
+        or raw.lower() in _VERSION_PLACEHOLDERS
+        or base.lower() in _VERSION_PLACEHOLDERS
+    ):
+        return "unknown"
+    # 只接受纯数字的 X[.Y[.Z]]；其它形态按未知处理（保守方向是放行而不是拦截）
+    parts = base.split(".")
+    if len(parts) > 3 or not all(part.isdigit() for part in parts):
+        return "unknown"
+    if _compare_versions(base, required) < 0:
+        return "too_old"
+    return "ok"
 
 
 def _compare_versions(installed: str, required: str) -> int:
@@ -349,8 +379,14 @@ def run_check() -> int:
         return 2
 
     # Case 3: installed from official source, check version compatibility
-    cmp = _compare_versions(installed_version, MIN_COMPATIBLE_VERSION)
-    if cmp < 0:
+    verdict = _judge_installed_version(installed_version, MIN_COMPATIBLE_VERSION)
+    if verdict == "unknown":
+        print_warn(f"Cannot tell the version from the reported value: {installed_version!r}")
+        print_info("  (upstream reports 0.0.0 when a checkout has no install stamp)")
+        print_info("  Skipping the minimum-version check and continuing.")
+        print()
+        return 0
+    if verdict == "too_old":
         print_fail(f"hermes-agent version {installed_version} is too old.")
         print_warn(f"Trade requires version >= {MIN_COMPATIBLE_VERSION} from NousResearch/hermes-agent.")
         print()

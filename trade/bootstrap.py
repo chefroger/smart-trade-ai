@@ -107,12 +107,17 @@ def check_hermes_version() -> bool:
     """
     from packaging.version import Version
 
-    try:
-        from hermes_cli import __version__ as _hv
-    except ImportError:
-        print("  ✗ Cannot import Hermes. Is hermes-agent installed?")
-        print("    Install: pip install hermes-agent")
-        return False
+    # 多源识别（version_info → __version__ → checkout pyproject）。
+    # 上游 main 在没有安装印章时会把 __version__ 报成 "0.0.0"（占位值），
+    # 若直接当版本比较就会得出「0.0.0 不兼容」并拒绝启动 —— 那是识别失败，
+    # 不是真的不兼容，所以这里按未知处理、警告后继续。
+    from trade.hermes_compat import hermes_version
+
+    _hv = hermes_version()
+    if _hv is None:
+        print("  ⚠️ 无法确定已安装的 Hermes 版本（常见于从 main 安装且无安装印章）")
+        print("     跳过版本窗口检查，继续启动。")
+        return True
 
     current = Version(_hv)
     min_v = Version(_MIN_HERMES_VERSION)
