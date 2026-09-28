@@ -55,7 +55,8 @@ def is_available() -> bool:
                 # 如果配置文件存在，尝试读取其中的 API 密钥
                 if p.exists():
                     try:
-                        cfg = json.loads(p.read_text())
+                        # 显式 utf-8：配置文件可能含非 ASCII（Windows 默认 cp1252 会读失败）
+                        cfg = json.loads(p.read_text(encoding="utf-8"))
                         # 支持多种配置字段名，兼容不同版本
                         if cfg.get("apiKey") or cfg.get("api_key") or cfg.get("mode") == "local_embedded":
                             has_key = True

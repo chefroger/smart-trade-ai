@@ -218,7 +218,9 @@ def _running_code_version() -> str:
             import tomllib as _toml
         except ImportError:
             import tomli as _toml
-        return _toml.loads(pyproject.read_text()).get("project", {}).get("version", "")
+        # 必须显式 utf-8：Windows 上默认用 cp1252 打开，而 pyproject.toml 含中文注释，
+        # 不指定编码会抛 UnicodeDecodeError（被下面 except 吞掉，标记文件永远写不出来）
+        return _toml.loads(pyproject.read_text(encoding="utf-8")).get("project", {}).get("version", "")
     except Exception:
         # 解析失败不应影响启动，降级为空串由调用方兜底
         return ""
@@ -237,7 +239,7 @@ def _write_version_marker() -> str:
     try:
         data_dir = _get_trade_data_dir()
         data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / "version.txt").write_text(version)
+        (data_dir / "version.txt").write_text(version, encoding="utf-8")
     except Exception:
         pass  # 写标记失败不影响服务启动
     return version
@@ -251,7 +253,7 @@ def _resolve_reported_version() -> str:
     try:
         _vf = _get_trade_data_dir() / "version.txt"
         if _vf.is_file():
-            _v = _vf.read_text().strip()
+            _v = _vf.read_text(encoding="utf-8").strip()
             if _v:
                 return _v
     except Exception:

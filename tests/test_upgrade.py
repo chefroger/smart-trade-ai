@@ -744,3 +744,50 @@ class TestVersionMarker:
 
         assert reported == app_mod._running_code_version()
         assert not marker.exists(), "只读回退不得创建 version.txt"
+
+
+# ── 文本读写必须显式指定编码 ────────────────────────────────────────────────
+# CI 的 windows-latest 任务抓到过：pyproject.toml 含中文注释，而未指定编码的
+# read_text() 在 Windows 上按 cp1252 解码 → UnicodeDecodeError → 被 except 吞掉，
+# version.txt 永远写不出来（产品行为，不只是测试问题）。
+# macOS 上 Python 对 C locale 会强制 UTF-8，本地无法复现该条件，
+# 所以这里锁住「显式指定编码」这一属性；端到端保障仍由 CI 的 windows 任务承担。
+
+
+class TestTextEncodingIsExplicit:
+    """版本相关的文件读写必须显式用 UTF-8，不依赖平台默认编码。"""
+
+    def test_version_marker_io_is_explicitly_utf8(self, tmp_path, monkeypatch):
+        """pyproject.toml 的读 + version.txt 的读写都必须显式 utf-8。"""
+        import pathlib
+
+        from trade import app as app_mod
+
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text(
+            '[project]\nname = "x"  # 中文注释\nversion = "1.2.3"\n', encoding="utf-8"
+        )
+        monkeypatch.setattr(app_mod, "_pyproject_path", lambda: pyproject)
+
+        seen: list[tuple[str, str | None]] = []
+        _orig_read, _orig_write = pathlib.Path.read_text, pathlib.Path.write_text
+
+        def _read(self, encoding=None, errors=None):
+            seen.append(("read", encoding))
+            return _orig_read(self, encoding=encoding, errors=errors)
+
+        def _write(self, data, encoding=None, errors=None):
+            seen.append(("write", encoding))
+            return _orig_write(self, data, encoding=encoding, errors=errors)
+
+        monkeypatch.setattr(pathlib.Path, "read_text", _read)
+        monkeypatch.setattr(pathlib.Path, "write_text", _write)
+
+        assert app_mod._running_code_version() == "1.2.3"
+        assert app_mod._write_version_marker() == "1.2.3"
+        assert app_mod._resolve_reported_version() == "1.2.3"
+
+        # 每一次读写都必须带显式编码；缺失就会退回平台默认（Windows=cp1252）
+        missing = [kind for kind, enc in seen if not enc]
+        assert not missing, f"存在未指定编码的读写：{missing}"
+        assert all(str(enc).lower().replace("-", "") == "utf8" for _, enc in seen), seen

@@ -364,7 +364,8 @@ def update_trade() -> dict:
         import tomli as _toml_v
     try:
         pyproject = trade_dir / "pyproject.toml"
-        data = _toml_v.loads(pyproject.read_text())
+        # 显式 utf-8：Windows 默认 cp1252，pyproject.toml 含中文注释会读失败
+        data = _toml_v.loads(pyproject.read_text(encoding="utf-8"))
         new_version = data.get("project", {}).get("version", "")
         _emit(f"  ℹ️  Target version: v{new_version}")
     except Exception:
