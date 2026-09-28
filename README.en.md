@@ -120,8 +120,8 @@ The script handles: Python check → Hermes Agent → Smart Trade AI → 38 skil
 Visit [Releases](https://github.com/chefroger/smart-trade-ai/releases) or specify a version:
 
 ```bash
-git clone --branch v0.6.7 https://github.com/chefroger/smart-trade-ai.git ~/.trade/smart-trade-ai
-cd ~/.trade/smart-trade-ai && pip install -e ".[docs]"
+git clone --branch v0.6.8 https://github.com/chefroger/smart-trade-ai.git ~/.trade/foreign-trade-assistant
+cd ~/.trade/foreign-trade-assistant && pip install -e ".[docs]"
 install-trade-skills
 python server.py
 ```
@@ -139,8 +139,8 @@ cd ~/.hermes/hermes-agent && pip install -e "."
 hermes setup      # Choose provider, paste API key
 
 # 3. Install Smart Trade AI
-git clone --branch main https://github.com/chefroger/smart-trade-ai.git ~/.trade/smart-trade-ai
-cd ~/.trade/smart-trade-ai && pip install -e ".[docs]"
+git clone --branch main https://github.com/chefroger/smart-trade-ai.git ~/.trade/foreign-trade-assistant
+cd ~/.trade/foreign-trade-assistant && pip install -e ".[docs]"
 
 # 4. Install skills and launch
 install-trade-skills
@@ -242,8 +242,14 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 - With **Ollama or other local models**, full local operation is possible — no data leaves your machine
 - With **OpenAI / Anthropic / DeepSeek / MiniMax or other cloud LLMs**, your input and necessary context are sent to the chosen provider — client identity data is NOT included
 - Multi-company isolation (`X-Company-ID` header)
-- Bound to `127.0.0.1` — only accessible from your local browser
+- Bound to `127.0.0.1` — only accessible from your local browser; even if you bind another address, session credentials are still handed out to loopback clients only (see Network Exposure Warning below)
 - **Auto-backup before upgrades** → `~/.trade/backups/`
+
+### Network Exposure Warning
+
+Bound to `127.0.0.1` by default. The session token is **only issued to loopback (local) browsers**: even if you expose the port with `--host 0.0.0.0`, requests from other devices only receive an explanatory page (HTTP 403) and never the token, so they cannot call the API.
+
+If you really need to reach the UI from another device, set `TRADE_ALLOW_REMOTE_UI=1` before starting — **this lowers security**: any device that can reach the port will be able to obtain the token and act on your behalf. The safer options remain an SSH tunnel or a reverse proxy with an extra authentication layer.
 
 > **Disclaimer**: Alibaba, LinkedIn, Facebook, Instagram, TikTok, YouTube, WhatsApp and other platform names mentioned in this documentation are trademarks of their respective owners. This tool provides analysis assistance for these platforms and is not affiliated with them. Sanctions data is sourced from OFAC/UN/EU public datasets — results are for reference only and do not constitute legal advice. See [SECURITY.md](SECURITY.md) for details.
 
@@ -270,7 +276,8 @@ trade/                     B2B business layer
 └── ... + 20 business modules
 
 skills/                    38 B2B skills (Markdown-driven)
-tests/                     Test coverage (database / business / API / OSINT / smoke)
+tests/                     Python tests (22 files) + end-to-end document-reading rule tests
+tests_js/                  Frontend utility tests (node:test, zero dependencies; run by CI)
 server.py                  FastAPI entry point
 ```
 
@@ -280,9 +287,12 @@ server.py                  FastAPI entry point
 
 ```bash
 pip install -e ".[dev,docs]"
-python -m pytest tests/ -v   # Run tests
-ruff check trade/ server.py  # Lint
+python -m pytest tests/ -v                  # Python tests
+node --test "tests_js/**/*.test.js"         # Frontend utility tests (zero deps, requires Node)
+ruff check trade/ server.py                 # Lint
 ```
+
+> Both the Python and frontend test suites run in CI (`.github/workflows/test.yml`).
 
 ## Documentation
 

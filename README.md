@@ -167,8 +167,8 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 访问 [Releases](https://github.com/chefroger/smart-trade-ai/releases) 下载最新版，或指定版本：
 
 ```bash
-git clone --branch v0.6.7 https://github.com/chefroger/smart-trade-ai.git ~/.trade/smart-trade-ai
-cd ~/.trade/smart-trade-ai && pip install -e ".[docs]"
+git clone --branch v0.6.8 https://github.com/chefroger/smart-trade-ai.git ~/.trade/foreign-trade-assistant
+cd ~/.trade/foreign-trade-assistant && pip install -e ".[docs]"
 install-trade-skills
 python server.py
 ```
@@ -280,7 +280,7 @@ python server.py
 - 如使用 **Ollama 等本地模型**，可实现完整本地运行，数据完全不出电脑
 - 如使用 **OpenAI / Anthropic / DeepSeek / MiniMax 等云端 LLM**，用户输入和必要上下文会发送至所选服务商——不包含客户身份信息
 - 多公司数据隔离（`X-Company-ID` header）
-- 绑定 `127.0.0.1`，仅本机浏览器可访问
+- 绑定 `127.0.0.1`，仅本机浏览器可访问；即使改用 `--host 0.0.0.0`，会话凭据也只下发给本机（见下方网络暴露警告）
 - **升级前自动备份数据库**到 `~/.trade/backups/`
 
 ### 多公司记忆共享说明
@@ -289,7 +289,9 @@ python server.py
 
 ### 网络暴露警告
 
-默认仅绑定 `127.0.0.1`。**不要使用 `--host 0.0.0.0` 将服务暴露到局域网或公网**——会话 token 以明文注入 HTML，任何能访问该端口的设备都可读取 token 并冒充操作。如需远程访问，请通过 SSH 隧道或反向代理 + 额外认证层，而不是直接改 bind 地址。
+默认仅绑定 `127.0.0.1`。会话凭据（session token）**只下发给本机（回环地址）浏览器**：即使你用 `--host 0.0.0.0` 把端口暴露出去，来自其它设备的访问也只会得到一页说明（HTTP 403），不会拿到 token，因此无法调用 API。
+
+确需从其它设备访问界面时，可在启动前设置环境变量 `TRADE_ALLOW_REMOTE_UI=1` 显式放行 —— **这会降低安全性**：任何能访问该端口的设备都能取得 token 并冒充操作。更稳妥的远程方案仍是 SSH 隧道或反向代理 + 额外认证层，而不是直接改 bind 地址。
 
 > **免责声明**：文档中提及的 Alibaba、LinkedIn、Facebook、Instagram、TikTok、YouTube、WhatsApp 等均为其各自所有者的商标。本工具仅提供对这些平台数据的分析辅助，与上述平台无关联。制裁名单数据来源于 OFAC/UN/EU 公开数据，结果仅供参考，不构成法律意见。详见 [SECURITY.md](SECURITY.md)。
 
@@ -318,7 +320,8 @@ trade/                     B2B 业务层
 └── ... + 38 个业务模块
 
 skills/                    38 个 B2B skills（Markdown 驱动）
-tests/                     测试覆盖（database/business/api/osint/smoke）
+tests/                     Python 测试（22 个文件）＋ 文档读取规则端到端实测
+tests_js/                  前端工具函数测试（node:test，零依赖；CI 会执行）
 server.py                  FastAPI 入口
 ```
 
@@ -328,9 +331,12 @@ server.py                  FastAPI 入口
 
 ```bash
 pip install -e ".[dev,docs]"
-python -m pytest tests/ -v   # 运行测试
-ruff check trade/ server.py  # 代码检查
+python -m pytest tests/ -v                  # Python 测试
+node --test "tests_js/**/*.test.js"         # 前端工具函数测试（零依赖，需 Node）
+ruff check trade/ server.py                 # 代码检查
 ```
+
+> 前端测试与 Python 测试都由 CI 执行（`.github/workflows/test.yml`）。
 
 ## 文档
 
@@ -446,9 +452,13 @@ python server.py
 |---------|---------|------------|
 | ⚠️ 更新结果未知，请检查网络 | `git pull` 超时（120s）或 HTTP 错误 | 全部 4 步 |
 | ⚠️ 请求超时 | `fetch()` 120s AbortController 触发 | 全部 4 步 |
+| ⚠️ 升级完成，但有 N 项警告 | skills 同步等**非关键步骤**失败（网络波动）——不影响升级 | 无需处理：代码与依赖已更新并会正常重启，仅技能清单可能未更新，可稍后手动执行 `install-trade-skills` |
 | ❌ 更新失败: Git 未安装或不在 PATH 中 | 系统找不到 `git` 命令 | [安装 Git](https://git-scm.com/download/win) 后全部 4 步 |
 | ❌ 更新失败: pip install failed | 依赖包下载失败（PyPI 不通） | `pip install -e "."` 重试 |
 | ❌ 更新失败: git pull / clone failed | GitHub 连不上 | 开 VPN 全局模式后重试 `git pull` |
+
+> 升级流程只有 **git pull / pip install / 数据库检查**三步属于关键步骤，失败才会中止升级并提示 `❌`；
+> skills 同步、模板同步、开机自启设置失败一律降级为警告（`⚠️`）**不会阻止重启**——避免因一次网络抖动把你锁在旧版本上。
 
 > 如果 VPN 已开启但仍失败，尝试在终端中先设置代理再执行更新：
 > ```bash
