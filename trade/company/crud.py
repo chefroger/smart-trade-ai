@@ -487,8 +487,11 @@ def get_agent_identity(company_id: int) -> str:
 
     优先级链（高到低）：
       1. trade_companies.agent_identity_md 数据库字段（在线编辑 / 首次引导写入）
-      2. ~/.trade/{slug}/agent-identity.md 磁盘文件（用户手动编辑）
+      2. ~/.trade/{slug}/companies/{slug}/agent-identity.md 磁盘文件（用户手动编辑）
       3. '' 空字符串 → 回退到通用 TRADE_SYSTEM_PROMPT
+
+    注意：磁盘路径必须与工作目录/模板布局（_ensure_data_dir → {data_dir}/companies/{slug}/）
+    及 trade.prompts._company_identity_path 保持一致，否则文件回退永远命中不了。
 
     Agent 身份文本会被注入到系统提示词中，让 AI 知道自己在为哪家公司服务。
     """
@@ -502,8 +505,9 @@ def get_agent_identity(company_id: int) -> str:
 
     # 其次检查磁盘文件（用户可能手动编辑了文件）
     data_dir = Path(tc["data_dir"]) if tc.get("data_dir") else None
-    if data_dir and data_dir.exists():
-        identity_file = data_dir / "agent-identity.md"
+    slug = slug_from_id(company_id)
+    if data_dir and slug:
+        identity_file = data_dir / "companies" / slug / "agent-identity.md"
         if identity_file.exists():
             return identity_file.read_text(encoding="utf-8")
 

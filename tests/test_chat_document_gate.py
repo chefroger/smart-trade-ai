@@ -370,3 +370,27 @@ async def test_stream_complete_emits_gate_then_response(env, agent_stub):
     assert "analysis_gate" in names
     assert "response" in names
     assert names.index("analysis_gate") < names.index("response")
+
+
+@pytest.mark.asyncio
+async def test_callback_evidence_discloses_coverage_note_in_payload(env, agent_stub):
+    """回调证据（客户机的原版 Hermes）时，响应必须带上能力边界说明。
+
+    开发机有结构化读取快照、客户机没有 —— 这个差异必须让用户看见，
+    否则用户会以为「已完整读取」等于「逐 Sheet 逐页都核验过」。
+    """
+    saved = []
+    evidence = {
+        str((env["dir"] / "合同.txt").resolve()): {
+            "status": "complete", "complete": True, "source": "callbacks",
+        },
+        str((env["dir"] / "报价.xlsx").resolve()): {
+            "status": "complete", "complete": True, "source": "callbacks",
+        },
+    }
+
+    result = await _call_chat(env, agent_stub, STRICT_QUERY, evidence, saved)
+
+    assert result["response"] == "分析完成", "文件都读了，不应被拦"
+    assert result.get("analysis_note"), "必须披露无法逐 Sheet / 逐页核验"
+    assert "Sheet" in result["analysis_note"] or "页" in result["analysis_note"]

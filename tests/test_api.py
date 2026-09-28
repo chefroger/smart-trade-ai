@@ -8,6 +8,7 @@ HTTP 层测试通过 run_server_smoke 验证即可。
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -134,6 +135,103 @@ class TestDeps:
         from trade.api.deps import opt_company
         assert opt_company("") is None
         assert opt_company(None) is None
+
+
+class TestCronIsMachineLevel:
+    """cron 端点是**机器级**资源，没有公司维度。
+
+    审查曾标记 get_today_cron(cid) / get_active_jobs(cid)「要求公司头却从不使用」。
+    核实结论：Hermes 的 cron 产物（~/.hermes/cron/jobs.json 与 output/）里没有任何
+    公司标识，按公司过滤在数据模型上不可能。因此把「机器级」语义固化成测试：
+    不同 cid 必须返回完全相同的数据；若将来真要按公司隔离，这个测试会先失败，
+    提醒改动者那是产品级变更（需要 Hermes 侧给 job 打公司标签）。
+    """
+
+    @pytest.fixture
+    def cron_with_jobs(self, monkeypatch, tmp_path):
+        """把 cron 数据源指向临时目录，避免读真实 ~/.hermes。"""
+        import trade.api.cron as cron_mod
+
+        monkeypatch.setattr(cron_mod, "_JOBS_FILE", tmp_path / "jobs.json")
+        monkeypatch.setattr(cron_mod, "_CRON_OUTPUT", tmp_path / "output")
+        cron_mod._JOBS_FILE.write_text(
+            json.dumps({"jobs": [
+                {"name": "早安简报", "schedule": {"display": "0 9 * * *"}},
+                {"name": "每日工作总结", "schedule": {"display": "0 17 * * *"}},
+            ]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return cron_mod
+
+    def test_today_cron_identical_across_companies(self, cron_with_jobs):
+        """不同公司的今日任务清单必须一致（cron 无公司维度）。"""
+        # 位置传参：函数签名是 _cid（故意不使用），这里就是要证明它被忽略
+        a = cron_with_jobs.get_today_cron(1)
+        b = cron_with_jobs.get_today_cron(2)
+
+        assert a == b, "cron 是机器级资源，不应随公司变化；若要按公司隔离需先改数据模型"
+
+    def test_active_jobs_identical_across_companies(self, cron_with_jobs):
+        """不同公司的活跃任务必须一致。"""
+        a = cron_with_jobs.get_active_jobs(1)
+        b = cron_with_jobs.get_active_jobs(999)
+
+        assert a == b
+
+
+class _FakeRequest:
+    """只带 headers 的最小 Request 替身（require_session 只用到 request.headers）。"""
+
+    def __init__(self, headers):
+        self.headers = headers
+
+
+class TestRequireSession:
+    """require_session（session token 校验）的负向用例。
+
+    此前这个依赖在全部测试里零覆盖：token 校验若被写反、或整段删掉，
+    测试仍然全绿，而整站 API 会变成无鉴权。这里补上真实断言。
+    """
+
+    def test_rejects_wrong_token(self, setup_mocks):
+        """token 不匹配 → 401。"""
+        from fastapi import HTTPException
+
+        from trade.api import deps
+
+        deps.set_session_token("correct-token")
+        with pytest.raises(HTTPException) as exc_info:
+            deps.require_session(_FakeRequest({"X-Hermes-Session-Token": "wrong-token"}))
+        assert exc_info.value.status_code == 401
+
+    def test_rejects_missing_token(self, setup_mocks):
+        """缺少 token header → 401。"""
+        from fastapi import HTTPException
+
+        from trade.api import deps
+
+        deps.set_session_token("correct-token")
+        with pytest.raises(HTTPException) as exc_info:
+            deps.require_session(_FakeRequest({}))
+        assert exc_info.value.status_code == 401
+
+    def test_rejects_empty_token_when_server_token_empty(self, setup_mocks):
+        """服务端 token 未初始化时不放行，返回 500（防御性：绝不能当成通过）。"""
+        from fastapi import HTTPException
+
+        from trade.api import deps
+
+        deps.set_session_token("")
+        with pytest.raises(HTTPException) as exc_info:
+            deps.require_session(_FakeRequest({"X-Hermes-Session-Token": ""}))
+        assert exc_info.value.status_code == 500
+
+    def test_accepts_matching_token(self, setup_mocks):
+        """token 匹配时放行（不抛异常）。"""
+        from trade.api import deps
+
+        deps.set_session_token("correct-token")
+        deps.require_session(_FakeRequest({"X-Hermes-Session-Token": "correct-token"}))
 
 
 # ── Router Assembly 测试 ────────────────────────────────────────────────────
@@ -558,3 +656,43 @@ class TestOnboardingFlow:
     def test_create_first_company_duplicate(self, test_db, company_id, setup_mocks):
         from trade import onboarding
         assert onboarding.is_onboarding_done() is True
+
+
+class _FakeClient:
+    """只带 client.host 的最小请求替身（回环判定只看它）。"""
+
+    def __init__(self, host):
+        self.client = type("C", (), {"host": host})()
+
+
+class TestTradeUiTokenScope:
+    """session token 只下发给本机回环客户端。
+
+    token 是唯一凭据，而 /trade 页面本身无需鉴权即可获取 —— 一旦 --host 0.0.0.0，
+    局域网内任意主机 fetch 该页就能拿到 token 并接管全部 API（含 /system/update）。
+    """
+
+    def test_loopback_clients_may_receive_token(self):
+        from trade.app import _client_is_loopback
+
+        for host in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            assert _client_is_loopback(_FakeClient(host)) is True, host
+
+    def test_remote_clients_are_not_loopback(self):
+        from trade.app import _client_is_loopback
+
+        for host in ("192.168.1.5", "10.0.0.7", "203.0.113.9", ""):
+            assert _client_is_loopback(_FakeClient(host)) is False, host
+
+    def test_remote_client_blocked_by_default(self, monkeypatch):
+        from trade import app as app_mod
+
+        monkeypatch.delenv("TRADE_ALLOW_REMOTE_UI", raising=False)
+        assert app_mod._client_may_receive_token(_FakeClient("192.168.1.5")) is False
+
+    def test_remote_client_allowed_with_explicit_optin(self, monkeypatch):
+        """显式开启后允许局域网使用（用户明确知道风险）。"""
+        from trade import app as app_mod
+
+        monkeypatch.setenv("TRADE_ALLOW_REMOTE_UI", "1")
+        assert app_mod._client_may_receive_token(_FakeClient("192.168.1.5")) is True

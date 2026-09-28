@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,60 @@ from typing import Any
 _DEFAULT_OFFSET = 1
 _DEFAULT_LIMIT = 2000
 
-# read_file 之外的工具不产生读取证据。
+# 能产出精确覆盖率（offset/limit/续读位置）的工具。
 _TRACKED_TOOLS = frozenset({"read_file"})
+
+# 通过 shell / 代码执行读文件的工具：能确认「读过」，但拿不到分页信息，
+# 无法核验读到多少 —— 记为弱证据，交由门禁如实披露而不是判成漏读。
+# 工具名取自 Hermes 侧注册名（terminal/bash/execute_code/code_execution）。
+_WEAK_EVIDENCE_TOOLS = frozenset({
+    "terminal", "bash", "execute_code", "code_execution",
+})
+
+# 弱证据工具的参数里，命令/代码可能出现在这些键下。
+_COMMAND_ARG_KEYS = ("command", "cmd", "code", "script", "input")
+
+# 从自由文本（用户提问 / shell 命令 / 代码片段）中提取路径候选。
+# trade.helpers._extract_explicit_paths 与本模块共用它，避免两处正则漂移。
+# 字符类排除引号与括号：否则 shell/代码里的 open('/x/y.pdf') 会让左最匹配
+# 从引号处开始、把 "open('" 一并吞进路径。
+EXPLICIT_PATH_RE = re.compile(
+    r'(?:(?:文件|目录|路径|path|file|dir)\s*[：:]\s*)?'  # 可选前缀 "文件："
+    r'(/(?:[^\s,，。；;、()\'"`]+/)*[^\s,，。；;、()\'"`]+'            # Unix 绝对路径
+    r'|\b[A-Za-z]:\\(?:[^\s,，。；;、()\'"`]+\\)*[^\s,，。；;、()\'"`]+'  # Windows 绝对路径
+    r'|[^\s,，。；;、()\'"`]+\.(?:xlsx?|csv|pdf|docx?|pptx?|txt|md|json|xml|html?|png|jpg|jpeg)'
+    r')',
+    re.IGNORECASE,
+)
+
+
+def extract_path_candidates(text: str) -> list[str]:
+    """从自由文本里提取路径候选（不去重、不校验存在性，由调用方处理）。"""
+    if not text:
+        return []
+    return EXPLICIT_PATH_RE.findall(text)
+
+
+# 命令/代码里紧贴路径的引号、括号、重定向符等 —— 剥离后再解析。
+# 剥离过度只会认不出路径（退回「无弱证据」的旧行为），不会造出假证据。
+_PATH_JUNK = "'\"`)]}>|&*?!,，。；;、"
+
+
+def _strip_path_junk(raw: str) -> str:
+    """去掉路径候选两侧的命令语法字符。"""
+    return raw.strip().strip(_PATH_JUNK)
+
+
+def _command_text(args: Any) -> str:
+    """取出工具参数里的命令/代码文本；取不到时返回空串。"""
+    # 有些工具直接把命令当字符串传
+    if isinstance(args, str):
+        return args
+    if not isinstance(args, dict):
+        return ""
+    # 常见键名都扫一遍，避免对具体工具的参数形状过度假设
+    parts = [v for k, v in args.items() if k in _COMMAND_ARG_KEYS and isinstance(v, str)]
+    return "\n".join(parts)
 
 
 def _coerce_int(value: Any, fallback: int) -> int:
@@ -72,6 +125,8 @@ class ReadEvidenceCollector:
         self._total_lines: dict[str, int | None] = {}
         self._failures: dict[str, str] = {}
         self._kinds: dict[str, dict[str, Any]] = {}
+        # 弱证据：terminal / 代码执行触碰过的路径（无分页信息）
+        self._weak: set[str] = set()
 
     # ── 回调入口 ──────────────────────────────────────────────────────────
 
@@ -81,6 +136,10 @@ class ReadEvidenceCollector:
 
     def on_complete(self, tool_call_id, name, args, result) -> None:  # noqa: ARG002
         """工具完成回调：解析 read_file 的结果并累积覆盖率。"""
+        # 弱证据工具（shell / 代码执行）：从命令文本里认文件，只记「读过」
+        if name in _WEAK_EVIDENCE_TOOLS:
+            self._record_weak_touches(args)
+            return
         if name not in _TRACKED_TOOLS or not isinstance(args, dict):
             return
         resolved = self._resolve(args.get("path"))
@@ -122,6 +181,21 @@ class ReadEvidenceCollector:
                 self._kinds[resolved] = {"kind": Path(resolved).suffix.lower().lstrip(".")}
             self._failures.pop(resolved, None)
 
+    def _record_weak_touches(self, args: Any) -> None:
+        """从命令/代码文本里认出文件路径，记为弱证据（无分页信息）。"""
+        text = _command_text(args)
+        if not text:
+            return
+        for raw in extract_path_candidates(text):
+            resolved = self._resolve(_strip_path_junk(raw))
+            if resolved is None:
+                continue
+            # 只认磁盘上真实存在的路径：命令文本里顺带提到的名字不该变成证据
+            if not Path(resolved).is_file():
+                continue
+            with self._lock:
+                self._weak.add(resolved)
+
     # ── 查询 ─────────────────────────────────────────────────────────────
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
@@ -131,6 +205,7 @@ class ReadEvidenceCollector:
             totals = dict(self._total_lines)
             failures = dict(self._failures)
             kinds = {p: dict(k) for p, k in self._kinds.items()}
+            weak = set(self._weak)
 
         snapshot: dict[str, dict[str, Any]] = {}
         for path, ranges in ranges_by_path.items():
@@ -161,6 +236,20 @@ class ReadEvidenceCollector:
                 "document_metadata": {},
                 "error": reason,
                 "source": "callbacks",
+            }
+        # 弱证据最后落盘：精确证据与失败记录都优先于它，避免弱证据覆盖更可靠的信息。
+        for path in weak:
+            if path in snapshot:
+                continue
+            snapshot[path] = {
+                "status": "unverified",
+                "complete": None,  # 既不断言读完，也不断言漏读
+                "total_lines": None,
+                "ranges": [],
+                "missing_ranges": [],
+                "document_metadata": {},
+                "source": "callbacks",
+                "weak": True,
             }
         return snapshot
 

@@ -53,13 +53,16 @@ When using `memory_recall`, `cognee_recall`, `read_file`, or any tool that retur
 
 TRADE_SYSTEM_PROMPT = TRADE_ROLE_BLOCK + "\n\n" + LANGUAGE_POLICY_BLOCK + "\n\n" + COMPANY_ISOLATION_BLOCK
 
-# 精简版 prompt — 仅核心规则，用于非首轮对话（首轮已发送过完整版）
-# 包含 Disclaimer + Role + Language Policy + Data Isolation，节约 ~2000 tokens
-TRADE_SYSTEM_PROMPT_MINIMAL = TRADE_DISCLAIMER_BLOCK + """
-
+# 短 Role（精简档用）— 与 TRADE_ROLE_BLOCK 的区别：只保留一句话身份声明
+TRADE_SHORT_ROLE_BLOCK = """
 # Role
 You are Trade AI Assistant, an intelligent assistant for B2B trade and manufacturing sales teams.
+"""
 
+# 准确规则块 — 首轮与后续轮次都必须携带。
+# 历史 bug：这块原本只内联在 MINIMAL（非首轮档）里，于是首轮反而拿不到
+# 「逐个文件完整扫描」这条对文档任务最关键的规则。
+TRADE_ACCURACY_BLOCK = """
 # Accuracy Rules (compact — same rules as first message)
 - **逐个文件扫描，不跳过任何文件**：目录中有多少文件就读多少文件。禁止根据文件名"猜测"内容而跳过读取。
 - Read every file to completion. Never truncate. If `read_file` returns partial content, immediately continue with offset until the entire file is read. Multi-sheet Excel → read every sheet.
@@ -80,7 +83,18 @@ You are Trade AI Assistant, an intelligent assistant for B2B trade and manufactu
 1. **先结构化**：逐行清点源清单得到产品总数 N，并整理每行参数（型号/规格/单价/单位）
 2. **生成不手抄**：生成文件 → 代码必须直接读源文件循环写入，禁止把产品数据手工抄进代码；文本输出 → 基于第 1 步数据逐条写
 3. **交付前核对**：输出条数 == N（少了必须补全）；参数逐字段一致（型号逐字符、数字不四舍五入、不换算单位）；确实无法确认的项标注「第 X 项未能确认」，**绝不静默省略**
-""" + "\n\n" + LANGUAGE_POLICY_BLOCK + "\n\n" + COMPANY_ISOLATION_BLOCK
+"""
+
+# 首轮基础块 = 基础三块 + 准确规则（首轮最需要文档准确规则）
+TRADE_SYSTEM_PROMPT_FIRST_TURN = TRADE_SYSTEM_PROMPT + "\n\n" + TRADE_ACCURACY_BLOCK
+
+# 精简版 prompt — 非首轮对话使用（首轮已发送过完整版），保留 Disclaimer + 短 Role + 准确规则
+TRADE_SYSTEM_PROMPT_MINIMAL = (
+    TRADE_DISCLAIMER_BLOCK + TRADE_SHORT_ROLE_BLOCK
+    + TRADE_ACCURACY_BLOCK
+    + "\n\n" + LANGUAGE_POLICY_BLOCK
+    + "\n\n" + COMPANY_ISOLATION_BLOCK
+)
 
 # OSINT/情报类精简 prompt — 只保留 Role + Language Policy，去掉文档生成/Cognee 等无关段落
 TRADE_SYSTEM_PROMPT_OSINT = TRADE_ROLE_BLOCK + "\n\n" + LANGUAGE_POLICY_BLOCK + "\n\n" + COMPANY_ISOLATION_BLOCK + """

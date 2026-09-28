@@ -124,10 +124,11 @@ def test_extracted_document_reports_kind(tmp_path):
     assert entry["source"] == "callbacks"
 
 
-def test_non_read_tools_are_ignored(tmp_path):
-    """其它工具不产生读取证据。"""
+def test_tools_without_recognisable_evidence_are_ignored(tmp_path):
+    """无关工具不产生证据；terminal 只在认得出真实存在文件时才留弱证据。"""
     c = ReadEvidenceCollector()
     c.on_complete("1", "search_files", {"pattern": "x"}, _result(total_lines=5))
+    # "cat a" 里没有可识别的文件路径 → 不留任何证据
     c.on_complete("2", "terminal", {"command": "cat a"}, "output")
 
     assert c.snapshot() == {}
@@ -179,3 +180,55 @@ def test_unknown_path_is_normalized(tmp_path):
                   _result(total_lines=5, truncated=False))
 
     assert list(c.snapshot()) == [str(f.resolve())]
+
+
+# ── 弱证据：terminal / 代码执行读过文件 ──────────────────────────────────────
+# 这些工具没有 offset/limit，只能确认「读过」，不能核验读到多少。
+# 记为弱证据，交由门禁如实披露，而不是判成 agent 漏读（那会误杀）。
+
+
+def test_weak_tool_marks_file_as_unverified(tmp_path):
+    """terminal 读过的文件记为弱证据：确认读过，但不冒充完整。"""
+    c = ReadEvidenceCollector()
+    f = tmp_path / "a.pdf"
+    f.write_bytes(b"%PDF-1.4")
+
+    c.on_complete("1", "terminal", {"command": f"pdftotext {f} -"}, "ok")
+
+    entry = c.snapshot()[str(f.resolve())]
+    assert entry["weak"] is True
+    assert entry["status"] == "unverified"
+    assert entry["complete"] is None, "弱证据不能断言文件已读完"
+
+
+def test_all_shell_and_code_tool_names_are_weak_tracked(tmp_path):
+    """terminal / bash / execute_code / code_execution 都要被弱证据覆盖。"""
+    f = tmp_path / "b.xlsx"
+    f.write_bytes(b"PK")
+
+    for name in ("terminal", "bash", "execute_code", "code_execution"):
+        c = ReadEvidenceCollector()
+        c.on_complete("1", name, {"command": f"python -c \"open('{f}')\""}, "ok")
+        assert c.snapshot()[str(f.resolve())]["weak"] is True, f"{name} 未被弱证据覆盖"
+
+
+def test_read_file_evidence_wins_over_weak_touch(tmp_path):
+    """同一文件既有 read_file 精确证据、又有弱触碰时，以精确证据为准。"""
+    c = ReadEvidenceCollector()
+    f = tmp_path / "a.txt"
+
+    c.on_complete("1", "terminal", {"command": f"cat {f}"}, "ok")
+    c.on_complete("2", "read_file", {"path": str(f)}, _result(total_lines=5, truncated=False))
+
+    entry = c.snapshot()[str(f.resolve())]
+    assert entry.get("weak") is not True
+    assert entry["complete"] is True
+    assert entry["total_lines"] == 5
+
+
+def test_weak_tool_without_recognisable_path_leaves_nothing(tmp_path):
+    """命令里认不出文件路径时不留下任何证据（不能凭空造证据）。"""
+    c = ReadEvidenceCollector()
+    c.on_complete("1", "terminal", {"command": "ls -la && echo hello"}, "ok")
+
+    assert c.snapshot() == {}

@@ -94,6 +94,9 @@ class GateResult:
     missing: list[str]
     errors: list[str]
     skipped: list[dict] = field(default_factory=list)
+    # 能力边界说明：证据不含结构化元数据（原版 Hermes 无读取快照接口）时，
+    # 明确告知「只能确认读过、无法核验读全」，避免用户高估校验强度。
+    coverage_note: str = ""
 
 
 @dataclass
@@ -202,7 +205,14 @@ class DocumentTask:
             # 读了（例如缺 firecrawl-anydoc 时的 PDF）。这不是 agent 的疏漏，
             # 无论读到多少都按「无法解析」披露，而不是判成不通过。
             # 完全没有读取记录时仍然是 agent 漏读，必须判不通过。
-            if (touched and expected_kind in _PARSED_DOCUMENT_KINDS
+            # 弱证据（terminal / 代码执行读过）必须最先判：它没有分页信息，
+            # 若落到下面的 kind 分支会被错标成「未能解析」，那是误导性披露。
+            if touched and record.get("weak"):
+                unreadable.append({
+                    "file": item.relative_path,
+                    "reason": "coverage_unverifiable",
+                })
+            elif (touched and expected_kind in _PARSED_DOCUMENT_KINDS
                     and record.get("status") != "failed"
                     and metadata.get("kind") != expected_kind):
                 unreadable.append({
@@ -240,15 +250,24 @@ class DocumentTask:
         elif not normalized:
             # 完全没有读取证据：无法区分「没读文件」和「用别的方式读了」，
             # 判为不可追踪，避免把正常问答误判成失败。
+            # 注意：这里保持严格语义 —— 只要有任意读取证据（哪怕是清单外的文件），
+            # 清单内文件未被触碰就算真正的漏读，如实拦截。
             status = "untracked"
         else:
             status = "incomplete"
+        # 只有 Hermes 的结构化读取快照才带 Sheet / 页数 / 扫描页信息。
+        # 走到这里的证据若全来自工具回调（原版 Hermes 就是这种情况），
+        # 就如实说明完整性未经核验，而不是让用户以为已经逐 Sheet 逐页校验过。
+        _has_structured = any(
+            rec.get("source") != "callbacks" for rec in normalized.values()
+        )
         return GateResult(
             status=status,
             complete=complete,
             missing=missing,
             errors=errors,
             skipped=unreadable,
+            coverage_note="" if _has_structured else _CALLBACK_COVERAGE_NOTE,
         )
 
 
@@ -270,6 +289,7 @@ _REASON_LABELS = {
     "not_parsed_as_pptx": "演示文稿未能解析",
     "not_parsed_as_ppt": "演示文稿未能解析",
     "no_sheet_coverage": "未能确认全部工作表已读取",
+    "coverage_unverifiable": "通过终端/代码读取，无法核验是否读全",
     "no_page_coverage": "未能确认全部页面已读取",
     "scanned_pages": "含扫描页（图片，无文字层），这部分内容无法读取",
 }
@@ -278,6 +298,13 @@ _REASON_LABELS = {
 def _label(reason: str) -> str:
     """把内部原因码翻成用户可读说明，未知原因原样返回。"""
     return _REASON_LABELS.get(reason, reason)
+
+
+# 回调证据下的能力边界说明（原版 Hermes 没有结构化读取快照接口）
+_CALLBACK_COVERAGE_NOTE = (
+    "本机 Hermes 未提供结构化读取快照，只能确认文件已被读取，"
+    "无法逐 Sheet / 逐页核验是否读全。"
+)
 
 
 def format_incomplete_report(result: GateResult) -> str:
@@ -299,6 +326,10 @@ def format_incomplete_report(result: GateResult) -> str:
             lines.append(f"- {item['file']}（{_label(item['reason'])}）")
         lines.append("")
     lines.append("请让助手补齐上述文件，或改为只分析指定文件的提问方式后重试。")
+    # 能力边界说明：让用户知道差异不是漏读造成的，而是本机无法核验那么细
+    if result.coverage_note:
+        lines.append("")
+        lines.append(f"ℹ️ {result.coverage_note}")
     return "\n".join(lines)
 
 

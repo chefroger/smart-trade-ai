@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -170,6 +170,95 @@ def _get_trade_home_path() -> Path:
     return Path(trade_home)
 
 
+def _client_is_loopback(request) -> bool:
+    """判断请求是否来自本机回环地址。"""
+    host = str(getattr(getattr(request, "client", None), "host", "") or "")
+    return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost")
+
+
+def _remote_ui_allowed() -> bool:
+    """是否显式允许向非本机客户端下发 token（局域网使用场景，默认关闭）。"""
+    return os.environ.get("TRADE_ALLOW_REMOTE_UI", "").strip().lower() in ("1", "true", "yes")
+
+
+def _client_may_receive_token(request) -> bool:
+    """是否允许向该客户端下发 session token。
+
+    session token 是唯一凭据，而 /trade 页面无需鉴权即可获取 ——
+    若绑定 --host 0.0.0.0 时照常下发，局域网内任意主机 fetch 该页即可拿到
+    token 并接管全部 API（包括 /system/update 这类系统端点）。
+    默认只给本机回环客户端；确需局域网访问时用 TRADE_ALLOW_REMOTE_UI=1 显式开启。
+    """
+    return _remote_ui_allowed() or _client_is_loopback(request)
+
+
+def _pyproject_path() -> Path | None:
+    """定位与「当前运行代码」配套的 pyproject.toml。
+
+    PyInstaller 打包后 pyproject.toml 在 _MEIPASS 下；开发/源码运行时在包的上一级目录。
+    找不到时返回 None（打包场景可能没带此文件）。
+    """
+    _meipass = getattr(sys, "_MEIPASS", None)
+    # 优先用打包目录里的副本，它与被冻结的代码版本一致
+    if _meipass:
+        _bundled = Path(_meipass) / "pyproject.toml"
+        if _bundled.is_file():
+            return _bundled
+    _source = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    return _source if _source.is_file() else None
+
+
+def _running_code_version() -> str:
+    """返回当前进程正在运行的代码版本（读与运行代码配套的 pyproject.toml）。"""
+    pyproject = _pyproject_path()
+    if not pyproject:
+        return ""
+    try:
+        try:
+            import tomllib as _toml
+        except ImportError:
+            import tomli as _toml
+        return _toml.loads(pyproject.read_text()).get("project", {}).get("version", "")
+    except Exception:
+        # 解析失败不应影响启动，降级为空串由调用方兜底
+        return ""
+
+
+def _write_version_marker() -> str:
+    """把「当前进程运行的版本」写入 version.txt（进程启动时调用一次）。
+
+    version.txt 的语义是「正在运行的代码版本」，所以只由启动流程写。
+    /api/status 不再反写 —— 否则磁盘上刚 pull 下来的新版本会在没重启的情况下
+    伪装成「已升级」，用户以为升级成功、实际仍跑旧代码。
+    """
+    version = _running_code_version()
+    if not version:
+        return ""
+    try:
+        data_dir = _get_trade_data_dir()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "version.txt").write_text(version)
+    except Exception:
+        pass  # 写标记失败不影响服务启动
+    return version
+
+
+def _resolve_reported_version() -> str:
+    """/api/status 上报的版本号。
+
+    以 version.txt（= 运行版本）为准；缺失时只读回退到 pyproject.toml，绝不写盘。
+    """
+    try:
+        _vf = _get_trade_data_dir() / "version.txt"
+        if _vf.is_file():
+            _v = _vf.read_text().strip()
+            if _v:
+                return _v
+    except Exception:
+        pass
+    return _running_code_version() or "0.0.0"
+
+
 def _kill_gateway() -> None:
     """终止当前 Hermes Gateway 进程（升级/重启时调用，新进程会重启它）。
 
@@ -250,14 +339,18 @@ def _perform_restart() -> None:
 
     # 记录启动命令，交给 shell 子进程执行
     _restart_cmd = [_restart_python] + _sys.argv
+    # POSIX 走 sh，repr() 产生的单引号是合法引法
     _cmd_str = " ".join(repr(a) for a in _restart_cmd)
+    # Windows 走 cmd，cmd 不认单引号：必须用 list2cmdline 生成双引号命令，
+    # 否则旧进程已被 taskkill、新进程却起不来，服务彻底下线
+    _cmd_str_win = _sp.list2cmdline(_restart_cmd)
 
     # 杀 Gateway
     _kill_gateway()
 
     # 构建独立 shell 脚本：sleep 等响应发完 → kill 旧进程 → 启动新进程
     if os.name == "nt":
-        _script = f'@echo off\r\ntimeout /t 3 /nobreak >nul\r\ntaskkill /PID {old_pid} /F\r\n{_cmd_str}'
+        _script = f'@echo off\r\ntimeout /t 3 /nobreak >nul\r\ntaskkill /PID {old_pid} /F\r\n{_cmd_str_win}'
         _sp.Popen(
             ["cmd", "/c", _script],
             stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
@@ -389,6 +482,12 @@ def create_app() -> FastAPI:
     _db_path = _init_db()
     print(f"  Database: {_db_path}")
 
+    # 版本标记：记录「本进程实际运行的代码版本」，供 /api/status 上报。
+    # 只在启动时写，升级流程不写 —— 这样没重启就一定显示旧版本（真话）。
+    _running_version = _write_version_marker()
+    if _running_version:
+        print(f"  Version:  v{_running_version}")
+
     # 许可证检查：到期不影响服务启动（chat 端点在每次请求时校验），
     # 但打印醒目提示引导用户激活
     lic_ok, lic_msg = _check_license()
@@ -414,43 +513,10 @@ def create_app() -> FastAPI:
     # Health check
     @app.get("/api/status", include_in_schema=False)
     async def status():
-        # 读取当前版本号
-        # 策略：version.txt（update_trade 写入）→ 自动同步 pyproject.toml
-        # 手动 git pull + 重启后 pyproject.toml 可能比 version.txt 新，自动覆盖
-        version = "0.0.0"
-        try:
-            # 1. 优先读 version.txt（升级成功后写入，最可靠）
-            version_file = _get_trade_data_dir() / "version.txt"
-            if version_file.is_file():
-                version = version_file.read_text().strip()
-
-            # 1b. 对比 pyproject.toml，如有更新则自动同步 version.txt
-            _pyproject = None
-            _meipass = getattr(sys, "_MEIPASS", None)
-            if _meipass:
-                _pyproject = Path(_meipass) / "pyproject.toml"
-            if not _pyproject or not _pyproject.is_file():
-                _pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
-            if _pyproject and _pyproject.is_file():
-                try:
-                    import tomllib as _toml
-                except ImportError:
-                    import tomli as _toml
-                _pv = ""
-                try:
-                    _data = _toml.loads(_pyproject.read_text())
-                    _pv = _data.get("project", {}).get("version", "")
-                except Exception:
-                    pass
-                if _pv and _pv != version:
-                    version = _pv
-                    try:
-                        version_file.parent.mkdir(parents=True, exist_ok=True)
-                        version_file.write_text(version)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        # 读取当前版本号：以 version.txt（= 启动时写入的运行版本）为准，只读不写。
+        # 曾在此处把磁盘 pyproject.toml 的新版本号反写进 version.txt，导致
+        # 「pull 成功但没重启」时 UI 显示新版本，把卡在旧版伪装成升级成功。
+        version = _resolve_reported_version()
 
         # 用缓存降低 GitHub API 调用频率，防止限流导致版本检测失效
         _now = time.monotonic()
@@ -514,12 +580,31 @@ def serve_trade_chat(app: FastAPI) -> None:
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     @app.get("/trade", response_class=HTMLResponse, include_in_schema=False)
-    async def trade_chat_ui():
-        """Serve the B2B chat interface with session token injected."""
+    async def trade_chat_ui(request: Request):
+        """Serve the B2B chat interface with session token injected.
+
+        非本机来源不下发 token（见 _client_may_receive_token）：token 是唯一凭据，
+        而本页面无需鉴权即可获取它，绑定 0.0.0.0 时照常下发等于把 API 交给整个局域网。
+        远程客户端会拿到一页说明，引导其改用本机地址访问。
+        """
         if not _TRADE_CHAT_HTML.exists():
             return HTMLResponse(
                 content='<html><body style="font-family:sans-serif;padding:2rem;"><h1>Trade chat UI not found</h1><p>The frontend file <code>static/trade_chat.html</code> is missing.</p></body></html>',
                 status_code=404,
+            )
+        if not _client_may_receive_token(request):
+            return HTMLResponse(
+                content=(
+                    '<html><body style="font-family:sans-serif;padding:2rem;max-width:40rem;">'
+                    '<h1>请在本机浏览器中打开</h1>'
+                    '<p>本服务只向本机（回环地址）浏览器下发会话凭据，'
+                    '以免局域网内其它主机取得凭据后接管全部接口。</p>'
+                    '<p>请在这台机器上访问 <code>http://127.0.0.1:{port}/trade</code>。</p>'
+                    '<p style="color:#666;font-size:0.9rem;">确需局域网访问时，'
+                    '可在启动前设置环境变量 <code>TRADE_ALLOW_REMOTE_UI=1</code>（会降低安全性）。</p>'
+                    '</body></html>'
+                ).replace("{port}", str(getattr(request.url, "port", "") or "")),
+                status_code=403,
             )
         html = _TRADE_CHAT_HTML.read_text(encoding="utf-8")
         html = html.replace("__TRADE_SESSION_TOKEN__", _SESSION_TOKEN)

@@ -435,3 +435,31 @@ class TestResolveHermesHome:
         home = _resolve_hermes_home()
         assert home.name  # 不为空
         assert str(home)  # 不为空字符串
+
+
+class TestActivationCodeErrorChain:
+    """激活码解码失败时的异常链必须保留原始原因。
+
+    _decode_activation_code 在签名验证失败时把 InvalidSignature 换成裸 ValueError，
+    一度丢掉了 __cause__ —— 排查「为什么激活码无效」时线索断裂（B904）。
+    """
+
+    @_crypto_needed
+    def test_bad_signature_preserves_cause(self):
+        """签名不匹配时 ValueError 必须带 InvalidSignature 作为 __cause__。"""
+        import base64
+
+        from cryptography.exceptions import InvalidSignature
+
+        from trade.license import _decode_activation_code
+
+        # 构造 88 字节新格式：date(8) + hash(16) + 全零签名(64) → 签名一定验证失败
+        raw = b"20261231" + b"a" * 16 + b"\x00" * 64
+        code = "TRADE-" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+        with pytest.raises(ValueError) as exc_info:
+            _decode_activation_code(code)
+
+        assert isinstance(exc_info.value.__cause__, InvalidSignature), (
+            "签名验证失败应保留原始 InvalidSignature 异常链，否则排查激活失败时无法定位"
+        )

@@ -252,6 +252,9 @@ async def trade_chat(
     payload_out = {"response": response, "conversation": conv}
     if gate_result is not None:
         payload_out["analysis_skipped"] = gate_result.skipped
+        if gate_result.coverage_note:
+            # 能力边界如实披露（原版 Hermes 无结构化读取快照时）
+            payload_out["analysis_note"] = gate_result.coverage_note
         if incomplete:
             payload_out["analysis_incomplete"] = True
     return payload_out
@@ -390,6 +393,7 @@ async def trade_chat_stream(
                                 "missing": gate_result.missing,
                                 "errors": gate_result.errors,
                                 "skipped": gate_result.skipped,
+                                "coverage_note": gate_result.coverage_note,
                             })
                     finally:
                         # 释放 Hermes 侧该请求的读取记录，避免长驻进程内无限累积。

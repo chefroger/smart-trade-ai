@@ -390,14 +390,8 @@ _OSINT_SKILL_NAMES = frozenset({"b2b-osint", "b2b-email-intel"})
 # ── 用户问题中显式文件/目录路径提取 ──────────────────────────────────────
 
 # 匹配常见文件路径模式：绝对路径、带扩展名的文件名、中文文件名
-_EXPLICIT_PATH_RE = re.compile(
-    r'(?:(?:文件|目录|路径|path|file|dir)\s*[：:]\s*)?'  # 可选前缀 "文件："
-    r'(/(?:[^\s,，。；;、]+/)*[^\s,，。；;、]+'            # Unix 绝对路径
-    r'|\b[A-Za-z]:\\(?:[^\s,，。；;、]+\\)*[^\s,，。；;、]+'  # Windows 绝对路径
-    r'|[^\s,，。；;、]+\.(?:xlsx?|csv|pdf|docx?|pptx?|txt|md|json|xml|html?|png|jpg|jpeg)'
-    r')',
-    re.IGNORECASE,
-)
+# 正则定义在 read_evidence（零 Trade 依赖）里，供弱证据识别共用，避免两处漂移
+from trade.read_evidence import EXPLICIT_PATH_RE as _EXPLICIT_PATH_RE  # noqa: E402
 
 
 def _extract_explicit_paths(query: str) -> list[str]:
@@ -481,17 +475,28 @@ def build_query(
     # 检查是否有历史对话记录，用于判断是否首轮
     has_history = bool(company_id and _cm.get_recent(company_id, limit=1))
 
+    # 问题里点名的文件/目录（文档类任务判定要用，后面 doc_context 复用同一份）
+    explicit_paths = _extract_explicit_paths(query)
+
     if matched_name in _OSINT_SKILL_NAMES:
-        # OSINT 背调场景使用精简 system prompt，去掉销售相关的指令以减少 token 浪费
+        # OSINT 背调场景：精简档，去掉文档生成/Cognee 等无关段落
         from trade.prompt import TRADE_SYSTEM_PROMPT_OSINT
         code_fallback = TRADE_SYSTEM_PROMPT_OSINT
+    elif _prompts.needs_full_prompt(
+        matched_name=matched_name, library_id=library_id, explicit_paths=explicit_paths
+    ):
+        # 文档处理类任务：注入完整档（含文档生成指南、文档分析协议等，
+        # 约 22674 字符 ≈ 5700 token）—— 只在真正需要时才付这个成本
+        from trade.prompt import TRADE_SYSTEM_PROMPT_FULL
+        code_fallback = TRADE_SYSTEM_PROMPT_FULL
     elif has_history:
-        # 非首轮对话 — 首轮已发送过完整版，后续注入精简版节约 token
+        # 非首轮对话：精简档（基础规则与准确规则仍然常驻）
         from trade.prompt import TRADE_SYSTEM_PROMPT_MINIMAL
         code_fallback = TRADE_SYSTEM_PROMPT_MINIMAL
     else:
-        # 首轮非 OSINT 对话 — 使用完整版 system prompt（含文档生成指南、Cognee 等）
-        code_fallback = None
+        # 首轮：完整基础块（基础三块 + 准确规则）
+        from trade.prompt import TRADE_SYSTEM_PROMPT_FIRST_TURN
+        code_fallback = TRADE_SYSTEM_PROMPT_FIRST_TURN
     system_prompt = _prompts.resolve_system_prompt(
         company_slug=company_slug,
         db_identity=db_identity,
@@ -556,7 +561,7 @@ def build_query(
     doc_context = ""
 
     # 4.0 用户问题中明确提到了文件路径或目录 → 强制读取
-    explicit_paths = _extract_explicit_paths(query)
+    #     （explicit_paths 已在档位选择前算好，此处复用）
     if explicit_paths:
         path_lines = "\n".join(
             f"  - {p}" + (" (目录)" if Path(p).is_dir() else " (文件)")
@@ -607,7 +612,9 @@ def build_query(
 
         if dirs_to_scan:
             dir_lines = "\n".join(f"  - {d}" for d in dirs_to_scan)
-            doc_context = (
+            # 必须用 += 追加：用 = 会把上面「用户指定文件（强制读取 — 最高优先级）」
+            # 整块覆盖掉 —— 用户点名文件时那条最强指令会被静默丢弃
+            doc_context += (
                 f"\n## 可用文档目录\n"
                 f"当前公司有以下数据目录，你**可以根据用户问题自行判断**是否需要读取：\n"
                 f"{dir_lines}\n\n"

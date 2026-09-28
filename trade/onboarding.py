@@ -24,8 +24,6 @@ Trade AI Assistant — 首次运行引导模块。
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from trade import company as _company_module
 from trade.database import get_connection
 
@@ -195,14 +193,12 @@ def create_first_company(
     )
 
     # Step 3: 将 agent_identity 写入公司目录下的标准文件
-    # 路径：~/.trade/{slug}/companies/{slug}/agent-identity.md
-    # 同时写 DB（DB 作为运行时缓存）
-    tc = _company_module.get_trade_company(company["id"])
-    if tc and tc.get("data_dir"):
-        slug = company.get("slug", "")
-        identity_path = Path(tc["data_dir"]) / "companies" / slug / "agent-identity.md"
-        identity_path.parent.mkdir(parents=True, exist_ok=True)
-        identity_path.write_text(agent_identity, encoding="utf-8")
+    # 路径由 trade.prompts.write_agent_identity 统一决定（~/.trade/{slug}/companies/{slug}/agent-identity.md），
+    # 这里不自己拼路径 —— 历史上两边各拼一份、拼出不同结果，导致读取方永远读不到写入的文件
+    slug = company.get("slug", "")
+    if slug:
+        from trade.prompts import write_agent_identity
+        write_agent_identity(slug, agent_identity)
 
     # 更新进程级标志
     global _onboarding_done

@@ -33,11 +33,16 @@ _JOBS_FILE = _HERMES_HOME / "cron" / "jobs.json"
 
 
 @router.get("/cron/today")
-def get_today_cron(cid: int = Depends(require_company)):
+def get_today_cron(_cid: int = Depends(require_company)):
     """返回今日 cron 任务清单（已执行 + 待执行）。
 
     任务来源: jobs.json 中已激活的定时任务。如果 jobs.json 不存在或为空，
-    回退到内置标准任务列表。要求公司上下文（require_company）。
+    回退到内置标准任务列表。
+
+    **机器级资源（无公司维度）**：数据来自 Hermes 的 ~/.hermes/cron/，
+    任务名与输出文件都不带公司标识，因此无法按公司过滤 ——
+    这里保留公司上下文校验与其它业务端点保持一致，但**故意不使用 cid**。
+    若将来要按公司隔离，需先在 Hermes 侧给 cron job 打公司标签。
     """
     today = date.today().isoformat()
     now = datetime.now()
@@ -168,11 +173,13 @@ def _cron_to_time(expr: str) -> str:
 
 
 @router.get("/cron/jobs")
-def get_active_jobs(cid: int = Depends(require_company)):
+def get_active_jobs(_cid: int = Depends(require_company)):
     """返回 Hermes cron 中已激活的定时任务列表。
 
     从 ~/.hermes/cron/jobs.json 读取，返回任务名称、调度时间、下次执行时间。
-    要求公司上下文（require_company）。
+
+    **机器级资源（无公司维度）**：与 get_today_cron 同理，jobs.json 里没有公司标识，
+    因此**故意不使用 cid**，仅保留公司上下文校验与其它业务端点保持一致。
     """
     if not _JOBS_FILE.is_file():
         return []

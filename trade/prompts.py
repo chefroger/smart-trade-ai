@@ -22,7 +22,7 @@ import os
 import threading
 from pathlib import Path
 
-from trade.prompt import TRADE_SYSTEM_PROMPT as _CODE_FALLBACK
+from trade.prompt import TRADE_SYSTEM_PROMPT_FIRST_TURN as _CODE_FALLBACK
 
 # ─────────────────────────────────────────────────────────────────────────────
 # mtime 缓存：{绝对路径: (mtime, 内容)}
@@ -90,8 +90,16 @@ def _load_file(path: Path, fallback: str = "") -> str:
 
 
 def _company_identity_path(slug: str) -> Path:
-    """返回公司级 identity 文件的绝对路径。"""
-    return _get_trade_home() / "companies" / slug / "agent_identity.md"
+    """返回公司级 identity 文件的绝对路径。
+
+    必须与工作目录布局一致 —— _ensure_data_dir 把 .trade-template 复制到
+    {data_dir}/companies/{slug}/（data_dir 即 ~/.trade/{slug}/），文件名是模板里的
+    连字符 agent-identity.md：
+        ~/.trade/{slug}/companies/{slug}/agent-identity.md
+    历史上这里写作 ~/.trade/companies/{slug}/agent_identity.md（下划线 + 少一层），
+    导致读取方永远读不到 onboarding / 模板写入的文件，「文件优先」整层失效。
+    """
+    return _get_trade_home() / slug / "companies" / slug / "agent-identity.md"
 
 
 def _system_prompt_path() -> Path:
@@ -133,41 +141,33 @@ def get_system_prompt(company_slug: str | None = None) -> str:
     return _CODE_FALLBACK
 
 
-def get_agent_identity(company_id: int) -> str:
-    """[已废弃] 根据 company_id 获取 identity 文本。
-
-    此函数始终返回空字符串 — 实际 identity 解析由
-    resolve_system_prompt() 统一处理，路径优先级为：
-      1. 公司 identity 文件
-      2. DB agent_identity_md
-      3. 全局 system.md
-      4. 代码 fallback
-
-    请改用 get_agent_identity_by_slug(company_slug) 或直接调用
-    resolve_system_prompt(company_slug, db_identity)。
-    """
-    import warnings
-    warnings.warn(
-        "get_agent_identity() is deprecated; use "
-        "get_agent_identity_by_slug() or resolve_system_prompt() instead.",
-        DeprecationWarning, stacklevel=2,
-    )
-    return ""
-
-
 def get_agent_identity_by_slug(company_slug: str) -> str:
     """根据 company_slug 获取 identity 文件内容。
 
-    如果文件不存在，返回空字符串（由调用方决定是否 fallback）。
+    规范路径优先（{data_dir}/companies/{slug}/agent-identity.md）；
+    没有内容时回退读历史遗留路径（~/.trade/companies/{slug}/agent_identity.md）——
+    统一路径之前读取方曾指向那里，用户可能已手动编辑过，直接弃用会让改动凭空消失。
+    两者都没有时返回空字符串（由调用方决定是否 fallback）。
     """
-    path = _company_identity_path(company_slug)
-    return _load_file(path)
+    content = _load_file(_company_identity_path(company_slug))
+    if content:
+        return content
+    return _load_file(_legacy_identity_path(company_slug))
+
+
+def _legacy_identity_path(slug: str) -> Path:
+    """历史遗留的 identity 文件路径（仅用于兼容读取，不用于写入）。
+
+    路径约定统一前的读取方指向：~/.trade/companies/{slug}/agent_identity.md
+    （下划线、且少一层 companies/{slug}）。
+    """
+    return _get_trade_home() / "companies" / slug / "agent_identity.md"
 
 
 def write_agent_identity(company_slug: str, content: str) -> None:
     """写入公司 identity 文件（供 onboarding 或手动编辑调用）。
 
-    文件路径：~/.trade/companies/{slug}/agent_identity.md
+    文件路径：~/.trade/{slug}/companies/{slug}/agent-identity.md
     写入后自动失效 mtime 缓存。
 
     注意：此函数只写文件，不写 DB。
@@ -194,8 +194,12 @@ def write_system_prompt(content: str) -> None:
 
 
 def _brand_safety_path(slug: str) -> Path:
-    """返回公司级品牌安全护栏文件路径。"""
-    return _get_trade_home() / "companies" / slug / "brand_safety.md"
+    """返回公司级品牌安全护栏文件路径。
+
+    与身份文件同约定（工作目录/模板布局）：
+        ~/.trade/{slug}/companies/{slug}/brand_safety.md
+    """
+    return _get_trade_home() / slug / "companies" / slug / "brand_safety.md"
 
 
 def get_brand_safety(company_slug: str | None = None) -> str:
@@ -223,40 +227,80 @@ def resolve_system_prompt(
     *,
     code_fallback: str | None = None,
 ) -> str:
-    """完整的 system prompt 解析（文件优先，DB 兜底，代码托底）。
+    """组合出最终 system prompt：**基础规则块 + 用户自定义文本**。
 
-    优先级链：
-      1. 公司 identity 文件（~/.trade/companies/{slug}/agent_identity.md）
+    基础规则块（Disclaimer / Role / Language Policy / Data Isolation / 准确规则，
+    由 code_fallback 指定档位）始终发送，公司身份文本追加在其后。
+    历史上这里是二选一的优先级链（文件 → DB → 全局 → 代码），而 onboarding 必然写入
+    身份文本，于是身份把基础规则整体顶替 —— 实测返回长度恰好等于身份文本长度，
+    这些规则从未到达过模型。
+
+    自定义层优先级（高到低）：
+      1. 公司 identity 文件 ~/.trade/{slug}/companies/{slug}/agent-identity.md
       2. DB agent_identity_md 字段（运行时缓存）
       3. 全局 system.md（~/.trade/prompts/system.md）
-      4. code_fallback 参数（指定则优先，否则用默认 TRADE_SYSTEM_PROMPT）
+    三者都没有时只返回基础规则块。
 
     Args:
         company_slug: 公司 slug（用于定位 identity 文件）
         db_identity:  DB 中 agent_identity_md 字段值（缓存）
-        code_fallback: 代码层兜底 prompt（None 时用默认 TRADE_SYSTEM_PROMPT）。
-                       OSINT 类 skill 可传入 TRADE_SYSTEM_PROMPT_OSINT。
+        code_fallback: 基础规则块档位（None 时用默认 TRADE_SYSTEM_PROMPT_FIRST_TURN）。
+                       OSINT 类 skill 传 TRADE_SYSTEM_PROMPT_OSINT，
+                       非首轮传 TRADE_SYSTEM_PROMPT_MINIMAL，
+                       文档类任务传 TRADE_SYSTEM_PROMPT_FULL。
     """
-    # 1. 公司 identity 文件 — 文件优先级最高，有则直接返回
+    base = code_fallback or _CODE_FALLBACK
+    custom = _resolve_custom_prompt(company_slug, db_identity)
+    # 自定义文本追加在基础规则之后；没有自定义时就是纯基础规则块
+    return f"{base}\n\n{custom}" if custom else base
+
+
+def _resolve_custom_prompt(company_slug: str | None, db_identity: str | None) -> str:
+    """按优先级取用户自定义身份文本；都没有时返回空串。"""
+    # 1. 公司 identity 文件优先级最高
     if company_slug:
         file_content = get_agent_identity_by_slug(company_slug)
-        # 公司级文件存在且非空，以此为最终结果
         if file_content:
             return file_content
 
-    # 2. DB 缓存（过渡期保留）— 文件不存在时使用数据库中保存的 identity
+    # 2. DB 缓存（onboarding / 前端在线编辑写入）
     if db_identity:
         return db_identity
 
-    # 3. 全局 system.md — 前两者都没有时，尝试读取全局自定义文件
-    global_path = _system_prompt_path()
-    global_content = _load_file(global_path)
-    # 全局文件存在且非空，以此为最终结果
-    if global_content:
-        return global_content
+    # 3. 全局自定义 system.md
+    return _load_file(_system_prompt_path())
 
-    # 4. 代码 fallback — 没有任何用户自定义内容时，返回代码内置的默认值
-    return code_fallback or _CODE_FALLBACK
+
+# 文档处理类技能：只有这些任务才需要注入 FULL 的文档生成/分析指南
+_DOC_TASK_SKILLS = frozenset({
+    "b2b-document",
+    "b2b-doc-generation",
+    "b2b-tech-drawing",
+    "b2b-customs-data",
+})
+
+
+def needs_full_prompt(
+    matched_name: str | None = None,
+    library_id: int | None = None,
+    explicit_paths: list[str] | None = None,
+) -> bool:
+    """是否需要注入 FULL 提示词（22674 字符 ≈ 5700 token，含文档生成指南与文档分析协议）。
+
+    判定为文档处理类任务（任一命中即可）：
+      1. 命中文档相关技能
+      2. 用户选定了文档库
+      3. 用户问题里点名了具体文件/目录
+
+    普通问答（营销/背调/闲聊）不注入，避免每次多付约 5700 token。
+    """
+    if matched_name and matched_name in _DOC_TASK_SKILLS:
+        return True
+    if library_id:
+        return True
+    if explicit_paths:
+        return True
+    return False
 
 
 def invalidate_cache(path: Path | str | None = None) -> None:

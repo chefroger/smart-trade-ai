@@ -832,11 +832,25 @@ async function recoverAuth(method, path, body) {
     }
 }
 
+// #region api-opts —— 这段被 tests_js/api-opts.test.js 按标记整体抽取测试，勿删标记
+// 构造请求选项：鉴权头 + body 编码。
+// FormData（文件上传）必须原样透传且不设 Content-Type —— 否则会丢掉 multipart 的 boundary。
+function _buildApiOpts(method, body, token, companyId) {
+    const opts = { method: method, headers: {} };
+    if (token) opts.headers['X-Hermes-Session-Token'] = token;
+    if (companyId) opts.headers['X-Company-ID'] = String(companyId);
+    if (body instanceof FormData) {
+        opts.body = body;
+    } else if (body) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(normalizeBody(body));
+    }
+    return opts;
+}
+// #endregion api-opts
+
 async function api(method, path, body) {
-    const opts = { method, headers: {} };
-    if (TOKEN) opts.headers['X-Hermes-Session-Token'] = TOKEN;
-    if (currentCompanyId) opts.headers['X-Company-ID'] = String(currentCompanyId);
-    if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(normalizeBody(body)); }
+    const opts = _buildApiOpts(method, body, TOKEN, currentCompanyId);
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 120000);
     opts.signal = ctrl.signal;
@@ -1081,6 +1095,10 @@ async function doTradeUpdate(e) {
             } else {
                 toast(t('sys.update_done'));
             }
+            // 非致命步骤（skills 同步等）失败只算警告，不阻止升级，但必须让用户看见
+            if (resp.warnings && resp.warnings.length) {
+                toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '));
+            }
         } else if (resp.error || (resp.errors && resp.errors.length)) {
             const errMsg = resp.error || resp.errors.join('; ');
             toast(t('sys.update_fail') + errMsg);
@@ -1192,7 +1210,7 @@ function showSkillsHelp() {
         for (var si = 0; si < group.items.length; si++) {
             var sk = group.items[si];
         var firstTrigger = sk.t.split('、')[0];
-        html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;" onmouseover="this.style.background=\'var(--bg-input)\'" onmouseout="this.style.background=\'\'" onclick="var t=this.querySelector(\'code\').textContent;navigator.clipboard.writeText(\'' + esc(firstTrigger) + '\');toast(t(\'skills.copied\')+\'' + esc(firstTrigger) + '\')" title="' + (currentLang==='en'?'Click to copy prompt':'点击复制提示词') + '">';
+        html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;" onmouseover="this.style.background=\'var(--bg-input)\'" onmouseout="this.style.background=\'\'" onclick="var t=this.querySelector(\'code\').textContent;navigator.clipboard.writeText(' + escJs(firstTrigger) + ');toast(t(\'skills.copied\')+' + escJs(firstTrigger) + ')" title="' + (currentLang==='en'?'Click to copy prompt':'点击复制提示词') + '">';
             html += '<code style="font-size:12px;white-space:nowrap;background:var(--bg-muted);padding:1px 6px;border-radius:3px;min-width:130px;">' + esc(sk.n) + '</code>';
             html += '<span style="flex:1;font-size:12px;color:var(--text-secondary);">' + esc(sk.d) + '</span>';
             html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">💬 ' + esc(sk.t.split('、').slice(0,2).join(' | ')) + '</span>';
@@ -1234,15 +1252,74 @@ function toast(msg) {
     const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
     c.appendChild(t); setTimeout(() => t.remove(), 3000);
 }
-function esc(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+// #region html-escape-utils —— 这段被 tests_js/esc.test.js 按标记整体抽取测试，勿删标记
+// HTML 转义表：& < > 三个是文本上下文必需，" 和 ' 是属性上下文必需
+// （不转引号时，值里的一个 " 就能闭合 value="..." 并注入新属性）
+const _ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
-// 安全移除动态弹窗（跳过静态模版弹窗避免误删 HTML 中的 modal-backdrop 骨架）
+// HTML 文本 / 属性转义。转义后仅做还原，不丢内容；对 null/undefined/0 返回空串（沿用原语义）
+function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, function (ch) { return _ESC_MAP[ch]; });
+}
+
+// 内联事件处理器（onclick="fn('...')"）里的 JS 字面量转义
+// 先用 JSON.stringify 得到带引号的合法 JS 串，再整体做 HTML 属性转义。
+// 顺序不可颠倒：浏览器会先解码 HTML 实体，再把结果交给 JS 解析器
+function escJs(s) {
+    return esc(JSON.stringify(String(s || '')));
+}
+// #endregion html-escape-utils
+
+// #region modal-utils —— 这段被 tests_js/modal.test.js 按标记整体抽取测试，勿删标记
+// 静态模版弹窗白名单：它们在 trade_chat.html 里写死，动态清理时必须跳过。
+// 新增静态弹窗要同步加进来，否则会被 _removeDynamicModals 当作动态弹窗删掉。
 const _STATIC_MODAL_IDS = new Set(['company-modal','customer-modal','library-modal','upgrade-help-modal','skills-help-modal']);
+// 安全移除动态弹窗（跳过静态模版弹窗避免误删 HTML 中的 modal-backdrop 骨架）
 function _removeDynamicModals() {
     document.querySelectorAll('.modal-backdrop').forEach(function(e) {
         if (!_STATIC_MODAL_IDS.has(e.id)) e.remove();
     });
 }
+// 关闭订单弹窗。必须按 id 精确移除：querySelector('.modal-backdrop') 返回文档序第一个，
+// 那是静态的 #company-modal，会把公司设置弹窗删掉并使后续 showAddCompanyModal 抛 TypeError
+function _closeOrderModal() {
+    const el = document.getElementById('order-modal-backdrop');
+    if (el) el.remove();
+}
+// #endregion modal-utils
+
+// #region stream-guard —— 这段被 tests_js/stream-guard.test.js 按标记整体抽取测试，勿删标记
+// 聊天流的归属记账：记录「当前这条流属于哪个公司」。
+// 存在的理由：sendMsg 里的 AbortController 是局部变量，切换公司时无人能中止它，
+// 旧流跑完后又会走 addMsg()，而 addMsg 读全局 currentChatContainer（已指向新公司），
+// 于是 A 公司的回复被写进 B 公司的会话窗口。归属记账让切公司能统一作废旧流。
+let _chatStream = null;  // { cid, ctl }
+
+// 开始一条属于 cid 的聊天流，返回它的 AbortController
+function _beginChatStream(cid) {
+    const ctl = new AbortController();
+    _chatStream = { cid: cid, ctl: ctl };
+    return ctl;
+}
+
+// 作废当前聊天流（切换公司时调用），保证旧流不再往页面写内容
+function _abortChatStream() {
+    if (_chatStream) {
+        _chatStream.ctl.abort();
+        _chatStream = null;
+    }
+}
+
+// 流收尾时清理自己那条（仅当它仍是当前流，避免误清用户切公司后新建的流）
+function _endChatStream(ctl) {
+    if (_chatStream && _chatStream.ctl === ctl) _chatStream = null;
+}
+
+// 该公司的流是否仍是当前活跃流（旧流据此丢弃输出）
+function _chatStreamBelongsTo(cid) {
+    return !!_chatStream && _chatStream.cid === cid;
+}
+// #endregion stream-guard
 
 // ═════════════════════ NAVIGATION ═════════════════════
 // 视图缓存：{ viewKey: { element, rendered, context } }
@@ -1501,6 +1578,10 @@ async function doUpdateSystem() {
         if (resp?.ok) {
             restartScheduled = !!resp.restart_scheduled;
             toast(restartScheduled ? '✅ 系统更新完成！正在重启...' : '✅ 更新完成。请点击"🔄 重启"以应用新版本。');
+            // 非致命步骤失败只算警告，不阻止升级，但必须让用户看见
+            if (resp.warnings && resp.warnings.length) {
+                toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '));
+            }
         } else if (resp?.error || (resp?.errors && resp.errors.length)) {
             toast('⚠️ 更新失败');
         }
@@ -1750,15 +1831,11 @@ async function _uploadToWorkDir(files, subdir) {
     for (const f of files) {
         form.append('files', f, f._relPath || f.name);
     }
-    const opts = { method: 'POST', headers: {}, body: form };
-    if (TOKEN) opts.headers['X-Hermes-Session-Token'] = TOKEN;
-    if (currentCompanyId) opts.headers['X-Company-ID'] = String(currentCompanyId);
-    const resp = await fetch('/api/trade/upload-files', opts);
-    if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.detail || `上传失败 (${resp.status})`);
-    }
-    return await resp.json();
+    // 走 api() 统一封装：拿到 120s 超时与 401 自愈。
+    // 历史上这里裸 fetch 且无超时，上传卡死时确认按钮会永久 disabled。
+    const resp = await api('POST', '/api/trade/upload-files', form);
+    if (!resp) throw new Error(t('toast.import_fail'));
+    return resp;
 }
 
 function _showDropModal(files) {
@@ -2037,7 +2114,14 @@ async function sendMsg() {
 
     // 用户可主动取消 SSE 流（替代原硬性 10 分钟超时）
     // 网站诊断等复杂 skill 可能需要 >10 分钟，依赖 SSE 心跳保活即可
-    const streamCtl = new AbortController();
+    // 归属记账：让切换公司时能统一作废这条流（否则旧流会写进新公司的窗口）
+    const ownerCid = currentCompanyId;
+    const streamCtl = _beginChatStream(ownerCid);
+    // 切公司后旧流的输出必须丢弃：addMsg 写的是全局 currentChatContainer
+    function deliver(role, text, save, convId) {
+        if (!_chatStreamBelongsTo(ownerCid)) return;
+        addMsg(role, text, null, save, convId);
+    }
     const stopBtn = ct.querySelector('#stop-btn');
     if (stopBtn) {
         stopBtn.classList.remove('hidden');
@@ -2109,7 +2193,7 @@ async function sendMsg() {
             body:JSON.stringify({library_id:currentLibraryId,customer_id:currentCustomerId,query,context:currentChatContext,language:currentLang}),
             signal:streamCtl.signal,
         });
-        if (!r.ok) { progDiv.remove(); addMsg('assistant', `⚠️ 请求失败 (${r.status})`, null); sendBtn.disabled = false; return; }
+        if (!r.ok) { progDiv.remove(); deliver('assistant', `⚠️ 请求失败 (${r.status})`); sendBtn.disabled = false; return; }
 
         const reader = r.body.getReader(); const decoder = new TextDecoder();
         let buffer = '';
@@ -2141,6 +2225,16 @@ async function sendMsg() {
                         note.style.cssText = 'font-size:12px;color:'+(ok?'var(--text-muted)':'var(--accent-red)')+';padding:4px 0;';
                         note.textContent = (ok ? '✓ 已完整读取 ' : '⚠ 完整读取未通过，已完整读取 ') + files + ' 个文件'
                             + (skipped.length ? '；未纳入：' + skipped.map(function(s){return s.file;}).join(', ') : '');
+                        // 能力边界如实披露：本机无法逐 Sheet/逐页核验时必须说出来
+                        if (data.coverage_note) {
+                            const cap = document.createElement('div');
+                            cap.className = 'thinking-msg';
+                            cap.style.cssText = 'font-size:12px;color:var(--text-muted);padding:2px 0 4px;';
+                            cap.textContent = 'ℹ️ ' + data.coverage_note;
+                            progDiv.appendChild(note);
+                            progDiv.appendChild(cap);
+                            break;
+                        }
                         progDiv.appendChild(note);
                         break;
                     }
@@ -2152,16 +2246,18 @@ async function sendMsg() {
             }
         }
         progDiv.remove();
-        if (responseText) addMsg('assistant', responseText, null, true, responseConvId);
-        else addMsg('assistant', '⚠️ Agent 未返回有效回复。', null, true, null);
+        if (responseText) deliver('assistant', responseText, true, responseConvId);
+        else deliver('assistant', '⚠️ Agent 未返回有效回复。', true, null);
     } catch(e) {
         progDiv.remove();
         _currentConvId = null;
-        if (e.name==='AbortError') addMsg('assistant','🛑 已停止生成。',null);
-        else addMsg('assistant',`网络错误：${e.message}`,null);
+        // AbortError 分两种：用户主动停止（应提示）与切公司导致的作废（不该再往页面写）
+        if (e.name==='AbortError') deliver('assistant','🛑 已停止生成。');
+        else deliver('assistant',`网络错误：${e.message}`);
     } finally {
         clearInterval(elapsedTimer);
         _currentConvId = null;
+        _endChatStream(streamCtl);
         if (stopBtn) { stopBtn.classList.add('hidden'); stopBtn.onclick = null; }
     }
     sendBtn.disabled = false;
@@ -2648,7 +2744,7 @@ async function saveOrder() {
     } else {
         await api('POST', '/api/trade/orders', body);
     }
-    document.querySelector('.modal-backdrop')?.remove();
+    _closeOrderModal();
     loadOrdersForCustomer(custId);
     toast(editId ? t('order.updated') : t('order.created'));
 }
@@ -2656,7 +2752,7 @@ async function saveOrder() {
 async function deleteOrder(oid) {
     if (!confirm(t('order.confirm_delete'))) return;
     await api('DELETE', `/api/trade/orders/${oid}`);
-    document.querySelector('.modal-backdrop')?.remove();
+    _closeOrderModal();
     // 刷新当前打开的客户详情
     const custId = $('order-cust-id').value;
     if (custId) loadOrdersForCustomer(custId);
@@ -2740,18 +2836,13 @@ async function bulkImportCustomers() {
     btn.disabled = true; btn.textContent = '导入中...';
 
     try {
-        const resp = await fetch('/api/trade/customers/bulk', {
-            method: 'POST',
-            headers: { 'X-Hermes-Session-Token': TOKEN, 'X-Company-ID': String(currentCompanyId) },
-            body: formData,
-        });
-        const result = await resp.json();
-        if (resp.ok) {
+        // 走 api() 统一封装：拿到 120s 超时与 401 自愈（原先裸 fetch 无超时）
+        const result = await api('POST', '/api/trade/customers/bulk', formData);
+        // result 为 null 时 api() 已经 toast 过失败原因，这里不重复提示
+        if (result) {
             toast(`导入完成：新增 ${result.created} 条，跳过 ${result.skipped} 条（重复或空行）`);
             await loadCustomersData();
             if (currentView === 'customers') renderCustomersTable(allCustomers);
-        } else {
-            toast(result.detail || '导入失败');
         }
     } catch (e) {
         toast('导入失败: ' + e.message);
@@ -3227,7 +3318,7 @@ async function loadActiveCronJobs() {
             <div class="task-card-schedule">🕐 ${esc(j.schedule)}</div>
             ${j.next_run ? `<div style="font-size:11px;color:var(--accent-green);margin-bottom:6px;">▶ 下次执行：${esc(j.next_run)}</div>` : ''}
             <div class="task-card-actions">
-                <button onclick="runActiveJob('${esc(j.id)}')">▶ 立即执行</button>
+                <button onclick="runActiveJob(${escJs(j.id)})">▶ 立即执行</button>
             </div>
         </div>
     `).join('');
@@ -3772,6 +3863,8 @@ async function onCompanyChange(cid) {
     }
     // 中止进行中的新手引导流，防止 reader 泄漏
     if (_onboardingStreamCtl) { _onboardingStreamCtl.abort(); _onboardingStreamCtl = null; }
+    // 中止进行中的聊天流：否则它会继续消耗 token，且结束后把回复写进新公司的会话窗口
+    _abortChatStream();
     // 清空 cron 输出记录，防止跨公司污染
     _shownCronOutputs = new Set();
     if (cid) {

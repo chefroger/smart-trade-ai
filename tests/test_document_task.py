@@ -226,7 +226,11 @@ def test_agent_skipping_a_readable_file_still_blocks(tmp_path):
 
 
 def test_gate_untracked_when_no_evidence_at_all(tmp_path):
-    """完全没有读取证据（例如全程用 terminal 读）时不判失败，避免误拦。"""
+    """完全没有读取证据时不判失败，避免误拦。
+
+    （不再等同于「全程用 terminal 读」——那种情形现在会产生弱证据，
+    见 test_weak_evidence_is_disclosed_not_blocking。）
+    """
     (tmp_path / "a.txt").write_text("a", encoding="utf-8")
     task = DocumentTask.from_root(tmp_path)
 
@@ -274,3 +278,145 @@ def test_gate_enabled_for_explicit_full_directory_read():
     assert should_enforce_document_gate("请完整读取这个目录的所有文件") is True
     assert should_enforce_document_gate("逐个读取全部文件，不要遗漏") is True
     assert should_enforce_document_gate("read every file completely") is True
+
+
+# ── 弱证据（terminal / 代码执行读取）────────────────────────────────────────
+# 用这些工具读过的文件：不判漏读（消除误杀），但必须披露「无法核验完整性」，
+# 不能让用户以为已经逐 Sheet / 逐页校验过。
+
+
+def test_weak_evidence_is_disclosed_not_blocking(tmp_path):
+    """terminal 读过的 PDF：不判漏读，但要披露无法核验完整性。"""
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "a.pdf").resolve()): {
+            "status": "unverified", "complete": None, "ranges": [],
+            "document_metadata": {}, "source": "callbacks", "weak": True,
+        },
+    })
+
+    assert result.missing == [], "弱证据不该被判成漏读 —— 这正是要消除的误杀"
+    assert result.status == "complete"
+    assert "coverage_unverifiable" in {item["reason"] for item in result.skipped}
+
+
+def test_weak_evidence_does_not_hide_untouched_files(tmp_path):
+    """弱证据只覆盖它触碰的文件，未触碰的文件仍必须判漏读。"""
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "b.txt").write_text("x", encoding="utf-8")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "a.pdf").resolve()): {
+            "status": "unverified", "complete": None, "weak": True, "source": "callbacks",
+        },
+    })
+
+    assert result.missing == ["b.txt"]
+    assert result.status == "incomplete"
+
+
+def test_mixed_read_file_and_weak_evidence_does_not_block(tmp_path):
+    """混合场景（read_file 读 A + terminal 读 B）不应再被整体误杀。"""
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "b.pdf").write_bytes(b"%PDF-1.4")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "a.txt").resolve()): {
+            "status": "complete", "complete": True, "total_lines": 1,
+            "ranges": [[1, 1]], "missing_ranges": [],
+            "document_metadata": {}, "source": "callbacks",
+        },
+        str((tmp_path / "b.pdf").resolve()): {
+            "status": "unverified", "complete": None, "weak": True, "source": "callbacks",
+        },
+    })
+
+    assert result.status == "complete", "terminal 读过的文件不该把整体判成 incomplete"
+    assert result.missing == []
+
+
+def test_partial_read_still_blocks(tmp_path):
+    """回归护栏：read_file 只读了一半仍必须判漏读（弱证据不能放宽这条）。"""
+    (tmp_path / "a.txt").write_text("x\ny\nz\n", encoding="utf-8")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "a.txt").resolve()): {
+            "status": "partial", "complete": False, "total_lines": 3,
+            "ranges": [[1, 1]], "missing_ranges": [[2, 3]],
+            "document_metadata": {}, "source": "callbacks",
+        },
+    })
+
+    assert result.missing == ["a.txt"]
+    assert result.status == "incomplete"
+
+
+def test_unverifiable_reason_has_human_label():
+    """披露原因必须有中文说明，否则用户看到的是机器码。"""
+    from trade.document_task import _REASON_LABELS
+
+    assert "coverage_unverifiable" in _REASON_LABELS
+
+
+# ── 能力边界如实披露 ────────────────────────────────────────────────────────
+# 只有在 Hermes 提供结构化读取快照时才能核验 Sheet / 页数 / 扫描页。
+# 客户机装的是原版 Hermes，没有这个接口 —— 此时必须如实说明「未能核验」，
+# 否则用户会以为已经逐 Sheet 逐页校验过（开发机上能校验、客户机上不能）。
+
+
+def test_callback_evidence_discloses_unverifiable_coverage(tmp_path):
+    """回调证据（原版 Hermes）：要披露无法逐 Sheet/逐页核验。"""
+    (tmp_path / "a.xlsx").write_bytes(b"PK")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "a.xlsx").resolve()): {
+            "status": "complete", "complete": True, "total_lines": 3,
+            "ranges": [[1, 3]], "missing_ranges": [],
+            "document_metadata": {}, "source": "callbacks",
+        },
+    })
+
+    assert result.status == "complete"
+    assert result.coverage_note, "回调证据下必须说明完整性未经核验"
+    assert "Sheet" in result.coverage_note or "页" in result.coverage_note
+
+
+def test_structured_evidence_has_no_coverage_note(tmp_path):
+    """有结构化快照（开发机）时不需要额外披露。"""
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        str((tmp_path / "a.pdf").resolve()): {
+            "status": "complete", "complete": True,
+            "document_metadata": {"kind": "pdf", "pages": 3},
+            "source": "hermes_snapshot",
+        },
+    })
+
+    assert result.status == "complete"
+    assert result.coverage_note == ""
+
+
+def test_incomplete_report_carries_coverage_note(tmp_path):
+    """被拦下时也要带上能力边界说明，避免用户以为差异是漏读造成的。"""
+    (tmp_path / "a.xlsx").write_bytes(b"PK")
+    (tmp_path / "b.xlsx").write_bytes(b"PK")
+    task = DocumentTask.from_root(tmp_path)
+
+    result = task.evaluate({
+        # a 读了、b 没读 → incomplete
+        str((tmp_path / "a.xlsx").resolve()): {
+            "status": "complete", "complete": True, "source": "callbacks",
+        },
+    })
+
+    assert result.status == "incomplete"
+    assert result.coverage_note, "被拦下时也必须说明能力边界"
+    assert result.coverage_note in format_incomplete_report(result)

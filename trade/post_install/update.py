@@ -257,7 +257,10 @@ def update_trade() -> dict:
       7. database migration
     """
     trade_dir = _get_trade_home() / "foreign-trade-assistant"
+    # errors = 致命失败（git / pip / 数据库），必须阻止重启
+    # warnings = 非致命失败（skills / 模板 / 开机自启），记录并上报但继续重启
     errors: list[str] = []
+    warnings: list[str] = []
     messages: list[str] = []
     new_version = ""
 
@@ -274,6 +277,7 @@ def update_trade() -> dict:
             "ok": False,
             "version": "",
             "errors": ["architecture_mismatch"],
+            "warnings": warnings,
             "messages": messages,
         }
 
@@ -291,12 +295,12 @@ def update_trade() -> dict:
         except FileNotFoundError:
             _emit("  ❌ git 命令未找到，请先安装 Git for Windows 并重启终端")
             errors.append("git not found")
-            return {"ok": False, "version": "", "error": "Git 未安装或不在 PATH 中，请先安装 Git for Windows", "errors": errors, "messages": messages}
+            return {"ok": False, "version": "", "error": "Git 未安装或不在 PATH 中，请先安装 Git for Windows", "errors": errors, "warnings": warnings, "messages": messages}
         if clone_result.returncode != 0:
             err = clone_result.stderr.strip()
             _emit(f"  ❌ git clone failed: {err}")
             errors.append(f"git clone failed: {err}")
-            return {"ok": False, "version": "", "error": err, "errors": errors, "messages": messages}
+            return {"ok": False, "version": "", "error": err, "errors": errors, "warnings": warnings, "messages": messages}
         _emit(f"  ✓ Repository cloned to {trade_dir}")
     else:
         _emit("→ Step 1/7: git pull ...")
@@ -308,7 +312,7 @@ def update_trade() -> dict:
         except FileNotFoundError:
             _emit("  ❌ git 命令未找到，请先安装 Git for Windows 并重启终端")
             errors.append("git not found")
-            return {"ok": False, "version": "", "error": "Git 未安装或不在 PATH 中，请先安装 Git for Windows", "errors": errors, "messages": messages}
+            return {"ok": False, "version": "", "error": "Git 未安装或不在 PATH 中，请先安装 Git for Windows", "errors": errors, "warnings": warnings, "messages": messages}
         if result.returncode != 0:
             err_text = result.stderr.strip()
             _emit(f"  ⚠ git pull failed: {err_text}")
@@ -324,20 +328,31 @@ def update_trade() -> dict:
                 )
                 if pull2.returncode == 0:
                     _emit("  ✓ git pull (after stash) OK")
-                    subprocess.run(
+                    pop = subprocess.run(
                         ["git", "stash", "pop"], cwd=str(trade_dir),
                         capture_output=True, text=True, timeout=30,
                     )
+                    # stash pop 可能因冲突失败，此时改动仍留在 stash 里，必须告知用户
+                    if pop.returncode != 0:
+                        _emit(f"  ⚠ git stash pop 冲突，改动仍留在 stash 中：{pop.stderr.strip()}")
+                        _emit(f"  💡 请手动处理：cd {trade_dir} && git stash pop")
+                        warnings.append("local changes remain stashed (git stash pop conflicted)")
                 else:
                     err2 = pull2.stderr.strip()
                     _emit(f"  ❌ git pull failed after stash: {err2}")
+                    # 关键：本地改动已被 stash 且未 pop，工作区看起来「改动消失了」——
+                    # 必须明确告知用户改动在哪、怎么取回，不能静默吞掉
+                    _emit("  ⚠ 你的本地改动已被暂存到 git stash（未自动恢复）")
+                    _emit(f"  💡 恢复方式：cd {trade_dir} && git stash pop")
                     errors.append(f"git pull failed: {err2}")
-                    return {"ok": False, "version": "", "error": err2, "errors": errors, "messages": messages}
+                    warnings.append("local changes were stashed and not restored (run: git stash pop)")
+                    return {"ok": False, "version": "", "error": err2, "errors": errors,
+                            "warnings": warnings, "messages": messages}
             else:
                 err_s = stash.stderr.strip()
                 _emit(f"  ❌ git stash also failed: {err_s}")
                 errors.append(f"git stash failed: {err_s}")
-                return {"ok": False, "version": "", "error": err_s, "errors": errors, "messages": messages}
+                return {"ok": False, "version": "", "error": err_s, "errors": errors, "warnings": warnings, "messages": messages}
         else:
             last_line = result.stdout.strip().split("\n")[-1] if result.stdout.strip() else "Already up-to-date."
             _emit(f"  ✓ {last_line}")
@@ -356,14 +371,16 @@ def update_trade() -> dict:
         pass
 
     # ── Step 2: install_skills ────────────────────────────────────────────
+    # skills 同步有离线兜底，失败只记警告：代码与依赖都已就绪，
+    # 若把它算作致命失败就会把用户锁在旧代码上，得不偿失
     _emit("→ Step 2/7: install skills ...")
     try:
         install_skills()
         _emit("  ✓ Skills installed")
     except SystemExit:
         msg = "install_skills failed"
-        _emit(f"  ⚠ {msg}")
-        errors.append(msg)
+        _emit(f"  ⚠ {msg}（非致命，继续升级）")
+        warnings.append(msg)
 
     # ── Step 3: update_skills ─────────────────────────────────────────────
     _emit("→ Step 3/7: update skills ...")
@@ -372,8 +389,8 @@ def update_trade() -> dict:
         _emit("  ✓ Skills updated")
     except SystemExit:
         msg = "update_skills failed"
-        _emit(f"  ⚠ {msg}")
-        errors.append(msg)
+        _emit(f"  ⚠ {msg}（非致命，继续升级）")
+        warnings.append(msg)
 
     # ── Step 4: pip install ───────────────────────────────────────────────
     # 与 install.sh Step 3 保持一致：先按 requirements.txt 装依赖，再用
@@ -391,14 +408,14 @@ def update_trade() -> dict:
             err = result.stderr.strip()
             _emit(f"  ❌ 依赖安装失败: {err}")
             errors.append(f"pip install -r requirements.txt failed: {err[:200]}")
-            return {"ok": False, "version": "", "error": err[:200], "errors": errors, "messages": messages}
+            return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
     pip_args = [sys.executable, "-m", "pip", "install", "-e", str(trade_dir), "--no-deps"]
     result = subprocess.run(pip_args, capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
         err = result.stderr.strip()
         _emit(f"  ❌ pip install failed: {err}")
         errors.append(f"pip install failed: {err[:200]}")
-        return {"ok": False, "version": "", "error": err[:200], "errors": errors, "messages": messages}
+        return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
     _emit("  ✓ Package updated")
 
     # ── Step 5: template sync ─────────────────────────────────────────────
@@ -411,6 +428,7 @@ def update_trade() -> dict:
         _emit("  ✓ Templates synced")
     except Exception as e:
         _emit(f"  ⚠ Template sync failed: {e}")
+        warnings.append(f"template sync failed: {e}")
 
     # ── Step 6: auto-start ────────────────────────────────────────────────
     _emit("→ Step 6/7: auto-start check ...")
@@ -419,6 +437,7 @@ def update_trade() -> dict:
         _emit("  ✓ Auto-start OK")
     except Exception as e:
         _emit(f"  ⚠ Auto-start setup failed: {e}")
+        warnings.append(f"auto-start setup failed: {e}")
 
     # ── Step 7: database ──────────────────────────────────────────────────
     _emit("→ Step 7/7: database check ...")
@@ -429,24 +448,26 @@ def update_trade() -> dict:
     except Exception as e:
         _emit(f"  ❌ Database check failed: {e}")
         errors.append(f"Database check failed: {e}")
-        return {"ok": False, "version": "", "error": str(e), "errors": errors, "messages": messages}
+        return {"ok": False, "version": "", "error": str(e), "errors": errors, "warnings": warnings, "messages": messages}
 
     # ── 结果 ──────────────────────────────────────────────────────────────
-    has_critical_errors = bool(errors)  # pip install / database 等关键步骤失败
+    # errors 只装致命失败（git pull/clone、pip install、数据库），
+    # 非致命失败（skills、模板同步、开机自启）走 warnings，不影响重启
+    has_critical_errors = bool(errors)
     ok = not has_critical_errors
 
-    # ── 写入版本标记文件（/api/status 直接读取，零中间层） ──────────────
-    if ok and new_version:
-        try:
-            data_dir = _get_trade_home() / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            (data_dir / "version.txt").write_text(new_version)
-            _emit(f"  ✓ Version marker written: {new_version}")
-        except Exception as e:
-            _emit(f"  ⚠ Failed to write version marker: {e}")
+    # 注意：这里**不再**写 version.txt。
+    # version.txt 的语义是「正在运行的代码版本」，由 trade.app 在进程启动时写入。
+    # 若在此处提前写入目标版本，重启前的窗口里 UI 会显示新版本号，
+    # 一旦重启失败（或本次 ok=False）就成了「假升级成功」。
 
     if ok:
-        _emit("\n✅ Trade update complete. Restarting...")
+        # 有非致命警告时也重启，但把警告一并回报给前端
+        if warnings:
+            _emit(f"\n✅ Trade update complete（{len(warnings)} 项警告）. Restarting...")
+        else:
+            _emit("\n✅ Trade update complete. Restarting...")
     else:
         _emit("\n⚠️  Update completed with errors. No restart.")
-    return {"ok": ok, "version": new_version, "errors": errors, "messages": messages}
+    return {"ok": ok, "version": new_version, "errors": errors,
+            "warnings": warnings, "messages": messages}

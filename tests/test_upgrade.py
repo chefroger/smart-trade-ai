@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -157,6 +158,42 @@ class TestPerformRestart:
     @patch("trade.app._sp")
     @patch("trade.app._kill_gateway")
     @patch("trade.app._get_trade_data_dir")
+    def test_windows_script_quotes_python_path_for_cmd(self, mock_data_dir, mock_kill_gw, mock_sp):
+        """Windows 重启脚本必须用 cmd 认得的双引号包裹解释器路径。
+
+        历史 bug：脚本由 repr() 拼成单引号（'C:\\...\\python.exe'），cmd 不认单引号，
+        而脚本上一行已经 taskkill 掉旧进程 —— 结果是旧进程已死、新进程起不来，服务彻底下线。
+        """
+        import subprocess as real_sp
+        import tempfile
+
+        from trade.app import _perform_restart
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        mock_data_dir.return_value = tmp_dir
+
+        mock_sp.DEVNULL = -1
+        mock_sp.Popen = MagicMock()
+        # 让被测代码能拿到真实的 list2cmdline 实现
+        mock_sp.list2cmdline = real_sp.list2cmdline
+
+        with patch("trade.app.os") as mock_os:
+            mock_os.name = "nt"
+            mock_os.getpid = MagicMock(return_value=12345)
+            # 解释器路径故意带空格，逼出引号处理。
+            # app.py 内部是 `import sys as _sys` 的局部导入，只能 patch 真实 sys 模块的属性。
+            with patch.object(sys, "executable", "C:\\Program Files\\Python313\\python.exe"):
+                _perform_restart()
+
+        # Windows 分支的第一个位置参数是 ["cmd", "/c", <脚本>]
+        script = mock_sp.Popen.call_args[0][0][-1]
+        assert "'C:\\Program Files" not in script, f"cmd 不认单引号，脚本仍为：{script}"
+        assert '"C:\\Program Files\\Python313\\python.exe"' in script, f"解释器路径未被双引号包裹：{script}"
+        assert "taskkill /PID 12345 /F" in script, f"脚本未先杀旧进程：{script}"
+
+    @patch("trade.app._sp")
+    @patch("trade.app._kill_gateway")
+    @patch("trade.app._get_trade_data_dir")
     def test_unix_start_new_session(self, mock_data_dir, mock_kill_gw, mock_sp):
         """Unix 上应使用 start_new_session。"""
         import tempfile
@@ -178,6 +215,114 @@ class TestPerformRestart:
         popen_kwargs = mock_sp.Popen.call_args[1]
         assert popen_kwargs.get("start_new_session") is True
         assert "creationflags" not in popen_kwargs
+
+
+# ── update_trade 失败分级测试 ─────────────────────────────────────────────
+
+
+class TestUpdateStepSeverity:
+    """update_trade 的失败分级：只有 git / pip / 数据库算致命，其余只记警告。
+
+    历史 bug：skills 步骤失败也把 ok 置为 False，导致「代码和依赖都已就绪却不重启」，
+    用户被锁在旧代码上，而 /api/status 又会把磁盘上 pyproject.toml 的新版本号反写进
+    version.txt —— 「卡在旧版」被伪装成「升级成功」。
+    """
+
+    @staticmethod
+    def _fake_run(pull_rc=0, pip_rc=0, stash_rc=0):
+        """按命令内容分派返回码，替掉真实 subprocess.run。"""
+        def _run(cmd, **kwargs):
+            joined = " ".join(str(c) for c in cmd)
+            rc = 0
+            # git stash 优先匹配（stash 命令里也含 "git"）
+            if "git" in joined and "stash" in joined:
+                rc = stash_rc
+            elif "git" in joined and "pull" in joined:
+                rc = pull_rc
+            elif "pip" in joined:
+                rc = pip_rc
+            result = MagicMock()
+            result.returncode = rc
+            result.stdout = ""
+            result.stderr = "boom" if rc else ""
+            return result
+        return _run
+
+    def _run_update(self, *, skills_raise=False, pull_rc=0, pip_rc=0,
+                    stash_rc=0, db_ok=True, existing_dir=False):
+        """在全部外部依赖被 mock 的前提下跑一次 update_trade()。"""
+        from contextlib import ExitStack
+
+        from trade.post_install import update as update_mod
+        from trade.post_install.skills import _get_trade_home
+
+        with ExitStack() as stack:
+            mock_sub = stack.enter_context(patch("trade.post_install.update.subprocess"))
+            mock_sub.run.side_effect = self._fake_run(pull_rc=pull_rc, pip_rc=pip_rc, stash_rc=stash_rc)
+            mock_sub.DEVNULL = -1
+            # 供目录定位用例断言实际执行的命令（cwd / clone 目标）
+            self.last_subprocess = mock_sub
+            # 模板同步/开机自启有真实副作用（写 launchd plist 等），必须 mock
+            stack.enter_context(patch("trade.post_install.update._sync_trade_template"))
+            stack.enter_context(patch("trade.post_install.update._ensure_auto_start"))
+            stack.enter_context(patch("trade.bootstrap.check_native_architecture", return_value=True))
+
+            mock_init = stack.enter_context(patch("trade.database.init_db"))
+            if db_ok:
+                mock_init.return_value = "/tmp/fake.db"
+            else:
+                mock_init.side_effect = RuntimeError("db boom")
+
+            # skills 步骤必须始终 mock：真实 install_skills 会写 ~/.hermes/skills，
+            # update_skills 还会访问 GitHub —— 测试绝不能碰真实用户数据或网络
+            if skills_raise:
+                stack.enter_context(patch("trade.post_install.update.install_skills", side_effect=SystemExit(1)))
+                stack.enter_context(patch("trade.post_install.update.update_skills", side_effect=SystemExit(1)))
+            else:
+                stack.enter_context(patch("trade.post_install.update.install_skills"))
+                stack.enter_context(patch("trade.post_install.update.update_skills"))
+
+            # 显式设定运行目录的存在状态，避免用例之间互相污染（共享同一个 TRADE_HOME）
+            trade_dir = Path(_get_trade_home()) / "foreign-trade-assistant"
+            if existing_dir:
+                trade_dir.mkdir(parents=True, exist_ok=True)  # 存在 → 走 git pull
+            elif trade_dir.exists():
+                shutil.rmtree(trade_dir)  # 不存在 → 走 git clone
+
+            return update_mod.update_trade()
+
+    def test_skills_failure_does_not_block_restart(self):
+        """skills 安装/更新失败只算警告，升级仍应 ok=True 以便重启到新代码。"""
+        result = self._run_update(skills_raise=True)
+
+        assert result["ok"] is True, f"skills 失败不应阻止重启：{result}"
+        assert "install_skills failed" in result["warnings"]
+        assert "update_skills failed" in result["warnings"]
+        # 非致命步骤不得污染 errors
+        assert result["errors"] == [], f"errors 只应装致命失败：{result['errors']}"
+
+    def test_pip_failure_is_fatal(self):
+        """pip install 失败必须阻止重启（依赖没装好，重启也起不来）。"""
+        result = self._run_update(pip_rc=1)
+
+        assert result["ok"] is False
+        assert any("pip install" in e for e in result["errors"]), result["errors"]
+
+    def test_database_failure_is_fatal(self):
+        """数据库检查失败必须阻止重启。"""
+        result = self._run_update(db_ok=False)
+
+        assert result["ok"] is False
+        assert any("Database check failed" in e for e in result["errors"]), result["errors"]
+
+    def test_stash_without_pop_tells_user_how_to_restore(self):
+        """pull 重试仍失败时本地改动会留在 stash —— 必须明确告知用户如何取回。"""
+        result = self._run_update(pull_rc=1, existing_dir=True)
+
+        assert result["ok"] is False
+        joined = "\n".join(result["messages"])
+        assert "git stash pop" in joined, f"未告知用户如何恢复被暂存的改动：{joined}"
+        assert any("stash" in w for w in result["warnings"]), result["warnings"]
 
 
 # ── 版本缓存测试 ─────────────────────────────────────────────────────────
@@ -230,35 +375,28 @@ class TestVersionCache:
 
 
 class TestFailedMarkers:
-    """测试 api_update_trade 的失败标记检测逻辑。"""
+    """致命失败必须以可识别的标记进入 errors（结构化返回值直读）。
 
-    def test_detect_failure_markers(self):
-        """应检测所有致命失败标记。"""
-        markers = [
-            "❌", "update failed", "git pull failed",
-            "pip install failed", "git stash 也失败", "Database check failed",
-        ]
-        for marker in markers:
-            # 模拟检测逻辑
-            assert any(m in f"some output {marker} more output" for m in markers)
+    注：旧版靠扫描 stdout 文本找 "❌ / pip install failed" 等标记，该机制已在
+    结构化返回值重构中删除；这里断言 update_trade() 返回值里的真实标记。
+    非致命步骤不得进 errors —— 由 TestUpdateStepSeverity 的 skills 用例覆盖。
+    """
 
-    def test_no_false_positive_on_warnings(self):
-        """非致命 ⚠️ 不应被检测为失败。"""
-        non_fatal = [
-            "⚠️ git pull failed after stash",
-            "⚠️ Code sync failed",
-            "⚠️ Auto-start setup failed",
-        ]
-        fatal_markers = [
-            "❌", "update failed", "git pull failed",
-            "pip install failed", "git stash 也失败", "Database check failed",
-        ]
-        # 非致命输出中不包含致命标记
-        for output in non_fatal:
-            any(m in output for m in fatal_markers)
-            # "git pull failed" 出现在 ⚠️ 行里——这是个边界情况
-            # 但实际上 ⚠️ 行中 "git pull failed" 出现说明有更严重的问题
-            # 这里的测试确认检测逻辑存在，不要求零误判
+    def test_git_pull_failure_is_fatal(self):
+        """git pull 失败必须阻止升级，并在 errors 里带上可识别标记。"""
+        updater = TestUpdateStepSeverity()
+        result = updater._run_update(pull_rc=1, existing_dir=True)
+
+        assert result["ok"] is False
+        assert any("git pull failed" in e for e in result["errors"]), result["errors"]
+
+    def test_git_stash_failure_is_fatal(self):
+        """pull 失败且自动 stash 也失败时必须阻止升级。"""
+        updater = TestUpdateStepSeverity()
+        result = updater._run_update(pull_rc=1, stash_rc=1, existing_dir=True)
+
+        assert result["ok"] is False
+        assert any("git stash failed" in e for e in result["errors"]), result["errors"]
 
 
 # ── update_trade 目录定位测试 ─────────────────────────────────────────────
@@ -267,14 +405,30 @@ class TestFailedMarkers:
 class TestUpdateTradeDir:
     """测试 update_trade 使用运行目录而非桌面目录。"""
 
-    def test_trade_dir_is_runtime_dir(self):
-        """update_trade 应使用 ~/.trade/foreign-trade-assistant/ 而非推断目录。"""
+    def test_git_clone_target_is_runtime_dir(self):
+        """升级操作必须落在 ~/.trade/foreign-trade-assistant/，不能碰开发源码目录。"""
         from trade.post_install.skills import _get_trade_home
 
-        trade_home = _get_trade_home()
-        expected_dir = trade_home / "foreign-trade-assistant"
-        # 验证路径构造
-        assert "foreign-trade-assistant" in str(expected_dir)
+        updater = TestUpdateStepSeverity()
+        updater._run_update(existing_dir=False)  # 目录不存在 → 走 git clone 分支
+
+        clone_cmd = updater.last_subprocess.run.call_args_list[0][0][0]
+        expected_dir = _get_trade_home() / "foreign-trade-assistant"
+        assert clone_cmd[:3] == [
+            "git", "clone", "https://github.com/chefroger/smart-trade-ai.git",
+        ], clone_cmd
+        assert clone_cmd[-1] == str(expected_dir), f"clone 目标应是运行目录：{clone_cmd}"
+
+    def test_git_pull_runs_inside_runtime_dir(self):
+        """目录已存在时，git pull 的 cwd 必须是运行目录。"""
+        from trade.post_install.skills import _get_trade_home
+
+        updater = TestUpdateStepSeverity()
+        updater._run_update(existing_dir=True)
+
+        first_call = updater.last_subprocess.run.call_args_list[0]
+        assert first_call[0][0][:3] == ["git", "pull", "--ff-only"], first_call
+        assert first_call[1]["cwd"] == str(_get_trade_home() / "foreign-trade-assistant"), first_call[1]
 
     def test_guess_running_project_dir_removed(self):
         """_guess_running_project_dir 应已被删除。"""
@@ -530,3 +684,63 @@ class TestUpdateTrade:
         result = update_module.update_trade()
         assert result["ok"] is False
         assert any("git clone failed" in e for e in result["errors"])
+
+
+# ── 版本标记语义测试 ─────────────────────────────────────────────────────
+
+
+class TestVersionMarker:
+    """version.txt 的语义 = 当前进程实际运行的代码版本。
+
+    历史 bug：/api/status 拿磁盘上 pyproject.toml 的新版本号反写 version.txt，
+    于是「git pull 成功但没重启（pip 失败/被跳过）」时 UI 显示新版本号，
+    把「卡在旧版」伪装成「升级成功」。
+    """
+
+    def test_running_code_version_matches_pyproject(self):
+        """_running_code_version 读取与运行代码配套的 pyproject.toml。"""
+        import tomllib
+
+        from trade import app as app_mod
+
+        pyproject = Path(app_mod.__file__).resolve().parent.parent / "pyproject.toml"
+        expected = tomllib.loads(pyproject.read_text())["project"]["version"]
+
+        assert app_mod._running_code_version() == expected
+
+    def test_write_version_marker_records_running_version(self):
+        """启动时写入的标记必须等于当前运行的代码版本。"""
+        from trade import app as app_mod
+
+        app_mod._write_version_marker()
+
+        marker = app_mod._get_trade_data_dir() / "version.txt"
+        assert marker.is_file(), "版本标记文件应被写出"
+        assert marker.read_text().strip() == app_mod._running_code_version()
+
+    def test_reported_version_prefers_marker_and_never_rewrites(self):
+        """上报版本以 version.txt 为准，且不得被磁盘上的 pyproject 反写。"""
+        from trade import app as app_mod
+
+        marker = app_mod._get_trade_data_dir() / "version.txt"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("9.9.9-sentinel")
+
+        reported = app_mod._resolve_reported_version()
+
+        assert reported == "9.9.9-sentinel", \
+            "version.txt 应优先于磁盘 pyproject，否则未重启也会显示新版本号"
+        assert marker.read_text().strip() == "9.9.9-sentinel", \
+            "/api/status 不得把 pyproject 的版本号反写进 version.txt"
+
+    def test_reported_version_falls_back_readonly(self):
+        """version.txt 缺失时只读回退到 pyproject，且不得写盘。"""
+        from trade import app as app_mod
+
+        marker = app_mod._get_trade_data_dir() / "version.txt"
+        marker.unlink(missing_ok=True)
+
+        reported = app_mod._resolve_reported_version()
+
+        assert reported == app_mod._running_code_version()
+        assert not marker.exists(), "只读回退不得创建 version.txt"

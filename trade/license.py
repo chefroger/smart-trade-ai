@@ -576,8 +576,9 @@ def _decode_activation_code(code: str) -> dict:
     public_key = ed25519.Ed25519PublicKey.from_public_bytes(_PUBLIC_KEY_BYTES)
     try:
         public_key.verify(sig, payload)
-    except InvalidSignature:
-        raise ValueError("Invalid activation code signature")
+    except InvalidSignature as e:
+        # 保留原始异常链：排查「激活码为何无效」时要能看出是签名不匹配
+        raise ValueError("Invalid activation code signature") from e
 
     # 解码日期
     expires_at = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
