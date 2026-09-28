@@ -51,3 +51,66 @@ class TestInstalledVersionJudgement:
     def test_new_enough_is_ok(self, reported):
         """满足下限的版本判通过。"""
         assert pic._judge_installed_version(reported, "0.13.0") == "ok"
+
+
+class TestInstalledVersionDetection:
+    """探测已安装 Hermes：包名必须是 hermes_cli，CLI 超时不能过紧。
+
+    历史缺陷：回退探测去 import `hermes_agent`，而实际包名是 `hermes_cli` → 必然失败；
+    且 CLI 探测用 5 秒硬超时，冷启动一旦超过就落到坏的回退上 → 报「未安装」。
+    实测本机出现过：Hermes 装得好好的，检查却让人重装。
+    """
+
+    def test_cli_probe_timeout_is_relaxed(self, monkeypatch):
+        """CLI 冷启动可能明显超过 5 秒，超时必须放宽。"""
+        import shutil
+        import subprocess
+        from types import SimpleNamespace
+
+        captured: dict = {}
+
+        def _fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(stdout="Hermes Agent v0.21.4 (2026.9.21) · upstream d275e422\n", stderr="")
+
+        monkeypatch.setattr(shutil, "which", lambda name: "/fake/hermes")
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+
+        assert pic.get_installed_hermes_version() == "0.21.4"
+        assert captured.get("timeout", 0) >= 15, f"CLI 探测超时过紧: {captured.get('timeout')}"
+
+    def test_falls_back_to_hermes_cli_module(self, monkeypatch):
+        """CLI 不可用时回退 import `hermes_cli`（不是 hermes_agent）。"""
+        import shutil
+        import types
+
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        fake = types.ModuleType("hermes_cli")
+        fake.__version__ = "0.21.4"
+        monkeypatch.setitem(sys.modules, "hermes_cli", fake)
+
+        assert pic.get_installed_hermes_version() == "0.21.4"
+
+    def test_scans_sys_path_for_hermes_cli_dir(self, monkeypatch, tmp_path):
+        """CLI 与 import 都不可用时，扫描 sys.path 里的 hermes_cli 包目录。"""
+        import shutil
+
+        pkg = tmp_path / "hermes_cli"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text('__version__ = "0.21.4"\n', encoding="utf-8")
+
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        monkeypatch.setitem(sys.modules, "hermes_cli", None)  # 强制 import 失败
+        monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+
+        assert pic.get_installed_hermes_version() == "0.21.4"
+
+    def test_returns_none_when_really_absent(self, monkeypatch, tmp_path):
+        """确实没装时仍返回 None（不能因为放宽回退就假报版本）。"""
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        monkeypatch.setitem(sys.modules, "hermes_cli", None)
+        monkeypatch.setattr(sys, "path", [str(tmp_path)])
+
+        assert pic.get_installed_hermes_version() is None

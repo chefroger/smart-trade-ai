@@ -34,6 +34,10 @@ MIN_COMPATIBLE_VERSION = "0.13.0"
 # 不是真实版本号的占位值：上游 main 在缺少安装印章时会把 __version__ 报成 "0.0.0"
 _VERSION_PLACEHOLDERS = {"", "0.0.0", "0.0.0.0", "unknown", "none", "dev"}
 
+# CLI 探测超时（秒）。冷启动实测约 2 秒，遇到慢盘/首次加载可能更久 ——
+# 用 5 秒会把「正常但慢」误判成「未安装」，故放宽到 30。
+_CLI_PROBE_TIMEOUT_SECONDS = 30
+
 # If hermes-agent is installed from a different source,
 # it may be incompatible even if version number looks OK.
 # List of known-incompatible package names (PyPI releases from other sources).
@@ -114,8 +118,11 @@ def get_installed_hermes_version() -> str | None:
 
     Tries in order:
       1. `hermes --version` CLI (fast, works if CLI is on PATH)
-      2. Import hermes_agent package and read __version__
-      3. Search site-packages for hermes-agent's version file
+      2. Import the `hermes_cli` package and read __version__
+      3. Scan sys.path for the `hermes_cli` package directory
+
+    NOTE: the distribution is named `hermes-agent`, but its **importable package
+    is `hermes_cli`** —— 回退探测必须用这个名字，否则必然 ImportError。
 
     Returns None if hermes-agent is not installed at all.
     """
@@ -128,7 +135,7 @@ def get_installed_hermes_version() -> str | None:
         try:
             result = subprocess.run(
                 [hermes_bin, "--version"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=_CLI_PROBE_TIMEOUT_SECONDS,
             )
             # Output format: 'hermes X.Y.Z' or just 'X.Y.Z'
             raw = result.stdout.strip() or result.stderr.strip()
@@ -139,10 +146,10 @@ def get_installed_hermes_version() -> str | None:
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
 
-    # Try importing the package
+    # Try importing the package（包名是 hermes_cli，不是 hermes_agent）
     try:
-        import hermes_agent
-        return getattr(hermes_agent, "__version__", None) or _find_version_in_path()
+        import hermes_cli
+        return getattr(hermes_cli, "__version__", None) or _find_version_in_path()
     except ImportError:
         pass
 
@@ -158,8 +165,8 @@ def _find_version_in_path() -> str | None:
         p = pathlib.Path(prefix)
         if not p.is_dir():
             continue
-        # Try hermes_agent package directory
-        pkg = p / "hermes_agent"
+        # Try the hermes_cli package directory（发行名是 hermes-agent，导入名不是）
+        pkg = p / "hermes_cli"
         if pkg.is_dir():
             # Check for __version__ in __init__.py
             init_file = pkg / "__init__.py"
