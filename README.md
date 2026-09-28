@@ -58,7 +58,7 @@
 |------|------|---------|---------|
 | **推荐** | DeepSeek V4 Flash | 日常对话、文档分析、开发信 | [platform.deepseek.com](https://platform.deepseek.com) → 充值 → API Keys |
 
-> 不再推荐 MiniMax — M3 上线后价格大幅上涨，已无性价比优势。
+> 本项目全部测试均在 DeepSeek 上完成，因此只推荐 DeepSeek。工具本身兼容其它 OpenAI 接口的模型（见下方技术栈），但未在其它模型上验证过。
 
 获取 API Key 后在终端运行 `hermes setup`，选择对应的 provider 并填入 Key 即可。
 
@@ -175,7 +175,7 @@ python server.py
 
 ### 方式 3：手动一步步装
 
-**前置条件**：Python >= 3.11 · Git · LLM API Key（OpenAI / Anthropic / DeepSeek / MiniMax 等）
+**前置条件**：Python >= 3.11 · Git · LLM API Key（推荐 DeepSeek；也兼容 OpenAI / Anthropic 等）
 
 ```bash
 # 1. 安装 Hermes Agent（AI 引擎）
@@ -278,7 +278,7 @@ python server.py
 
 - **业务数据默认存储在本地**（`~/.trade/`），不上传任何服务器
 - 如使用 **Ollama 等本地模型**，可实现完整本地运行，数据完全不出电脑
-- 如使用 **OpenAI / Anthropic / DeepSeek / MiniMax 等云端 LLM**，用户输入和必要上下文会发送至所选服务商——不包含客户身份信息
+- 如使用 **DeepSeek 等云端 LLM**，用户输入和必要上下文会发送至所选服务商——不包含客户身份信息
 - 多公司数据隔离（`X-Company-ID` header）
 - 绑定 `127.0.0.1`，仅本机浏览器可访问；即使改用 `--host 0.0.0.0`，会话凭据也只下发给本机（见下方网络暴露警告）
 - **升级前自动备份数据库**到 `~/.trade/backups/`
@@ -302,7 +302,7 @@ python server.py
 - **AI 引擎**: [Hermes Agent](https://github.com/NousResearch/hermes-agent)（MIT 开源）
 - **后端**: FastAPI + SQLite + uvicorn
 - **前端**: 原生 JavaScript SPA（HTML/CSS/JS 三文件，零构建工具依赖）
-- **LLM**: 兼容 OpenAI / Anthropic / DeepSeek / MiniMax / Ollama 等
+- **LLM**: 推荐 DeepSeek V4 Flash；兼容 OpenAI / Anthropic / GLM / Kimi / Ollama 等
 - **文档解析**: PyMuPDF / python-docx / openpyxl / python-pptx
 
 ---

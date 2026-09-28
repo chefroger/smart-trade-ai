@@ -58,7 +58,7 @@ Recommended plan:
 |------|-------|----------|---------|
 | **Recommended** | DeepSeek V4 Flash | Daily chat, doc analysis, cold emails | [platform.deepseek.com](https://platform.deepseek.com) → Top-up → API Keys |
 
-> MiniMax is no longer recommended — the M3 launch brought significant price hikes with no remaining cost advantage.
+> All testing for this project was done on DeepSeek, so DeepSeek is the only recommended option. The tool itself is compatible with other OpenAI-wire-format models (see Tech Stack), but has not been verified on them.
 
 After getting your API Key, run `hermes setup` in terminal, choose your provider, and paste the key.
 
@@ -128,7 +128,7 @@ python server.py
 
 ### Or do it step by step
 
-**Prerequisites**: Python >= 3.11 · Git · LLM API Key (OpenAI / Anthropic / DeepSeek / MiniMax etc.)
+**Prerequisites**: Python >= 3.11 · Git · LLM API Key (DeepSeek recommended; OpenAI / Anthropic etc. also compatible)
 
 ```bash
 # 1. Install Hermes Agent (AI engine)
@@ -240,7 +240,7 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 
 - **Business data is stored locally by default** (`~/.trade/`), nothing uploaded to any server
 - With **Ollama or other local models**, full local operation is possible — no data leaves your machine
-- With **OpenAI / Anthropic / DeepSeek / MiniMax or other cloud LLMs**, your input and necessary context are sent to the chosen provider — client identity data is NOT included
+- With **DeepSeek or other cloud LLMs**, your input and necessary context are sent to the chosen provider — client identity data is NOT included
 - Multi-company isolation (`X-Company-ID` header)
 - Bound to `127.0.0.1` — only accessible from your local browser; even if you bind another address, session credentials are still handed out to loopback clients only (see Network Exposure Warning below)
 - **Auto-backup before upgrades** → `~/.trade/backups/`
@@ -260,7 +260,7 @@ If you really need to reach the UI from another device, set `TRADE_ALLOW_REMOTE_
 - **AI Engine**: [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT licensed)
 - **Backend**: FastAPI + SQLite + uvicorn
 - **Frontend**: Vanilla JavaScript SPA (HTML/CSS/JS, zero build dependencies)
-- **LLM**: Compatible with OpenAI / Anthropic / DeepSeek / MiniMax / Ollama etc.
+- **LLM**: DeepSeek V4 Flash recommended; compatible with OpenAI / Anthropic / GLM / Kimi / Ollama etc.
 - **Document Parsing**: PyMuPDF / python-docx / openpyxl / python-pptx
 
 ---
