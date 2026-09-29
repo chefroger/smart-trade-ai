@@ -77,7 +77,10 @@ desktop = [
 ]
 
 [project.scripts]
-trade = "server:main"
+# 指向**包内**入口：原先写 server:main，而 server.py 在仓库根、不被打包，
+# pip 安装后 `trade` 命令会 ModuleNotFoundError（且 server.py 无守卫，
+# `from server import main` 会连带执行启动流程）。trade.cli 做 setup() + app.main()。
+trade = "trade.cli:run_server"
 # Installs Trade skills into Hermes at package install time.
 # Copies skills/b2b-* to ~/.hermes/skills/b2b/ so Hermes can discover them.
 install-trade-skills = "trade.post_install:install_skills"
@@ -89,6 +92,12 @@ trade-update = "trade.post_install:update_trade"
 trade-backup = "trade.post_install:backup_trade"
 trade-restore = "trade.post_install:restore_trade"
 tradewin = "tradewin:main"
+
+[tool.setuptools]
+# tradewin 是仓库根的桌面启动器（.spec 也按路径引用它），必须声明为顶层模块，
+# 否则 console script `tradewin = tradewin:main` 装完即 ModuleNotFoundError。
+# server.py 不需要声明：`python server.py` 按路径运行，脚本入口已改为 trade.cli:run_server。
+py-modules = ["tradewin"]
 
 [tool.setuptools.packages.find]
 include = ["trade", "trade.*"]
