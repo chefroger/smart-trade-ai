@@ -32,6 +32,43 @@ _warnings.filterwarnings("ignore", message=r".*No module named 'hermes_cli\.tool
 # ── sys.path 调整：Trade 包优先于 Hermes ──────────────────────────────────
 # Hermes 也有 `trade/` 包；我们的 `trade/` 必须优先。
 # NOTE: 当 hermes-agent 作为独立 pip 包发布后，此块可移除。
+def _resolve_hermes_checkout() -> str:
+    r"""解析 Hermes 源码目录（含 `hermes_cli` 包的那个目录）；找不到返回空串。
+
+    候选顺序：
+      1. `HERMES_HOME` —— 注意它是**数据根目录**（~/.hermes），checkout 在其下的
+         `hermes-agent/`；若 HERMES_HOME 本身就指向 checkout 也接受
+      2. 平台默认路径（macOS/Linux: `~/.hermes/hermes-agent`，
+         Windows: `%LOCALAPPDATA%\hermes\hermes-agent`）
+      3. 与 Trade 平级的 `trade_ai_assistant` 开发目录
+
+    每个候选都必须真的含 `hermes_cli` 目录才采用 —— 否则会把不含包的路径插进
+    sys.path（历史 bug：`trade` 包装脚本会 export HERMES_HOME=~/.hermes，
+    于是插进去的是数据根目录，`import hermes_cli` 直接失败）。
+    """
+    def _is_checkout(path: Path) -> bool:
+        """是否为可用的 Hermes checkout（含 hermes_cli 包）。"""
+        return (path / "hermes_cli").is_dir()
+
+    candidates: list[Path] = []
+    _hermes_home = os.environ.get("HERMES_HOME", "").strip()
+    if _hermes_home:
+        _root = Path(_hermes_home)
+        candidates.append(_root)                 # HERMES_HOME 本身即 checkout
+        candidates.append(_root / "hermes-agent")  # 数据根目录下的 checkout
+    if os.name == "nt":
+        _local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        candidates.append(Path(_local) / "hermes" / "hermes-agent")
+    else:
+        candidates.append(Path.home() / ".hermes" / "hermes-agent")
+    candidates.append(Path(__file__).resolve().parent.parent.parent / "trade_ai_assistant")
+
+    for candidate in candidates:
+        if _is_checkout(candidate):
+            return str(candidate)
+    return ""
+
+
 def _adjust_sys_path():
     # PyInstaller 打包后 sys.frozen=True，不需要 sys.path 调整
     if getattr(sys, "frozen", False):
@@ -40,24 +77,7 @@ def _adjust_sys_path():
     if _trade_root not in sys.path:
         sys.path.insert(0, _trade_root)
 
-    # Hermes 源码路径优先级：
-    # 1. HERMES_HOME 环境变量
-    # 2. 平台默认路径（macOS/Linux: ~/.hermes/, Windows: %LOCALAPPDATA%\hermes\）
-    # 3. 与 Trade 平级的 trade_ai_assistant 开发目录
-    _hermes_checkout = os.environ.get("HERMES_HOME", "").strip()
-    if not _hermes_checkout:
-        if os.name == "nt":
-            _local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-            _default = Path(_local) / "hermes" / "hermes-agent"
-        else:
-            _default = Path.home() / ".hermes" / "hermes-agent"
-        if _default.is_dir():
-            _hermes_checkout = str(_default)
-    if not _hermes_checkout:
-        _dev_hermes = str(Path(__file__).resolve().parent.parent.parent / "trade_ai_assistant")
-        if Path(_dev_hermes).is_dir():
-            _hermes_checkout = _dev_hermes
-
+    _hermes_checkout = _resolve_hermes_checkout()
     if _hermes_checkout and _hermes_checkout not in sys.path:
         # Hermes 放在第 1 位，Trade 仍在第 0 位（避免 trade/ 包名冲突）
         sys.path.insert(1, _hermes_checkout)
