@@ -188,6 +188,7 @@ def create(
 
     data_dir = None
     work_dir = None
+    company_id = None  # 哨兵：失败补偿时据此判断「本次是否真的插入过公司」
     is_new = True  # 标记工作目录是否为新创建（回滚时据此决定是否清理）
     conn = get_connection()
 
@@ -241,7 +242,19 @@ def create(
         return result
 
     except Exception:
-        conn.rollback()  # 数据库回滚，不残留脏数据
+        conn.rollback()  # 回滚尚未提交的部分
+        # 补偿删除：公司在「注册文档库」之前就已经 commit（不能把 commit 后移 ——
+        # library.create 走独立连接，而 PRAGMA foreign_keys=ON，未提交的公司行对它
+        # 不可见，会触发外键失败），所以 rollback 覆盖不到这一段，必须显式删掉，
+        # 否则用户重试会立刻撞 `UNIQUE constraint failed: companies.slug`。
+        if company_id is not None:
+            try:
+                conn.execute("DELETE FROM libraries WHERE company_id = ?", (company_id,))
+                conn.execute("DELETE FROM trade_companies WHERE company_id = ?", (company_id,))
+                conn.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+                conn.commit()
+            except Exception:
+                pass  # 补偿失败不掩盖原始异常
         # 清理本事务中创建的文件系统资源（仅清理本次新建的目录）
         import shutil as _shutil
 

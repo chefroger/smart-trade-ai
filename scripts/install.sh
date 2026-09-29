@@ -18,6 +18,38 @@ log_warn()  { echo -e "${YELLOW}⚠${NC} $*"; }
 log_err()   { echo -e "${RED}✗${NC} $*"; }
 log_step()  { echo -e "\n${BOLD}════════════════════════════════════════${NC}"; echo -e "${BOLD}$*${NC}"; }
 
+# 克隆或更新一个 git 仓库（失败返回 1，由调用方决定是否中止）。
+#
+# 为什么要这些判断（都是实测踩出来的）：
+#   1. 只有目录**是有效的 git 仓库**（.git 且 HEAD 可解析）才算「已安装」。
+#      克隆被网络中断时 git 会留下空目录，旧逻辑 `[ -d ... ]` 会把它当成已装，
+#      随后 `git pull` 静默失败、`pip install -e .` 在残缺树里报出误导性错误，
+#      而且**重试永远无法恢复**，用户只能手动删目录。
+#   2. 用浅克隆 `--depth 1`：全历史克隆在弱网下最慢、最易失败（README 本身就提醒
+#      用户要有稳定网络）。代价是本地没有 tag，Hermes 版本推导会退化为「未知」，
+#      Trade 会打印警告并继续启动，不影响使用。
+#   3. 不吞 git 的 stderr：README 让用户按网络问题排查，看不到真实报错就没法排查。
+_clone_or_update() {
+    local name="$1" repo="$2" dest="$3"
+    # 目录存在且是有效仓库 → 拉取更新
+    if [ -d "$dest/.git" ] && git -C "$dest" rev-parse --verify HEAD >/dev/null 2>&1; then
+        log_info "更新已有仓库..."
+        git -C "$dest" pull --ff-only origin main || log_warn "git pull 失败，继续使用现有代码"
+        return 0
+    fi
+    # 目录存在但不是有效仓库 → 多为上次克隆的残留，重克隆（否则重试永远失败）
+    if [ -e "$dest" ]; then
+        log_warn "已存在的目录不是有效的代码仓库（上次克隆中断的残留），重新克隆：$dest"
+        rm -rf "$dest"
+    fi
+    mkdir -p "$(dirname "$dest")"
+    git clone --depth 1 --branch main "$repo" "$dest" || {
+        log_err "无法克隆 $name（git 的报错见上）。请确认网络/VPN 后重新运行本脚本。"
+        return 1
+    }
+    return 0
+}
+
 echo ""
 echo -e "${BOLD}${CYAN}  Foreign Trade Assistant — 安装向导${NC}"
 echo ""
@@ -120,19 +152,10 @@ else
     HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
     HERMES_DIR="$HERMES_HOME/hermes-agent"
 
-    if [ -d "$HERMES_DIR" ]; then
-        log_info "更新已有仓库..."
-        git -C "$HERMES_DIR" pull --ff-only origin main 2>/dev/null || true
-    else
-        mkdir -p "$HERMES_DIR"
-        git clone --branch main "$HERMES_REPO" "$HERMES_DIR" 2>/dev/null || {
-            log_err "无法克隆 hermes-agent。请检查网络连接。"
-            exit 1
-        }
-    fi
+    _clone_or_update "hermes-agent" "$HERMES_REPO" "$HERMES_DIR" || exit 1
 
     cd "$HERMES_DIR"
-    "$PIP" install -e "." --quiet 2>&1 | tail -1
+    "$PIP" install -e "."
     cd - >/dev/null
 
     if "$PY" -c "import hermes_cli" 2>/dev/null; then
@@ -151,21 +174,12 @@ log_step "Step 3/5: 安装 Foreign Trade Assistant"
 TRADE_REPO="https://github.com/chefroger/smart-trade-ai.git"
 TRADE_DIR="$HOME/.trade/foreign-trade-assistant"
 
-if [ -d "$TRADE_DIR" ]; then
-    log_info "更新已有仓库..."
-    git -C "$TRADE_DIR" pull --ff-only origin main 2>/dev/null || log_warn "git pull 可能失败（本地修改或网络问题），但已有数据不受影响"
-else
-    mkdir -p "$TRADE_DIR"
-    git clone --branch main "$TRADE_REPO" "$TRADE_DIR" 2>/dev/null || {
-        log_err "无法克隆 foreign-trade-assistant。"
-        exit 1
-    }
-fi
+_clone_or_update "foreign-trade-assistant" "$TRADE_REPO" "$TRADE_DIR" || exit 1
 
 cd "$TRADE_DIR"
 # 装依赖（不含 hermes-agent，它在 Step 2 已装进 venv）+ trade 自身
-"$PIP" install -r requirements.txt --quiet
-"$PIP" install -e "." --no-deps --quiet
+"$PIP" install -r requirements.txt
+"$PIP" install -e "." --no-deps
 cd - >/dev/null
 
 log_ok "Foreign Trade Assistant 安装完成"
@@ -175,7 +189,10 @@ log_ok "Foreign Trade Assistant 安装完成"
 # ─────────────────────────────────────────────────────────────────────────────
 log_step "Step 4/5: 安装 B2B skills"
 
-if "$PY" -m trade.post_install install 2>/dev/null; then
+# 必须用真实存在的入口：此前写的是 `python -m trade.post_install install`，
+# 但该包**没有 __main__.py** → 这一步从未生效过（报错被 2>/dev/null 吞掉，
+# 只打印下面那句警告）。实测新装后 ~/.hermes/skills 里 0 个 skill。
+if "$PY" -c "from trade.post_install import install_skills; install_skills()"; then
     log_ok "B2B skills 安装完成"
 else
     log_warn "B2B skills 安装可能不完整（首次启动时会自动同步）"

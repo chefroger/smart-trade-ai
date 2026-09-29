@@ -457,3 +457,45 @@ class TestRootPathValidation:
         for p in legal:
             result = _validate_root_path(p)
             assert Path(result).is_absolute()
+
+
+class TestCompanyCreateCompensation:
+    """创建公司在后续步骤失败时不得留下半成品。
+
+    crud.create 的文档承诺「任何步骤失败都会回滚数据库并清理已创建的目录」，但实测
+    （隔离新装环境）发现：公司在库注册之前就已 commit，库注册失败后公司行仍在，
+    用户重试会立刻撞 `UNIQUE constraint failed: companies.slug`。
+
+    注意：不能把 commit 后移到库注册之后 —— library.create 走独立连接，而
+    `PRAGMA foreign_keys=ON`，未提交的公司行对它不可见，会触发外键失败。
+    所以修法是失败时**补偿删除**本次创建的公司（对称于已有的目录清理）。
+    """
+
+    def test_library_registration_failure_leaves_no_company(self, test_db, monkeypatch):
+        from trade import company
+        from trade.company import workdir
+
+        def _boom(company_id, work_dir):
+            raise RuntimeError("library registration failed")
+
+        # create() 内部是函数内 import，所以要 patch 源模块
+        monkeypatch.setattr(workdir, "_register_work_libraries", _boom)
+
+        with pytest.raises(RuntimeError):
+            company.create(name="Half Made Co", slug="half-made")
+
+        assert company.get_by_slug("half-made") is None, \
+            "公司行残留 → 用户重试会撞 slug 唯一约束冲突"
+
+    def test_failure_before_insert_is_harmless(self, test_db, monkeypatch):
+        """更早的步骤失败时不应因补偿逻辑而报错。"""
+        from trade import company
+        from trade.company import workdir
+
+        monkeypatch.setattr(workdir, "_setup_work_directory",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("work dir failed")))
+
+        with pytest.raises(RuntimeError):
+            company.create(name="Early Fail Co", slug="early-fail")
+
+        assert company.get_by_slug("early-fail") is None
