@@ -10,8 +10,11 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
+
+import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -89,6 +92,12 @@ class TestCloneRobustness:
                 f"{name} 仍在截断 pip 报错"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="需要真正的 POSIX bash：Windows runner 上的 bash 只是 WSL 存根（无发行版）。"
+           "install.sh 的 shell 辅助函数只服务 macOS/Linux，Windows 侧由 install.ps1 承担"
+           "（其行为已由本文件的静态断言覆盖）",
+)
 class TestCloneHelperBehaviour:
     """行为验证（不只是静态断言）：残缺目录必须能被重克隆。"""
 
