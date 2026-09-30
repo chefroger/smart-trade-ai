@@ -225,6 +225,39 @@ def get_agent_kwargs() -> dict:
 
 # ── Agent factory ─────────────────────────────────────────────────────────────
 
+# 默认启用的 Hermes toolset 组合。Trade 是**显式**传 enabled_toolsets 的，不继承
+# config.yaml 里的 toolsets —— 所以这个列表就是 agent 全部能力的边界。
+#
+# `vision` 必须在列：Hermes 的 `vision_analyze`（唯一的图片识别工具）注册在
+# `toolset="vision"` 下。缺了它 agent 拿不到任何看图能力，只能自写 OCR 或直接失败 ——
+# 2026-09-29 那次截图识别（会话 20260929_084156_4120c8）正是如此：模型自写 Swift 脚本
+# 调 macOS Apple Vision 框架 OCR，因为工具表里根本没有 vision_analyze。
+# 注意判断依据要用**工具表**（create_agent() 解析出的工具），不能用
+# tools/vision_tools.py 的 check_vision_requirements() —— 那是工具的能力门控
+# (check_fn)，只在工具已被 toolset 启用后才会评估，不代表工具在场。
+DEFAULT_ENABLED_TOOLSETS = (
+    "web", "search", "file", "terminal", "code_execution",
+    "browser", "skills", "memory", "cronjob", "todo",
+    "vision",
+)
+
+
+def resolve_enabled_toolsets() -> list[str]:
+    """解析本次实际启用的 toolset 列表。
+
+    优先级：`TRADE_ENABLED_TOOLSETS` 环境变量（逗号分隔，空白串按未设置处理）
+    → 默认组合 `DEFAULT_ENABLED_TOOLSETS`。
+
+    Returns:
+        toolset 名列表（环境变量覆盖时按用户给定的顺序与内容，不做校验）
+    """
+    raw = os.environ.get("TRADE_ENABLED_TOOLSETS", "").strip()
+    if raw:
+        # 环境变量存在且非空白时才覆盖；容忍多余空格与空项
+        return [t.strip() for t in raw.split(",") if t.strip()]
+    return list(DEFAULT_ENABLED_TOOLSETS)
+
+
 def create_agent(
     tool_start_callback=None,
     tool_complete_callback=None,
@@ -268,15 +301,8 @@ def create_agent(
     # 一致性温度：按 skill 类型 + provider 白名单决定是否注入（None = 不传，用 provider 默认）
     request_overrides = _consistency_request_overrides(skill_name, kwargs["provider"])
 
-    # toolsets 可通过 TRADE_ENABLED_TOOLSETS 环境变量覆盖（逗号分隔）
-    _toolsets = os.environ.get("TRADE_ENABLED_TOOLSETS", "").strip()
-    if _toolsets:
-        # 环境变量存在时，解析逗号分隔的 toolset 列表
-        enabled_toolsets = [t.strip() for t in _toolsets.split(",") if t.strip()]
-    else:
-        # 未设置环境变量时使用默认 toolset 组合
-        enabled_toolsets = ["web", "search", "file", "terminal", "code_execution",
-                            "browser", "skills", "memory", "cronjob", "todo"]
+    # toolset 组合由 resolve_enabled_toolsets() 决定（环境变量可整体覆盖默认值）
+    enabled_toolsets = resolve_enabled_toolsets()
 
     agent_kwargs = {
         "quiet_mode": True,
