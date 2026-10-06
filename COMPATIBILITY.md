@@ -41,8 +41,9 @@ Hermes 的安装路径跟的是 **main 分支**（`scripts/install.sh` 用 `git 
 |---------|-----------|---------|------------------|------|
 | 2026-09-30 | `f42f579c` | `d275e422` (2026-09-23) | 7 个耦合点文件被改：run_agent.py / config.py / auth.py / env_loader.py / models.py / hermes_constants.py / version_info.py（另 `auxiliary_client.py`、`vision_tools.py` 亦有改动，非 Trade 耦合点；`agent/image_routing.py` 未动） | ✅ 无破坏。`AIAgent` 仍在且 Trade 实际传的 **14 个构造参数全部保留**；`load_config()` / `PROVIDER_REGISTRY` / `get_auth_status()` / `provider_model_ids()` / `_PROVIDER_MODELS` / `load_hermes_dotenv(hermes_home=)` / `get_hermes_home()` / `provider_catalog()` / `get_version_info()` 签名均未变。无需改动 Trade。 |
 | 2026-10-03 | `1cb26bf2` | `d275e422` (2026-09-23) | 4 个：run_agent.py（reasoning blob 容错修复）、config.py + env_loader.py（原子写入临时文件的内部重构）、models.py（StepFun 模型列表合并） | ✅ 无破坏。与上一行同一批符号逐个复核仍未变；`provider_model_ids(provider, *, force_refresh=False)` 与 `_PROVIDER_MODELS` 均保留。无需改动 Trade，`_MAX_HERMES_VERSION` 无需改动。 |
+| 2026-10-07 | `9b38eb14` | `d275e422` (2026-09-23) | 6 个（均 10-06）：run_agent.py（free tier 限流处理）、config.py（**移除内置 tirith 扫描器**）、auth.py（free-tier 重构）、models.py + provider_catalog.py（pre-release profile 不进发现列表）、hermes_constants.py（scratch 清理记账） | ✅ 无破坏。同一批符号逐个复核未变：`AIAgent` 的 14 个参数、`load_config()`、`PROVIDER_REGISTRY` / `get_auth_status()`、`provider_model_ids()` / `_PROVIDER_MODELS`、`get_hermes_home()`、`provider_catalog()` 全部保留。唯一「移除」是内置 **tirith** 预执行扫描器，**对 Trade 零影响**：Trade 代码完全不引用它，`~/.hermes/config.yaml` 里相关键也只出现在注释行。无需改动 Trade。 |
 
-**静态核对的盲区**（两次复核都受此限制，记录以免误以为「查过了就没事」）：
+**静态核对的盲区**（历次复核都受此限制，记录以免误以为「查过了就没事」）：
 ① 无法发现**签名不变但行为变了**的符号 —— 这类只能靠真机跑端点暴露；
 ② 无法发现上游新增了 Trade **应该启用却没启用**的 toolset —— 默认 toolset 组合缺 `vision`
 就是靠真机跑 `create_agent()` 打印工具表才发现的（导致 agent 一直没有 `vision_analyze`，
