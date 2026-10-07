@@ -217,9 +217,11 @@ Tavily 是联网搜索引擎，让 AI 能搜索实时信息。
 3. 打开文件，按以下格式粘贴：
 
 ```
-DeepSeek API Key: sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Tavily API Key: tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+DeepSeek API Key: <在此粘贴你的 DeepSeek Key，以 sk- 开头>
+Tavily API Key: <在此粘贴你的 Tavily Key，以 tvly- 开头>
 ```
+
+> 上面用尖括号表示占位——**不要照抄尖括号内容**，把你自己的 Key 整串替换进去即可。
 
 4. 保存并关闭。后面配置 Hermes 时需要从这里复制粘贴。
 
