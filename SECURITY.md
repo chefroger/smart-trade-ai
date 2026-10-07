@@ -13,20 +13,19 @@ the product unusable.
 
 ### Mitigations
 
-1. **Network isolation**: Bind to `127.0.0.1` only. Do not expose to LAN/WAN.
-2. **Session token**: 随机 32 字节 url-safe token，注入前端 HTML，所有 API 需携带。`secrets.compare_digest` 时序安全比较。
+1. **Network isolation**: Bind to `127.0.0.1` only. Do not expose to LAN/WAN. 该限制**可以**通过设置环境变量 `TRADE_ALLOW_REMOTE_UI=1` 显式解除（`trade/app.py:_remote_ui_allowed()`）；解除后任何能访问该端口的设备都能取得 session token 并调用全部 API，**会降低安全性**。
+2. **Session token**: 32 字节 url-safe 随机 token（`secrets.token_urlsafe(32)`），`secrets.compare_digest` 时序安全比较。注入前端 HTML，所有 API 需携带。
 3. **Session-company binding**: 首次请求自动绑定 session 到 company_id，跨公司操作返回 403。切换需通过显式端点。
 4. **CDN SRI**: 前端外部脚本（marked.js、DOMPurify）有 integrity 哈希校验。
 5. **SSRF 防护**: `osint/constants.py::_is_private_host()` 统一拦截 8 个内网/保留 IP 段（RFC1918、loopback、link-local、multicast）。`http_get()` 和 `detect_tech_stack()` 共享复用，无重复实现。
 6. **PID 三层校验**: 重启时 psutil（强制依赖）验证 cmdline + exe 路径比对 + pid 文件 0600 权限。macOS 无 /proc 也无 psutil 时信任自己的 PID 文件做兜底。
 7. **系统端点限流**: `/system/update`、`/system/restart`、`/system/backup`、`/skills/update` 均限制 5 req/min per token，防止脚本循环触发 GitHub API 限流或 pip 配额耗尽。
-8. **Session token**: 32 字节 url-safe 随机 token（secrets.token_urlsafe(32)），`secrets.compare_digest` 时序安全比较。注入前端 HTML，所有 API 需携带。
-9. **X-Confirm-Delete**: 删除公司需要确认 header。
-10. **SQL 全参数化**: 所有查询使用 `?` 占位符，无 f-string 拼接。
-11. **路径穿越防护**: slug/root_path/文件名均校验 `..`、`/`、NUL。
-12. **API Key safety**: Store in `~/.hermes/.env` with `chmod 600`.
-13. **Regular backups**: Back up `~/.trade/` and desktop work directories.
-14. **Least privilege**: Run as a regular user, never as root.
+8. **X-Confirm-Delete**: 删除公司需要确认 header。
+9. **SQL 全参数化**: 所有查询使用 `?` 占位符，无 f-string 拼接。
+10. **路径穿越防护**: slug/root_path/文件名均校验 `..`、`/`、NUL。
+11. **API Key safety**: Store in `~/.hermes/.env` with `chmod 600`.
+12. **Regular backups**: Back up `~/.trade/` and desktop work directories.
+13. **Least privilege**: Run as a regular user, never as root.
 
 ### If you find a vulnerability
 
@@ -72,7 +71,7 @@ We do not currently run a bug bounty program.
 
 | 组件 | 许可证 | 兼容性 |
 |------|--------|:------:|
-| Smart Trade AI | MIT | — |
+| Smart Trade AI | AGPL-3.0-only | — |
 | Hermes Agent | MIT | ✅ 完全兼容 |
 | FastAPI / uvicorn / beautifulsoup4 | MIT / BSD | ✅ 完全兼容 |
 | PyMuPDF | AGPL | ⚠️ pip install 使用无传染风险；PyInstaller 打包分发时需评估 |

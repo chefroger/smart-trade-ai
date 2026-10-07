@@ -261,7 +261,7 @@ If you really need to reach the UI from another device, set `TRADE_ALLOW_REMOTE_
 - **Backend**: FastAPI + SQLite + uvicorn
 - **Frontend**: Vanilla JavaScript SPA (HTML/CSS/JS, zero build dependencies)
 - **LLM**: `deepseek-flash` recommended; compatible with OpenAI / Anthropic / GLM / Kimi / Ollama etc.
-- **Document Parsing**: PyMuPDF / python-docx / openpyxl / python-pptx
+- **Document Parsing**: hard dependencies `firecrawl-anydoc` + `pypdfium2`; PyMuPDF / python-docx / openpyxl / python-pptx are an optional `[docs]` extra
 
 ---
 
@@ -273,10 +273,12 @@ trade/                     B2B business layer
 ├── osint/                 Client due diligence module (6-layer verification)
 ├── skill_router.py        Skill auto-matching engine
 ├── skill_registry.py      38 skill registry (pure data)
-└── ... + 20 business modules
+├── bootstrap.py            Startup bootstrap (Hermes version check, env loading, skills sync)
+├── app.py                  FastAPI app factory
+└── ... + 22 business modules
 
 skills/                    38 B2B skills (Markdown-driven)
-tests/                     Python tests (22 files) + end-to-end document-reading rule tests
+tests/                     Python tests (28 files) + end-to-end document-reading rule tests
 tests_js/                  Frontend utility tests (node:test, zero dependencies; run by CI)
 server.py                  FastAPI entry point
 ```

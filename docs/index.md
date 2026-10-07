@@ -149,17 +149,19 @@ trade
 
 浏览器会自动打开 Trade 界面。如果没有自动打开，手动访问 **http://127.0.0.1:9119/trade**。
 
-### 第九步：设置 Trade 开机自启（可选）
+### 第九步：设置 Hermes Gateway 开机自启（可选）
 
-如果希望开机后 Trade 自动运行，在终端执行：
+如果希望开机后定时任务（每日简报等）能自动运行，在终端执行：
 
 ```bash
 hermes gateway install
 ```
 
-这会安装一个 macOS 后台服务，开机后自动启动 Gateway。
+这会安装一个 macOS 后台服务（`com.foreign-trade.gateway`，端口 8642），开机后自动启动 **Hermes Gateway**。注意：它只负责 Gateway，**不包含 Trade 本体**。
 
-> 以后的使用方式：打开电脑等约 30 秒，直接浏览器访问 **http://127.0.0.1:9119/trade** 即可。
+Trade 服务本身的开机自启由安装脚本 `scripts/install.sh` 单独配置（写入 `~/Library/LaunchAgents/com.trade.assistant.plist`，开机静默启动 `trade`）。
+
+> 以后的使用方式（仅对经 `install.sh` 安装的用户成立）：开机后等约 30 秒，Trade 与 Gateway 均已自启，直接浏览器访问 **http://127.0.0.1:9119/trade** 即可；若未配置 Trade 自启，仍需先手动运行 `trade` 再访问。
 
 ---
 

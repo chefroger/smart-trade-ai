@@ -303,7 +303,7 @@ python server.py
 - **后端**: FastAPI + SQLite + uvicorn
 - **前端**: 原生 JavaScript SPA（HTML/CSS/JS 三文件，零构建工具依赖）
 - **LLM**: 推荐 `deepseek-flash`；兼容 OpenAI / Anthropic / GLM / Kimi / Ollama 等
-- **文档解析**: PyMuPDF / python-docx / openpyxl / python-pptx
+- **文档解析**: 硬依赖 `firecrawl-anydoc` + `pypdfium2`；PyMuPDF / python-docx / openpyxl / python-pptx 为可选 `[docs]` extra
 
 ---
 
@@ -317,10 +317,10 @@ trade/                     B2B 业务层
 ├── skill_registry.py      38 个 skill 注册表（纯数据）
 ├── bootstrap.py            启动引导（Hermes 版本检查、env 加载、Skills 同步）
 ├── app.py                  FastAPI app factory
-└── ... + 38 个业务模块
+└── ... + 22 个业务模块
 
 skills/                    38 个 B2B skills（Markdown 驱动）
-tests/                     Python 测试（22 个文件）＋ 文档读取规则端到端实测
+tests/                     Python 测试（28 个文件）＋ 文档读取规则端到端实测
 tests_js/                  前端工具函数测试（node:test，零依赖；CI 会执行）
 server.py                  FastAPI 入口
 ```
