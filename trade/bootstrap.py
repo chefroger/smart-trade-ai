@@ -338,12 +338,24 @@ def check_native_architecture(auto_repair: bool = True) -> bool:
 
 
 def load_env_and_set_yolo():
-    """加载 Hermes .env 并开启 YOLO 模式（跳过工具审批）。"""
+    """加载 Hermes .env、开启 YOLO 模式，并禁用 Hermes 的懒加载重启。"""
     from hermes_cli.env_loader import load_hermes_dotenv
     from hermes_constants import get_hermes_home
 
     load_hermes_dotenv(hermes_home=get_hermes_home())
     os.environ["HERMES_YOLO_MODE"] = "true"
+
+    # 禁用 Hermes 的「借用启动」：否则 `from run_agent import AIAgent` 会连带执行
+    # hermes_bootstrap.py，它发现当前解释器不是 Hermes 的 store 解释器后，会把
+    # server.py 重新 exec 到 Hermes 自带的 Python —— 那个解释器里没有 trade 包，
+    # 于是子进程以 ModuleNotFoundError 退出，父进程 raise RelaunchExit(1)。
+    # RelaunchExit 继承 SystemExit（BaseException），Trade 的 except Exception 抓不到，
+    # agent 线程静默死亡，前端只会看到「Agent 未返回有效回复」（客户机实测，2026-10-08）。
+    #
+    # 这是上游正式的 sealed-venv 开关（Hermes tools/lazy_deps.py）。作用域仅限本进程树，
+    # 不影响用户自己那个 hermes CLI；必须设在 load_hermes_dotenv **之后**，
+    # 因为该函数会用 os.environ[name] = value 覆盖，顺序反了就会被用户的 .env 顶掉。
+    os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
 
 
 # ── Skills 同步 ──────────────────────────────────────────────────────────

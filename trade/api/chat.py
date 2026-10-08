@@ -447,6 +447,21 @@ async def trade_chat_stream(
                     continue
                 _emit_threadsafe("error", {"message": f"⚠️ {last_error}"})
                 return None
+            except BaseException as e:
+                # Hermes 可能以 BaseException 结束 —— 例如 hermes_bootstrap 的
+                # RelaunchExit 继承 SystemExit（它会把 server.py 重新 exec 到 Hermes
+                # 自带的 store python，而那里没有 trade 包）。`except Exception` 抓不到
+                # 这类异常，agent 线程会静默死亡：前端既收不到 response 也收不到 error，
+                # 只能落兜底文案「Agent 未返回有效回复」（客户机实测，2026-10-08）。
+                # 它也不是瞬时故障，重试无意义，如实上报即可。
+                _log.error(
+                    "Agent terminated with %s: %s", type(e).__name__, e, exc_info=True
+                )
+                _emit_threadsafe(
+                    "error",
+                    {"message": f"⚠️ Agent 异常终止（{type(e).__name__}）：{e}"},
+                )
+                return None
         _emit_threadsafe("error", {"message": "Agent 重试耗尽，请稍后重试。"})
         return None
 
@@ -470,6 +485,17 @@ async def trade_chat_stream(
                     ev_type, ev_data = await asyncio.wait_for(event_queue.get(), timeout=wait_sec)
                 except TimeoutError:
                     if agent_task.done():
+                        # 任务已结束、队列里却没有终止事件 —— 说明它是异常收场的。
+                        # 不取 exception() 会让失败彻底静默（还会打出
+                        # "Future exception was never retrieved" 警告），
+                        # 前端只能落到兜底文案。取出来即当作 error 下发。
+                        if not agent_task.cancelled():
+                            exc = agent_task.exception()
+                            if exc is not None:
+                                _log.error("Agent task died without emitting: %r", exc)
+                                yield _sse("error", {
+                                    "message": f"⚠️ Agent 失败（{type(exc).__name__}）：{exc}"
+                                })
                         break
                     yield ": ping\n\n"
                     continue

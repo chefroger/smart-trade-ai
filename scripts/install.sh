@@ -218,6 +218,10 @@ mkdir -p "$HOME/.local/bin"
 cat > "$HOME/.local/bin/trade" << LAUNCHER
 #!/bin/bash
 export HERMES_HOME="\${HERMES_HOME:-$HOME/.hermes}"
+# 禁用 Hermes 懒加载重启：否则 agent 创建时会被 exec 到 Hermes 自带的 store python
+# （那里没有 trade 包），agent 线程以 RelaunchExit(SystemExit) 静默死亡，
+# 前端只会看到「Agent 未返回有效回复」。bootstrap.py 里也设了一处，这里是双保险。
+export HERMES_DISABLE_LAZY_INSTALLS="1"
 exec "$VENV_DIR/bin/python" "$TRADE_DIR/server.py" "\$@"
 LAUNCHER
 chmod +x "$HOME/.local/bin/trade"

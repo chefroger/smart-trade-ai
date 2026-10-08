@@ -194,6 +194,10 @@ New-Item -ItemType Directory -Path $LocalBin -Force | Out-Null
 @"
 @echo off
 set HERMES_HOME=$HermesHome
+REM 禁用 Hermes 懒加载重启：否则 agent 创建时会被 exec 到 Hermes 自带的 store python
+REM （那里没有 trade 包），agent 线程以 RelaunchExit(SystemExit) 静默死亡，
+REM 前端只会看到「Agent 未返回有效响应」。bootstrap.py 里也设了一处，这里是双保险。
+set HERMES_DISABLE_LAZY_INSTALLS=1
 "$PyCmd" "$TradeDir\server.py" %*
 "@ | Out-File -FilePath "$LocalBin\trade.cmd" -Encoding ASCII
 

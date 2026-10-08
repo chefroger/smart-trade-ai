@@ -176,3 +176,40 @@ class TestCloneHelperBehaviour:
 
         assert "RESULT_FAIL" in out, out
         assert rc == 0  # 脚本自身正常结束，失败通过返回值表达
+
+
+class TestLauncherDisablesHermesLazyInstalls:
+    """生成的启动器必须禁用 Hermes 懒加载重启。
+
+    客户机实测（2026-10-08）：「网站诊断」时前端只显示「Agent 未返回有效回复」。
+    成因是 `from run_agent import AIAgent` 连带执行 Hermes 的 `hermes_bootstrap.py`，
+    它把 server.py 重新 exec 到 Hermes 自带的 store python（那里没有 trade 包），
+    子进程 ModuleNotFoundError 退出，父进程 raise RelaunchExit(1)——继承 SystemExit，
+    Trade 的 except Exception 抓不到，agent 线程静默死亡。
+
+    `trade/bootstrap.py` 已在代码层设了这个开关；启动器里再设一次是双保险，而且
+    **必须写进生成器**：`trade.cmd` 是 install.ps1 生成的产物，手改会被重装抹掉。
+    """
+
+    FLAG = "HERMES_DISABLE_LAZY_INSTALLS"
+
+    def test_bash_launcher_sets_flag(self):
+        assert self.FLAG in _code_lines(SH), (
+            "install.sh 生成的 ~/.local/bin/trade 未禁用 Hermes 懒加载重启"
+        )
+
+    def test_powershell_launcher_sets_flag(self):
+        assert self.FLAG in _code_lines(PS1), (
+            "install.ps1 生成的 trade.cmd 未禁用 Hermes 懒加载重启"
+        )
+
+    def test_flag_value_is_one(self):
+        """两个脚本都必须设成 1（上游判的是 == "1"，别的值等于没设）。"""
+        import re
+
+        for name, text in (("install.sh", SH), ("install.ps1", PS1)):
+            body = _code_lines(text)
+            # bash: export FLAG="1"  /  cmd: set FLAG=1
+            assert re.search(rf'{self.FLAG}=(?:"1"|1)(\s|$)', body), (
+                f"{name} 里 {self.FLAG} 的值不是 1"
+            )
