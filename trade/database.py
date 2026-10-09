@@ -311,6 +311,50 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
     return True
 
 
+_EXPECTED_TABLES = frozenset({
+    "companies", "trade_companies", "libraries", "customers",
+    "customer_libraries", "conversations", "orders",
+})
+
+
+def _needs_schema_work(conn: sqlite3.Connection) -> bool:
+    """只读判断：这次 init_db 是否真的会改动 schema。
+
+    为什么要先判断再备份：`init_db()` **每次启动**都调用，而备份原先是无条件的 ——
+    实测在一台开发机上累积到 **72,626 个备份文件 / 38 GB**（每个 573KB）。
+    而这台机器的迁移列表是空的、schema 已是最新，那 7 万次备份没有一次是必要的。
+
+    判据取"任何一项会触发写入"的条件，宁可多备一次也不要漏备。
+    """
+    try:
+        existing = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        # 缺表（全新库或残缺库）→ 会建表
+        if not _EXPECTED_TABLES <= existing:
+            return True
+        # 迁移表本身不存在 → 待建
+        if "schema_migrations" not in existing:
+            return True
+        # 备用列缺失 → ALTER TABLE
+        for table in ("companies", "trade_companies", "libraries", "customers",
+                      "customer_libraries", "conversations"):
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if not {"extra1", "extra2", "extra3"} <= cols:
+                return True
+        # conversations.context 缺失 → ALTER TABLE
+        if "conversations" in existing:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
+            if "context" not in cols:
+                return True
+    except sqlite3.Error:
+        # 读不出来（损坏/权限）→ 保守起见当作需要处理，让它照旧备份并报错
+        return True
+    return False
+
+
 def _backup_db(db_path: Path) -> Path | None:
     """在 schema 变更前自动备份数据库。
 
@@ -338,7 +382,41 @@ def _backup_db(db_path: Path) -> Path | None:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_path = backup_dir / f"trade-{ts}.db"
     shutil.copy2(str(db_path), str(backup_path))
+    prune_old_backups(backup_dir)
     return backup_path
+
+
+# 保留最近多少份自动备份。备份是"schema 变更前的快照"，改坏了大不了回退一步，
+# 攒多了只会占磁盘（实测一台机器上 7 万份 / 38 GB）。
+_BACKUP_KEEP = 5
+
+
+def prune_old_backups(backup_dir: Path, keep: int = _BACKUP_KEEP) -> list[Path]:
+    """只保留最近 `keep` 份自动备份，其余删除。返回被删列表。
+
+    只处理形如 `trade-YYYYMMDD-HHMMSS.db` 的自动备份；**手工备份
+    （如 trade-before-restore-*.db）一律不动** —— 那是用户特意留的。
+    """
+    import re as _re
+
+    pattern = _re.compile(r"^trade-\d{8}-\d{6}\.db$")
+    try:
+        candidates = sorted(
+            (p for p in backup_dir.iterdir()
+             if p.is_file() and pattern.match(p.name)),
+            key=lambda p: p.name,  # 文件名含时间戳，字典序即时间序
+        )
+    except OSError:
+        return []
+
+    removed: list[Path] = []
+    for old in candidates[:-keep] if keep > 0 else candidates:
+        try:
+            old.unlink()
+            removed.append(old)
+        except OSError:
+            pass  # 删不掉就留着，不影响主流程
+    return removed
 
 
 def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
@@ -390,10 +468,25 @@ def init_db() -> Path:
     """
     db_path = _get_db_path()
 
-    # 升级前自动备份
-    backup_path = _backup_db(db_path)
-    if backup_path:
-        print(f"  📦 Database backed up → {backup_path}")
+    # 先只读判断是否真会改 schema，再决定要不要备份。
+    # 历史 bug：这里原先无条件备份，而 init_db 每次启动都跑 —— 实测累积到
+    # 7 万多个备份文件 / 38 GB，且没有一次是必要的（schema 已是最新时
+    # 这次调用什么都不改）。
+    _needs_backup = False
+    if db_path.is_file():
+        try:
+            _probe = get_connection()
+            try:
+                _needs_backup = _needs_schema_work(_probe)
+            finally:
+                _probe.close()
+        except Exception:
+            _needs_backup = True  # 判断不了就照旧备份，宁可多备
+
+    if _needs_backup:
+        backup_path = _backup_db(db_path)
+        if backup_path:
+            print(f"  📦 Database backed up → {backup_path}")
 
     conn = get_connection()
     try:
