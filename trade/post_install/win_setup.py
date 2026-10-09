@@ -68,21 +68,36 @@ def to_batch_path(path: str | Path) -> str:
     return p
 
 
-def resolve_trade_command(trade_dir: Path) -> str:
+def _is_windows() -> bool:
+    """当前是否 Windows。
+
+    提为函数是为了**可注入**：测试里直接改 `os.name` 会连累 pathlib ——
+    Windows 上 `os.name != "nt"` 会让 `Path()` 抛 NotImplementedError，
+    把整个进程（含 pytest 自己）搞崩。这个坑已经踩过一次。
+    """
+    return os.name == "nt"
+
+
+def resolve_trade_command(trade_dir: Path, *, executable: str | None = None) -> str:
     """返回启动 Trade 的**完整命令行**（不含参数，已做 batch 安全转换）。
 
     优先用与当前解释器同目录的 `trade.exe`（console script，在 venv 的 Scripts 里）——
     与文档里「用完整路径、不依赖 PATH」的做法一致，开机早期 PATH 未加载完也能跑。
     没有就退回 `"<python>" "<server.py>"`，行为等价、不依赖 console script 是否在 PATH。
 
+    Args:
+        executable: 解释器路径，默认 `sys.executable`。可注入以便测试 ——
+                    直接改 `sys.executable` 是全局副作用，会波及同进程的其它调用。
+
     返回带引号、可直接拼进 .bat 的字符串。
     """
-    exe_dir = Path(sys.executable).parent
+    exe = executable or sys.executable
+    exe_dir = Path(exe).parent
     for name in ("trade.exe", "trade"):
         candidate = exe_dir / name
         if candidate.is_file():
             return f'"{to_batch_path(candidate)}"'
-    return f'"{to_batch_path(sys.executable)}" "{to_batch_path(trade_dir / "server.py")}"'
+    return f'"{to_batch_path(exe)}" "{to_batch_path(trade_dir / "server.py")}"'
 
 
 def build_autostart_bat(command: str, log_file: str) -> str:
@@ -266,7 +281,7 @@ def ensure_windows_setup(trade_dir: Path) -> list[str]:
     幂等：重复调用不会重复建东西，也不会覆盖用户改过的正确配置。
     每一步失败只记一条说明，不抛异常 —— 调用方（服务启动路径）不能因此挂掉。
     """
-    if os.name != "nt":
+    if not _is_windows():
         return []
 
     messages: list[str] = []

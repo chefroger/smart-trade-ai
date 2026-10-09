@@ -24,6 +24,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# 注意：测试通过 `executable=` 参数注入解释器路径，**不要** monkeypatch 全局
+# `sys.executable` —— 那是进程级副作用，会影响同进程其它调用（同类问题曾在 CI
+# 上把 os.name 改坏、连 pytest 自己都崩）。
+
 
 def _clear_path(monkeypatch):
     """模拟客户机：PATH 里没有任何 hermes。"""
@@ -35,23 +39,25 @@ class TestVenvFirst:
         """与解释器同目录的 hermes 优先 —— 那就是 Trade venv 里的那份。"""
         import trade.app as app
 
-        monkeypatch.setattr(sys, "executable", str(tmp_path / "bin" / "python"))
         (tmp_path / "bin").mkdir(parents=True)
         exe = "hermes.exe" if os.name == "nt" else "hermes"
         (tmp_path / "bin" / exe).write_text("", encoding="utf-8")
         _clear_path(monkeypatch)
 
-        assert app._find_hermes_binary() == str(tmp_path / "bin" / exe)
+        found = app._find_hermes_binary(executable=str(tmp_path / "bin" / "python"))
+
+        assert found == str(tmp_path / "bin" / exe)
 
     def test_falls_back_to_path(self, monkeypatch):
         """venv 里没有时退回 PATH 查找（开发者机器上常见）。"""
         import trade.app as app
 
-        monkeypatch.setattr(sys, "executable", "/nonexistent/python")
         monkeypatch.setenv("PATH", "/usr/bin")
         monkeypatch.setattr(app.shutil, "which", lambda _n: "/usr/bin/hermes")
 
-        assert app._find_hermes_binary() == "/usr/bin/hermes"
+        found = app._find_hermes_binary(executable="/nonexistent/python")
+
+        assert found == "/usr/bin/hermes"
 
     def test_last_resort_is_name_not_none(self, monkeypatch):
         """都找不到时返回 'hermes' 字面量，让 Popen 抛错并在日志里可见。
@@ -60,8 +66,9 @@ class TestVenvFirst:
         """
         import trade.app as app
 
-        monkeypatch.setattr(sys, "executable", "/nonexistent/python")
         _clear_path(monkeypatch)
         monkeypatch.setattr(app.shutil, "which", lambda _n: None)
 
-        assert app._find_hermes_binary() == "hermes"
+        found = app._find_hermes_binary(executable="/nonexistent/python")
+
+        assert found == "hermes"

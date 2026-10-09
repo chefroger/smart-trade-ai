@@ -30,6 +30,18 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_restart(monkeypatch):
+    """必须屏蔽真实重启 —— restore_trade 末尾会 Popen 一个新的 Trade 进程。
+
+    不屏蔽的话测试会在 CI 机器上真的拉起一个服务（占端口、留进程），
+    既慢又不可控。
+    """
+    from trade.post_install import backup as bk
+
+    monkeypatch.setattr(bk, "_restart_trade_service", lambda: None)
+
+
 @pytest.fixture
 def trade_env(monkeypatch, tmp_path):
     """临时 TRADE_HOME / HERMES_HOME，带一份可辨别的数据。"""

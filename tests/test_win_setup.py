@@ -82,21 +82,19 @@ class TestGeneratedScripts:
         exe_dir = tmp_path / "Scripts"
         exe_dir.mkdir()
         (exe_dir / "trade.exe").write_text("", encoding="utf-8")
-        monkeypatch.setattr(ws.sys, "executable", str(exe_dir / "python.exe"))
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
-        cmd = ws.resolve_trade_command(tmp_path)
+        cmd = ws.resolve_trade_command(tmp_path, executable=str(exe_dir / "python.exe"))
 
         assert "trade.exe" in cmd
 
     def test_resolve_command_falls_back_to_python(self, tmp_path, monkeypatch):
         exe_dir = tmp_path / "Scripts"
         exe_dir.mkdir()
-        monkeypatch.setattr(ws.sys, "executable", str(exe_dir / "python.exe"))
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         (tmp_path / "server.py").write_text("", encoding="utf-8")
 
-        cmd = ws.resolve_trade_command(tmp_path)
+        cmd = ws.resolve_trade_command(tmp_path, executable=str(exe_dir / "python.exe"))
 
         assert "python.exe" in cmd and "server.py" in cmd
 
@@ -179,6 +177,24 @@ class TestScheduledTaskReplacement:
 
 
 class TestNonWindowsIsNoop:
+    """非 Windows 上必须完全不动系统。
+
+    **不要 monkeypatch 全局 `os.name`**：`ws.os` 就是 `os` 模块本身，改它会让
+    pathlib 以为当前是 POSIX —— Windows 上 `Path()` 随即抛 NotImplementedError，
+    连 pytest 自己的报告机制都崩（CI 上真实发生过）。这里注入模块内的
+    `_is_windows` 判断函数，只影响被测代码。
+    """
+
     def test_returns_empty_off_windows(self, monkeypatch):
-        monkeypatch.setattr(ws.os, "name", "posix")
+        monkeypatch.setattr(ws, "_is_windows", lambda: False)
         assert ws.ensure_windows_setup(Path("/tmp")) == []
+
+    def test_no_side_effects_off_windows(self, monkeypatch):
+        """非 Windows 上连脚本都不该生成。"""
+        monkeypatch.setattr(ws, "_is_windows", lambda: False)
+        called = []
+        monkeypatch.setattr(ws, "ensure_launcher_scripts", lambda _d: called.append(1))
+
+        ws.ensure_windows_setup(Path("/tmp"))
+
+        assert called == []

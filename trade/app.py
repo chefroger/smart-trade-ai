@@ -98,7 +98,7 @@ def _is_gateway_running() -> bool:
         return False
 
 
-def _find_hermes_binary() -> str:
+def _find_hermes_binary(*, executable: str | None = None) -> str:
     """定位 hermes 可执行文件，**优先当前解释器所在目录（即 Trade 的 venv）**。
 
     为什么不能只查 PATH：Hermes 装在 Trade 自己的 venv 里，而
@@ -107,8 +107,12 @@ def _find_hermes_binary() -> str:
 
     于是只查 PATH 时 Windows/Linux 上 Gateway 永远起不来 → 定时任务静默失效，
     而 cron 界面照常列出任务、全部标"missed"，用户以为在跑。
+
+    Args:
+        executable: 解释器路径，默认 `sys.executable`。可注入以便测试 ——
+                    直接改全局 `sys.executable` 会波及同进程的其它调用。
     """
-    exe_dir = Path(sys.executable).parent
+    exe_dir = Path(executable or sys.executable).parent
     names = ("hermes.exe", "hermes.cmd", "hermes") if os.name == "nt" else ("hermes",)
     for name in names:
         candidate = exe_dir / name
