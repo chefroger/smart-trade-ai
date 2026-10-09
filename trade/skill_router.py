@@ -95,9 +95,20 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
 
     使用 PyYAML safe_load 解析，正确处理 | block scalar 格式。
 
+    **换行符归一化**：先把 CRLF 折成 LF 再解析。Windows 上 SKILL.md 常为 CRLF
+    （Git core.autocrlf 检出、或 skills 同步时 write_text 的换行翻译），而本函数
+    原先用 `startswith("---\\n")` / `find("\\n---\\n")` 定位分隔线 —— CRLF 下
+    两个判断全部失配，直接返回空 frontmatter：`triggers` 丢失（技能注册失效）、
+    `injection_prompt` 丢失（降级到 registry 的 augment_prompt，而其中 19/38
+    是空串 → 零指令注入）。
+
     返回结果：
         (frontmatter_dict, body_content)。无有效 frontmatter 时返回 ({}, content)。
     """
+    # CRLF → LF 归一化（幂等；对纯 LF 输入是无操作）
+    if "\r\n" in content:
+        content = content.replace("\r\n", "\n")
+
     # 没有 YAML frontmatter 标记，返回原始内容
     if not content.startswith("---\n"):
         return {}, content

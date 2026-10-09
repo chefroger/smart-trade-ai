@@ -44,7 +44,11 @@ def detect_tech_stack(url: str) -> dict:
         "technologies": [],
         "platforms": [],
         "is_free_platform": False,
-        "is_enterprise": True,
+        # 默认 False：只有真的抓到页面并检出企业级技术时才置 True（见下方
+        # `any(t in technologies for t in enterprise_indicators)`）。
+        # 历史上这里默认 True —— 抓取失败时 except 只写 error、不改这个值，
+        # 于是报告输出「✅ 网站使用企业级技术栈，可信度 +1」：**域名被墙反而加分**。
+        "is_enterprise": False,
         "ssl_valid": False,
         "server": None,
         "error": None,

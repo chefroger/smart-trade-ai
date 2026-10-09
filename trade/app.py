@@ -6,6 +6,7 @@ Trade AI Assistant — FastAPI application factory.
 
 import os
 import secrets
+import shutil
 import subprocess as _sp
 import sys
 import threading
@@ -97,6 +98,32 @@ def _is_gateway_running() -> bool:
         return False
 
 
+def _find_hermes_binary() -> str:
+    """定位 hermes 可执行文件，**优先当前解释器所在目录（即 Trade 的 venv）**。
+
+    为什么不能只查 PATH：Hermes 装在 Trade 自己的 venv 里，而
+      - Windows 的计划任务、Linux 的 systemd user unit 都不带 venv 的 bin/Scripts
+      - macOS 的 launchd plist 恰好显式设了 PATH（含 venv/bin），所以开发机正常
+
+    于是只查 PATH 时 Windows/Linux 上 Gateway 永远起不来 → 定时任务静默失效，
+    而 cron 界面照常列出任务、全部标"missed"，用户以为在跑。
+    """
+    exe_dir = Path(sys.executable).parent
+    names = ("hermes.exe", "hermes.cmd", "hermes") if os.name == "nt" else ("hermes",)
+    for name in names:
+        candidate = exe_dir / name
+        if candidate.is_file():
+            return str(candidate)
+
+    found = shutil.which("hermes")
+    if found:
+        return found
+
+    # 兜底返回字面量而非 None：让 Popen 抛 FileNotFoundError 并在日志里可见，
+    # 比返回 None 导致更难懂的 TypeError 好。
+    return "hermes"
+
+
 def _ensure_gateway_running() -> None:
     """如果 Gateway 未运行，启动它。Gateway 独立于 Trade 生命周期。"""
     if _is_gateway_running():
@@ -104,8 +131,7 @@ def _ensure_gateway_running() -> None:
         return
 
     try:
-        import shutil
-        hermes_bin = shutil.which("hermes") or "hermes"
+        hermes_bin = _find_hermes_binary()
 
         # 架构检测：Rosetta 下尝试使用原生 arm64 hermes 二进制
         import platform as _platform

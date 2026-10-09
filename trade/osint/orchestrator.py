@@ -111,9 +111,10 @@ async def osint_full_check(
         email_verify_result = await loop.run_in_executor(None, verify_corporate_email, target)
         report["layers"]["email_verification"] = email_verify_result
 
-        if email_verify_result.get("risk_flag"):
-            # 邮箱属于个人邮箱域名（如 gmail），标记为风险
-            report["flags"].append("personal_email_domain")
+        # 按**具体红旗**映射到评分用的标记名。
+        # 历史上这里把任何 risk_flag 一律写成 "personal_email_domain" ——
+        # 于是"域名没有 MX 记录"也被标成"个人邮箱"，扣分理由与事实不符。
+        report["flags"].extend(_map_email_flags(email_verify_result.get("risk_flags") or []))
     else:
         # 非邮箱目标，跳过企业邮箱验证
         report["layers"]["email_verification"] = None
@@ -174,6 +175,25 @@ async def osint_full_check(
 # ─────────────────────────────────────────────────────────────────────────────
 # 内部 helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+# 邮箱验证的中文红旗 → 评分用的标记名。
+# 必须逐条对应：不同红旗的证据强度不同、扣分也不同（见 scoring._deductions）。
+_EMAIL_FLAG_MAP = {
+    "使用个人邮箱域名": "personal_email_domain",
+    "域名未检测到 MX 记录（可能是假域名）": "no_mx_record",
+    "邮箱域名与网站域名不一致": "email_domain_mismatch",
+}
+
+
+def _map_email_flags(risk_flags: list[str]) -> list[str]:
+    """把邮箱验证层的中文红旗翻译成评分层的标记名。
+
+    未识别的红旗不丢弃：转成 ``email_<hash>`` 会污染评分表，改为忽略并
+    依赖该层自己的 suggestion 字段披露（scoring 是白名单制，未知标记本就扣默认分，
+    这里选择不臆造语义）。
+    """
+    return [_EMAIL_FLAG_MAP[f] for f in risk_flags if f in _EMAIL_FLAG_MAP]
+
 
 def _extract_lookup_domain(target: str, target_type: str, domain_from_email: str | None) -> str | None:
     """从目标中提取用于 WHOIS / 技术栈检测的域名。

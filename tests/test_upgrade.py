@@ -249,7 +249,8 @@ class TestUpdateStepSeverity:
         return _run
 
     def _run_update(self, *, skills_raise=False, pull_rc=0, pip_rc=0,
-                    stash_rc=0, db_ok=True, existing_dir=False):
+                    stash_rc=0, db_ok=True, existing_dir=False,
+                    skills_exc=None):
         """在全部外部依赖被 mock 的前提下跑一次 update_trade()。"""
         from contextlib import ExitStack
 
@@ -273,11 +274,15 @@ class TestUpdateStepSeverity:
             else:
                 mock_init.side_effect = RuntimeError("db boom")
 
+            # 调用方可用 skills_exc 指定具体异常类型；skills_raise=True 是
+            # SystemExit 的简写（保持既有用例不变）
+            skills_exc = skills_exc or (SystemExit(1) if skills_raise else None)
+
             # skills 步骤必须始终 mock：真实 install_skills 会写 ~/.hermes/skills，
             # update_skills 还会访问 GitHub —— 测试绝不能碰真实用户数据或网络
-            if skills_raise:
-                stack.enter_context(patch("trade.post_install.update.install_skills", side_effect=SystemExit(1)))
-                stack.enter_context(patch("trade.post_install.update.update_skills", side_effect=SystemExit(1)))
+            if skills_exc is not None:
+                stack.enter_context(patch("trade.post_install.update.install_skills", side_effect=skills_exc))
+                stack.enter_context(patch("trade.post_install.update.update_skills", side_effect=skills_exc))
             else:
                 stack.enter_context(patch("trade.post_install.update.install_skills"))
                 stack.enter_context(patch("trade.post_install.update.update_skills"))
@@ -296,8 +301,9 @@ class TestUpdateStepSeverity:
         result = self._run_update(skills_raise=True)
 
         assert result["ok"] is True, f"skills 失败不应阻止重启：{result}"
-        assert "install_skills failed" in result["warnings"]
-        assert "update_skills failed" in result["warnings"]
+        # 警告文案带上了异常详情（便于定位），所以按前缀匹配而非精确相等
+        assert any(w.startswith("install_skills failed") for w in result["warnings"]), result["warnings"]
+        assert any(w.startswith("update_skills failed") for w in result["warnings"]), result["warnings"]
         # 非致命步骤不得污染 errors
         assert result["errors"] == [], f"errors 只应装致命失败：{result['errors']}"
 
@@ -307,6 +313,20 @@ class TestUpdateStepSeverity:
 
         assert result["ok"] is False
         assert any("pip install" in e for e in result["errors"]), result["errors"]
+
+    def test_non_systemexit_skill_error_is_also_non_fatal(self):
+        """skills 抛**非 SystemExit**（如目录只读的 PermissionError）同样非致命。
+
+        历史 bug：这两步只捕 `except SystemExit`，而 install_skills 内部做文件
+        复制（shutil.copy2/copytree），只读目录、磁盘满、杀软占用都会抛
+        OSError/PermissionError。这类异常会穿透出去 —— 后果是半升级状态：
+        代码已 git pull 到新版、依赖没装、服务不重启、UI 只有一个 500。
+        """
+        result = self._run_update(skills_exc=PermissionError("skills 目录只读"))
+
+        assert result["ok"] is True, f"非 SystemExit 的 skills 失败不应致命：{result}"
+        assert result["errors"] == []
+        assert any("install_skills failed" in w for w in result["warnings"]), result["warnings"]
 
     def test_database_failure_is_fatal(self):
         """数据库检查失败必须阻止重启。"""

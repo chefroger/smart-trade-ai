@@ -30,6 +30,9 @@ import urllib.request
 # trade requires hermes-agent from NousResearch/hermes-agent at or above this version.
 # (Prior to v0.4.0, the chefroger/hermes-agent fork was used; now migrated to upstream.)
 MIN_COMPATIBLE_VERSION = "0.13.0"
+# 上限（排他），必须与 trade/bootstrap.py 的 _MAX_HERMES_VERSION 保持一致 ——
+# 有测试断言两者相等。超上限的 Hermes 启动时会被 bootstrap 拒绝。
+MAX_COMPATIBLE_VERSION = "0.22.0"
 
 # 不是真实版本号的占位值：上游 main 在缺少安装印章时会把 __version__ 报成 "0.0.0"
 _VERSION_PLACEHOLDERS = {"", "0.0.0", "0.0.0.0", "unknown", "none", "dev"}
@@ -65,14 +68,21 @@ def _parse_version(version_str: str) -> tuple[int, int, int]:
         return (0, 0, 0)
 
 
-def _judge_installed_version(installed: str | None, required: str) -> str:
-    """判定已安装的 Hermes 版本，返回 'ok' / 'too_old' / 'unknown'。
+def _judge_installed_version(
+    installed: str | None, required: str, maximum: str | None = None
+) -> str:
+    """判定已安装的 Hermes 版本，返回 'ok' / 'too_old' / 'too_new' / 'unknown'。
 
     'unknown' 覆盖三种「识别不到」的情形 —— 这几种都不能当成版本过旧，
     否则会卡死安装流程，而且给出的提示是误导的：
       1. 占位值：上游 main 无安装印章时把 __version__ 报成 "0.0.0"
       2. 带后缀的派生版本：如 "0.21.4+5045"、"v0.21.5-490-gabc1234"
       3. 无法解析的字符串：如 "git.abc1234"
+
+    'too_new'（传入 maximum 时）对应 `trade/bootstrap.py` 的**上限**：
+    超出窗口的版本启动时会被 `sys.exit(1)` 拒绝。安装器不检查上限的话，
+    用户会"安装全绿、一启动即死" —— 而 install.sh 是 `clone --branch main`
+    （不锁版本），上游一到上限就会发生。上限是**排他**的（与 bootstrap 一致）。
     """
     raw = str(installed or "").strip()
     # 先去 PEP 440 本地版本段（+5045）与 git 后缀（-490-gabc1234）再判
@@ -87,6 +97,8 @@ def _judge_installed_version(installed: str | None, required: str) -> str:
     parts = base.split(".")
     if len(parts) > 3 or not all(part.isdigit() for part in parts):
         return "unknown"
+    if maximum and _compare_versions(base, maximum) >= 0:
+        return "too_new"
     if _compare_versions(base, required) < 0:
         return "too_old"
     return "ok"
@@ -206,7 +218,11 @@ def is_hermes_from_official_source() -> bool:
         p = pathlib.Path(prefix)
         if not p.is_dir():
             continue
-        pkg = p / "hermes_agent"
+        # 真实**导入名**是 hermes_cli（发行名 hermes-agent 与导入名不同 ——
+        # 见本文件上文关于回退探测的说明）。历史 bug：这里找的是
+        # `p / "hermes_agent"`，永不命中，函数恒返回 True，装了废弃的
+        # chefroger fork 也照样放行。
+        pkg = p / "hermes_cli"
         if pkg.is_dir():
             path_str = str(pkg.resolve())
             if "NousResearch" in path_str:
@@ -386,13 +402,30 @@ def run_check() -> int:
         return 2
 
     # Case 3: installed from official source, check version compatibility
-    verdict = _judge_installed_version(installed_version, MIN_COMPATIBLE_VERSION)
+    verdict = _judge_installed_version(
+        installed_version, MIN_COMPATIBLE_VERSION, MAX_COMPATIBLE_VERSION
+    )
     if verdict == "unknown":
         print_warn(f"Cannot tell the version from the reported value: {installed_version!r}")
         print_info("  (upstream reports 0.0.0 when a checkout has no install stamp)")
-        print_info("  Skipping the minimum-version check and continuing.")
+        print_info("  Skipping the version-window check and continuing.")
         print()
         return 0
+    if verdict == "too_new":
+        # 上限超出：`trade/bootstrap.py` 会用 sys.exit(1) 拒绝启动。
+        # 安装阶段就拦下来，并给出可执行的补救（回退到已知兼容的 tag）。
+        print_fail(
+            f"hermes-agent version {installed_version} is newer than Trade supports."
+        )
+        print_warn(
+            f"Trade requires version >= {MIN_COMPATIBLE_VERSION} and < {MAX_COMPATIBLE_VERSION}."
+        )
+        print()
+        print_info("Please install a supported version:")
+        print_info("  cd ~/.hermes/hermes-agent")
+        print_info("  git checkout v2026.9.24 && uv pip install -e .")
+        print()
+        return 2
     if verdict == "too_old":
         print_fail(f"hermes-agent version {installed_version} is too old.")
         print_warn(f"Trade requires version >= {MIN_COMPATIBLE_VERSION} from NousResearch/hermes-agent.")

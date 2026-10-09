@@ -9,9 +9,20 @@ CSV 数据通过 loader 模块管理持久化缓存（~/.trade/cache/sanctions/�
   - loader.py: OFAC/UN 下载 + 文件缓存 + fallback 数据
 """
 
-from trade.osint.sanctions.loader import get_cache, load_ofac_sanctions, load_un_sanctions
+from trade.osint.sanctions.loader import (
+    get_cache,
+    get_coverage,
+    load_ofac_sanctions,
+    load_un_sanctions,
+)
 
-__all__ = ["check_sanctions", "get_cache", "load_ofac_sanctions", "load_un_sanctions"]
+__all__ = [
+    "check_sanctions",
+    "get_cache",
+    "get_coverage",
+    "load_ofac_sanctions",
+    "load_un_sanctions",
+]
 
 
 def check_sanctions(name: str, country: str | None = None) -> dict:
@@ -144,6 +155,10 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
     else:
         risk_level = "none"
 
+    # ── 数据源健康度 ──────────────────────────────────────────────────────
+    # 拿不到真名单时（下载失败 → 2 条内置样本），"没查到"绝不等于"没问题"。
+    coverage = get_coverage()
+
     # ── 行动建议 ──────────────────────────────────────────────────────────
     if is_sanctioned:
         suggestion = "命中制裁名单（精确匹配），强烈建议拒绝交易或咨询法律部门。"
@@ -151,6 +166,13 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
         suggestion = "发现疑似匹配项，建议进一步人工核查，确认是否为同一家公司。"
     elif risk_level == "low":
         suggestion = "发现弱匹配（非精确），建议记录并持续观察。"
+    elif coverage["degraded"]:
+        # 关键分支：数据源不可用时不得宣称"未发现匹配"。
+        # 用户会拿这句结论去谈生意，必须让他知道这次筛查不是结论。
+        suggestion = (
+            f"⚠️ 制裁名单数据源不可用：本次仅比对了 {coverage['total_entries']} 条内置样本，"
+            "**不构成「无制裁记录」的结论**。请通过官方渠道（OFAC/UN 官网）人工复核后再决策。"
+        )
     else:
         suggestion = "未在任何制裁名单中发现匹配项。"
 
@@ -161,4 +183,6 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
         "is_sanctioned": is_sanctioned,
         "risk_level": risk_level,
         "suggestion": suggestion,
+        # 数据源健康度：让调用方（评分/报告）能区分「查过没有」与「没查成」
+        "coverage": coverage,
     }

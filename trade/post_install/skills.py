@@ -362,8 +362,13 @@ def update_skills() -> None:
                         break
 
                 # 写入更新内容到本地 Hermes skill 目录
+                # newline="\n" 是关键：Windows 上 write_text 默认 newline=None 会把
+                # "\n" 翻译成 "\r\n"，CRLF 的 SKILL.md 会让 frontmatter 解析失配
+                # （triggers/injection_prompt 全丢）。解析器已做归一化兜底，这里
+                # 从源头保证写出去的也是 LF。
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                dest_file.write_text(remote_content, encoding="utf-8")
+                with open(dest_file, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(remote_content)
                 print(f"  ↻ {skill_name} (updated)")
                 updated += 1
 

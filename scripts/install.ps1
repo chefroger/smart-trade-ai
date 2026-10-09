@@ -145,10 +145,31 @@ $TradeDir = "$TradeHome\foreign-trade-assistant"
 if (-not (Invoke-CloneOrUpdate "foreign-trade-assistant" $TradeRepo $TradeDir)) { exit 1 }
 
 Push-Location $TradeDir
-# 装依赖 + trade 自身
+# 装依赖 + trade 自身。
+# 每个 pip 后都必须查 $LASTEXITCODE —— 原生命令非零退出不抛异常（见本文件前面的说明），
+# 不查就会在弱网/磁盘满时把失败当成成功，用户之后运行 trade 只得到
+# ModuleNotFoundError，且开机自启任务每次登录静默失败。
 & $PipCmd install -r requirements.txt
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ✗ 依赖安装失败（pip 的报错见上）。请检查网络后重新运行本脚本。" -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
 & $PipCmd install -e "." --no-deps
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ✗ Foreign Trade Assistant 安装失败（pip 的报错见上）。" -ForegroundColor Red
+    Pop-Location
+    exit 1
+}
 Pop-Location
+
+# 真实探针：确认装完确实能导入（与 Step 2 的 `import hermes_cli` 对齐）。
+# 只看 pip 退出码还不够 —— editable 安装可能"成功"但路径不对。
+& $PyCmd -c "import trade.app"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ✗ Foreign Trade Assistant 装好了但无法导入，安装不完整。" -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "  ✓ Foreign Trade Assistant 安装完成" -ForegroundColor Green
 
@@ -199,7 +220,7 @@ REM （那里没有 trade 包），agent 线程以 RelaunchExit(SystemExit) 静�
 REM 前端只会看到「Agent 未返回有效响应」。bootstrap.py 里也设了一处，这里是双保险。
 set HERMES_DISABLE_LAZY_INSTALLS=1
 "$PyCmd" "$TradeDir\server.py" %*
-"@ | Out-File -FilePath "$LocalBin\trade.cmd" -Encoding ASCII
+"@ | Out-File -FilePath "$LocalBin\trade.cmd" -Encoding OEM
 
 # 检测 PATH 中是否已包含 $LocalBin
 $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")

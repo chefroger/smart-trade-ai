@@ -71,8 +71,6 @@ def get_today_cron(_cid: int = Depends(require_company)):
     for task in tasks:
         task_name = task["name"]
         task_time = task["time"].split("-")[0] if "-" in task["time"] else task["time"]
-        # task_time 为空字符串时按"未到点"处理，避免 "" <= "14:30" 永远 True 导致空任务被永远标记 missed
-        is_past = bool(task_time) and task_time <= current_time
         output = _find_cron_output(task_name, today)
 
         if output:
@@ -80,7 +78,21 @@ def get_today_cron(_cid: int = Depends(require_company)):
                 "name": task_name, "time": task["time"],
                 "output": output, "has_output": True,
             })
-        elif is_past:
+            continue
+
+        # 第三态：调度解析不出来。`_cron_to_time` 只处理 "M H * * *"，
+        # `*/5 * * * *`、`0 9 1 * *` 这类返回空串。此前用 bool(task_time) 把它
+        # 归进"未到点"，于是界面显示「待执行」—— 真相是"不知道几点跑"，
+        # 一个从没执行过的任务会被用户一直当成还没到时间。
+        # （bool 守卫本身是为了修 "空串 <= '14:30' 恒 True" 那个 bug，不能退回去。）
+        if not task_time:
+            pending.append({
+                "name": task_name, "time": task["time"],
+                "scheduled": None, "missed": None, "unknown_schedule": True,
+            })
+            continue
+
+        if task_time <= current_time:
             pending.append({
                 "name": task_name, "time": task["time"],
                 "scheduled": task_time, "missed": True,

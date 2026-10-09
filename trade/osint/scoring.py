@@ -7,6 +7,25 @@ Trade AI Assistant — OSINT 模块：风险评分与建议生成。
 from __future__ import annotations
 
 
+def _deductions() -> dict[str, int]:
+    """红旗 → 扣分权重表。
+
+    提为函数是为了可测（测试要断言「不同红旗的扣分轻重关系合理」）。
+    """
+    return {
+        "personal_email_domain": 30,     # 个人邮箱 → 严重减分
+        "no_mx_record": 15,              # 域名无 MX 记录：假域名信号，但证据强度
+                                         # 低于"个人邮箱"，故扣分更轻
+        "email_domain_mismatch": 15,     # 邮箱域名与网站域名不一致
+        "domain_age_new": 20,            # 新注册域名 → 中等减分
+        "free_platform": 15,             # 免费建站 → 轻微减分
+        "no_linkedin": 10,               # 无 LinkedIn → 轻微减分
+        "linkedin_domain_mismatch": 15,  # LinkedIn 域名不匹配 → 中等减分
+        "sanctioned": 50,                # 命中制裁名单 → 直接死刑
+        "domain_age_old": 0,             # 老域名 → 不扣分（加分项在建议中体现）
+    }
+
+
 def compute_risk_score(flags: list[str]) -> tuple[int, str]:
     """根据红旗列表计算综合风险评分（0-100）和评级。
 
@@ -20,16 +39,7 @@ def compute_risk_score(flags: list[str]) -> tuple[int, str]:
     """
     score = 100
 
-    # 扣分规则表（按严重程度）
-    deductions = {
-        "personal_email_domain": 30,    # 个人邮箱 → 严重减分
-        "domain_age_new": 20,           # 新注册域名 → 中等减分
-        "free_platform": 15,            # 免费建站 → 轻微减分
-        "no_linkedin": 10,              # 无 LinkedIn → 轻微减分
-        "linkedin_domain_mismatch": 15, # LinkedIn 域名不匹配 → 中等减分
-        "sanctioned": 50,               # 命中制裁名单 → 直接死刑
-        "domain_age_old": 0,            # 老域名 → 不扣分（加分项在建议中体现）
-    }
+    deductions = _deductions()
 
     for flag in flags:
         score -= deductions.get(flag, 10)  # 未知红旗默认扣 10 分
@@ -63,6 +73,17 @@ def generate_recommendations(report: dict) -> list[str]:
     recs: list[str] = []
     layers = report.get("layers", {})
 
+    # ── 邮箱注册检测层（holehe）──
+    # 这一层在全新安装的机器上从不执行（holehe 未被任何安装路径声明），
+    # 代码内是懒加载 + 错误字典。报告若一字不提，用户会以为 120+ 平台的
+    # 注册检测已经跑过 —— 属于"静默少一层"，必须披露。
+    er = layers.get("email_registration")
+    if er and er.get("error"):
+        recs.append(
+            f"⚠️ 邮箱注册检测未执行（{er['error']}）——"
+            "本项缺失 120+ 平台的注册记录核查，如需该能力请联系支持安装 holehe"
+        )
+
     # ── 邮箱验证建议 ──
     ev = layers.get("email_verification")
     if ev:
@@ -84,6 +105,12 @@ def generate_recommendations(report: dict) -> list[str]:
     if di:
         age_cat = di.get("age_category")
         days = di.get("days_old")
+        if di.get("error"):
+            # 查询失败的**必须说出来**：什么都不写会让读者以为域名已核验通过
+            # （WHOIS 的 43 端口常被 ISP/防火墙拦截，国内尤其常见）。
+            recs.append(
+                f"⚠️ WHOIS 域名信息未能核验（{di.get('error')}），域名注册时间/持有者未知"
+            )
         if age_cat == "new":
             # 域名为新注册（不足 1 年），提示风险
             recs.append(
@@ -105,6 +132,12 @@ def generate_recommendations(report: dict) -> list[str]:
             recs.append(
                 f"⚠️ 网站使用免费建站平台（{platforms}），可能代表公司规模较小"
             )
+        elif ts.get("error"):
+            # 抓取失败时**不能**当成"技术栈没问题"：什么都不说会让读者以为
+            # 这一层核验通过了。如实披露未验证。
+            recs.append(
+                f"⚠️ 网站无法访问或抓取失败（{ts.get('error')}），技术栈未能验证"
+            )
         elif ts.get("is_enterprise"):
             # 使用企业级技术栈，可信度加分
             recs.append("✅ 网站使用企业级技术栈，可信度 +1")
@@ -120,8 +153,19 @@ def generate_recommendations(report: dict) -> list[str]:
             # 疑似匹配但不确定，需要人工核查
             recs.append("⚠️ 发现疑似制裁匹配，建议进一步人工核查")
         elif not sa.get("hits"):
-            # 未发现任何匹配项，验证通过
-            recs.append("✅ 未在任何制裁名单中发现匹配项")
+            # 只有数据源健康时才敢下「未发现匹配」的结论。下载失败时会退化成
+            # 几条内置样本，此时"没查到"完全是另一回事 —— 报告必须如实说明，
+            # 否则用户会拿一条绿色的"已核查"去谈生意。
+            # coverage 缺失（旧版报告/外部构造）按降级处理：保守优先。
+            coverage = sa.get("coverage") or {}
+            if coverage.get("degraded", True):
+                total = coverage.get("total_entries", 0)
+                recs.append(
+                    f"⚠️ 制裁名单数据源不可用（本次仅比对 {total} 条内置样本），"
+                    "不构成「无制裁记录」的结论，请通过 OFAC/UN 官网人工复核"
+                )
+            else:
+                recs.append("✅ 未在任何制裁名单中发现匹配项")
 
     # ── LinkedIn 建议（需 Agent 通过 browser_navigate 实际执行后补充）───
     li = layers.get("linkedin")

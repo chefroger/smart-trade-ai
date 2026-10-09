@@ -34,6 +34,11 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
 
+# SSE 流的 agent 兜底超时（秒）。网站诊断等长任务也应在该时限内完成；
+# 超时后必须下发 error 事件并中止 agent，不能让流无声结束。
+# 提为模块常量是为了可测 —— 超时路径以前没有测试覆盖（它的 error 事件曾被丢弃）。
+_STREAM_DEADLINE_SECONDS = 1800.0
+
 # ── 简单内存限流（per-process，按公司隔离）──────────────────────────────────
 # 每个公司 60 秒窗口内最多 20 次 chat 请求（含 sync + SSE）
 _MAX_CHAT_PER_MINUTE = 20
@@ -208,6 +213,16 @@ async def trade_chat(
                 if attempt < _MAX_AGENT_RETRIES:
                     time.sleep(2 ** attempt)
                     continue
+            except BaseException as e:
+                # 与 _run_agent（stream）对称：Hermes 可能以 BaseException 结束，例如
+                # hermes_bootstrap 的 RelaunchExit 继承 SystemExit。它穿过
+                # asyncio.wait_for 后，uvicorn 的 ExceptionMiddleware 同样只捕
+                # Exception → 会一路穿透到 ASGI 栈，最坏情况整个服务进程退出。
+                # 同步端点没有"稍后重试"的余地，如实上报即可。
+                _log.error(
+                    "Agent terminated with %s: %s", type(e).__name__, e, exc_info=True
+                )
+                return f"⚠️ Agent 异常终止（{type(e).__name__}）：{e}", False
         fallback = f"⚠️ Agent 调用失败: {last_error}" if last_error else "⚠️ Agent 调用失败，请稍后重试。"
         return fallback, False
 
@@ -472,12 +487,17 @@ async def trade_chat_stream(
         agent_task = loop.run_in_executor(None, _run_agent)
         # 30 分钟 Agent 兜底超时 — 网站诊断等长任务也应在 30min 内完成
         # 超时后发 error 事件并取消 agent，防止永久挂起
-        deadline = time.time() + 1800
+        deadline = time.time() + _STREAM_DEADLINE_SECONDS
         try:
             while True:
                 remaining = deadline - time.time()
                 if remaining <= 0:
-                    _emit_threadsafe("error", {"message": "⏰ Agent 执行超过 30 分钟，已自动中止。请简化问题或联系支持。"})
+                    # 直接 yield，不能走 _emit_threadsafe：那条路径要等下一轮事件循环
+                    # 才往队列里 put，而这里紧接着就 break，队列里的 error 永远不会被
+                    # 取到（历史 bug —— 超时后用户只看到「未返回有效回复」，既不知道
+                    # 是超时、也不知道任务已被中止）。
+                    _log.error("Agent stream exceeded %.0fs deadline; aborting", _STREAM_DEADLINE_SECONDS)
+                    yield _sse("error", {"message": "⏰ Agent 执行超过 30 分钟，已自动中止。请简化问题或联系支持。"})
                     break
                 try:
                     # 取 15s 心跳与剩余 deadline 的较小值，确保 deadline 到期时能及时触发

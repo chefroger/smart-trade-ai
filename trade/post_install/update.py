@@ -378,8 +378,14 @@ def update_trade() -> dict:
     try:
         install_skills()
         _emit("  ✓ Skills installed")
-    except SystemExit:
-        msg = "install_skills failed"
+    # 必须同时捕 SystemExit 与 Exception（两者**没有**继承关系）：
+    #   - SystemExit：install_skills 内部会 sys.exit()
+    #   - Exception：文件复制（shutil.copy2/copytree）遇到目录只读、磁盘满、
+    #     杀软占用时会抛 OSError/PermissionError
+    # 只捕前者会让后者穿透，而这一步被明确定义为「非致命」。穿透的后果是
+    # 半升级状态：代码已 git pull 到新版、依赖没装、服务不重启、UI 只有一个 500。
+    except (SystemExit, Exception) as e:
+        msg = f"install_skills failed: {e}"
         _emit(f"  ⚠ {msg}（非致命，继续升级）")
         warnings.append(msg)
 
@@ -388,8 +394,8 @@ def update_trade() -> dict:
     try:
         update_skills()
         _emit("  ✓ Skills updated")
-    except SystemExit:
-        msg = "update_skills failed"
+    except (SystemExit, Exception) as e:  # 理由同上：这一步同样是非致命
+        msg = f"update_skills failed: {e}"
         _emit(f"  ⚠ {msg}（非致命，继续升级）")
         warnings.append(msg)
 

@@ -6,6 +6,11 @@
 # Python uses LF universally
 *.py text eol=lf
 
+# Markdown must stay LF: SKILL.md 的 frontmatter 以 "---\n" 定位分隔线。
+# Git for Windows 默认 core.autocrlf=true，若无此规则，检出即 CRLF → frontmatter
+# 解析失配（triggers/injection_prompt 全丢，技能退化为零指令注入）。
+*.md text eol=lf
+
 # Binary files
 *.ico binary
 *.png binary

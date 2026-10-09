@@ -54,17 +54,19 @@ async def upload_to_work_dir(
             pass
 
     if work_dir is None:
-        # 没有保存过路径，在桌面上查找公司名匹配的已存在目录
+        # 没有保存过路径，在桌面上查找公司名匹配的已存在目录。
+        # 必须用 workdir._get_desktop_path()（Windows 走 SHGetFolderPathW 拿真实桌面）——
+        # 自己猜 ~/Desktop 在 OneDrive 重定向桌面（C:\Users\x\OneDrive\Desktop）时
+        # 找不到真实目录，于是新建一个「公司名-2」，而文档库记录仍指向原目录
+        # → AI 读不到刚上传的文件。
         import re as _re
+
+        from trade.company.workdir import _get_desktop_path
+
         co_name_clean = _re.sub(r'[<>:"/\\|?*]', '-', co["name"]).strip()
-        candidates = [
-            Path.home() / "Desktop" / co_name_clean,
-            Path.home() / "桌面" / co_name_clean,
-        ]
-        for c in candidates:
-            if c.is_dir():
-                work_dir = c
-                break
+        candidate = _get_desktop_path() / co_name_clean
+        if candidate.is_dir():
+            work_dir = candidate
         if work_dir is None:
             # 实在找不到，创建新目录
             from trade.company import _setup_work_directory

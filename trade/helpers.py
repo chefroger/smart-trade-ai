@@ -653,23 +653,20 @@ def build_query(
             )
 
     # 6. Skill system hint — OSINT 类 skill 的注入指令作为 system 层独立传入
+    #
+    # OSINT **不做**「连续同 skill 走简短提示」的省 token 优化：那套机制依赖模型能
+    # 从对话历史里读到上一次的规则，而 OSINT 恰恰不注入历史（见下方第 7 步，理由是
+    # 每次背调目标独立）。走了简短提示就等于整个三阶段协议丢失 —— 第二次背调起
+    # agent 自由发挥：不查 WHOIS、不查制裁名单、不给来源 URL。
     skill_system_hint: str | None = None
     if matched_name in _OSINT_SKILL_NAMES and matched_skill:
-        if same_skill_repeat:
-            # 同一 skill 连续使用 → 简短提示，不重复发送完整规则
+        augment = _skill_router.load_injection_prompt(matched_name)
+        if augment is None:
+            augment = matched_skill.get("augment_prompt", "")
+        if augment:
             skill_system_hint = (
-                f"## 当前技能：{matched_name}\n"
-                f"继续使用 {matched_name} 技能，规则同上一次。"
+                f"## 当前技能：{matched_name}\n\n{augment}"
             )
-        else:
-            # 首轮或切换 skill → 完整注入
-            augment = _skill_router.load_injection_prompt(matched_name)
-            if augment is None:
-                augment = matched_skill.get("augment_prompt", "")
-            if augment:
-                skill_system_hint = (
-                    f"## 当前技能：{matched_name}\n\n{augment}"
-                )
         # OSINT skill 的 system hint 已单独抽出，augmented_query 中无需
         # 再拼 [SKILL AUGMENTATION] 块。用原始 query 替代。
         augmented_query = query

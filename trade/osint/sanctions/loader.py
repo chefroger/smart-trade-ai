@@ -27,8 +27,64 @@ _sanctions_cache: dict[str, list[dict]] = {
     "UN": [],
 }
 
+# 每份名单的**来源与健康度** —— 与 _sanctions_cache 分开存放（后者是「名字 → 条目列表」
+# 的纯数据映射，check_sanctions 会直接遍历它的值）。
+#
+# 为什么必须记录：加载失败时会落到 2 条硬编码 fallback，而返回结构里原先没有任何
+# 字段能区分「比对过上万条 SDN 记录」与「只比对了几条样本」。报告于是输出绿色的
+# 「✅ 未在任何制裁名单中发现匹配项」—— 被制裁的公司也会被判「干净」。
+_sanctions_meta: dict[str, dict] = {}
+
+# OFAC SDN 实际有上万条实体；低于这个数说明下载/解析出了问题，
+# 不能当成「加载成功」。取 100 是保守下限（阈值过低会放过空页面/错误页）。
+_MIN_OFAC_ENTRIES = 100
+
+# OFAC 官方下载地址。允许有多个候选：历史上换过地址（旧地址实测已 404），
+# 逐个尝试并把命中的那个记进 meta，便于事后判断数据源是否又变了。
+_OFAC_URL_CANDIDATES = (
+    "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.CSV",
+    "https://www.treasury.gov/ofac/downloads/sdn.csv",
+)
+
 # 文件缓存 TTL：24 小时后视为过期，触发重新下载
 _CACHE_TTL_SECONDS = 86400
+
+
+def _mark_loaded(list_name: str, entries: list[dict], source: str, note: str = "") -> None:
+    """记录一份名单的加载结果（条目数 + 来源 + 是否降级）。
+
+    Args:
+        list_name: "OFAC" / "UN"
+        entries: 解析出的条目
+        source: "network" | "cache" | "fallback"
+        note: 附加说明（如命中的 URL、失败原因），随 coverage 一起返回
+    """
+    _sanctions_cache[list_name] = entries
+    _sanctions_meta[list_name] = {
+        "entries": len(entries),
+        "source": source,
+        "degraded": source == "fallback",
+        "note": note,
+    }
+
+
+def get_coverage() -> dict:
+    """返回制裁数据源的健康度摘要（供 check_sanctions 一并返回给上层）。
+
+    Returns:
+        {
+            "degraded": bool,        # 任一份名单走了 fallback 即为 True
+            "total_entries": int,    # 实际参与比对的条目总数
+            "lists": {名单名: {...}}, # 每份名单的 entries/source/degraded/note
+        }
+    """
+    lists = dict(_sanctions_meta)
+    degraded = any(m.get("degraded") for m in lists.values()) or not lists
+    return {
+        "degraded": degraded,
+        "total_entries": sum(m.get("entries", 0) for m in lists.values()),
+        "lists": lists,
+    }
 
 
 def _resolve_cache_dir() -> Path:
@@ -160,19 +216,22 @@ def load_ofac_sanctions() -> None:
     # 1. 优先读文件缓存（网络未变化时直接命中，零网络开销）
     cached = _load_from_file_cache("OFAC")
     if cached is not None:
-        _sanctions_cache["OFAC"] = cached
+        _mark_loaded("OFAC", cached, "cache")
         return
 
-    # 2. 网络下载最新 OFAC SDN CSV
-    url = (
-        "https://ofac.treasury.gov/specially-designated-nationals-and-blocked-"
-        "persons-list-sdn-human-readable-lists/sdn.csv"
-    )
+    # 2. 网络下载最新 OFAC SDN CSV —— 逐个尝试候选地址（官方换过地址）
     entries: list[dict] = []
+    used_url = ""
+    errors: list[str] = []
 
-    try:
-        response = http_get(url, timeout=30)
-        if response:
+    for url in _OFAC_URL_CANDIDATES:
+        try:
+            response = http_get(url, timeout=30)
+            if not response:
+                errors.append(f"{url}: 无响应")
+                continue
+
+            parsed: list[dict] = []
             # 用 csv.DictReader 解析 CSV，自动处理标题行
             reader = csv.DictReader(io.StringIO(response))
             for row in reader:
@@ -181,7 +240,7 @@ def load_ofac_sanctions() -> None:
                 if not name:
                     name = row.get("Last Name", "").strip()
                 if name:
-                    entries.append(
+                    parsed.append(
                         {
                             "name": name,
                             "label": "OFAC SDN",
@@ -191,24 +250,39 @@ def load_ofac_sanctions() -> None:
                         }
                     )
 
-        if entries:
-            logger.info("OFAC 制裁名单下载完成: %d 条记录", len(entries))
-            _save_to_file_cache("OFAC", entries)
-        else:
-            raise ValueError("No entries parsed from OFAC CSV")
-    except Exception as e:
-        logger.warning("OFAC 下载失败: %s", e)
+            # 条目数下限校验：地址失效时往往返回错误页/空页，解析出 0~几条，
+            # 若只看"有没有解析出东西"就会把错误页当成加载成功。
+            if len(parsed) < _MIN_OFAC_ENTRIES:
+                errors.append(f"{url}: 仅解析出 {len(parsed)} 条（低于下限 {_MIN_OFAC_ENTRIES}）")
+                continue
 
-        # 3. Fallback：读过期缓存（网络不可用但有旧数据）
-        stale = _load_from_file_cache_expired("OFAC")
-        if stale is not None:
-            _sanctions_cache["OFAC"] = stale
-            return
+            entries = parsed
+            used_url = url
+            break
+        except Exception as e:  # noqa: PERF203 — 逐个候选尝试，逐个记录原因
+            errors.append(f"{url}: {e}")
 
-        # 4. 连过期缓存也没有：使用内存内置的 fallback 示例数据
-        entries = _get_fallback_ofac_entries()
+    if entries:
+        logger.info("OFAC 制裁名单下载完成: %d 条记录（来源 %s）", len(entries), used_url)
+        _save_to_file_cache("OFAC", entries)
+        _mark_loaded("OFAC", entries, "network", note=used_url)
+        return
 
-    _sanctions_cache["OFAC"] = entries
+    # 3. Fallback：读过期缓存（网络不可用但有旧数据）
+    logger.warning("OFAC 下载失败（候选地址均未取到足量数据）: %s", "; ".join(errors))
+    stale = _load_from_file_cache_expired("OFAC")
+    if stale is not None:
+        _mark_loaded("OFAC", stale, "cache", note="过期缓存：" + "; ".join(errors))
+        return
+
+    # 4. 连过期缓存也没有：使用内存内置的 fallback 示例数据
+    #    注意这里必须标 degraded —— 上层据此拒绝给出「未发现匹配」的结论。
+    _mark_loaded(
+        "OFAC",
+        _get_fallback_ofac_entries(),
+        "fallback",
+        note="; ".join(errors),
+    )
 
 
 # ── UN 制裁名单加载 ──────────────────────────────────────────────────────
@@ -217,7 +291,8 @@ def load_un_sanctions() -> None:
     """加载联合国安理会制裁名单。
 
     UN 制裁名单目前不提供机器可读 CSV 端点（仅 HTML 表格页面），
-    因此目前使用本地维护的 fallback 数据。
+    因此目前使用本地维护的 fallback 数据 —— **这份名单永远是降级状态**，
+    必须如实标记，上层不得据此给出「未发现匹配」的结论。
 
     未来改进方向：
       1. 定期抓取 https://www.un.org/securitycouncil/content/un-sc-consolidated-list
@@ -227,7 +302,12 @@ def load_un_sanctions() -> None:
     注意：OFAC SDN 已覆盖大部分国际贸易制裁实体，
     UN / EU 制裁名单与 OFAC 高度重叠。
     """
-    _sanctions_cache["UN"] = _get_fallback_un_entries()
+    _mark_loaded(
+        "UN",
+        _get_fallback_un_entries(),
+        "fallback",
+        note="UN 无机器可读端点，仅比对内置样本",
+    )
 
 
 # ── Fallback 数据（所有途径失败时的内存兜底） ────────────────────────────

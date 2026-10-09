@@ -213,3 +213,68 @@ class TestLauncherDisablesHermesLazyInstalls:
             assert re.search(rf'{self.FLAG}=(?:"1"|1)(\s|$)', body), (
                 f"{name} 里 {self.FLAG} 的值不是 1"
             )
+
+
+class TestPowerShellChecksPipExitCodes:
+    """install.ps1 的每个 pip 调用后都必须检查 $LASTEXITCODE。
+
+    历史 bug：Step 2（装 Hermes）显式查了退出码，Step 3（装 Trade 依赖）没查 ——
+    而脚本自己在 105 行注释过「PowerShell 里原生命令非零退出不会抛异常」，
+    同一个坑只堵了一半。后果：弱网下 requirements.txt 装失败，脚本照样打印
+    「✓ Foreign Trade Assistant 安装完成」→「══ 安装完成 ══」，用户运行 trade
+    只得到一句 ModuleNotFoundError，且开机自启任务每次登录都静默失败。
+
+    macOS 走 install.sh（`set -e`，pip 失败即中止）所以开发机看不出来；
+    CI 的 windows-latest 不跑安装脚本。
+    """
+
+    def test_each_pip_install_is_followed_by_exit_code_check(self):
+        body = _code_lines(PS1)
+        lines = body.splitlines()
+        checked = 0
+
+        for idx, line in enumerate(lines):
+            if "& $PipCmd install" not in line:
+                continue
+            # 其后 3 行内必须出现 $LASTEXITCODE 判定
+            window = "\n".join(lines[idx + 1: idx + 4])
+            assert "$LASTEXITCODE" in window, (
+                f"第 {idx + 1} 行的 `{line.strip()}` 之后没有检查 $LASTEXITCODE —— "
+                "pip 失败会被当成安装成功"
+            )
+            checked += 1
+
+        # 脚本里共 3 处 pip 调用：Hermes 装 1 处 + Trade 依赖/自身 2 处
+        assert checked >= 3, f"应覆盖全部 3 处 pip 调用（Hermes 1 + Trade 2），实际 {checked}"
+
+    def test_failure_exits_nonzero(self):
+        """失败分支必须真的中止脚本，而不是只打印一行。"""
+        body = _code_lines(PS1)
+
+        assert "exit 1" in body, "安装失败没有 exit 1"
+
+
+class TestPowerShellLauncherEncoding:
+    """trade.cmd 用 ASCII 落盘会把中文用户名路径写成 '?'。
+
+    `-Encoding ASCII` 把每个非 ASCII 字符替换为 `?` 且**不报错**。中文 Windows
+    用户名（C:\\Users\\张伟\\...）是本产品的主力用户群，写坏后 `trade` 命令报
+    「系统找不到指定的路径」，而自启任务用的是 API 传参（不受影响）——
+    于是表现为「后台能跑、命令坏了」，更难排查。
+    """
+
+    def test_launcher_not_written_as_ascii(self):
+        body = _code_lines(PS1)
+
+        assert "-Encoding ASCII" not in body, (
+            "trade.cmd 仍用 ASCII 编码 —— 中文用户名路径会被写成 '?'"
+        )
+
+    def test_launcher_uses_unicode_capable_encoding(self):
+        import re
+
+        body = _code_lines(PS1)
+
+        assert re.search(r"-Encoding\s+(OEM|Default|UTF8|utf8)", body), (
+            "应改用能承载非 ASCII 的编码（OEM/Default/UTF8）"
+        )

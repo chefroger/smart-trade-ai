@@ -60,8 +60,9 @@ def verify_corporate_email(email: str, website: str | None = None) -> dict:
     # MX 记录查询（通过 socket DNS-over-UDP）
     mx_found = False
     mx_servers: list[str] = []
+    mx_error: str | None = None
     if is_corporate:
-        mx_servers, mx_found = _query_mx_records(email_domain)
+        mx_servers, mx_found, mx_error = _query_mx_records(email_domain)
 
     # 域名一致性验证（如果提供了 website）
     domain_match: bool | None = None
@@ -77,8 +78,9 @@ def verify_corporate_email(email: str, website: str | None = None) -> dict:
     if is_personal:
         # 个人邮箱域名，红旗标记
         risk_flags.append("使用个人邮箱域名")
-    if not mx_found and is_corporate:
-        # 企业域名但无 MX 记录，可能为假域名
+    if not mx_found and is_corporate and not mx_error:
+        # 企业域名且**确实查过**、没有 MX 记录 → 可能是假域名。
+        # mx_error 非空时说明查询本身失败了（DNS 抖动/被墙），此时不能下这个判断。
         risk_flags.append("域名未检测到 MX 记录（可能是假域名）")
     if domain_match is False:
         # 邮箱域名与网站域名不一致，红旗标记
@@ -91,6 +93,9 @@ def verify_corporate_email(email: str, website: str | None = None) -> dict:
     elif domain_match is False:
         # 域名不匹配场景：建议交叉验证
         suggestion = "邮箱域名与网站域名不匹配，建议交叉验证对方公司身份。"
+    elif mx_error:
+        # 查询失败场景：既不能夸也不能贬，如实说明未验证
+        suggestion = f"MX 记录未能验证（{mx_error}），建议稍后重试或换网络环境再查。"
     elif not mx_found:
         # 无 MX 记录场景：建议谨慎
         suggestion = "域名未找到 MX 邮件服务器，建议谨慎跟进，要求更多公司证明文件。"
@@ -107,6 +112,8 @@ def verify_corporate_email(email: str, website: str | None = None) -> dict:
         "domain_match": domain_match,
         "mx_found": mx_found,
         "mx_servers": mx_servers,
+        # 查询失败的原因（None = 查询成功）。上层据此区分"没有记录"与"没查成"。
+        "mx_error": mx_error,
         "risk_flags": risk_flags,
         "suggestion": suggestion,
     }
@@ -128,20 +135,36 @@ def _extract_domain(url_or_domain: str) -> str | None:
 # DNS MX 查询（dnspython，替代手动 RFC 1035 socket 实现）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _query_mx_records(domain: str) -> tuple[list[str], bool]:
-    """通过 dnspython 查询 MX 记录，自动处理 TCP fallback / EDNS / 截断重试。
+def _query_mx_records(domain: str) -> tuple[list[str], bool, str | None]:
+    """查询 MX 记录。返回 ``(mx_servers, mx_found, mx_error)``。
 
-    如果 dnspython 不可用则返回空结果。
+    **mx_error 非空表示"查询本身失败"**（超时/无可用 DNS/dnspython 缺失），
+    与"域名确实没有 MX 记录"（返回 ``([], False, None)``）必须区分开 ——
+    否则一次 DNS 抖动就会被当成"假域名"信号，客户被误判。
+
+    把 impl 单独拆出来是为了给测试一个稳定的接缝（monkeypatch 它即可覆盖
+    两条分支，不必依赖真实 DNS）。
     """
     try:
-        import dns.resolver
-        answers = dns.resolver.resolve(domain, "MX", lifetime=5)
-        mx_servers = [str(r.exchange).rstrip(".") for r in answers]
-        return mx_servers, len(mx_servers) > 0
-    except ImportError:
-        logger.debug("dnspython not installed, skipping MX query for %s", domain)
-        return [], False
+        return _query_mx_records_impl(domain)
     except Exception as e:
         logger.debug("MX query failed for %s: %s", domain, e)
-        return [], False
+        return [], False, f"MX 查询失败：{e}"
+
+
+def _query_mx_records_impl(domain: str) -> tuple[list[str], bool, str | None]:
+    """真实查询实现。抛出的异常由 ``_query_mx_records`` 统一转成 mx_error。"""
+    import dns.resolver  # ImportError 也由上层转成 mx_error（dnspython 缺失）
+
+    try:
+        answers = dns.resolver.resolve(domain, "MX", lifetime=5)
+    except dns.resolver.NXDOMAIN:
+        # 域名根本不存在 —— 这是真实的"查不到"，照常出红旗
+        return [], False, None
+    except dns.resolver.NoAnswer:
+        # 域名存在但没有 MX 记录 —— 真实的假域名信号
+        return [], False, None
+
+    mx_servers = [str(r.exchange).rstrip(".") for r in answers]
+    return mx_servers, len(mx_servers) > 0, None
 

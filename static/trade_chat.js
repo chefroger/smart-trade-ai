@@ -1288,6 +1288,53 @@ function _closeOrderModal() {
 }
 // #endregion modal-utils
 
+// #region cron-task-line
+/**
+ * 渲染一条待处理的 cron 任务行。
+ *
+ * 三种状态必须区分开（后端用 unknown_schedule 表达第三态）：
+ *   - 已完成但无输出 / 已过时（missed=true）→ ⚠ 红色「已过时」
+ *   - 确实还没到点（missed=false）        → ○「HH:MM」
+ *   - **调度解析不出来**（unknown_schedule）→ ? 「调度未知」
+ * 第三态此前被当成"还没到点"，用户会一直以为任务只是没到时间 ——
+ * 实际它可能从未执行过（步进式 cron 表达式解析不出具体时刻）。
+ */
+function _cronTaskLine(t) {
+    const unknown = !!(t && t.unknown_schedule);
+    const missed = !!(t && t.missed);
+    const color = missed ? 'var(--accent-red)' : 'var(--text-muted)';
+    const mark = unknown ? '?' : (missed ? '⚠' : '○');
+    // scheduled 为 null（未知调度）时不能直接渲染，否则界面上出现 "null"
+    const when = unknown ? '调度未知' : (t.scheduled || '');
+    let suffix = '';
+    if (missed) suffix = '<span style="color:var(--accent-red);font-size:11px;">（已过时）</span>';
+    else if (unknown) suffix = '<span style="color:var(--text-muted);font-size:11px;">（无法解析调度时间）</span>';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;">`
+        + `<span style="color:${color};">${mark}</span>`
+        + `<span style="font-weight:500;color:${missed ? 'var(--accent-red)' : ''};">${esc(t.name)}</span>`
+        + `<span style="color:var(--text-muted);font-size:11px;">${esc(when)}</span>`
+        + suffix + `</div>`;
+}
+// #endregion cron-task-line
+
+// #region sse-outcome
+/**
+ * 流结束后的分类与兜底文案。判据是「有没有收到 done」：
+ *   - done 是服务端在 finally 里必发的事件（trade/api/chat.py），收到它说明
+ *     服务端走完了整个流程 —— 此时还没有内容，就是服务端一侧没能给出来。
+ *   - 没收到 done 说明连接中途断了 —— 属于网络/客户端侧。
+ * 历史 bug：两者（外加 agent 线程静默死亡）都显示同一句「Agent 未返回有效回复」，
+ * 用户既不知道原因也不知道该做什么。
+ */
+function _sseStreamOutcome(sawResponse, sawDone) {
+    if (sawResponse) return { kind: 'response' };
+    if (sawDone) {
+        return { kind: 'silent', message: '⚠️ 服务端未能给出回复（请求已结束但内容为空）。请重试一次；若反复出现，请把这条消息发给技术支持。' };
+    }
+    return { kind: 'interrupted', message: '⚠️ 连接中断，未收到回复。请检查网络后重试。' };
+}
+// #endregion sse-outcome
+
 // #region stream-guard —— 这段被 tests_js/stream-guard.test.js 按标记整体抽取测试，勿删标记
 // 聊天流的归属记账：记录「当前这条流属于哪个公司」。
 // 存在的理由：sendMsg 里的 AbortController 是局部变量，切换公司时无人能中止它，
@@ -1643,7 +1690,7 @@ async function loadCronStatus(isPoll = false) {
         if (pending.length) {
             panelHtml += `<div style="font-size:12px;color:var(--text-secondary);margin:6px 0;">待处理 (${pending.length})</div>`;
             for (const t of pending) {
-                panelHtml += `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;"><span style="color:${t.missed ? 'var(--accent-red)' : 'var(--text-muted)'};">${t.missed ? '⚠' : '○'}</span><span style="font-weight:500;color:${t.missed ? 'var(--accent-red)' : ''};">${esc(t.name)}</span><span style="color:var(--text-muted);font-size:11px;">${t.scheduled}</span>${t.missed ? '<span style="color:var(--accent-red);font-size:11px;">（已过时）</span>' : ''}</div>`;
+                panelHtml += _cronTaskLine(t);
             }
         }
         if (panel) {
@@ -2149,6 +2196,7 @@ async function sendMsg() {
     let progressDiv = null;
     let responseText = '';
     let responseConvId = null;
+    let sawDone = false;  // 服务端是否发过 done（区分「服务端没内容」与「连接断了」）
     _currentConvId = null;
 
     function ensureProgress() {
@@ -2239,6 +2287,7 @@ async function sendMsg() {
                         break;
                     }
                     case 'response': responseText = data.text||''; responseConvId = data.conversation_id || null; _currentConvId = data.conversation_id || null; break;
+                    case 'done': sawDone = true; break;  // 服务端正常收尾的标记（用于区分「服务端没内容」与「连接断了」）
                     case 'error': progDiv.innerHTML=`<div class="msg-avatar" style="background:var(--accent-red);color:#fff;">⚠</div><div class="msg-body" style="color:var(--accent-red);">${esc(data.message)}</div>`; sendBtn.disabled = false; return;
                     }
                     eventType='';dataStr='';
@@ -2246,8 +2295,9 @@ async function sendMsg() {
             }
         }
         progDiv.remove();
-        if (responseText) deliver('assistant', responseText, true, responseConvId);
-        else deliver('assistant', '⚠️ Agent 未返回有效回复。', true, null);
+        const outcome = _sseStreamOutcome(!!responseText, sawDone);
+        if (outcome.kind === 'response') deliver('assistant', responseText, true, responseConvId);
+        else deliver('assistant', outcome.message, true, null);
     } catch(e) {
         progDiv.remove();
         _currentConvId = null;
