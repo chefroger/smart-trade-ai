@@ -241,6 +241,19 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "  ⚠ 开机自启动/桌面快捷方式设置失败（不影响 Trade 使用，可稍后重试）" -ForegroundColor Yellow
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 安装后自检（快检：零 token，不发真实请求）
+#
+# 端到端验活（真发一次对话 / 一张图 / 一次搜索）在**首次启动时**跑 ——
+# 那时服务与配置都已就位，且结果会落盘、在界面提示。这里只做能立刻发现
+# "装坏了"的快检，避免安装脚本因为网络波动误报失败而挡住用户。
+# ─────────────────────────────────────────────────────────────────────────────
+& $PyCmd -c "import sys; from trade.doctor import run_doctor, format_report, has_fatal_failure; r = run_doctor(deep=False); print(format_report(r)); sys.exit(1 if has_fatal_failure(r) else 0)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ✗ 自检发现致命问题，安装不完整。请把上面的输出发给技术支持。" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host ""
 Write-Host "══ 安装完成 ══" -ForegroundColor Green
 Write-Host ""

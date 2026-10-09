@@ -10,6 +10,7 @@ import logging as _logging
 import os
 import shutil
 import sys
+import time
 import warnings as _warnings
 from pathlib import Path
 
@@ -96,15 +97,15 @@ _MAX_HERMES_VERSION = "0.22.0"  # exclusive upper bound: bumped 2026-09-03 for v
 
 
 def dispatch_subcommands() -> bool:
-    """处理子命令（update/backup/skills-update/open），无需启动服务器。
+    """处理子命令（update/backup/skills-update/open/doctor），无需启动服务器。
 
     `open` 是桌面快捷方式的目标：确保服务在跑，然后打开界面。
-    它自己不启动服务器，所以能在这里处理。
+    `doctor` 是安装后自检：验 Hermes 运行环境 / vision / Tavily / Trade 自身。
 
     Returns True 表示已处理子命令并应退出进程。
     """
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    if cmd not in ("update", "backup", "skills-update", "open"):
+    if cmd not in ("update", "backup", "skills-update", "open", "doctor"):
         return False
 
     if cmd == "update":
@@ -116,6 +117,16 @@ def dispatch_subcommands() -> bool:
     elif cmd == "open":
         from trade.opener import open_trade
         print(open_trade())
+    elif cmd == "doctor":
+        from trade.doctor import format_report, has_fatal_failure, run_doctor, save_doctor_result
+
+        # 默认端到端验活；--quick 只查配置与工具表（零 token，安装脚本用）
+        deep = "--quick" not in sys.argv[2:]
+        results = run_doctor(deep=deep)
+        save_doctor_result(results, deep=deep)
+        print(format_report(results))
+        # 致命项失败 → 非零退出，让安装脚本能据此中止
+        sys.exit(1 if has_fatal_failure(results) else 0)
     else:  # skills-update
         from trade.post_install import update_skills
         update_skills()
@@ -585,6 +596,50 @@ def setup():
     sync_b2b_skills()
     ensure_document_deps()
     ensure_desktop_integration()
+    start_doctor_if_needed()
+
+
+def start_doctor_if_needed() -> None:
+    """首次启动跑一次端到端自检；未通过则每次启动重试。
+
+    为什么放在启动路径：客户的安装流程是「装 Hermes → 让 Hermes 装 Trade」，
+    不会主动去调 `trade doctor` —— 只有启动这一步是必然发生的。
+
+    为什么放后台线程而不是阻塞启动：
+      - 自检要发真实请求（含一次对话回合），会拖慢启动几十秒
+      - 自检失败不该妨碍 Trade 起服务（致命项的后果由 doctor 报告与安装脚本处理）
+    为什么不是每次启动都跑：端到端验活要花 token 和 Tavily 配额，
+    所以只在"没跑过 / 上次没过 / 配置变了"时跑（见 doctor.should_run_doctor）。
+    """
+    try:
+        from trade.doctor import should_run_doctor
+
+        if not should_run_doctor():
+            return
+    except Exception:
+        return  # 判断失败就不跑，绝不因为自检影响启动
+
+    import threading
+
+    def _run() -> None:
+        try:
+            # 稍等，避免和启动阶段抢资源（skills 同步、文档依赖安装都在跑）
+            time.sleep(5)
+            from trade.doctor import (
+                format_report,
+                run_doctor,
+                save_doctor_result,
+            )
+
+            print("[doctor] 首次运行自检中（会发一次真实对话与图片请求）...")
+            results = run_doctor(deep=True)
+            save_doctor_result(results)
+            print(format_report(results))
+        except Exception as e:
+            # 自检自身出错绝不冒泡 —— 它只是诊断工具
+            print(f"[doctor] 自检未能完成：{e}")
+
+    threading.Thread(target=_run, name="trade-doctor", daemon=True).start()
 
 
 def ensure_desktop_integration() -> None:

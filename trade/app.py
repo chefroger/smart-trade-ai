@@ -582,12 +582,22 @@ def create_app() -> FastAPI:
             if latest and _ver_tuple(latest) <= _ver_tuple(version):
                 latest = None
 
+        # 上次自检结果（首次启动后台跑，结果落盘）。只读，不影响状态码 ——
+        # 自检失败时 Trade 仍在运行，界面据此提示用户去修而不是把服务判死。
+        try:
+            from trade.doctor import load_doctor_result
+
+            doctor_result = load_doctor_result()
+        except Exception:
+            doctor_result = None
+
         return {
             "status": "ok",
             "app": "Foreign Trade Assistant",
             "version": version,
             "latest_version": latest or None,
             "started_at": _STARTED_AT,
+            "doctor": doctor_result,
         }
 
     return app
