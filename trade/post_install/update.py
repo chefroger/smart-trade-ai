@@ -128,32 +128,16 @@ def _ensure_auto_start(trade_dir: Path) -> None:
 
 
 def _ensure_windows_auto_start(trade_dir: Path) -> None:
-    """Windows: 创建 Task Scheduler 登录时自动运行的后台任务。"""
-    task_name = "SmartTradeAI"
-    check = subprocess.run(
-        ["schtasks", "/query", "/tn", task_name],
-        capture_output=True, text=True, timeout=30,
-    )
-    if check.returncode == 0:
-        print("  ✓ 开机自启动任务已存在")
-        return
+    """Windows: 开机自启（隐藏窗口）+ 桌面快捷方式。
 
-    py_exe = sys.executable
-    server_py = str(trade_dir / "server.py")
-    result = subprocess.run(
-        [
-            "schtasks", "/create", "/tn", task_name,
-            "/tr", f'"{py_exe}" "{server_py}" --no-browser',
-            "/sc", "onlogon",
-            "/rl", "limited",  # 用户权限运行，不请求管理员
-            "/f",  # 强制创建，覆盖同名任务
-        ],
-        capture_output=True, text=True, timeout=30,
-    )
-    if result.returncode == 0:
-        print("  ✓ 已设置开机自启动")
-    else:
-        print(f"  ⚠ 开机自启动设置失败: {result.stderr.strip()}")
+    委托给 `trade.post_install.win_setup` —— 那里是唯一实现，install.ps1 和
+    服务启动路径也调它。历史教训：这段逻辑曾有三份互相不一致的拷贝，其中两份
+    跑 python.exe（登录必弹终端窗口），只有文档里的手动教程是对的。
+    """
+    from trade.post_install.win_setup import ensure_windows_setup
+
+    for msg in ensure_windows_setup(trade_dir):
+        print(f"  {msg}")
 
 
 def _ensure_macos_auto_start(trade_dir: Path) -> None:

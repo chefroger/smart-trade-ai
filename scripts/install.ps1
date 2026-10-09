@@ -230,19 +230,15 @@ if ($currentPath -notlike "*$LocalBin*") {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 开机自启动（Windows Task Scheduler — 用户登录后以最小窗口运行）
+# 开机自启动（隐藏窗口）+ 桌面快捷方式
+#
+# 委托给 trade.post_install.win_setup —— 那是唯一实现，服务启动时也会幂等调用。
+# 以前这里用 Register-ScheduledTask 直接跑 python.exe，是控制台程序 → 登录必弹
+# 终端窗口；而且只在这一处配，走「让 Hermes 装 Trade」流程的用户根本拿不到。
 # ─────────────────────────────────────────────────────────────────────────────
-$TaskName = "SmartTradeAI"
-$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if (-not $ExistingTask) {
-    $Action = New-ScheduledTaskAction -Execute $PyCmd -Argument "$TradeDir\server.py --no-browser"
-    $Trigger = New-ScheduledTaskTrigger -AtLogon
-    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
-    $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description "Smart Trade AI — 外贸 AI 助手开机自启动" -Force | Out-Null
-    Write-Host "  ✓ 已设置开机自启动" -ForegroundColor Green
-} else {
-    Write-Host "  ✓ 开机自启动任务已存在" -ForegroundColor Green
+& $PyCmd -c "from trade.post_install.win_setup import ensure_windows_setup, trade_dir_from_module; [print('  ' + m) for m in ensure_windows_setup(trade_dir_from_module())]"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ⚠ 开机自启动/桌面快捷方式设置失败（不影响 Trade 使用，可稍后重试）" -ForegroundColor Yellow
 }
 
 Write-Host ""

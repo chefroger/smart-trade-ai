@@ -338,86 +338,79 @@ hermes gateway install
 
 ---
 
-## 第十步：设置 Trade 开机自启（无终端窗口）
+## 第十步：开机自启与桌面快捷方式（已自动完成）
 
-上一步装好了 Gateway，但 Trade 本身还没设为自启。这一步用**注册表 + VBS 脚本**的方式让 Trade 开机自动运行，**且不弹出任何终端窗口**——开机后直接打开浏览器访问 **http://127.0.0.1:9119/trade** 就能用。
+**这一步正常情况下不需要你做。** 首次运行 `trade` 时，程序会自动完成：
 
-### 10.1 创建启动器脚本（VBS + BAT，带日志）
+1. 在 `%LOCALAPPDATA%\trade\` 生成隐藏窗口启动器（`trade-autostart.bat` + `.vbs`）
+2. 注册登录自启的计划任务 `SmartTradeAI`（**不弹终端窗口**）
+3. 在桌面创建 **Trade** 快捷方式（双击 = 启动服务并打开界面）
+4. 清理旧版遗留的、会弹终端窗口的自启方式
 
-把下面**整段命令**复制粘贴到 PowerShell 里，按回车：
+启动日志在 `%LOCALAPPDATA%\trade\trade-autostart.log`（隐藏窗口后看不到控制台，出问题看这个文件）。
+
+> 想跳过这套自动配置（例如你有自己的启动方式）：设环境变量 `TRADE_SKIP_AUTOSTART_SETUP=1`。
+>
+> 从旧版本升级上来的机器若曾用手动方案配过，程序会自动把注册表里的旧自启项清掉并改用计划任务，**不会双重启动**。
+
+### 手动配置（仅在自动配置失败时使用）
+
+先运行一次 `trade` 并确认界面能打开，然后按下面做。
+
+**10.1 创建启动器脚本**
 
 ```powershell
-# 探测 trade.exe 完整路径（避免开机时 PATH 未完全加载导致找不到）
 $tradeExe = (Get-Command trade -ErrorAction Stop).Source
-if (-not $tradeExe) {
-    Write-Host "❌ 找不到 trade.exe，请先确认 trade 已安装" -ForegroundColor Red
-} else {
-    Write-Host "找到 trade.exe：$tradeExe" -ForegroundColor Green
-    $dir = "$env:LOCALAPPDATA\trade"
-    $bat = "$dir\trade-autostart.bat"
-    $vbs = "$dir\trade-autostart.vbs"
-    $logFile = "$dir\trade-autostart.log"
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$dir = "$env:LOCALAPPDATA\trade"
+$bat  = "$dir\trade-autostart.bat"
+$vbs  = "$dir\trade-autostart.vbs"
+$log  = "$dir\trade-autostart.log"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
-    # .bat 用完整路径调用 trade.exe 并重定向日志（启动失败时可查日志）
-    @"
+@"
 @echo off
-"$tradeExe" > "$logFile" 2>&1
-"@ | Out-File -FilePath $bat -Encoding ASCII
+"$tradeExe" --no-browser > "$log" 2>&1
+"@ | Out-File -FilePath $bat -Encoding OEM
 
-    # VBS 隐藏窗口启动 .bat（不等待，不弹窗）
-    @"
+@"
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.Run "cmd /c ""$bat""", 0, False
-"@ | Out-File -FilePath $vbs -Encoding ASCII
-
-    Write-Host "已创建启动器：$vbs" -ForegroundColor Green
-    Write-Host "日志文件：$logFile（启动失败时打开它排查）" -ForegroundColor Yellow
-}
+"@ | Out-File -FilePath $vbs -Encoding OEM
 ```
 
-看到绿色「已创建启动器」即成功。
+> 用 `-Encoding OEM` 而**不是** `-Encoding ASCII`：后者会把中文用户名路径里的非 ASCII 字符静默替换成 `?`，写出来的启动器直接失效（早期教程栽在这里）。
 
-> **这段命令做了什么：**
-> 1. 用 `Get-Command trade` 探测 `trade.exe` 的完整路径，写入 .bat 文件——**不依赖 PATH**，开机早期也能找到
-> 2. .bat 把 trade 的所有输出重定向到 `trade-autostart.log`——启动失败时打开这个日志就能看到错误，不用两眼一抹黑
-> 3. VBS 以**隐藏窗口**模式启动 .bat——不会弹出黑框终端
-
-### 10.2 写入注册表，开机自动运行该脚本
-
-继续在 PowerShell 里粘贴下面这行，按回车：
+**10.2 注册登录自启（计划任务，隐藏窗口）**
 
 ```powershell
-New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "TradeAutoStart" -Value "wscript.exe `"$env:LOCALAPPDATA\trade\trade-autostart.vbs`"" -PropertyType String -Force
+schtasks /create /tn SmartTradeAI /sc onlogon /rl limited /f /tr "wscript.exe \"$env:LOCALAPPDATA\trade\trade-autostart.vbs\""
 ```
 
-没有报错就说明写入成功。
-
-### 10.3 立即测试（可选但推荐）
-
-不想等到明天才验证？在 PowerShell 里执行：
+**10.3 创建桌面快捷方式**
 
 ```powershell
-wscript.exe "$env:LOCALAPPDATA\trade\trade-autostart.vbs"
+$ws = New-Object -ComObject WScript.Shell
+$lnk = "$([Environment]::GetFolderPath('Desktop'))\Trade.lnk"
+$sc = $ws.CreateShortcut($lnk)
+$sc.TargetPath = "wscript.exe"
+$sc.Arguments = "\"$env:LOCALAPPDATA\trade\trade-autostart.vbs\""
+$sc.Description = "打开 Trade 外贸 AI 助手"
+$sc.Save()
 ```
 
-等约 15 秒，然后打开浏览器访问 **http://127.0.0.1:9119/trade**。如果能看到 Trade 界面，且**没有弹出任何终端窗口**，说明配置完全正确。
+**10.4 验证**
 
-> **如果打不开**：打开文件 `%LOCALAPPDATA%\trade\trade-autostart.log`（直接在资源管理器地址栏粘贴这个路径回车），看里面的错误信息。最常见的是 `ModuleNotFoundError`——说明 trade 安装有问题，回到第八步重装。
+执行 `wscript.exe "$env:LOCALAPPDATA\trade\trade-autostart.vbs"`，等约 15 秒，访问 **http://127.0.0.1:9119/trade**。能看到界面、且**没有弹出终端窗口**即为正确。
 
-> **以后的使用方式：** 每天打开电脑，等约 30 秒（系统启动 + Trade 自动启动），直接浏览器访问 **http://127.0.0.1:9119/trade** 即可，**再也不用打开 PowerShell 手动输入 `trade`**。
+> 打不开就看 `%LOCALAPPDATA%\trade\trade-autostart.log`。最常见的是 `ModuleNotFoundError`，说明 trade 没装好。
 
-### 10.4 如果想取消开机自启
-
-将来不想要自启了，在 PowerShell 里执行：
+**10.5 取消开机自启**
 
 ```powershell
-Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "TradeAutoStart" -Force
+schtasks /delete /tn SmartTradeAI /f
 ```
 
-即可移除自启，不影响 Trade 本身的使用。
-
----
+（若曾按早期教程配过注册表方式，再执行：`Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "TradeAutoStart" -Force`）
 
 ## 如何更新 Trade
 
@@ -448,6 +441,8 @@ Trade 会持续更新，新版本增加功能和修复问题。最简单的方�
 | 浏览器打开显示「无法访问此网站」 | 程序没在运行。打开一个新的 PowerShell，输入 `trade` 启动 |
 | 开机后访问 127.0.0.1:9119/trade 打不开 | Trade 自启还没跑完，等 30 秒再试。若仍不行，打开 `%LOCALAPPDATA%\trade\trade-autostart.log` 看错误日志；或按 `Win+R` 输入 `taskmgr` 回车，看进程里有没有 `python.exe`，没有就手动运行第十步的 VBS 脚本 |
 | 定时任务（每日简报等）不执行 | 第九步的 Hermes Gateway 没装好或没运行。重新执行 `hermes gateway install`，再到 `services.msc` 确认服务状态 |
+| 收不到桌面 Trade 图标 | 首次运行 `trade` 时自动创建；被删了的话重启一次 Trade 会重新生成，仍没有就按第十步手动创建 |
+| 登录后弹出黑色终端窗口 | 自启任务还是旧版（直接跑 python.exe）。重启一次 Trade 会自动换成隐藏窗口版本；没换掉就按第十步手动重建计划任务 |
 | 提示「Filename too long」 | 第五步的长路径设置没做。回到 5.2 执行那行命令，然后**重启电脑** |
 | M 芯片 Mac 启动 Trade 报错 (Mach-O / 422) | 用了 Rosetta 转译的 Python。按 macOS 第四步检查 Python 架构，切换到原生 arm64 Python |
 

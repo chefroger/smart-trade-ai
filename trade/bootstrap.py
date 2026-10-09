@@ -96,12 +96,15 @@ _MAX_HERMES_VERSION = "0.22.0"  # exclusive upper bound: bumped 2026-09-03 for v
 
 
 def dispatch_subcommands() -> bool:
-    """处理子命令（update/backup/skills-update），无需启动服务器。
+    """处理子命令（update/backup/skills-update/open），无需启动服务器。
+
+    `open` 是桌面快捷方式的目标：确保服务在跑，然后打开界面。
+    它自己不启动服务器，所以能在这里处理。
 
     Returns True 表示已处理子命令并应退出进程。
     """
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    if cmd not in ("update", "backup", "skills-update"):
+    if cmd not in ("update", "backup", "skills-update", "open"):
         return False
 
     if cmd == "update":
@@ -110,6 +113,9 @@ def dispatch_subcommands() -> bool:
     elif cmd == "backup":
         from trade.post_install import backup_trade
         print(backup_trade())
+    elif cmd == "open":
+        from trade.opener import open_trade
+        print(open_trade())
     else:  # skills-update
         from trade.post_install import update_skills
         update_skills()
@@ -556,9 +562,12 @@ def setup():
     调用顺序：
     1. sys.path 调整
     2. 子命令分发（如果是子命令则直接 exit）
-    3. Hermes 版本检查
-    4. .env 加载 + YOLO 设置
-    5. Skills 同步
+    3. 架构检查
+    4. Hermes 版本检查
+    5. .env 加载 + YOLO 设置
+    6. Skills 同步
+    7. 文档依赖检查
+    8. 桌面集成（Windows：自启 + 桌面快捷方式，幂等、失败不阻断）
     """
     _adjust_sys_path()
 
@@ -575,3 +584,32 @@ def setup():
     load_env_and_set_yolo()
     sync_b2b_skills()
     ensure_document_deps()
+    ensure_desktop_integration()
+
+
+def ensure_desktop_integration() -> None:
+    """Windows：幂等地配好开机自启（隐藏窗口）与桌面快捷方式。
+
+    为什么放在**服务启动**而不是只在安装脚本里：客户的部署流程是
+    「装 Hermes → 让 Hermes 装 Trade」，**不经过 install.ps1** —— 只在脚本里配
+    等于没配，用户得每次人工交代。放在这里，任何安装路径都会自动完成。
+
+    行为约定：
+      - 只在 Windows 执行（macOS/Linux 的自启由 install.sh 的 launchd/systemd 负责）
+      - 幂等：已配好就跳过；检测到旧的会弹窗的任务（python.exe）会替换掉
+      - 失败只打印警告，**绝不阻断启动** —— 自启是便利功能，不是运行前提
+      - `TRADE_SKIP_AUTOSTART_SETUP=1` 可整体关掉（不想被改系统设置的用户）
+    """
+    if os.name != "nt":
+        return
+    if os.environ.get("TRADE_SKIP_AUTOSTART_SETUP", "").strip() == "1":
+        return
+
+    try:
+        from trade.post_install.win_setup import ensure_windows_setup, trade_dir_from_module
+
+        for msg in ensure_windows_setup(trade_dir_from_module()):
+            print(f"  {msg}")
+    except Exception as e:
+        # 自启配置是便利功能，失败绝不能影响 Trade 本身能不能用
+        print(f"  ⚠ 桌面集成设置跳过：{e}")
