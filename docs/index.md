@@ -27,11 +27,13 @@ layout: default
 
 ---
 
-<div style="background:#3d1f1f; border:2px solid #f85149; border-radius:8px; padding:1.2rem 1.5rem; margin:1.5rem 0;">
-  <p style="font-size:1.15rem; font-weight:bold; color:#f85149; margin:0 0 0.6rem;">🚫 禁止用 workbuddy 等国产 AI 助手安装 Trade</p>
-  <p style="margin:0 0 0.6rem;"><strong>已有多位用户这样装，结果都是同一个：助手回报「安装成功」，实际完全不能用。</strong>更麻烦的是它还会<strong>生成错误的公司文件夹</strong>，残留下来后很难清理干净。</p>
-  <p style="margin:0 0 0.6rem;">原因：这类助手不了解本项目的安装依赖（Hermes 必须是指定来源的可编辑检出、Trade 必须用 <code>--no-deps</code> 安装、装完还要同步 skills 与初始化数据库），步骤做错了却照样报告成功，所以表面看不出问题。</p>
-  <p style="margin:0;">要 AI 代装，<strong>只能用 Hermes</strong>（见下面的安装步骤）；换成别的 AI 助手一律会出问题。不想让 AI 装的话，对着下面的步骤手动做即可。</p>
+<!-- 深色警示块：**每个元素都要显式指定颜色**，不能靠继承 ——
+     页面主题是浅色（深色正文），继承下去就是深字压深底，完全看不清。 -->
+<div style="background:#3d1f1f; border:2px solid #f85149; border-radius:8px; padding:1.2rem 1.5rem; margin:1.5rem 0; color:#f0f6fc;">
+  <p style="font-size:1.15rem; font-weight:bold; color:#ff8a80; margin:0 0 0.6rem;">🚫 禁止用 workbuddy 等国产 AI 助手安装 Trade</p>
+  <p style="color:#f0f6fc; margin:0 0 0.6rem;"><strong>已有多位用户这样装，结果都是同一个：助手回报「安装成功」，实际完全不能用。</strong>更麻烦的是它还会<strong>生成错误的公司文件夹</strong>，残留下来后很难清理干净。</p>
+  <p style="color:#f0f6fc; margin:0 0 0.6rem;">原因：这类助手不了解本项目的安装依赖（Hermes 必须是指定来源的可编辑检出、Trade 必须用 <code style="background:#6b2424; color:#ffd7d5; padding:0 0.25em; border-radius:3px;">--no-deps</code> 安装、装完还要同步 skills 与初始化数据库），步骤做错了却照样报告成功，所以表面看不出问题。</p>
+  <p style="color:#f0f6fc; margin:0;">要 AI 代装，<strong>只能用 Hermes</strong>（见下面的安装步骤）；换成别的 AI 助手一律会出问题。不想让 AI 装的话，对着下面的步骤手动做即可。</p>
 </div>
 
 ---
