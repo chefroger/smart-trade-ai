@@ -123,25 +123,59 @@ def build_hidden_vbs(bat_path: Path) -> str:
     """VBS：以**隐藏窗口**启动 .bat，不等待返回。
 
     `Run(cmd, 0, False)` 的三个参数分别是：命令、窗口样式(0=隐藏)、是否等待结束。
+
+    bat 路径同样要过 `to_batch_path` —— 让 VBS 也保持纯 ASCII。
+    VBS 由 wscript 按系统 ANSI 代码页读取，中文用户名路径原样写进去依赖编码兜底；
+    改成 `%LOCALAPPDATA%` 由 cmd 运行时展开就没有这个问题
+    （`.bat` 与 `.vbs` 两侧现在用同一套路径规则）。
     """
     return (
         'Set WshShell = CreateObject("WScript.Shell")\r\n'
-        f'WshShell.Run "cmd /c ""{bat_path}""", 0, False\r\n'
+        f'WshShell.Run "cmd /c ""{to_batch_path(bat_path)}""", 0, False\r\n'
     )
 
 
-def is_vbs_launcher_task(task_xml: str) -> bool:
-    """判断已存在的计划任务是不是「新的隐藏式启动器」。
+def is_vbs_launcher_task(task_xml: str, expected_vbs: Path | None = None) -> bool:
+    """判断已存在的计划任务是不是「**正确的**隐藏式启动器」。
 
-    判据：它的执行体是 wscript.exe（VBS）——旧实现是 python.exe，会弹窗。
-    无法判断（拿不到 XML）时返回 False，让调用方走"替换"路径。
+    历史判据太松：只要 XML 里同时出现 `wscript` 与 `.vbs` 就算通过 —— 于是一个
+    被注册坏的命令（路径被引号截断、指向别的 vbs、参数丢失）会被当成好的，
+    **永远不修**，而症状恰是"开机弹终端窗口"或"开机什么都不发生"。
+
+    现在的判据（三条全中才算对）：
+      1. `<Command>` 的可执行文件名是 wscript（或其全路径）
+      2. `<Arguments>` 里出现 .vbs
+      3. 传了 expected_vbs 时，参数里的 vbs 文件名必须与之一致
+
+    拿不到 XML（空串）返回 False —— 让调用方走"替换"路径。
     """
-    lowered = (task_xml or "").lower()
-    if not lowered:
+    import re
+
+    xml = task_xml or ""
+    if not xml:
         return False
-    has_wscript = "wscript" in lowered
-    has_vbs = ".vbs" in lowered
-    return has_wscript and has_vbs
+
+    m_cmd = re.search(r"<Command>(.*?)</Command>", xml, re.S | re.I)
+    m_args = re.search(r"<Arguments>(.*?)</Arguments>", xml, re.S | re.I)
+    if not m_cmd:
+        return False
+
+    command = m_cmd.group(1).strip().strip('"')
+    # 只取可执行文件名比较，路径里带不带 wscript 字样都不影响判断
+    exe = command.replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    if exe not in ("wscript.exe", "wscript"):
+        return False
+
+    args = (m_args.group(1) if m_args else "").strip()
+    if ".vbs" not in args.lower():
+        return False
+
+    if expected_vbs is not None:
+        # 参数里必须引用我们那个 vbs（防止任务指向了残留的旧脚本）
+        if expected_vbs.name.lower() not in args.lower():
+            return False
+
+    return True
 
 
 # ── 需要碰系统的部分（命令可注入，便于测试） ──────────────────────────────
@@ -208,7 +242,7 @@ def ensure_scheduled_task(vbs_path: Path) -> str:
     注销后按新方式重建。客户机上残留的旧任务因此能自动修好，不需要人工干预。
     """
     existing = _query_task_xml()
-    if existing and is_vbs_launcher_task(existing):
+    if existing and is_vbs_launcher_task(existing, expected_vbs=vbs_path):
         return "✓ 开机自启动已是隐藏式启动器，跳过"
 
     if existing:
@@ -229,6 +263,29 @@ def ensure_scheduled_task(vbs_path: Path) -> str:
     if existing:
         return "✓ 已替换旧版开机自启任务（新版本不弹终端窗口）"
     return "✓ 已设置开机自启动（隐藏窗口）"
+
+
+# 桌面上**不该出现**的启动器脚本名（它们只在 launcher_dir() 里）：
+# 把 .vbs/.bat 直接放桌面等于多一个可执行文件 —— 容易被误删、也可能被杀软拦。
+_STRAY_LAUNCHER_NAMES = (
+    "trade-autostart.vbs",
+    "trade-open.vbs",
+    "trade-autostart.bat",
+    "trade-open.bat",
+)
+
+
+def find_stray_desktop_launchers(desktop: Path) -> list[Path]:
+    """找出桌面上遗留的启动器脚本（本不该在那）。
+
+    只**报告**不删除：那可能是用户自己特意放的，删桌面上的文件必须由人决定。
+    """
+    found: list[Path] = []
+    for name in _STRAY_LAUNCHER_NAMES:
+        p = desktop / name
+        if p.is_file():
+            found.append(p)
+    return found
 
 
 def ensure_desktop_shortcut(open_vbs: Path) -> str:
@@ -257,6 +314,16 @@ def ensure_desktop_shortcut(open_vbs: Path) -> str:
     result = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps])
     if result.returncode != 0 or not lnk.is_file():
         return f"⚠ 桌面快捷方式创建失败：{(result.stderr or '').strip()}"
+
+    # 桌面上只该有 .lnk —— 启动器脚本一律在 launcher_dir()。检测到遗留就如实说，
+    # 但**不自动删**：那可能是用户自己放的，删桌面文件得由人决定。
+    stray = find_stray_desktop_launchers(desktop)
+    if stray:
+        names = "、".join(p.name for p in stray)
+        return (
+            f"✓ 已创建桌面快捷方式：{lnk.name}\n"
+            f"  ⚠ 桌面还留着启动器脚本（本不该在这里，可安全删除）：{names}"
+        )
     return f"✓ 已创建桌面快捷方式：{lnk.name}"
 
 

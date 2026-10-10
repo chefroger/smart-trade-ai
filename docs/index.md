@@ -347,6 +347,10 @@ hermes gateway install
 3. 在桌面创建 **Trade** 快捷方式（双击 = 启动服务并打开界面）
 4. 清理旧版遗留的、会弹终端窗口的自启方式
 
+**快捷方式双击后的行为**：服务没跑就先在后台静默启动；**如果浏览器里已经开着 Trade 页面，
+就把那个窗口切到前台**（不会重复开标签页）；没开才新开。浏览器不向外部程序暴露「聚焦已有
+标签页」的能力，所以这是按窗口标题找回的。
+
 启动日志在 `%LOCALAPPDATA%\trade\trade-autostart.log`（隐藏窗口后看不到控制台，出问题看这个文件）。
 
 > 想跳过这套自动配置（例如你有自己的启动方式）：设环境变量 `TRADE_SKIP_AUTOSTART_SETUP=1`。
@@ -388,12 +392,18 @@ schtasks /create /tn SmartTradeAI /sc onlogon /rl limited /f /tr "wscript.exe \"
 
 **10.3 创建桌面快捷方式**
 
+> **桌面上只应有一个 `Trade.lnk` 快捷方式，不要放 .vbs / .bat 文件** —— 启动器脚本都在
+> `%LOCALAPPDATA%\trade\` 下，快捷方式只是指向它们。直接把 .vbs 拖到桌面会多出一个可执行
+> 文件，既容易被误删，也可能被杀软拦截。
+
 ```powershell
 $ws = New-Object -ComObject WScript.Shell
 $lnk = "$([Environment]::GetFolderPath('Desktop'))\Trade.lnk"
 $sc = $ws.CreateShortcut($lnk)
 $sc.TargetPath = "wscript.exe"
-$sc.Arguments = "\"$env:LOCALAPPDATA\trade\trade-autostart.vbs\""
+# 注意指向 trade-open.vbs（打开界面），不是 trade-autostart.vbs（那个只启动服务、
+# 不开浏览器）—— 早期文档写错了这一处，照抄会得到"启动了但页面不弹"的快捷方式
+$sc.Arguments = "\"$env:LOCALAPPDATA\trade\trade-open.vbs\""
 $sc.Description = "打开 Trade 外贸 AI 助手"
 $sc.Save()
 ```

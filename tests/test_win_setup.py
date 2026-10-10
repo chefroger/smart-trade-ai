@@ -145,7 +145,11 @@ class TestScheduledTaskReplacement:
 
     def test_skips_when_already_vbs(self, monkeypatch):
         calls: list[list[str]] = []
-        new_xml = '<Command>wscript.exe</Command><Arguments>"C:\\x\\a.vbs"</Arguments>'
+        # 必须指向**我们期望的那个** vbs —— 判据已收紧：指向别的脚本算需要替换
+        new_xml = (
+            "<Command>wscript.exe</Command>"
+            '<Arguments>"C:\\x\\trade-autostart.vbs"</Arguments>'
+        )
         self._patch_run(monkeypatch, new_xml, calls)
 
         msg = ws.ensure_scheduled_task(Path(r"C:\x\trade-autostart.vbs"))
@@ -198,3 +202,124 @@ class TestNonWindowsIsNoop:
         ws.ensure_windows_setup(Path("/tmp"))
 
         assert called == []
+
+
+class TestTaskDetectionIsStrict:
+    """判据必须严格到能识别「注册坏了」的任务。
+
+    历史判据只要 XML 里同时出现 wscript 与 .vbs 就算通过 —— 于是一个被引号
+    截断、或指向残留旧脚本的任务会被当成好的，**永远不修**，
+    而症状恰是"开机弹终端窗口"或"开机什么都不发生"。
+    """
+
+    def test_missing_arguments_is_not_ok(self):
+        xml = "<Command>wscript.exe</Command>"
+        assert ws.is_vbs_launcher_task(xml) is False
+
+    def test_pointing_at_another_vbs_is_not_ok(self):
+        """任务指向残留的旧 vbs —— 必须判为需要替换。"""
+        xml = (
+            "<Command>wscript.exe</Command>"
+            '<Arguments>"C:\\old\\leftover-launcher.vbs"</Arguments>'
+        )
+
+        assert ws.is_vbs_launcher_task(
+            xml, expected_vbs=Path(r"C:\Users\x\AppData\Local\trade\trade-autostart.vbs")
+        ) is False
+
+    def test_pointing_at_expected_vbs_is_ok(self):
+        xml = (
+            "<Command>C:\\Windows\\System32\\wscript.exe</Command>"
+            '<Arguments>"C:\\Users\\x\\AppData\\Local\\trade\\trade-autostart.vbs"</Arguments>'
+        )
+
+        assert ws.is_vbs_launcher_task(
+            xml, expected_vbs=Path(r"C:\Users\x\AppData\Local\trade\trade-autostart.vbs")
+        ) is True
+
+    def test_bare_wscript_command_is_ok(self):
+        """schtasks 存的是裸文件名 wscript.exe 时也算对。"""
+        xml = (
+            "<Command>wscript.exe</Command>"
+            '<Arguments>"C:\\x\\trade-autostart.vbs"</Arguments>'
+        )
+        assert ws.is_vbs_launcher_task(xml) is True
+
+    def test_cmd_wrapping_wscript_is_not_ok(self):
+        """`cmd /c wscript ...` 这种包一层的写法会真的闪一下窗口，判为需要替换。"""
+        xml = (
+            "<Command>cmd.exe</Command>"
+            '<Arguments>/c wscript "C:\\x\\trade-autostart.vbs"</Arguments>'
+        )
+        assert ws.is_vbs_launcher_task(xml) is False
+
+
+class TestVbsIsAsciiSafe:
+    """VBS 里的 bat 路径也要走环境变量展开，保持纯 ASCII。
+
+    wscript 按系统 ANSI 代码页读 .vbs，中文用户名路径原样写进去依赖编码兜底；
+    换成 `%LOCALAPPDATA%` 由 cmd 运行时展开就没有这个问题。
+    """
+
+    def test_vbs_uses_env_var_not_literal_path(self, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\张伟\AppData\Local")
+        bat = Path(r"C:\Users\张伟\AppData\Local\trade\trade-autostart.bat")
+
+        vbs = ws.build_hidden_vbs(bat)
+
+        assert "%LOCALAPPDATA%" in vbs
+        assert "张伟" not in vbs
+        assert vbs.isascii(), "VBS 里仍有非 ASCII，wscript 读取可能乱码"
+
+    def test_vbs_still_hides_window(self, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\a\AppData\Local")
+
+        vbs = ws.build_hidden_vbs(Path(r"C:\Users\a\AppData\Local\trade\t.bat"))
+
+        assert ", 0, False" in vbs
+
+
+class TestNoStrayLaunchersOnDesktop:
+    """桌面只该有 Trade.lnk —— 启动器脚本一律在 launcher_dir()。
+
+    为什么专门测这条：让 AI「在桌面放个快捷方式」时，很容易变成把 .vbs 复制到桌面。
+    那等于桌面上多一个可执行文件：容易被误删、也可能被杀软拦截。
+    """
+
+    def test_detects_stray_vbs(self, tmp_path):
+        (tmp_path / "trade-autostart.vbs").write_text("x", encoding="utf-8")
+
+        found = ws.find_stray_desktop_launchers(tmp_path)
+
+        assert [p.name for p in found] == ["trade-autostart.vbs"]
+
+    def test_detects_all_four_launcher_names(self, tmp_path):
+        for name in ("trade-autostart.vbs", "trade-open.vbs",
+                     "trade-autostart.bat", "trade-open.bat"):
+            (tmp_path / name).write_text("x", encoding="utf-8")
+
+        assert len(ws.find_stray_desktop_launchers(tmp_path)) == 4
+
+    def test_clean_desktop_returns_empty(self, tmp_path):
+        (tmp_path / "Trade.lnk").write_text("x", encoding="utf-8")
+        (tmp_path / "我的文档.docx").write_text("x", encoding="utf-8")
+
+        assert ws.find_stray_desktop_launchers(tmp_path) == []
+
+    def test_does_not_delete_anything(self, tmp_path):
+        """只报告不删除 —— 删桌面上的文件必须由人决定。"""
+        stray = tmp_path / "trade-autostart.vbs"
+        stray.write_text("x", encoding="utf-8")
+
+        ws.find_stray_desktop_launchers(tmp_path)
+
+        assert stray.is_file(), "检测过程把文件删了"
+
+    def test_launcher_dir_is_never_the_desktop(self, tmp_path, monkeypatch):
+        """启动器目录落在 TRADE_HOME / %LOCALAPPDATA%\\trade，绝不是桌面。"""
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path / "th"))
+        assert ws.launcher_dir() == tmp_path / "th"
+
+        monkeypatch.delenv("TRADE_HOME", raising=False)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
+        assert "trade" in str(ws.launcher_dir())
