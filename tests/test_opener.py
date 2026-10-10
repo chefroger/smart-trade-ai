@@ -9,8 +9,11 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -231,10 +234,39 @@ class TestWindowTitleMatching:
         )
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="这一组断言的是**非 Windows** 上的行为：Windows 上窗口枚举会真的返回窗口"
+           "（CI 上就枚举到了任务管理器），聚焦也可能真的成功",
+)
 class TestNonWindowsBehaviour:
+    """非 Windows 上的行为。
+
+    **必须加平台守卫**：这些实现只在 Windows 上做事，在别的平台上返回空/False ——
+    而 Windows CI 上它们会真的工作，断言"返回空表"必然失败。
+    （与 os.name 那次同类：平台相关的断言漏了守卫。）
+    """
+
     def test_focus_is_noop_off_windows(self):
         """非 Windows 上聚焦直接返回 False（照常打开页面），不抛异常。"""
         assert opener._focus_window_by_title(opener.WINDOW_TITLE_MARKER) is False
 
     def test_window_enumeration_empty_off_windows(self):
         assert opener._iter_window_titles() == []
+
+
+class TestWindowsHelpersAreGuarded:
+    """与平台无关的那半：这些函数在任何平台上都不能抛异常。
+
+    上面那组只能非 Windows 跑，这组保证"调了不该调的东西"时是安全降级 ——
+    没有 Win32 的环境下枚举/聚焦会走 except 分支返回空。
+    """
+
+    def test_enumeration_never_raises(self):
+        assert isinstance(opener._iter_window_titles(), list)
+
+    def test_focus_never_raises(self):
+        assert isinstance(opener._focus_window_by_title("绝不存在的窗口标题"), bool)
+
+    def test_focus_on_bogus_marker_is_false(self):
+        assert opener._focus_window_by_title("绝不存在的窗口标题") is False
