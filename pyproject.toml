@@ -23,7 +23,7 @@ dependencies = [
   # sdists for hermes-agent is not supported"); declaring it makes `pip install`
   # fail outright. It is installed separately as an editable checkout by
   # scripts/install.sh (Step 2), and Trade installs itself with --no-deps.
-  # Tested version: v2026.9.24 (0.21.5) — see COMPATIBILITY.md. The installed
+  # Tested version: v0.21.6 (0.21.6) — see COMPATIBILITY.md. The installed
   # version is enforced at runtime by pre_install_check.py and
   # bootstrap.check_hermes_version().
   # LLM Provider SDKs — Hermes uses openai SDK as universal HTTP wire format
