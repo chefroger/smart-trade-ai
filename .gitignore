@@ -67,6 +67,9 @@ CHANGELOG.md
 Trade数据目录结构设计.md
 Trade数据目录结构设计.en.md
 docs/database-schema.md
+
+# 内部操作手册（作者远程处理客户机时用，含内部口令，不入库）
+公司管理命令说明.md
 docs/skill-development-guide.md
 docs/diagrams/
 docs/superpowers/

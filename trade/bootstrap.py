@@ -97,15 +97,16 @@ _MAX_HERMES_VERSION = "0.22.0"  # exclusive upper bound: bumped 2026-09-03 for v
 
 
 def dispatch_subcommands() -> bool:
-    """处理子命令（update/backup/skills-update/open/doctor），无需启动服务器。
+    """处理子命令（update/backup/skills-update/open/doctor/company），无需启动服务器。
 
     `open` 是桌面快捷方式的目标：确保服务在跑，然后打开界面。
     `doctor` 是安装后自检：验 Hermes 运行环境 / vision / Tavily / Trade 自身。
+    `company` 是公司管理（作者用的隐藏功能，不写进用户文档）：见 trade.company_admin。
 
     Returns True 表示已处理子命令并应退出进程。
     """
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    if cmd not in ("update", "backup", "skills-update", "open", "doctor"):
+    if cmd not in ("update", "backup", "skills-update", "open", "doctor", "company"):
         return False
 
     if cmd == "update":
@@ -117,6 +118,9 @@ def dispatch_subcommands() -> bool:
     elif cmd == "open":
         from trade.opener import open_trade
         print(open_trade())
+    elif cmd == "company":
+        from trade.company_admin import main as company_main
+        sys.exit(company_main(sys.argv[2:]))
     elif cmd == "doctor":
         from trade.doctor import format_report, has_fatal_failure, run_doctor, save_doctor_result
 
