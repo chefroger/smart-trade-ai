@@ -39,11 +39,18 @@ Hermes 的安装路径跟的是 **main 分支**（`scripts/install.sh` 用 `git 
 最后改动时间，与本地检出基线比较；有改动的再拉当前内容核对具体符号与签名 —— 上游仓库体量大、
 本机装不起 main，故用静态符号核对而非运行验证。
 
+> 2026-10-12 起改用更省事的办法：在本地检出上 `git fetch --shallow-since=<基线日期> origin main`，
+> 然后直接 `git diff HEAD origin/main -- <耦合文件>` 看全量差异、`git show origin/main:<文件>`
+> 取上游当前实现做符号/签名核对（AST 解析取形参，别用手写正则 —— `dict[str, Any] | None`
+> 这类注解里的逗号会让正则漏报）。fetch 只更新 `.git` 里的对象与 refs，**工作树不动**，
+> 生产代码不受影响（核对前后 `git status` 应保持干净）。该方法比 API 更全、无速率限制。
+
 | 复核日期 | 上游 main | 本地基线 | 期内有改动的耦合文件 | 结论 |
 |---------|-----------|---------|------------------|------|
 | 2026-09-30 | `f42f579c` | `d275e422` (2026-09-23) | 7 个耦合点文件被改：run_agent.py / config.py / auth.py / env_loader.py / models.py / hermes_constants.py / version_info.py（另 `auxiliary_client.py`、`vision_tools.py` 亦有改动，非 Trade 耦合点；`agent/image_routing.py` 未动） | ✅ 无破坏。`AIAgent` 仍在且 Trade 实际传的 **14 个构造参数全部保留**；`load_config()` / `PROVIDER_REGISTRY` / `get_auth_status()` / `provider_model_ids()` / `_PROVIDER_MODELS` / `load_hermes_dotenv(hermes_home=)` / `get_hermes_home()` / `provider_catalog()` / `get_version_info()` 签名均未变。无需改动 Trade。 |
 | 2026-10-03 | `1cb26bf2` | `d275e422` (2026-09-23) | 4 个：run_agent.py（reasoning blob 容错修复）、config.py + env_loader.py（原子写入临时文件的内部重构）、models.py（StepFun 模型列表合并） | ✅ 无破坏。与上一行同一批符号逐个复核仍未变；`provider_model_ids(provider, *, force_refresh=False)` 与 `_PROVIDER_MODELS` 均保留。无需改动 Trade，`_MAX_HERMES_VERSION` 无需改动。 |
 | 2026-10-07 | `9b38eb14` | `d275e422` (2026-09-23) | 6 个（均 10-06）：run_agent.py（free tier 限流处理）、config.py（**移除内置 tirith 扫描器**）、auth.py（free-tier 重构）、models.py + provider_catalog.py（pre-release profile 不进发现列表）、hermes_constants.py（scratch 清理记账） | ✅ 无破坏。同一批符号逐个复核未变：`AIAgent` 的 14 个参数、`load_config()`、`PROVIDER_REGISTRY` / `get_auth_status()`、`provider_model_ids()` / `_PROVIDER_MODELS`、`get_hermes_home()`、`provider_catalog()` 全部保留。唯一「移除」是内置 **tirith** 预执行扫描器，**对 Trade 零影响**：Trade 代码完全不引用它，`~/.hermes/config.yaml` 里相关键也只出现在注释行。无需改动 Trade。 |
+| 2026-10-12 | `835c3dd0` | `d275e422` (2026-09-23) | **8 个耦合点文件全部有改动**（区间共 **10,105 个提交**，最新日期 tag `v2026.9.24`）：run_agent.py(±284) / config.py(±1118) / auth.py(±478) / env_loader.py(±216) / models.py(±546) / provider_catalog.py(±8) / **version_info.py（+332，新增模块）** / hermes_constants.py(±560) | ✅ 无破坏，建议**不跟随**（与「冻结 + vendor」路线一致）。逐符号复核：`AIAgent` 仍在、`__init__` 共 86 个形参且 Trade 传的 **14 个全部保留**（无 `**kwargs` 兜底，故「保留」有意义）；`load_config()` / `get_auth_status(provider_id)` / `provider_model_ids(provider, *, force_refresh)` / `provider_catalog()` / `load_hermes_dotenv(*, hermes_home=…)` / `get_hermes_home()` / `get_version_info()` 签名均未变；`PROVIDER_REGISTRY` 的 `base_url_env_var` / `auth_type` / `api_key_env_vars` 属性仍在；`agent.tools`（`doctor._agent_tool_names` 读的工具表）仍由 `agent/agent_init.py` 赋值；`HERMES_DISABLE_LAZY_INSTALLS` 开关与 `gateway` 子命令均保留。区间内安全类提交集中在 **Trade 不使用的消息适配器**（line / webhook / whatsapp_cloud / memory-provider hand-off），无影响 Trade 的面。版本仍落窗口内（最新语义化 tag `v0.21.6` < `0.22.0`；上游 main 的 pyproject 现为占位 `0.0.0`，Trade 的 `_is_real_version()` 已按「识别不到」处理，不会误判不兼容 —— 该预判被现实验证）。 |
 
 **静态核对的盲区**（历次复核都受此限制，记录以免误以为「查过了就没事」）：
 ① 无法发现**签名不变但行为变了**的符号 —— 这类只能靠真机跑端点暴露；
