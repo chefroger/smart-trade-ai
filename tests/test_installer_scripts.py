@@ -92,6 +92,87 @@ class TestCloneRobustness:
                 f"{name} 仍在截断 pip 报错"
 
 
+class TestHermesVersionPin:
+    """安装脚本必须把 Hermes 固定在**已核对兼容**的版本上，而不是 main 尖端。
+
+    为什么：main 每天前进约 200 个提交，一旦版本号越出 Trade 声明的兼容窗口
+    （0.13.0 ≤ v < 0.22.0，`trade/bootstrap.py` / `pre_install_check.py`），
+    新装机器会「装得上、起不来」—— 最坏的一类安装问题。固定到 release tag
+    同时也让装机结果可复现。
+    """
+
+    @staticmethod
+    def _pinned_version(name: str, text: str) -> str:
+        """从 TRADE_HERMES_REF 赋值行取出固定版本号。
+
+        **必须跳过注释行**：注释里举了「临时装别的版本」的例子（含另一个版本号），
+        按行扫描会把例子当成固定值 —— 第一版就是这么写的，mutation 检验时
+        才发现「把 pin 改成不存在的版本」测不出来（解析到了注释里的旧版本）。
+        """
+        import re
+
+        for line in text.splitlines():
+            if line.strip().startswith("#"):
+                continue  # 注释里的示例版本号不算
+            if "TRADE_HERMES_REF" in line:
+                m = re.search(r"v(\d+\.\d+\.\d+)", line)
+                if m:
+                    return m.group(1)
+        raise AssertionError(f"{name} 未见固定的 Hermes 版本号（TRADE_HERMES_REF 行）")
+
+    def test_both_scripts_pin_a_version(self):
+        for name, text in (("install.sh", SH), ("install.ps1", PS1)):
+            self._pinned_version(name, text)  # 取不到会抛错
+            assert "TRADE_HERMES_REF" in text, f"{name} 未提供 TRADE_HERMES_REF 覆盖入口"
+
+    def test_clone_uses_the_ref_variable_not_hardcoded_main(self):
+        """克隆必须走 ref 变量 —— 写死 main 会让固定版本静默失效。"""
+        assert '--branch "$ref"' in SH, "install.sh 的克隆未使用 ref 变量"
+        assert "--branch $Ref" in PS1, "install.ps1 的克隆未使用 Ref 变量"
+
+    def test_hermes_step_passes_the_pinned_ref(self):
+        """Step 2 调用克隆辅助函数时必须把固定版本传进去（漏传 = 退回 main）。"""
+        assert (
+            '_clone_or_update "hermes-agent" "$HERMES_REPO" "$HERMES_DIR" "$HERMES_REF"'
+            in SH
+        ), "install.sh 的 Hermes 步骤未传固定版本"
+        assert (
+            'Invoke-CloneOrUpdate "hermes-agent" $HermesRepo $HermesDir $HermesRef'
+            in PS1
+        ), "install.ps1 的 Hermes 步骤未传固定版本"
+
+    def test_pinned_version_is_declared_compatible(self):
+        """脚本固定的版本必须在 COMPATIBILITY.md 里标为兼容 —— 两边不许漂移。
+
+        这条防的是「升了脚本的 pin、忘了核对/记录」：那会装出一个没验证过的版本。
+        """
+        compat = (ROOT / "COMPATIBILITY.md").read_text(encoding="utf-8")
+        for name, text in (("install.sh", SH), ("install.ps1", PS1)):
+            ver = self._pinned_version(name, text)
+            assert any(
+                line.startswith(f"| {ver} ") and "✅" in line
+                for line in compat.splitlines()
+            ), f"{name} 固定的 {ver} 未在 COMPATIBILITY.md 中标记为兼容"
+
+    def test_pinned_version_matches_between_scripts(self):
+        """两个脚本固定同一版本（跨平台一致性）。"""
+        assert self._pinned_version("install.sh", SH) == self._pinned_version("install.ps1", PS1)
+
+    def test_readme_manual_install_uses_the_same_pin(self):
+        """README 的手动安装命令必须与脚本同一固定版本（三处不许漂移）。
+
+        手动安装是「方式 3」，走 README 的用户不经过安装脚本 —— 这里不钉住的话，
+        脚本固定了、文档还在装 main，问题原样复现。
+        """
+        pin = "v" + self._pinned_version("install.sh", SH)
+        for name in ("README.md", "README.en.md"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            lines = [ln for ln in text.splitlines() if "NousResearch/hermes-agent.git" in ln]
+            assert lines, f"{name} 未见 Hermes 克隆命令"
+            for ln in lines:
+                assert pin in ln, f"{name} 的 Hermes 克隆未用固定版本 {pin}：{ln.strip()}"
+
+
 @pytest.mark.skipif(
     os.name == "nt",
     reason="需要真正的 POSIX bash：Windows runner 上的 bash 只是 WSL 存根（无发行版）。"
@@ -128,13 +209,14 @@ class TestCloneHelperBehaviour:
         subprocess.run([*git, "commit", "-qm", "init"], cwd=path, check=True)
         return path
 
-    def _run_helper(self, repo: str, dest: pathlib.Path) -> tuple[str, int]:
+    def _run_helper(self, repo: str, dest: pathlib.Path, ref: str | None = None) -> tuple[str, int]:
         import subprocess
 
+        extra = f' "{ref}"' if ref else ""
         script = (
             "log_info(){ :; }; log_ok(){ :; }; log_warn(){ :; }; log_err(){ :; }\n"
             + self._extract_helper()
-            + f'\n_clone_or_update "test" "{repo}" "{dest}" && echo RESULT_OK || echo RESULT_FAIL\n'
+            + f'\n_clone_or_update "test" "{repo}" "{dest}"{extra} && echo RESULT_OK || echo RESULT_FAIL\n'
         )
         proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
         return proc.stdout + proc.stderr, proc.returncode
@@ -176,6 +258,44 @@ class TestCloneHelperBehaviour:
 
         assert "RESULT_FAIL" in out, out
         assert rc == 0  # 脚本自身正常结束，失败通过返回值表达
+
+    def test_pinned_ref_clones_that_tag_and_never_moves_to_main(self, tmp_path):
+        """固定版本模式：克隆指定 tag，且**再次运行时不得被拖到 main 尖端**。
+
+        背景：main 每天前进约 200 个提交，一旦越出 Trade 的兼容窗口
+        （0.13.0 ≤ v < 0.22.0），新装机器会「装得上、起不来」。所以安装脚本把
+        Hermes 固定在已核对兼容的 release tag 上 —— 而固定只有在**不会**被
+        后续 pull main 悄悄带走时才有意义（在 tag 检出上 `git pull origin main`
+        会直接快进到 main 尖端）。
+        """
+        import subprocess
+
+        src = self._make_local_repo(tmp_path / "src_pin")
+        git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(["git", "tag", "v0.21.7"], cwd=src, check=True)
+        tag_sha = subprocess.run(
+            ["git", "rev-parse", "v0.21.7"], cwd=src, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        dest = tmp_path / "dest_pin"
+        out, _ = self._run_helper(str(src), dest, ref="v0.21.7")
+        assert "RESULT_OK" in out, out
+        head1 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert head1 == tag_sha, f"克隆未落在固定 tag 上：{out}"
+
+        # 源仓库 main 前进（模拟上游发新版），再次运行安装脚本
+        (src / "new.txt").write_text("新提交", encoding="utf-8")
+        subprocess.run([*git, "add", "-A"], cwd=src, check=True)
+        subprocess.run([*git, "commit", "-qm", "advance main"], cwd=src, check=True)
+
+        out2, _ = self._run_helper(str(src), dest, ref="v0.21.7")
+        assert "RESULT_OK" in out2, out2
+        head2 = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert head2 == tag_sha, f"固定 tag 被拖到了 main 尖端（固定失效）：{out2}"
 
 
 class TestLauncherDisablesHermesLazyInstalls:

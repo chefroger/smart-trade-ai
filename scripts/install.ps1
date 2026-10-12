@@ -60,10 +60,12 @@ Write-Host "  ✓ 虚拟环境就绪 ($VenvDir)" -ForegroundColor Green
 #   1. 只有目录**是有效 git 仓库**（.git 且 HEAD 可解析）才算「已安装」。克隆被中断时
 #      git 会留下空目录，旧逻辑 Test-Path 会把它当成已装 → 之后 pull 静默失败、
 #      pip 在残缺树里报出误导性错误，且**重试永远无法恢复**。
-#   2. 浅克隆 --depth 1：全历史克隆在弱网下最慢、最易失败。
+#   2. 浅克隆 --depth 1：全历史克隆在弱网下最慢、最易失败。跟 main 时本地没有 tag，
+#      Hermes 版本推导会退化为「未知」（Trade 警告后继续启动）；固定版本模式
+#      （--branch <tag>）会把该 tag 一并带上，版本可正常解出。
 #   3. 不吞 git 的 stderr：用户要靠它排查网络问题。
 function Invoke-CloneOrUpdate {
-    param([string]$Name, [string]$Repo, [string]$Dest)
+    param([string]$Name, [string]$Repo, [string]$Dest, [string]$Ref = "main")
 
     $isRepo = $false
     if (Test-Path "$Dest\.git") {
@@ -72,6 +74,12 @@ function Invoke-CloneOrUpdate {
     }
 
     if ($isRepo) {
+        # 固定版本模式（Ref != main，Hermes 用）：不 pull —— 在 tag 检出上 pull main
+        # 会把它拖到 main 尖端，固定就失去意义。已有检出保持原样。
+        if ($Ref -ne "main") {
+            Write-Host "  → 已有 $Name 检出，保持现状（固定版本 $Ref，不跟随 main）" -ForegroundColor Cyan
+            return $true
+        }
         Write-Host "  → 更新已有仓库..." -ForegroundColor Cyan
         git -C $Dest pull --ff-only origin main
         if ($LASTEXITCODE -ne 0) {
@@ -86,7 +94,7 @@ function Invoke-CloneOrUpdate {
     }
 
     New-Item -ItemType Directory -Path (Split-Path $Dest -Parent) -Force | Out-Null
-    git clone --depth 1 --branch main $Repo $Dest
+    git clone --depth 1 --branch $Ref $Repo $Dest
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  ✗ 无法克隆 $Name（git 的报错见上）。请确认网络后重新运行本脚本。" -ForegroundColor Red
         return $false
@@ -102,6 +110,15 @@ Write-Host "Step 2/5: 安装 hermes-agent" -ForegroundColor White
 
 $HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
 
+# Hermes 固定版本（安装时装这个 tag，而不是 main 尖端）。
+#
+# 为什么固定：main 每天都在前进，一旦上游版本号越出 Trade 声明的兼容窗口
+# （0.13.0 ≤ v < 0.22.0，见 trade/bootstrap.py 与 pre_install_check.py），新装的机器
+# 会「装得上、起不来」—— 最坏的一类安装问题。固定到已核对兼容的 release tag 就能
+# 从根上避免，同时让装机结果可复现。更新时同步三处：COMPATIBILITY.md 兼容性矩阵、
+# 本文件、install.sh。临时装别的版本：$env:TRADE_HERMES_REF = "v0.21.6" 后重跑。
+$HermesRef = if ($env:TRADE_HERMES_REF) { $env:TRADE_HERMES_REF } else { "v0.21.7" }
+
 # 注意：PowerShell 里**原生命令非零退出不会抛异常**，所以不能用 try/catch 判断成败，
 # 必须显式看 $LASTEXITCODE（旧代码的 try/catch 从不触发 → 整个安装分支是死代码）。
 & $PyCmd -c "import hermes_cli" 2>$null
@@ -109,12 +126,12 @@ if ($LASTEXITCODE -eq 0) {
     $hermesVer = & $PyCmd -c "import hermes_cli; print(hermes_cli.__version__)" 2>$null
     Write-Host "  ✓ hermes-agent 已安装 (v$hermesVer)" -ForegroundColor Green
 } else {
-    Write-Host "  → 正在安装 hermes-agent ..." -ForegroundColor Cyan
+    Write-Host "  → 正在安装 hermes-agent（固定版本 $HermesRef）..." -ForegroundColor Cyan
 
     $HermesRepo = "https://github.com/NousResearch/hermes-agent.git"
     $HermesDir = "$HermesHome\hermes-agent"
 
-    if (-not (Invoke-CloneOrUpdate "hermes-agent" $HermesRepo $HermesDir)) { exit 1 }
+    if (-not (Invoke-CloneOrUpdate "hermes-agent" $HermesRepo $HermesDir $HermesRef)) { exit 1 }
 
     Push-Location $HermesDir
     & $PipCmd install -e "."

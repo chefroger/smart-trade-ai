@@ -131,8 +131,10 @@ python server.py
 **Prerequisites**: Python >= 3.11 · Git · LLM API Key (DeepSeek recommended; OpenAI / Anthropic etc. also compatible)
 
 ```bash
-# 1. Install Hermes Agent (AI engine)
-git clone --branch main https://github.com/NousResearch/hermes-agent.git ~/.hermes/hermes-agent
+# 1. Install Hermes Agent (AI engine) — use the pinned version, not main:
+#    main moves daily; once it leaves the supported window (0.13.0 ≤ v < 0.22.0)
+#    the install succeeds but Trade refuses to start.
+git clone --branch v0.21.7 https://github.com/NousResearch/hermes-agent.git ~/.hermes/hermes-agent
 cd ~/.hermes/hermes-agent && pip install -e "."
 
 # 2. Configure LLM

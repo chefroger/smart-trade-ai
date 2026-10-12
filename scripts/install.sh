@@ -26,13 +26,20 @@ log_step()  { echo -e "\n${BOLD}════════════════
 #      随后 `git pull` 静默失败、`pip install -e .` 在残缺树里报出误导性错误，
 #      而且**重试永远无法恢复**，用户只能手动删目录。
 #   2. 用浅克隆 `--depth 1`：全历史克隆在弱网下最慢、最易失败（README 本身就提醒
-#      用户要有稳定网络）。代价是本地没有 tag，Hermes 版本推导会退化为「未知」，
-#      Trade 会打印警告并继续启动，不影响使用。
+#      用户要有稳定网络）。跟 main 时本地没有 tag，Hermes 版本推导会退化为「未知」，
+#      Trade 会打印警告并继续启动，不影响使用；固定版本模式（`--branch <tag>`）
+#      会把该 tag 一并带上，版本可正常解出。
 #   3. 不吞 git 的 stderr：README 让用户按网络问题排查，看不到真实报错就没法排查。
 _clone_or_update() {
-    local name="$1" repo="$2" dest="$3"
+    local name="$1" repo="$2" dest="$3" ref="${4:-main}"
     # 目录存在且是有效仓库 → 拉取更新
     if [ -d "$dest/.git" ] && git -C "$dest" rev-parse --verify HEAD >/dev/null 2>&1; then
+        # 固定版本模式（ref != main，Hermes 用）：不 pull —— 在 tag 检出上 pull main
+        # 会把它拖到 main 尖端，固定就失去意义。已有检出保持原样。
+        if [ "$ref" != "main" ]; then
+            log_info "已有 $name 检出，保持现状（固定版本 $ref，不跟随 main）"
+            return 0
+        fi
         log_info "更新已有仓库..."
         git -C "$dest" pull --ff-only origin main || log_warn "git pull 失败，继续使用现有代码"
         return 0
@@ -43,7 +50,7 @@ _clone_or_update() {
         rm -rf "$dest"
     fi
     mkdir -p "$(dirname "$dest")"
-    git clone --depth 1 --branch main "$repo" "$dest" || {
+    git clone --depth 1 --branch "$ref" "$repo" "$dest" || {
         log_err "无法克隆 $name（git 的报错见上）。请确认网络/VPN 后重新运行本脚本。"
         return 1
     }
@@ -138,21 +145,31 @@ PY="$VENV_DIR/bin/python"
 log_ok "虚拟环境就绪 ($VENV_DIR)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2: 安装 hermes-agent 
+# Step 2: 安装 hermes-agent
 # ─────────────────────────────────────────────────────────────────────────────
 log_step "Step 2/5: 安装 hermes-agent"
 
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 
+# Hermes 固定版本（安装时装这个 tag，而不是 main 尖端）。
+#
+# 为什么固定：main 每天都在前进（实测平均约 200 提交/天），一旦上游版本号越出
+# Trade 声明的兼容窗口（0.13.0 ≤ v < 0.22.0，见 trade/bootstrap.py 与
+# pre_install_check.py），新装的机器会「装得上、起不来」—— 这是最坏的一类安装问题。
+# 固定到一个**已核对兼容**的 release tag 就能从根上避免，同时也让装机结果可复现。
+# 该数字是单一事实来源，更新时同步：COMPATIBILITY.md 的兼容性矩阵 + 本文件 + install.ps1。
+# 需要临时装别的版本时用环境变量覆盖：TRADE_HERMES_REF=v0.21.6
+HERMES_REF="${TRADE_HERMES_REF:-v0.21.7}"
+
 if "$PY" -c "import hermes_cli" 2>/dev/null; then
     hermes_ver=$("$PY" -c "import hermes_cli; print(hermes_cli.__version__)" 2>/dev/null || echo "unknown")
     log_ok "hermes-agent 已安装 (v$hermes_ver)"
 else
-    log_info "正在安装 hermes-agent..."
+    log_info "正在安装 hermes-agent（固定版本 $HERMES_REF）..."
     HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
     HERMES_DIR="$HERMES_HOME/hermes-agent"
 
-    _clone_or_update "hermes-agent" "$HERMES_REPO" "$HERMES_DIR" || exit 1
+    _clone_or_update "hermes-agent" "$HERMES_REPO" "$HERMES_DIR" "$HERMES_REF" || exit 1
 
     cd "$HERMES_DIR"
     "$PIP" install -e "."

@@ -467,7 +467,7 @@ trade doctor
 
 ```
 ══ Trade 自检 ══
-  ✓ Hermes 版本: 0.21.4（要求 >=0.13.0,<0.22.0）
+  ✓ Hermes 版本: 0.21.7（要求 >=0.13.0,<0.22.0）
   ✓ Agent 构造: run_agent.AIAgent
   ✓ vision 工具在场: vision_analyze 在工具表中
   ✓ vision 读图: deepseek-flash 正确读出探测文字
