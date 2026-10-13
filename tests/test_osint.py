@@ -679,3 +679,55 @@ class TestIDNTargetDetection:
 
 # 注：离线桩统一在文件顶部的 `_osint_stays_offline` fixture 里定义
 # （模块级 autouse，覆盖 WHOIS / DNS / 制裁下载 / 官网抓取四个传输层）。
+
+
+class TestTechStackPrecision:
+    """检测必须"域名/路径锚定"，不能靠正文里的裸产品名。
+
+    实测背景（Muse 复核反馈）：github.com 被判成 Shopify、wordpress.com 的集成
+    列表页把 Hotjar/HubSpot/Salesforce 全点亮 —— 这些词只是被"提到"。
+    危害不止列表难看：is_enterprise 会触发「✅ 可信度 +1」，**误报等于给可疑
+    网站加分**（假绿灯）。所以两个方向都要钉住：提到≠用了，真用了要能认出来。
+    """
+
+    def _page(self, body: str) -> dict:
+        return detect_tech_stack(
+            "https://demo.example.com",
+            opener=lambda req, timeout=15: _FakeHTTPResponse(body),
+        )
+
+    def test_mention_only_page_flags_nothing(self):
+        """正文里"提到"这些产品名，不得被判定为使用它们（Muse 反馈的两个实例）。"""
+        html = (
+            "<html><body><h1>对比评测</h1>"
+            "<p>我们对比了 Shopify、Stripe、PayPal、HubSpot、Salesforce、"
+            "Hotjar、Marketo、Zendesk、WordPress、Cloudflare 等工具。</p>"
+            "</body></html>"
+        )
+        res = self._page(html)
+        for name in ("Shopify", "Stripe", "PayPal", "HubSpot", "Salesforce", "Hotjar"):
+            assert name not in res["technologies"], f"仅提及就被判成使用了 {name}"
+        assert res["is_enterprise"] is False, "仅提及就给「企业级」可信度加分会误导"
+
+    def test_real_asset_urls_are_still_detected(self):
+        """真用了的必须认出来（收紧不能把召回打没）。"""
+        html = (
+            '<html><head>'
+            '<script src="https://cdn.shopify.com/s/files/1/0/demo.js"></script>'
+            '<script src="https://js.stripe.com/v3/"></script>'
+            '<script src="https://static.hotjar.com/c/hotjar-1.js"></script>'
+            '<script src="https://js.hs-scripts.com/123.js"></script>'
+            '<link rel="stylesheet" href="/wp-content/themes/x/style.css">'
+            "</head></html>"
+        )
+        res = self._page(html)
+        for name in ("Shopify", "Stripe", "Hotjar", "HubSpot", "WordPress"):
+            assert name in res["technologies"], f"真用了却没检出 {name}"
+        assert res["is_enterprise"] is True, "真用企业级服务时应给出可信度加分"
+
+    def test_cloudflare_cdnjs_is_not_cloudflare_edge(self):
+        """从 cdnjs 引库 ≠ 网站用了 Cloudflare 的边缘/安全（原裸名匹配的经典误报）。"""
+        html = '<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>'
+        res = self._page(html)
+        assert "Cloudflare" not in res["technologies"]
+        assert res["is_enterprise"] is False

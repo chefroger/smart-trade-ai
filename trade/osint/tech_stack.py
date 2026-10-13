@@ -126,18 +126,26 @@ def detect_tech_stack(url: str, *, opener=None) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # 支持的技术检测模式：正则 → 技术名
+#
+# **精度要求（2026-10-13 起）：喂给可信度评分的信号必须"域名/路径锚定"。**
+# 裸产品名（`shopify`、`stripe`、`paypal`…）会让页面**只要提到**这个词就被判成用了它 ——
+# 实测两例：github.com 被判成 Shopify、wordpress.com 的集成列表页把
+# Hotjar/HubSpot/Salesforce 全点亮。危害不只是列表难看：`is_enterprise` 会触发
+# 「✅ 网站使用企业级技术栈，可信度 +1」，**误报等于给可疑网站加分**（假绿灯）。
+# 锚定的判据：真实的资源 URL / 路径特征（cdn.shopify.com、js.stripe.com…），
+# 而不是正文里出现过的字眼。
 _TECH_PATTERNS: list[tuple[str, str]] = [
     # 建站平台
-    (r"shopify", "Shopify"),
-    (r"wp-content|wp-includes|wordpress", "WordPress"),
-    (r"wix\.com", "Wix"),
-    (r"squarespace", "Squarespace"),
-    (r"strikingly", "Strikingly"),
-    (r"woocommerce", "WooCommerce"),
-    (r"drupal", "Drupal"),
-    (r"joomla", "Joomla"),
-    (r"laravel", "Laravel"),
-    # 前端框架
+    (r"cdn\.shopify\.com|myshopify\.com|shopifycdn|shopify\.com/s/files", "Shopify"),
+    (r"wp-content|wp-includes", "WordPress"),
+    (r"wix\.com|wixstatic\.com", "Wix"),
+    (r"squarespace\.com|static1\.squarespace\.com|sqsp\.net", "Squarespace"),
+    (r"strikingly\.com|strikinglycdn", "Strikingly"),
+    (r"wp-content/plugins/woocommerce|woocommerce-page|wc-ajax", "WooCommerce"),
+    (r"sites/default/files|drupal-settings-json|core/misc/drupal", "Drupal"),
+    (r"/media/jui/|joomla-script-options|/components/com_", "Joomla"),
+    (r"laravel_session|/vendor/laravel|livewire", "Laravel"),
+    # 前端框架（仅信息展示，不参与可信度评分；保持宽松以保召回）
     (r"react|reactjs", "React"),
     (r"vue\.js|vuejs", "Vue.js"),
     (r"angular", "Angular"),
@@ -146,22 +154,22 @@ _TECH_PATTERNS: list[tuple[str, str]] = [
     (r"tailwind", "Tailwind CSS"),
     (r"jquery", "jQuery"),
     # CDN / 安全
-    (r"cloudflare", "Cloudflare"),
-    (r"akamai", "Akamai"),
-    (r"fastly", "Fastly"),
+    (r"cdn-cgi/|__cfduid|cf-ray", "Cloudflare"),   # 被 CF 代理的站点会带 /cdn-cgi/ 注入
+    (r"akamaihd\.net|akamaized\.net|akamai\.net", "Akamai"),
+    (r"fastly\.net|fastlylb", "Fastly"),
     # 支付
-    (r"stripe", "Stripe"),
-    (r"paypal", "PayPal"),
+    (r"js\.stripe\.com|api\.stripe\.com|stripe\.com/v3", "Stripe"),
+    (r"paypalobjects\.com|paypal\.com/sdk|paypal\.com/webstatic", "PayPal"),
     # 分析 / 营销
-    (r"google-tag-manager|googletagmanager", "Google Tag Manager"),
-    (r"google-analytics|analytics\.js|ga\.js", "Google Analytics"),
-    (r"facebook\.com/tr", "Facebook Pixel"),
-    (r"hotjar", "Hotjar"),
-    (r"hubspot", "HubSpot"),
-    (r"marketo", "Marketo"),
+    (r"google-tag-manager|googletagmanager\.com", "Google Tag Manager"),
+    (r"google-analytics\.com|analytics\.js|ga\.js", "Google Analytics"),
+    (r"facebook\.com/tr|connect\.facebook\.net", "Facebook Pixel"),
+    (r"static\.hotjar\.com|hotjar\.com/c/|hjsiteSettings", "Hotjar"),
+    (r"js\.hs-scripts\.com|hs-analytics|hsforms\.net|hubspot\.com/forms", "HubSpot"),
+    (r"marketo\.com|mktoresp\.com|mktoForms", "Marketo"),
     # CRM / 客服
-    (r"zendesk", "Zendesk"),
-    (r"salesforce", "Salesforce"),
+    (r"zdassets\.com|zendesk\.com|zopim\.com", "Zendesk"),
+    (r"\.salesforce\.com|force\.com|salesforceliveagent", "Salesforce"),
     (r"shopify-api|shopify-checkout", "Shopify API"),
 ]
 
