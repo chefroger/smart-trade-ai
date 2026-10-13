@@ -352,6 +352,41 @@ def match_skill(query: str) -> dict | None:
     return get_skill_by_name(results[0]["skill_name"])
 
 
+def match_skill_routed(query: str) -> dict | None:
+    """Skill 路由总入口（优化路线 P0-1）。
+
+    TRADE_ROUTER_MODE=hybrid 时走"关键词快路径 + 语义兜底"的混合路由，
+    否则沿用原关键词路由（默认行为不变）。
+
+    返回值与 match_skill 完全一致（skill dict 或 None），调用方
+    （helpers.py）可直接把 match_skill 换成它。混合模式下命中来源
+    与备选会记入日志，便于线上调参观察。
+    """
+    import logging
+
+    mode = os.environ.get("TRADE_ROUTER_MODE", "keyword").strip().lower()
+    if mode != "hybrid":
+        return match_skill(query)
+    try:
+        from trade.skill_semantic import match_skill_hybrid
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            "trade.skill_semantic 不可用，回退关键词路由"
+        )
+        return match_skill(query)
+    best, alternatives = match_skill_hybrid(query)
+    if best is None:
+        return None
+    logging.getLogger(__name__).info(
+        "hybrid router: query=%r -> %s (source=%s, alternatives=%s)",
+        query[:60],
+        best["skill_name"],
+        best.get("source"),
+        [a["skill_name"] for a in alternatives],
+    )
+    return get_skill_by_name(best["skill_name"])
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # QA 对检索（从 references/qa_pairs.md 加载结构化知识）
 # ─────────────────────────────────────────────────────────────────────────────

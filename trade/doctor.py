@@ -372,10 +372,71 @@ def _probe_chat_live() -> tuple[bool, str]:
 
 # ── 编排、持久化、报告 ────────────────────────────────────────────────────
 
+def check_post_install() -> list[CheckResult]:
+    """安装后自检：可选但重要的外部依赖是否真的可用（优化路线 P1-4）。
+
+    背景：README 反复出现"助手回报安装成功、实际完全不能用"的事故，
+    根因都是外部依赖（Hermes/Hindsight/holehe）只看了"装没装"、
+    没验证"能不能用"。本检查做最小可用性探测：
+      - import 能成功（装没装）
+      - 关键符号/最小调用能跑通（能不能用）
+    缺失项一律 fatal=False（功能降级但不阻断），但必须在报告里说清楚
+    哪一层能力会缺失 —— 延续项目"不给虚假绿灯"的设计。
+    """
+    out: list[CheckResult] = []
+
+    # holehe：OSINT Layer 1 邮箱注册检测。缺失时该层静默跳过。
+    try:
+        import holehe  # noqa: F401
+        out.append(CheckResult("holehe（邮箱注册检测）", STATUS_OK, "已安装，Layer 1 可用"))
+    except ImportError:
+        out.append(CheckResult(
+            "holehe（邮箱注册检测）", STATUS_WARN,
+            "未安装：OSINT 报告将缺失 120+ 平台注册检测。如需请按文档安装 holehe",
+        ))
+
+    # Hindsight：长期记忆后端。复用 trade.memory 的可用性检测。
+    try:
+        from trade.memory import is_available as _mem_available
+        ok = bool(_mem_available())
+        out.append(CheckResult(
+            "Hindsight（长期记忆）",
+            STATUS_OK if ok else STATUS_WARN,
+            "已配置，跨会话记忆可用" if ok else "未安装/未配置：记忆降级为会话内（不阻断）",
+        ))
+    except Exception as e:
+        out.append(CheckResult("Hindsight（长期记忆）", STATUS_WARN, f"检查失败：{e}"))
+
+    # sqlite-vec：语义检索（优化路线 P0-2）。缺失时自动降级关键词检索。
+    try:
+        from trade.vec_search import vec_available
+        ok = bool(vec_available())
+        out.append(CheckResult(
+            "sqlite-vec（语义检索）",
+            STATUS_OK if ok else STATUS_WARN,
+            "可用：客户/文档支持语义搜索" if ok else "未安装：已降级为关键词检索（pip install sqlite-vec 可启用）",
+        ))
+    except Exception as e:
+        out.append(CheckResult("sqlite-vec（语义检索）", STATUS_WARN, f"检查失败：{e}"))
+
+    # sentence-transformers：高质量 embedding（可选）。缺失时用零依赖 TF-IDF。
+    try:
+        import sentence_transformers  # noqa: F401
+        out.append(CheckResult("sentence-transformers", STATUS_OK, "已安装，语义路由质量更优"))
+    except ImportError:
+        out.append(CheckResult(
+            "sentence-transformers", STATUS_WARN,
+            "未安装：使用内置 TF-IDF 后端（离线可用，改写查询召回稍弱）",
+        ))
+
+    return out
+
+
 def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     """跑全部检查。deep=False 时跳过所有真实请求（快检，零 token）。"""
     results: list[CheckResult] = []
     results += check_hermes_runtime()
+    results += check_post_install()
     if deep:
         results += check_vision()
         results += check_tavily()

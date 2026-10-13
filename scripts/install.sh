@@ -197,6 +197,18 @@ cd "$TRADE_DIR"
 # 装依赖（不含 hermes-agent，它在 Step 2 已装进 venv）+ trade 自身
 "$PIP" install -r requirements.txt
 "$PIP" install -e "." --no-deps
+
+# 可选依赖：客户语义检索用的向量扩展（sqlite-vec）。
+# **单独装、失败只警告** —— 它不是主链依赖：不装则语义检索自动降级关键词，
+# 其余功能零影响；而个别平台（如 Windows ARM）没有对应 wheel，
+# 不能因为一个可选能力让整台机器的安装失败。
+if "$PY" -c "import sqlite_vec" 2>/dev/null; then
+    log_ok "sqlite-vec 已安装（客户语义检索可用）"
+elif "$PIP" install "sqlite-vec>=0.1.6" >/dev/null 2>&1; then
+    log_ok "sqlite-vec 安装完成（客户语义检索可用）"
+else
+    log_warn "sqlite-vec 未安装：客户语义检索将降级为关键词检索（其余功能不受影响）"
+fi
 cd - >/dev/null
 
 log_ok "Foreign Trade Assistant 安装完成"

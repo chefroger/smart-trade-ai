@@ -75,6 +75,12 @@ desktop = [
   "pywebview>=5.0",
   "pyinstaller>=6.0",
 ]
+semantic = [
+  # 语义检索（优化路线 P0-2）：sqlite-vec 是 SQLite 向量扩展，
+  # 纯本地、无服务器。缺失时 trade.vec_search 自动降级为关键词检索，
+  # 故为 optional 而非 required。安装：pip install -e ".[semantic]"
+  "sqlite-vec>=0.1.6",
+]
 
 [project.scripts]
 # 指向**包内**入口：原先写 server:main，而 server.py 在仓库根、不被打包，

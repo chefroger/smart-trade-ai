@@ -181,6 +181,37 @@ def get_customer_duplicates(cid: int = Depends(require_company)):
     return customer_module.find_duplicates(cid)
 
 
+@router.get("/customers/search")
+def search_customers(
+    q: str,
+    limit: int = 20,
+    cid: int = Depends(require_company),
+):
+    """按语义搜索客户（向量优先，不可用/无命中时自动降级关键词）。
+
+    注意必须声明在 `/customers/{customer_id}` 之前 —— 否则 "search" 会被
+    当成 customer_id 去转 int。
+    """
+    from trade.database import get_connection
+    from trade.vec_search import search_customers as _search
+
+    query = (q or "").strip()
+    if not query:
+        return []
+    conn = get_connection()
+    try:
+        hits = _search(conn, query, company_id=cid, top_k=max(1, min(limit, 100)))
+        out = []
+        for h in hits:
+            cust = customer_module.get(h["customer_id"], company_id=cid)
+            if cust:
+                cust["match_score"] = h.get("score")  # 排序依据，附带返回
+                out.append(cust)
+        return out
+    finally:
+        conn.close()
+
+
 # ── 客户详情 / 更新 / 删除（{customer_id} 通配路由必须在字面路由之后）─
 
 @router.get("/customers/{customer_id}")

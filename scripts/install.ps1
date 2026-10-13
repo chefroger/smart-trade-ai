@@ -178,6 +178,22 @@ if ($LASTEXITCODE -ne 0) {
     Pop-Location
     exit 1
 }
+
+# 可选依赖：客户语义检索用的向量扩展（sqlite-vec）。
+# **单独装、失败只警告** —— 不是主链依赖：不装则语义检索自动降级关键词，
+# 其余功能零影响；个别平台（如 Windows ARM）没有对应 wheel，
+# 不能因为一个可选能力让整台机器的安装失败。
+& $PyCmd -c "import sqlite_vec" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  ✓ sqlite-vec 已安装（客户语义检索可用）" -ForegroundColor Green
+} else {
+    & $PipCmd install "sqlite-vec>=0.1.6" *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  ✓ sqlite-vec 安装完成（客户语义检索可用）" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠ sqlite-vec 未安装：客户语义检索将降级为关键词检索（其余功能不受影响）" -ForegroundColor Yellow
+    }
+}
 Pop-Location
 
 # 真实探针：确认装完确实能导入（与 Step 2 的 `import hermes_cli` 对齐）。

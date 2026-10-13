@@ -135,8 +135,14 @@ async def osint_full_check(
 
     # ── Layer 5 (可选): 制裁名单筛查 ───────────────────────────────────
     if include_sanctions:
-        # 用户选择制裁筛查时，用域名或原始目标进行匹配
-        sanctions_name = domain_from_email or target
+        # 用户选择制裁筛查时，优先用公司名匹配（优化路线 P0-3）。
+        # 直接拿域名（如 acme.com）去匹配公司名名单命中率很低，
+        # 先尝试从官网 title 解析公司名，失败则回退用域名原文（保持原行为）。
+        #
+        # 解析会发一次官网 HTTP 请求（阻塞）→ 必须进 executor，与本文件其它
+        # 阻塞调用（whois / 邮箱验证 / 制裁下载）同一规矩，别卡住事件循环。
+        resolved_name = await loop.run_in_executor(None, _resolve_entity_name, lookup_domain)
+        sanctions_name = resolved_name or (domain_from_email or target)
         # 制裁筛查可能涉及文件下载，放入 executor
         sanctions_result = await loop.run_in_executor(None, check_sanctions, sanctions_name)
         report["layers"]["sanctions"] = sanctions_result
@@ -233,11 +239,55 @@ def _detect_target_type(target: str) -> str:
     if target.startswith(("http://", "https://")):
         # 以 http(s):// 开头 → 视为 URL
         return "url"
-    if re.match(r"^[a-z0-9]([a-z0-9-]+\.)+[a-z]{2,}$", target.lower()):
-        # 符合标准域名格式（如 example.com）→ 视为域名
+    # IDN（中文域名等）先转 punycode 再匹配，否则"例子.中国"会被误判成公司名
+    try:
+        ascii_target = target.encode("idna").decode("ascii")
+    except Exception:
+        ascii_target = target
+    # TLD 既可能是纯字母（com/de/io），也可能是 **punycode**（中文域名的顶级域，
+    # 如 中国 → xn--fiqs8s）—— 后者含数字和连字符，只写 [a-z]{2,} 会漏判 IDN 域名。
+    if re.match(r"^[a-z0-9]([a-z0-9-]+\.)+([a-z]{2,}|xn--[a-z0-9]+)$", ascii_target.lower()):
+        # 符合标准域名格式（如 example.com / 例子.中国）→ 视为域名
         return "domain"
     # 以上都不匹配 → 视为公司名称
     return "company"
+
+
+def _resolve_entity_name(domain: str | None, *, fetcher=None) -> str | None:
+    """域名 → 公司名（供制裁名单筛查用）。
+
+    用官网 `<title>` 取主标题（分隔符前的部分）。
+
+    **为什么不用 WHOIS 注册人**：本项目的 whois 层不提取注册人信息
+    （`registrant_name` 字段恒为 None —— GDPR 后绝大多数 TLD 已脱敏，
+    解析出来的也多为隐私代理名）。曾经想复用它省一次请求，但那是一条
+    永远走不到的死路；这里如实去掉，只留真正有信号的一条。
+
+    Args:
+        fetcher: 可选注入的取页面函数（测试用；默认 http_get，自带 SSRF 防护）。
+
+    解析失败返回 None，调用方回退用域名原文（保持原行为）。
+    """
+    if not domain:
+        return None
+
+    # 官网 <title>
+    try:
+        from trade.osint.constants import http_get  # 懒加载，避免循环导入
+
+        fetch = fetcher or http_get
+        html = fetch(f"https://{domain}", timeout=15)
+        if html:
+            m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+            if m:
+                title = re.sub(r"\s+", " ", m.group(1)).strip()
+                # 去掉分隔符后的后缀："ACME Corp | Official Site" -> "ACME Corp"
+                title = re.split(r"\s*[|\-–—]\s*", title)[0].strip()
+                if len(title) >= 3:
+                    return title
+    except Exception:
+        pass
+    return None
 
 
 async def _run_email_check(email: str) -> dict:

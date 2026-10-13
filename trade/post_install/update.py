@@ -224,6 +224,42 @@ def _ensure_linux_auto_start(trade_dir: Path) -> None:
     print("  ✓ 已设置开机自启动")
 
 
+# ── 可选依赖（best-effort）───────────────────────────────────────────────
+
+# 客户语义检索用的向量扩展。**不是主链依赖**：不装则语义检索自动降级关键词，
+# 其余功能零影响。单独装、失败只警告 —— 个别平台（如 Windows ARM）没有
+# 对应 wheel，不能让一个可选能力把整次升级搞失败。
+_OPTIONAL_DEPS = ("sqlite-vec>=0.1.6",)
+
+
+def _install_optional_deps(emit, warnings: list[str]) -> None:
+    """装可选依赖；已装则跳过，任何失败只记警告，绝不阻断升级。
+
+    emit 由调用方传入（update_trade() 里的闭包，同时 print + 记 messages）——
+    本函数是模块级的，拿不到那个闭包。
+    """
+    try:
+        import sqlite_vec  # noqa: F401
+
+        return  # 已装
+    except ImportError:
+        pass
+    emit("→ Step 4b: 可选依赖（客户语义检索）...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", *_OPTIONAL_DEPS],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode == 0:
+            emit("  ✓ sqlite-vec 已启用（客户语义检索可用）")
+        else:
+            emit("  ⚠ sqlite-vec 安装失败：语义检索降级为关键词（其余功能不受影响）")
+            warnings.append("optional dep sqlite-vec failed to install")
+    except Exception as e:  # 超时/环境异常都不该拖垮升级
+        emit(f"  ⚠ 可选依赖安装跳过：{e}")
+        warnings.append(f"optional dep install skipped: {e}")
+
+
 # ── 一键更新主函数 ────────────────────────────────────────────────────────
 
 def update_trade() -> dict:
@@ -408,6 +444,9 @@ def update_trade() -> dict:
         errors.append(f"pip install failed: {err[:200]}")
         return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
     _emit("  ✓ Package updated")
+
+    # ── Step 4b: 可选依赖（best-effort，失败只警告）────────────────────────
+    _install_optional_deps(_emit, warnings)
 
     # ── Step 5: template sync ─────────────────────────────────────────────
     _emit("→ Step 5/7: template sync ...")

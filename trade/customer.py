@@ -6,6 +6,7 @@ B2B 客户 CRUD，支持可选的文档库关联。
 """
 
 import json
+import os
 
 from trade.database import get_connection
 
@@ -65,27 +66,42 @@ def create(
         # 软去重检查：在同一连接内用 SQL json_extract 做原子查询，
         # 消除之前 list_by_company() 跨连接的 TOCTOU 竞态窗口
         _warn = None
+        _dup_id = None
+        # 去重策略（优化路线 P1-5）：warn=只警告仍写入（默认，保持兼容）；
+        # block=命中重复时拒绝写入；suggest=警告并返回候选 id 供上层合并。
+        dedup_mode = os.environ.get("TRADE_DEDUP_MODE", "warn").strip().lower()
         if not _skip_dedup and (email or company_website):
             _email_check = (email or "").strip().lower()
             _site_check = (company_website or "").strip().lower()
             if _email_check:
                 dup = conn.execute(
-                    "SELECT 1 FROM customers WHERE company_id = ? "
+                    "SELECT id FROM customers WHERE company_id = ? "
                     "AND LOWER(COALESCE(json_extract(extra2, '$.email'), '')) = ? "
                     "LIMIT 1",
                     (company_id, _email_check),
                 ).fetchone()
                 if dup:
                     _warn = "email_already_exists"
+                    _dup_id = dup[0]
             if not _warn and _site_check:
                 dup = conn.execute(
-                    "SELECT 1 FROM customers WHERE company_id = ? "
+                    "SELECT id FROM customers WHERE company_id = ? "
                     "AND LOWER(COALESCE(json_extract(extra1, '$.company_website'), '')) = ? "
                     "LIMIT 1",
                     (company_id, _site_check),
                 ).fetchone()
                 if dup:
                     _warn = "website_already_exists"
+                    _dup_id = dup[0]
+
+        if _warn and dedup_mode == "block":
+            # 拒绝写入：返回错误结构而非抛异常，保持返回 dict 的契约
+            return {
+                "error": "duplicate",
+                "duplicate_warning": _warn,
+                "duplicate_customer_id": _dup_id,
+                "company_id": company_id,
+            }
 
         cur = conn.execute(
             "INSERT INTO customers (company_id, name, contact, note, extra1, extra2) VALUES (?, ?, ?, ?, ?, ?)",
@@ -98,6 +114,10 @@ def create(
         result = _row_to_dict(row)
         if _warn:
             result["duplicate_warning"] = _warn
+            if dedup_mode == "suggest" and _dup_id is not None:
+                result["duplicate_customer_id"] = _dup_id
+        # 语义索引：best-effort，立即写入，避免"刚建的客户搜不到"
+        _index_customer_best_effort(conn, result)
         return result
     finally:
         conn.close()
@@ -194,7 +214,11 @@ def update(
                 return None
 
         conn.commit()
-        return get(customer_id, company_id=company_id)
+        result = get(customer_id, company_id=company_id)
+        # 语义索引：改过的客户（改名/备注/邮箱）要立刻重算向量
+        if result:
+            _index_customer_best_effort(conn, result)
+        return result
     except Exception:
         conn.rollback()
         raise
@@ -211,9 +235,39 @@ def delete(customer_id: int, *, company_id: int) -> bool:
             (customer_id, company_id),
         )
         conn.commit()
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+        if deleted:
+            # 语义索引：同步移除，避免删掉的客户仍被搜出来
+            _delete_customer_index_best_effort(conn, customer_id)
+        return deleted
     finally:
         conn.close()
+
+
+# ── 语义索引钩子（best-effort，任何失败都不影响客户主流程）──────────────────
+
+def _index_customer_best_effort(conn, cust: dict) -> None:
+    """把客户写进语义索引。没装 sqlite-vec / 索引未建时静默跳过。
+
+    为什么放在这里（而不是等 Phase 2）：向量检索只在"命中为空"时才降级关键词，
+    索引过期会让**刚建的客户搜不到、还不降级** —— 这是用户最先撞上的问题。
+    """
+    try:
+        from trade.vec_search import index_customer
+
+        index_customer(conn, cust)
+    except Exception:
+        pass  # 索引是增强能力，坏了不能拖垮建客户
+
+
+def _delete_customer_index_best_effort(conn, customer_id: int) -> None:
+    """从语义索引移除客户（best-effort）。"""
+    try:
+        from trade.vec_search import delete_customer_vector
+
+        delete_customer_vector(conn, customer_id)
+    except Exception:
+        pass
 
 
 # ── Library associations ─────────────────────────────────────────────────────

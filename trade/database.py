@@ -161,6 +161,21 @@ CREATE TABLE IF NOT EXISTS order_libraries (
     PRIMARY KEY (order_id, library_id)
 );
 
+CREATE TABLE IF NOT EXISTS usage_ledger (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts                REAL    NOT NULL,
+    company_id        INTEGER NOT NULL DEFAULT 0,
+    skill             TEXT    NOT NULL DEFAULT '',
+    provider          TEXT    NOT NULL DEFAULT '',
+    model             TEXT    NOT NULL DEFAULT '',
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd          REAL    NOT NULL DEFAULT 0,
+    extra1            TEXT    NOT NULL DEFAULT '',
+    extra2            TEXT    NOT NULL DEFAULT '',
+    extra3            TEXT    NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_libraries_company   ON libraries(company_id);
 CREATE INDEX IF NOT EXISTS idx_customers_company    ON customers(company_id);
 CREATE INDEX IF NOT EXISTS idx_orders_company      ON orders(company_id);
@@ -168,6 +183,8 @@ CREATE INDEX IF NOT EXISTS idx_orders_customer     ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_company ON conversations(company_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_library ON conversations(library_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_created  ON conversations(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_ts    ON usage_ledger(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_skill ON usage_ledger(skill);
 
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -199,6 +216,7 @@ def _add_spare_columns(conn: sqlite3.Connection) -> None:
         ("customers",       ["extra1", "extra2", "extra3"]),
         ("customer_libraries", ["extra1", "extra2", "extra3"]),
         ("conversations",   ["extra1", "extra2", "extra3"]),
+        ("usage_ledger",    ["extra1", "extra2", "extra3"]),
     ]:
         # 跳过还不存在的表（如 v0 schema 中没有 customer_libraries）
         if table not in existing_tables:
@@ -313,7 +331,7 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
 
 _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
-    "customer_libraries", "conversations", "orders",
+    "customer_libraries", "conversations", "orders", "usage_ledger",
 })
 
 
@@ -338,9 +356,9 @@ def _needs_schema_work(conn: sqlite3.Connection) -> bool:
         # 迁移表本身不存在 → 待建
         if "schema_migrations" not in existing:
             return True
-        # 备用列缺失 → ALTER TABLE
+        # 备用列缺失 → ALTER TABLE（清单必须与 _add_spare_columns 保持一致）
         for table in ("companies", "trade_companies", "libraries", "customers",
-                      "customer_libraries", "conversations"):
+                      "customer_libraries", "conversations", "usage_ledger"):
             cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
             if not {"extra1", "extra2", "extra3"} <= cols:
                 return True

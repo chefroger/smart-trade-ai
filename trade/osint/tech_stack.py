@@ -14,7 +14,7 @@ import urllib.request
 from trade.osint.constants import FREE_PLATFORMS, _is_private_host
 
 
-def detect_tech_stack(url: str) -> dict:
+def detect_tech_stack(url: str, *, opener=None) -> dict:
     """BuiltWith 风格技术栈检测。
 
     通过 HTTP 请求获取页面 HTML 和响应头，用正则匹配检测技术栈特征。
@@ -70,7 +70,9 @@ def detect_tech_stack(url: str) -> dict:
             url,
             headers={"User-Agent": "Mozilla/5.0 (compatible; Trade-AI/1.0)"},
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        # 测试可注入 opener（见签名）；生产用 urllib 默认实现
+        _open = opener or urllib.request.urlopen
+        with _open(req, timeout=15) as resp:
             result["ssl_valid"] = True
             # 从响应头提取服务器信息
             server_header = resp.headers.get("Server", "")
@@ -83,11 +85,16 @@ def detect_tech_stack(url: str) -> dict:
         # 从 HTML 中检测技术栈特征
         technologies = _detect_technologies(html_content)
 
-        # 判断是否为免费建站平台
-        free_platforms_detected = [
-            t for t in technologies
-            if t.lower() in [p.lower() for p in FREE_PLATFORMS]
-        ]
+        # 判断是否为免费/托管建站平台。
+        #
+        # **别拿检测名去比 FREE_PLATFORMS**：那个集合里存的是**域名**
+        # （"shopify.com"、"wix.com"…），而 technologies 里是**名字**（"Shopify"）
+        # —— 旧写法 `t.lower() in [...FREE_PLATFORMS]` 恒为 False，
+        # 这个"低预算公司"红旗**从来没有触发过**（2026-10-13 实测发现）。
+        # 正确做法：拿域名去页面源码里找 —— 建站平台的资源域名一定会出现在
+        # asset URL / 页脚里，这也正是这个信号的本意。
+        html_lower = html_content.lower()
+        free_platforms_detected = [p for p in FREE_PLATFORMS if p.lower() in html_lower]
         result["is_free_platform"] = len(free_platforms_detected) > 0
 
         # 识别建站平台类别
