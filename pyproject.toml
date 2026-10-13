@@ -23,7 +23,7 @@ dependencies = [
   # sdists for hermes-agent is not supported"); declaring it makes `pip install`
   # fail outright. It is installed separately as an editable checkout by
   # scripts/install.sh (Step 2), and Trade installs itself with --no-deps.
-  # Tested version: v0.21.6 (0.21.6) — see COMPATIBILITY.md. The installed
+  # Pinned version: v0.21.7 — new installs clone this tag; see COMPATIBILITY.md. The installed
   # version is enforced at runtime by pre_install_check.py and
   # bootstrap.check_hermes_version().
   # LLM Provider SDKs — Hermes uses openai SDK as universal HTTP wire format
@@ -54,6 +54,12 @@ dependencies = [
   "psutil>=5.9.0,<8.0",
   # DNS resolution — MX record queries in OSINT email verification
   "dnspython>=2.6.0,<3.0",
+  # Email-registration checks (OSINT Layer 1: 122 platforms) — REQUIRED.
+  # Missing → the layer is silently skipped (the report discloses it, but one
+  # evidence source is gone). Pure Python, installs on all three platforms;
+  # its httpx matches Hermes' pin (0.28.1), so no conflict. Trade runs it in a
+  # subprocess (holehe uses trio, incompatible with asyncio) with a 120s timeout.
+  "holehe>=1.61,<2.0",
 ]
 
 [project.optional-dependencies]

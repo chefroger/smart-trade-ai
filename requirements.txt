@@ -26,6 +26,11 @@ pypdfium2>=4.30.0,<6.0
 psutil>=5.9.0,<8.0
 # DNS — OSINT email verification
 dnspython>=2.6.0,<3.0
+# 邮箱注册检测（OSINT Layer 1：122 个平台的注册痕迹）—— required，不是可选。
+# 缺了这层会被**静默跳过**（报告如实披露，但少一层证据）。纯 Python（无 C 扩展）、
+# 三平台可装；其 httpx 与 Hermes 钉的版本一致（0.28.1），无冲突。
+# Trade 侧在子进程里跑它（holehe 用 trio，与 asyncio 不兼容），120s 超时兜底。
+holehe>=1.61,<2.0
 
 # Document extraction (read_file tool)
 pymupdf>=1.24.0
