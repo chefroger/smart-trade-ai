@@ -219,6 +219,31 @@ class TestPerformRestart:
 
 # ── update_trade 失败分级测试 ─────────────────────────────────────────────
 
+def _classify_subprocess_cmd(cmd) -> str:
+    """把被 mock 的命令分类成 git-stash / git-pull / git-other / pip / other。
+
+    **只看程序名与参数，不看路径**。历史事故（2026-10-13 CI 随机失败）：
+    旧实现用 `" ".join(cmd)` 做子串匹配，而 mkdtemp 的随机后缀恰好是
+    `ypipz09g` → `git clone ... /tmp/trade-test-ypipz09g/...` 被判成 pip 命令
+    → 假 subprocess 给 clone 返回失败码 → `test_pip_failure_is_fatal` 随机红。
+    概率约万分之一，CI 上撞到了。
+    """
+    argv = [str(c) for c in cmd]
+    if not argv:
+        return "other"
+    # 取程序名（去目录、去 .exe 后缀），大小写不敏感
+    prog = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if prog.startswith("git"):
+        if "stash" in argv:
+            return "git-stash"
+        if "pull" in argv:
+            return "git-pull"
+        return "git-other"  # clone / fetch 等
+    # pip 可能是裸命令，也可能是 `python -m pip ...`（前 4 个参数足够覆盖）
+    if "pip" in argv[:4]:
+        return "pip"
+    return "other"
+
 
 class TestUpdateStepSeverity:
     """update_trade 的失败分级：只有 git / pip / 数据库算致命，其余只记警告。
@@ -230,16 +255,19 @@ class TestUpdateStepSeverity:
 
     @staticmethod
     def _fake_run(pull_rc=0, pip_rc=0, stash_rc=0):
-        """按命令内容分派返回码，替掉真实 subprocess.run。"""
+        """按命令的**实际动作**分派返回码，替掉真实 subprocess.run。
+
+        分类走 `_classify_subprocess_cmd`（看程序名+参数），**不要**对整条命令行
+        做子串匹配 —— 见那个函数的说明（路径含 "pip" 导致 CI 随机红的事故）。
+        """
         def _run(cmd, **kwargs):
-            joined = " ".join(str(c) for c in cmd)
+            kind = _classify_subprocess_cmd(cmd)
             rc = 0
-            # git stash 优先匹配（stash 命令里也含 "git"）
-            if "git" in joined and "stash" in joined:
+            if kind == "git-stash":
                 rc = stash_rc
-            elif "git" in joined and "pull" in joined:
+            elif kind == "git-pull":
                 rc = pull_rc
-            elif "pip" in joined:
+            elif kind == "pip":
                 rc = pip_rc
             result = MagicMock()
             result.returncode = rc
@@ -327,6 +355,21 @@ class TestUpdateStepSeverity:
         assert result["ok"] is True, f"非 SystemExit 的 skills 失败不应致命：{result}"
         assert result["errors"] == []
         assert any("install_skills failed" in w for w in result["warnings"]), result["warnings"]
+
+    def test_command_classifier_ignores_paths_containing_pip(self):
+        """回归：命令的**路径**里含 "pip"/"git" 不得改变分类（CI 随机红的根因）。
+
+        用事故现场的真实路径（/tmp/trade-test-ypipz09g）钉住。
+        """
+        clone = ["git", "clone", "https://github.com/x/y.git",
+                 "/tmp/trade-test-ypipz09g/foreign-trade-assistant"]
+        assert _classify_subprocess_cmd(clone) == "git-other"
+        assert _classify_subprocess_cmd(["git", "-C", "/tmp/gitlab-proj", "pull", "--ff-only"]) == "git-pull"
+        assert _classify_subprocess_cmd(["git", "-C", "/p", "stash"]) == "git-stash"
+        assert _classify_subprocess_cmd(["/usr/bin/python3", "-m", "pip", "install", "-r", "req.txt"]) == "pip"
+        assert _classify_subprocess_cmd(["pip", "install", "x"]) == "pip"
+        # 路径含 "pip" 的 python 调用（不是 pip 安装）不得误判
+        assert _classify_subprocess_cmd(["/opt/pipeline/python", "-c", "print(1)"]) == "other"
 
     def test_database_failure_is_fatal(self):
         """数据库检查失败必须阻止重启。"""
