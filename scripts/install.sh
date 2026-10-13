@@ -153,13 +153,18 @@ HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 
 # Hermes 固定版本（安装时装这个 tag，而不是 main 尖端）。
 #
-# 为什么固定：main 每天都在前进（实测平均约 200 提交/天），一旦上游版本号越出
-# Trade 声明的兼容窗口（0.13.0 ≤ v < 0.22.0，见 trade/bootstrap.py 与
-# pre_install_check.py），新装的机器会「装得上、起不来」—— 这是最坏的一类安装问题。
-# 固定到一个**已核对兼容**的 release tag 就能从根上避免，同时也让装机结果可复现。
-# 该数字是单一事实来源，更新时同步：COMPATIBILITY.md 的兼容性矩阵 + 本文件 + install.ps1。
-# 需要临时装别的版本时用环境变量覆盖：TRADE_HERMES_REF=v0.21.6
-HERMES_REF="${TRADE_HERMES_REF:-v0.21.7}"
+# 为什么固定（两条都是实测出来的）：
+#   1. main 每天前进约 200 个提交，一旦越出 Trade 的兼容窗口（0.13.0 ≤ v < 0.22.0，
+#      见 trade/bootstrap.py 与 pre_install_check.py），新机器会「装得上、起不来」。
+#   2. **上游从 v0.21.6 起把 45/46 条核心依赖标成 `; python_version >= '3.14'`**
+#      （requires-python 仍写 >=3.11）。在 3.11–3.13 上 `pip install -e` 一条依赖
+#      都不装（实测 3.13：装完只有 2 个包），Hermes 直接起不来。
+#      所以 pin 必须落在 marker 之前的 tag —— 当前 v2026.9.24（版本 0.21.5），
+#      实测 3.13 上装完 64 个包、依赖齐全、导入正常。
+# 更新 pin 时同步四处：本文件 + install.ps1 + README.md + README.en.md，
+# 并确认该 tag 在 COMPATIBILITY.md 的 ✅ 行里（有测试钉住）。
+# 临时装别的版本：TRADE_HERMES_REF=v2026.9.21
+HERMES_REF="${TRADE_HERMES_REF:-v2026.9.24}"
 
 if "$PY" -c "import hermes_cli" 2>/dev/null; then
     hermes_ver=$("$PY" -c "import hermes_cli; print(hermes_cli.__version__)" 2>/dev/null || echo "unknown")

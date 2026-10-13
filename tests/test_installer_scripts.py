@@ -99,11 +99,20 @@ class TestHermesVersionPin:
     （0.13.0 ≤ v < 0.22.0，`trade/bootstrap.py` / `pre_install_check.py`），
     新装机器会「装得上、起不来」—— 最坏的一类安装问题。固定到 release tag
     同时也让装机结果可复现。
+
+    **另一条硬约束（2026-10-13 实测）**：上游从 v0.21.6 起把 45/46 条核心依赖
+    都标成 `; python_version >= '3.14'`（requires-python 却仍写 >=3.11）。
+    在 Python 3.11–3.13 上 `pip install -e hermes-agent` 会**一条依赖都不装**
+    （实测 3.13：装完只有 2 个包），Hermes 直接起不来。所以安装 pin 必须落在
+    marker 之前的 tag（当前为 v2026.9.24），并实测过「装完依赖齐全」。
     """
 
     @staticmethod
-    def _pinned_version(name: str, text: str) -> str:
-        """从 TRADE_HERMES_REF 赋值行取出固定版本号。
+    def _pinned_ref(name: str, text: str) -> str:
+        """从 TRADE_HERMES_REF 赋值行取出固定的 **ref（tag 名）**，如 v2026.9.24。
+
+        保留完整 ref（不是拆出的语义化版本号）：pin 可能是日期式 tag
+        （v2026.9.24），也可能对回语义化 tag（v0.21.6）—— 两者都要能核对。
 
         **必须跳过注释行**：注释里举了「临时装别的版本」的例子（含另一个版本号），
         按行扫描会把例子当成固定值 —— 第一版就是这么写的，mutation 检验时
@@ -113,16 +122,16 @@ class TestHermesVersionPin:
 
         for line in text.splitlines():
             if line.strip().startswith("#"):
-                continue  # 注释里的示例版本号不算
+                continue  # 注释里的示例不算
             if "TRADE_HERMES_REF" in line:
-                m = re.search(r"v(\d+\.\d+\.\d+)", line)
+                m = re.search(r"(v[0-9][0-9A-Za-z.\-]*)", line)
                 if m:
-                    return m.group(1)
-        raise AssertionError(f"{name} 未见固定的 Hermes 版本号（TRADE_HERMES_REF 行）")
+                    return m.group(1).rstrip(".")
+        raise AssertionError(f"{name} 未见固定的 Hermes ref（TRADE_HERMES_REF 行）")
 
     def test_both_scripts_pin_a_version(self):
         for name, text in (("install.sh", SH), ("install.ps1", PS1)):
-            self._pinned_version(name, text)  # 取不到会抛错
+            self._pinned_ref(name, text)  # 取不到会抛错
             assert "TRADE_HERMES_REF" in text, f"{name} 未提供 TRADE_HERMES_REF 覆盖入口"
 
     def test_clone_uses_the_ref_variable_not_hardcoded_main(self):
@@ -148,15 +157,17 @@ class TestHermesVersionPin:
         """
         compat = (ROOT / "COMPATIBILITY.md").read_text(encoding="utf-8")
         for name, text in (("install.sh", SH), ("install.ps1", PS1)):
-            ver = self._pinned_version(name, text)
+            ref = self._pinned_ref(name, text)
+            # 兼容矩阵的行既有语义化版本号（0.21.5），也有的备注里写 tag 名；
+            # 只要**某条 ✅ 行提到这个 ref** 就算核对过（v2026.9.24 这种日期式
+            # tag 没有同名版本行，靠 0.21.5 那行的备注关联）。
             assert any(
-                line.startswith(f"| {ver} ") and "✅" in line
-                for line in compat.splitlines()
-            ), f"{name} 固定的 {ver} 未在 COMPATIBILITY.md 中标记为兼容"
+                "✅" in line and ref in line for line in compat.splitlines()
+            ), f"{name} 固定的 {ref} 未在任何 ✅ 兼容行中出现（未核对/未记录）"
 
     def test_pinned_version_matches_between_scripts(self):
-        """两个脚本固定同一版本（跨平台一致性）。"""
-        assert self._pinned_version("install.sh", SH) == self._pinned_version("install.ps1", PS1)
+        """两个脚本固定同一 ref（跨平台一致性）。"""
+        assert self._pinned_ref("install.sh", SH) == self._pinned_ref("install.ps1", PS1)
 
     def test_readme_manual_install_uses_the_same_pin(self):
         """README 的手动安装命令必须与脚本同一固定版本（三处不许漂移）。
@@ -164,7 +175,7 @@ class TestHermesVersionPin:
         手动安装是「方式 3」，走 README 的用户不经过安装脚本 —— 这里不钉住的话，
         脚本固定了、文档还在装 main，问题原样复现。
         """
-        pin = "v" + self._pinned_version("install.sh", SH)
+        pin = self._pinned_ref("install.sh", SH)
         for name in ("README.md", "README.en.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
             lines = [ln for ln in text.splitlines() if "NousResearch/hermes-agent.git" in ln]

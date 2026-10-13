@@ -112,12 +112,16 @@ $HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDA
 
 # Hermes 固定版本（安装时装这个 tag，而不是 main 尖端）。
 #
-# 为什么固定：main 每天都在前进，一旦上游版本号越出 Trade 声明的兼容窗口
-# （0.13.0 ≤ v < 0.22.0，见 trade/bootstrap.py 与 pre_install_check.py），新装的机器
-# 会「装得上、起不来」—— 最坏的一类安装问题。固定到已核对兼容的 release tag 就能
-# 从根上避免，同时让装机结果可复现。更新时同步三处：COMPATIBILITY.md 兼容性矩阵、
-# 本文件、install.sh。临时装别的版本：$env:TRADE_HERMES_REF = "v0.21.6" 后重跑。
-$HermesRef = if ($env:TRADE_HERMES_REF) { $env:TRADE_HERMES_REF } else { "v0.21.7" }
+# 为什么固定（两条都是实测出来的）：
+#   1. main 每天前进约 200 个提交，越出 Trade 的兼容窗口（0.13.0 ≤ v < 0.22.0）后
+#      新机器会「装得上、起不来」。
+#   2. 上游从 v0.21.6 起把 45/46 条核心依赖标成 `; python_version >= '3.14'`
+#      （requires-python 仍写 >=3.11）—— 在 3.11–3.13 上 `pip install -e` 一条依赖
+#      都不装（实测 3.13 只有 2 个包），Hermes 起不来。pin 必须落在 marker 之前。
+# 当前 v2026.9.24（版本 0.21.5）：实测 3.13 装完 64 个包、导入正常。
+# 更新时同步四处：本文件 + install.sh + README.md + README.en.md（有测试钉住）。
+# 临时装别的版本：$env:TRADE_HERMES_REF = "v2026.9.21" 后重跑。
+$HermesRef = if ($env:TRADE_HERMES_REF) { $env:TRADE_HERMES_REF } else { "v2026.9.24" }
 
 # 注意：PowerShell 里**原生命令非零退出不会抛异常**，所以不能用 try/catch 判断成败，
 # 必须显式看 $LASTEXITCODE（旧代码的 try/catch 从不触发 → 整个安装分支是死代码）。

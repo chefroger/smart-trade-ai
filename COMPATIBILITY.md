@@ -6,6 +6,17 @@
 
 > **当前声明范围**：`0.13.0 <= version < 0.22.0`（定义在 `trade/bootstrap.py` 的 `_MIN_HERMES_VERSION` / `_MAX_HERMES_VERSION`）
 
+> ⚠️ **安装 pin 硬约束（2026-10-13 实测发现）**：上游**从 v0.21.6 起把 45/46 条核心依赖
+> 都标成 `; python_version >= '3.14'`**，而 `requires-python` 仍写 `>=3.11,<3.15`。
+> 后果：在 Python 3.11–3.13 上 `pip install -e hermes-agent` **一条依赖都不装**
+> （实测 3.13：装完 venv 里只有 2 个包），`import run_agent` 直接因缺 openai/ruamel/
+> requests 失败 —— 「装得上、起不来」。
+> 所以安装脚本的 `HERMES_REF` **必须落在该 marker 之前的 tag**：当前 pin 为
+> **`v2026.9.24`（版本 0.21.5）**，实测 3.13 上装完 64 个包、依赖齐全、导入正常。
+> **v0.21.6 / v0.21.7 可以静态核对兼容（见下表），但在 3.11–3.13 上不能作为安装 pin。**
+> 若将来上游修掉 marker（或用 3.14 运行时 + `pm` 安装），再重新评估 pin。
+
+
 | Hermes 版本 | 兼容状态 | 测试日期 | 测试人 | 备注 |
 |------------|---------|---------|--------|------|
 | 0.12.0 | ⚠️ 不再支持 | 2026-05-11 | — | 低于最低兼容版本 0.13.0，启动时拒绝 |
@@ -28,13 +39,15 @@
 | 0.21.5 | ✅ 兼容 | 2026-09-28 | AI | v2026.9.24 版本（0.21.4→0.21.5，共 1148 commits）。逐符号核对 Trade 7 个耦合点：`run_agent.AIAgent` 仍在（组合式实现，`run_conversation(task_id=)` / `chat()` 由 `TurnFacadeMixin` 提供，签名未变）、`hermes_cli.config.load_config`、`auth.PROVIDER_REGISTRY` / `get_auth_status`、`models._PROVIDER_MODELS` / `provider_model_ids`、`env_loader.load_hermes_dotenv`、`hermes_constants.get_hermes_home` 全部保留；`hermes_cli/provider_catalog.py` 文件未变；`tool_complete_callback` / `ephemeral_system_prompt` 构造参数健在。另核对**上游 main**（比本地基线多 5045 commits）：`hermes_cli.__version__` 已改为惰性读安装印章 `install-stamp.json`，**无印章时返回 "0.0.0"**，并新增 `hermes_cli.version_info.get_version_info()`（安装印章 → live git → unknown，明确选择降级不崩）。这会让 Trade 的启动门禁把 0.0.0 误判成「版本过旧」而拒绝启动 —— 已修：`trade/hermes_compat.hermes_version()` 改为多源识别（version_info → `__version__` → checkout pyproject），占位值与不可解析值一律按「未知」处理、警告后继续启动；`pre_install_check.py` 同原则同步（`0.0.0` 与带 `+git` 后缀的派生版本不再判「过旧」）。无 breaking change，仍在 `<0.22.0` 范围内，`_MAX_HERMES_VERSION` 无需改动。 |
 
 | 0.21.6 | ✅ 兼容 | 2026-10-10 | AI | **v0.21.6**（2026-10-08 发布）。注意上游从此改用**语义化 tag**（`v0.21.6`），不再是 `v2026.9.24` 那种日期式命名。本 release 内 **8 个耦合文件全部被动过**，逐个拉 tag 上的实际内容核符号，全部健在且签名未变：`run_agent.AIAgent` 在且 Trade 实际传的 **14 个构造参数一个不少**、`config.load_config() -> Dict[str, Any]`、`auth.PROVIDER_REGISTRY` / `get_auth_status(provider_id=None)`、`models.provider_model_ids(provider, *, force_refresh=False)` / `_PROVIDER_MODELS`、`env_loader.load_hermes_dotenv(*, hermes_home=, …)`、`hermes_constants.get_hermes_home() -> Path`、`version_info.get_version_info() -> VersionInfo`、`provider_catalog.provider_catalog() -> list[ProviderDescriptor]`。Release 说明里无 BREAKING/removed/rename/deprecated 字样。**单独核过一条行为风险**：10-08 的 `refactor(approval): one session /yolo contract` 把三份会话级 YOLO 持久化实现收进 `tools/approval_yolo.py` —— 它只**新增**会话级开关，Trade 依赖的**进程级环境变量**未受影响：`tools/approval.py:46` 仍是 `_YOLO_MODE_FROZEN = is_truthy_value(os.getenv("HERMES_YOLO_MODE", ""))`，并在 :326/:487 的放行判定中使用。无 breaking change，仍在 `<0.22.0` 范围内，`_MAX_HERMES_VERSION` 无需改动；Trade 无需改代码。 |
-| 0.21.7 | ✅ 兼容（静态核对，未上机） | 2026-10-12 | AI | **v0.21.7**（2026-10-12 发布；v0.21.6→v0.21.7 共 **777 commits**，主力是 release/CI/测试，功能面含 terminal `persistent_shell` 修复、Codex 请求体 zstd 压缩）。本 release 内 7 个耦合文件有改动（auth ±201 / config ±202 / run_agent ±106 / env_loader ±27 / hermes_constants ±7 / models ±4 / version_info ±4；`provider_catalog` 未动），但 **v0.21.7 上这些文件的最终内容与上游 main tip 完全一致** —— 与当日 main 复核是同一批内容，逐符号核对结论直接成立：`AIAgent.__init__` 共 86 形参、Trade 传的 **14 个全部保留**（无 `**kwargs` 兜底）；`load_config()` / `get_auth_status(provider_id)` / `provider_model_ids(provider, *, force_refresh)` / `provider_catalog()` / `load_hermes_dotenv(*, hermes_home=…)` / `get_hermes_home()` / `get_version_info()` 签名未变；`PROVIDER_REGISTRY` 的 `base_url_env_var`/`auth_type`/`api_key_env_vars` 仍在；`agent.tools` 仍由 `agent/agent_init.py` 赋值；`HERMES_DISABLE_LAZY_INSTALLS` 与 `gateway` 子命令仍在。**新增 toolset 逐个核对，结论均不应启用**：`connections`/`catalog`（`tools/connectors/`）受 portal 门控（`connectors_available()`，本地无 portal 时不出现），`setup`/`start_chat` 是 CLI 向导便利工具，`example` 是 AGENTS.md 示例；`homeassistant` 被移除（Trade 未用）。版本面：v0.21.7 的 pyproject 是占位 `0.0.0`、`__version__` 改为惰性读安装印章，源码检出由 `version_info` 经语义化 tag 解出 **0.21.7** —— 仍在 `<0.22.0` 窗口内，`_MAX_HERMES_VERSION` 无需改动；Trade 的多源版本识别已覆盖该情形。区间内无 BREAKING/CVE 关键词命中。**结论：Trade 无需改代码；本机（0.21.4 基线）暂不升级，建议随「冻结 + vendor」一次性升到 v0.21.7 并做一次真机端点验证。** 附带观察：上游发布节奏约 3–4 天一个 release（0.21.5 09-28 → 0.21.6 10-08 → 0.21.7 10-12），单 release 千级提交，现有「跟随」模式的维护成本由此可量化。 |
+| 0.21.7 | ✅ 兼容（静态核对，未上机） | 2026-10-12 | AI | **v0.21.7**（2026-10-12 发布；v0.21.6→v0.21.7 共 **777 commits**，主力是 release/CI/测试，功能面含 terminal `persistent_shell` 修复、Codex 请求体 zstd 压缩）。本 release 内 7 个耦合文件有改动（auth ±201 / config ±202 / run_agent ±106 / env_loader ±27 / hermes_constants ±7 / models ±4 / version_info ±4；`provider_catalog` 未动），但 **v0.21.7 上这些文件的最终内容与上游 main tip 完全一致** —— 与当日 main 复核是同一批内容，逐符号核对结论直接成立：`AIAgent.__init__` 共 86 形参、Trade 传的 **14 个全部保留**（无 `**kwargs` 兜底）；`load_config()` / `get_auth_status(provider_id)` / `provider_model_ids(provider, *, force_refresh)` / `provider_catalog()` / `load_hermes_dotenv(*, hermes_home=…)` / `get_hermes_home()` / `get_version_info()` 签名未变；`PROVIDER_REGISTRY` 的 `base_url_env_var`/`auth_type`/`api_key_env_vars` 仍在；`agent.tools` 仍由 `agent/agent_init.py` 赋值；`HERMES_DISABLE_LAZY_INSTALLS` 与 `gateway` 子命令仍在。**新增 toolset 逐个核对，结论均不应启用**：`connections`/`catalog`（`tools/connectors/`）受 portal 门控（`connectors_available()`，本地无 portal 时不出现），`setup`/`start_chat` 是 CLI 向导便利工具，`example` 是 AGENTS.md 示例；`homeassistant` 被移除（Trade 未用）。版本面：v0.21.7 的 pyproject 是占位 `0.0.0`、`__version__` 改为惰性读安装印章，源码检出由 `version_info` 经语义化 tag 解出 **0.21.7** —— 仍在 `<0.22.0` 窗口内，`_MAX_HERMES_VERSION` 无需改动；Trade 的多源版本识别已覆盖该情形。区间内无 BREAKING/CVE 关键词命中。**结论：Trade 无需改代码。但 ⚠️ 2026-10-13 发现 v0.21.7 的依赖被标成 Python 3.14+，在 3.11–3.13 上装不出依赖（见文件顶部「安装 pin 硬约束」）——所以它**不能**作为安装 pin；安装 pin 定为 `v2026.9.24`（0.21.5）。本机（0.21.4 基线）暂不升级。** 附带观察：上游发布节奏约 3–4 天一个 release（0.21.5 09-28 → 0.21.6 10-08 → 0.21.7 10-12），单 release 千级提交，现有「跟随」模式的维护成本由此可量化。 |
 
 ## 上游 main 跟进记录
 
-Hermes 的安装路径跟的是 **main 分支**（`scripts/install.sh` 用 `git clone --depth 1 --branch main`），
-所以「上游有没有变化」不能只看 release —— main 在两次 release 之间会持续前进。这里记录**未伴随
-新 release 的 main 复核**；伴随 release 的复核记在上方矩阵的对应行里。
+Hermes 的安装走**固定 tag**（`scripts/install.sh` 的 `HERMES_REF`，当前 `v2026.9.24`）——
+2026-10-13 起因上游依赖 marker 问题不再跟 main（见文件顶部「安装 pin 硬约束」）。
+但**复核上游 main 仍然必要**：它是「下一个 release 里会发生什么」的预警（历史多次靠它提前发现
+签名变化），也是将来换 pin 的候选来源。这里记录**未伴随新 release 的 main 复核**；伴随 release
+的复核记在上方矩阵的对应行里。
 
 复核方法：用 GitHub API（`/commits?path=<文件>&sha=main&per_page=1`）逐个查 Trade 耦合点文件的
 最后改动时间，与本地检出基线比较；有改动的再拉当前内容核对具体符号与签名 —— 上游仓库体量大、
