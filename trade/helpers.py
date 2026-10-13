@@ -131,13 +131,13 @@ def check_provider() -> str | None:
 
     provider, model = current_model_config()
     if not provider and not model:
-        return "未配置 AI 模型。请先运行 trade setup 选择模型。"
+        return "未配置 AI 模型。请先运行 hermes setup 选择模型。"
 
     configured = provider_is_configured(provider) if provider else None
     if configured is False:
-        return "未检测到当前 Provider 的认证信息。请在 ~/.hermes/.env 中设置，或运行 trade setup 重新配置。"
+        return "未检测到当前 Provider 的认证信息。请在 ~/.hermes/.env 中设置，或运行 hermes setup 重新配置。"
     if configured is None and not os.getenv("LLM_API_KEY"):
-        return "未检测到 API Key。请在 ~/.hermes/.env 中设置，或运行 trade setup 重新配置。"
+        return "未检测到 API Key。请在 ~/.hermes/.env 中设置，或运行 hermes setup 重新配置。"
 
     # 检查 openai SDK 是否可导入 — Hermes 用此 SDK 作为所有 provider 的通用 HTTP 客户端
     try:
