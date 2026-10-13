@@ -15,7 +15,7 @@ Smart Trade AI — 客户/文档语义检索（优化路线 P0-2）。
 
 环境变量：
     TRADE_VEC_TOP_K        默认返回条数（默认 10）
-    TRADE_VEC_MIN_SCORE    最低分（默认 0.43，score=1/(1+distance)）。
+    TRADE_VEC_MIN_SCORE    最低分（默认 0.42，score=1/(1+distance)）。
                            **别凭感觉调**：L2 归一化下无关向量的距离恒为 √2，
                            score 有恒定正交基线 0.4142 —— 低于它等于不过滤。
 """
@@ -402,16 +402,21 @@ def _default_min_score() -> float:
     出厂默认 0.35 低于这个基线 → 任何查询都会把**全部客户**当命中返回，
     关键词降级分支永远不会触发（实测：5 个客户、无关查询也全数返回）。
 
-    实测（5 条真实客户文本）：相关命中 0.44~0.48（对应 cos 0.18~0.41），
-    无关命中恒为 0.4142（cos 0）。默认取 0.43（≈ cos 0.08）：滤掉正交噪声，
-    又保住弱重叠的相关命中。**上线前应随评测集重校准**（TRADE_VEC_MIN_SCORE 可覆盖）。
+    实测（5 条真实客户文本）：相关命中 0.44~0.48（cos 0.18~0.41），
+    无关命中恒为 0.4142（cos 0）。
+
+    默认取 **0.42**（≈ cos 0.05）—— 刚过正交基线，只滤纯噪声。**不要再往上调**：
+    0.43 对应 cos≈0.12，会把"弱相关但真实"的命中（cos 0.05~0.12）一起切掉，
+    而本功能的降级链是「向量命中为空 → 关键词 LIKE」，自然语言查询在 LIKE 下
+    基本查不到东西 → 用户得到**空结果**。搜索场景里，弱结果比空结果好。
+    **评测集里要同时盯 recall，不能只看"不过滤噪声"**（TRADE_VEC_MIN_SCORE 可覆盖）。
     """
     import os
 
     try:
-        return float(os.environ.get("TRADE_VEC_MIN_SCORE", "0.43"))
+        return float(os.environ.get("TRADE_VEC_MIN_SCORE", "0.42"))
     except (ValueError, TypeError):
-        return 0.43
+        return 0.42
 
 
 def semantic_search_customers(

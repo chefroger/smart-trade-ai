@@ -250,3 +250,30 @@ def test_search_endpoint_declared_before_dynamic_route():
 
     src = pathlib.Path("trade/api/customers.py").read_text(encoding="utf-8")
     assert src.index('"/customers/search"') < src.index('"/customers/{customer_id}"')
+
+
+@needs_vec
+def test_default_threshold_keeps_weak_but_real_matches(conn):
+    """默认阈值的**召回侧**：弱相关但真实的命中不得被切掉（否则用户搜不到）。
+
+    实测（3 条客户、查询「深圳的客户」）：正确客户 cos≈0.12 只拿到 0.4299 分。
+    若阈值定在 0.43（cos≈0.12），这类命中全被切；而本功能的降级链是
+    「向量为空 → 关键词 LIKE」，自然语言查询在 LIKE 下查不到东西 →
+    用户得到空结果。搜索场景里弱结果优于空结果，故默认取 0.42（刚过正交基线）。
+    正交噪声（0.4142）在 0.42 下仍被滤掉 —— 见 test_default_threshold_excludes_orthogonal_noise。
+    """
+    from trade.embeddings import reset_backend
+
+    reset_backend()
+    rows = [
+        (1, 1, "深圳市光明照明有限公司 张伟 灯具出口 德国 汉堡地区买家"),
+        (2, 1, "宁波五金制品厂 李娜 紧固件 美国市场 家得宝供应商"),
+        (3, 1, "青岛纺织品进出口 刘洋 家纺 毛巾 澳大利亚 批发商"),
+    ]
+    assert vec_search.rebuild_customer_index(conn, rows, backend=TfidfBackend()) == 3
+
+    hits = vec_search.semantic_search_customers(conn, "深圳的客户", company_id=1)  # 默认阈值
+    ids = [h["customer_id"] for h in hits]
+    assert 1 in ids, f"弱相关但正确的客户被默认阈值切掉了（recall 回归）：{ids}"
+    # 纯噪声（无任何字符重叠）仍须被滤掉
+    assert all(h["cosine"] > 0.0 for h in hits), f"正交噪声漏进来了：{hits}"

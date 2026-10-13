@@ -33,10 +33,15 @@ PERSONAL_EMAIL_DOMAINS: set[str] = {
 FREE_PLATFORMS: set[str] = {
     "wordpress.com", "blogspot.com", "wix.com", "squarespace.com",
     "weebly.com", "shopify.com", "tilda.cc", "webflow.com",
-    "wordpress.org", "blogger.com", "livejournal.com",
+    "blogger.com", "livejournal.com",
     "webnode.com", "site123.com", "strikingly.com", "duda.co",
     "carrd.co", "linktr.ee", "about.me", "format.com",
 }
+# 注意 **不要**把 wordpress.org 加回来：它是自建 WordPress 程序的官网，不是
+# 「托管建站平台」。自建站的企业页脚常带 "Powered by WordPress"（链到
+# wordpress.org）→ 会被误判成"免费建站、低预算"，污染这个红旗的语义。
+# 自建 WordPress 的识别由 tech_stack 的技术检测负责（"WordPress" 进
+# technologies / platforms，是中性信号，不是红旗）。
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 制裁名单来源（公开 CSV URL，定期需更新）
