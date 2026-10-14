@@ -116,18 +116,22 @@ Phase 2: 信息提取与验证 (Extraction)
 Phase 3: 深度背调 (Deep Verification)
 ════════════════════════════════════════
 
-6. 对 Phase 1/2 中发现的每个邮箱地址：
-   a) 调用 email_background_check(邮箱) — 查 120+ 平台注册情况
-   b) 调用 verify_corporate_email(邮箱) — 判断企业邮箱 vs 个人邮箱
-   c) 输出每个邮箱的社交档案 URL 列表和真实性评分
+6. **机器判定层（6 层）用一个命令跑** —— 不要凭搜索印象编造判定：
 
-7. 对发现的域名：
-   a) 调用 domain_whois(域名) — 查注册时间、注册商、过期时间
-   b) 调用 detect_tech_stack(https://域名) — 查建站技术栈
-   c) 调用 check_sanctions(公司名) — 查 OFAC/UN 制裁名单
-   d) 调用 linkedin_company_verify(域名, 公司名) — 生成 LinkedIn 验证指令
+       python -m trade.osint <邮箱|域名|公司名>
+       python -m trade.osint <目标> --json        # 需要结构化数据时
 
-8. 所有信息汇总后，调用 compute_risk_score() 和 generate_recommendations() 生成最终评分。
+   覆盖：邮箱注册检测（holehe）/ WHOIS / 企业邮箱验证 / 技术栈 / 制裁名单（OFAC/UN）
+   / LinkedIn 核查指令 + 综合评分与建议。
+
+   规则：
+   a) **照抄命令输出的结论与披露**：数据源不可用它会有明确标注（降级），
+      不要替它补全，更不要写出"未发现匹配"这类它没给出的结论；
+   b) 对 Phase 1/2 中发现的每个邮箱，单独跑 `python -m trade.osint <邮箱>`，
+      核验真实性与社交档案；
+   c) LinkedIn 层只生成浏览器操作指令，需用浏览器工具实际执行后再下结论。
+
+7. 手工搜索（Phase 1/2）与机器判定合并写进报告：**机器判定是事实层，搜索是背景层**。
 
 ════════════════════════════════════════
 输出格式（完整情报报告）
@@ -219,8 +223,9 @@ STOP RULE（防止无效搜索）:
         "augment_prompt": """你是 b2b-email-intel 技能。当用户需要调查某个邮箱的背景时，请执行以下步骤：
 
 情况 A — 用户提供了邮箱地址：
-  1. 调用 email_background_check(邮箱) 查 120+ 平台注册情况
-  2. 调用 verify_corporate_email(邮箱) 判断企业邮箱 vs 个人邮箱
+  1. 跑 `python -m trade.osint <邮箱> --no-sanctions --no-tech-stack --no-linkedin`
+     查 122 个平台的注册情况 + 企业/个人邮箱判别（WHOIS 一并返回）
+  2. **结论照抄命令输出**；它标注降级（如 holehe 未装）时如实转述，别替它补全
   3. 汇总输出：平台注册数 + 社交档案 + 真实性评分 + 风险标记
 
 情况 B — 用户只提供了公司名/网站/人名，没有邮箱：

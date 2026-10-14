@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 from trade.company.workdir import _WORK_DIR_CATEGORIES
+from trade.console import reconfigure_streams
 
 # 桌面目录的识别指纹：工作目录由 _setup_work_directory 建成含这些分类子目录的结构。
 # 用「命中数」而不是「全部命中」判定 —— 用户可能删掉或改名个别分类目录。
@@ -212,22 +213,6 @@ def _rmtree(path: Path) -> None:
                 _clear_readonly_bits(path)
                 time.sleep(0.3 * (attempt + 1))
     raise last
-
-
-def _reconfigure_streams() -> None:
-    """把报告输出的编码错误降级，避免"删完了却崩在打印上"。
-
-    控制台输出不受影响（PEP 528 直接写 UTF-16），但**重定向/管道**时 Windows
-    用的是本地代码页（中文机 cp936、英文机 cp1252），而 `✓ ✗ ⚠` 不在其中 ——
-    `print` 会抛 UnicodeEncodeError。删除动作已经发生，却崩在最后的报告上，
-    操作者会以为没删成功（客户机常被远程操作，输出正是走管道）。
-    只降级 `errors`、不改编码：控制台里中文照常，个别符号变 `?` 而已。
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")
-        except (AttributeError, ValueError, OSError):
-            pass  # 被包装/已关闭的流（pytest 捕获、GUI 环境）—— 无所谓
 
 
 def _fmt_size(n: int) -> str:
@@ -645,7 +630,7 @@ def purge_dir(path_str: str, *, yes: bool = False, password: str | None = None) 
 
 def main(argv: list[str]) -> int:
     """`trade company <子命令>` 的入口。返回退出码。"""
-    _reconfigure_streams()  # 报告里带 ✓/✗/⚠，Windows 管道输出要先降级编码错误
+    reconfigure_streams()  # 报告里带 ✓/✗/⚠，Windows 管道输出要先降级编码错误
     sub = argv[0] if argv else ""
     rest = argv[1:]
 
