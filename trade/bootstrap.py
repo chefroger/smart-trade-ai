@@ -363,6 +363,19 @@ def check_native_architecture(auto_repair: bool = True) -> bool:
 # ── .env 加载 + YOLO 模式 ────────────────────────────────────────────────
 
 
+def _disable_hermes_lazy_installs() -> None:
+    """设置上游的 sealed-venv 开关（无导入、幂等，可重复调用）。
+
+    必须在**任何 Hermes 导入之前**生效 —— 子命令（doctor/osint/company/update）与
+    版本检查都发生在 `load_env_and_set_yolo()` 之前，而新版本 Hermes 会在 import 时
+    发现「当前解释器 ≠ 托管解释器」并重拉进程（runpy 重跑当前命令）；重拉环境里没有
+    trade 包，进程直接以 ModuleNotFoundError 崩掉（2026-10-14 实测：本机升级到
+    Hermes main 后 `trade doctor` 每次 2 秒内即崩，见 COMPATIBILITY.md）。
+    `load_env_and_set_yolo()` 在 dotenv 之后会**再设一次**（防用户的 .env 顶掉）。
+    """
+    os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+
+
 def load_env_and_set_yolo():
     """加载 Hermes .env、开启 YOLO 模式，并禁用 Hermes 的懒加载重启。"""
     from hermes_cli.env_loader import load_hermes_dotenv
@@ -379,9 +392,10 @@ def load_env_and_set_yolo():
     # agent 线程静默死亡，前端只会看到「Agent 未返回有效回复」（客户机实测，2026-10-08）。
     #
     # 这是上游正式的 sealed-venv 开关（Hermes tools/lazy_deps.py）。作用域仅限本进程树，
-    # 不影响用户自己那个 hermes CLI；必须设在 load_hermes_dotenv **之后**，
-    # 因为该函数会用 os.environ[name] = value 覆盖，顺序反了就会被用户的 .env 顶掉。
-    os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+    # 不影响用户自己那个 hermes CLI；这里必须在 load_hermes_dotenv **之后**再设一次 ——
+    # 该函数会用 os.environ[name] = value 覆盖，顺序反了会被用户的 .env 顶掉
+    # （setup() 开头已先设过一次，覆盖子命令分发与版本检查这两个更早的窗口）。
+    _disable_hermes_lazy_installs()
 
 
 # ── Skills 同步 ──────────────────────────────────────────────────────────
@@ -580,6 +594,7 @@ def setup():
     """执行 Trade 启动所需的所有引导步骤。
 
     调用顺序：
+    0. Hermes 懒加载守卫（必须最先 —— 见 _disable_hermes_lazy_installs）
     1. sys.path 调整
     2. 子命令分发（如果是子命令则直接 exit）
     3. 架构检查
@@ -589,6 +604,8 @@ def setup():
     7. 文档依赖检查
     8. 桌面集成（Windows：自启 + 桌面快捷方式，幂等、失败不阻断）
     """
+    # 第 0 步：子命令分发（doctor/osint/…）与版本检查都会导入 Hermes，都必须有守卫。
+    _disable_hermes_lazy_installs()
     _adjust_sys_path()
 
     if dispatch_subcommands():
