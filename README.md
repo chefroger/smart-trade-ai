@@ -163,7 +163,7 @@ trade
 curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh | bash
 ```
 
-脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 38 个 skills → 数据库初始化。
+脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 39 个 skills → 数据库初始化。
 
 > **如果你希望安装前先审查脚本**：
 > ```bash
@@ -256,6 +256,7 @@ python server.py
 | 客户背调 | 6 层验证：邮箱平台检测→WHOIS→企业邮箱验证→制裁名单→技术栈→LinkedIn |
 | 客户画像 | 单一客户 15 维深度画像：决策链/采购偏好/社交风格/送礼建议等 |
 | 客户开发向导 | 三问启动 + 自动搜索 + 开发信生成，零门槛找客户 |
+| 国内线索挖掘 | 找货源厂家（主）/ 挖竞品国内厂家（重点）/ 找国内客户，免费公开渠道（产业带+搜索引擎+海关记录+人工核对） |
 | 买家画像 | 按决策角色（采购/技术/老板）分层定制 FAB 价值主张和沟通策略 |
 | 销售管线 | 客户旅程 5 阶段映射 + 30 天跟进表 + KPI 追踪 + 管线健康度看板 |
 | 邮箱情报 | 120+ 平台邮箱注册检测，识别企业 vs 个人邮箱 |
@@ -326,12 +327,12 @@ trade/                     B2B 业务层
 ├── api/                   FastAPI 路由（10 个业务域）
 ├── osint/                 客户背调模块（6 层检测）
 ├── skill_router.py        Skill 自动匹配引擎
-├── skill_registry.py      38 个 skill 注册表（纯数据）
+├── skill_registry.py      39 个 skill 注册表（纯数据）
 ├── bootstrap.py            启动引导（Hermes 版本检查、env 加载、Skills 同步）
 ├── app.py                  FastAPI app factory
 └── ... + 22 个业务模块
 
-skills/                    38 个 B2B skills（Markdown 驱动）
+skills/                    39 个 B2B skills（Markdown 驱动）
 tests/                     Python 测试（28 个文件）＋ 文档读取规则端到端实测
 tests_js/                  前端工具函数测试（node:test，零依赖；CI 会执行）
 server.py                  FastAPI 入口
@@ -352,7 +353,7 @@ ruff check trade/ server.py                 # 代码检查
 
 ## 文档
 
-- [使用说明书](TRADE-GUIDE.md) — 从零上手：界面认知、38 个技能全解、日常用法、常见问题
+- [使用说明书](TRADE-GUIDE.md) — 从零上手：界面认知、38 个可用技能全解、日常用法、常见问题
 - [Windows 安装教程](docs/index.md) — 零基础用户 20 分钟快速安装指南
 - [LinkedIn 获客功能使用说明](docs/linkedin-guide.md) — 免费 / Premium / Sales Navigator（Core·Advanced·Advanced Plus）功能分级与使用示例
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Hermes 版本兼容性记录

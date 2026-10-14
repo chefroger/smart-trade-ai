@@ -93,7 +93,7 @@
     <div class="sidebar-footer">
         <button id="system-update-btn" onclick="doTradeUpdate(event)" title="一键更新系统（git pull + skills + db）" hidden>⬆️ 系统更新</button>
         <button id="system-restart-btn" onclick="doRestartTrade(event)" title="重启 Trade 服务" hidden>🔄 重启</button>
-        <button id="skills-help-btn" onclick="showSkillsHelp()" title="查看所有 38 个技能和使用示例">📖 技能帮助</button>
+        <button id="skills-help-btn" onclick="showSkillsHelp()" title="查看所有 39 个技能和使用示例">📖 技能帮助</button>
         <button id="skills-update-btn" onclick="updateSkills(event)" title="从 GitHub 更新 B2B skills 到最新版本" hidden>🔄 Skills</button>
         <button id="upgrade-help-btn" onclick="showUpgradeHelp()" title="如何升级 Trade 系统">⬆️ 升级说明</button>
         <button id="onboarding-btn" onclick="restartOnboarding()" title="重新执行新手引导">🎓 新手引导</button>
@@ -226,7 +226,7 @@
 <!-- Skills Help Modal -->
 <div class="modal-backdrop hidden" id="skills-help-modal">
     <div class="modal wide" style="max-width:800px;">
-        <h3>📖 全部 38 个技能速查</h3>
+        <h3>📖 全部 39 个技能速查</h3>
         <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">在聊天框输入关键词，Trade 自动匹配合适的技能。点击复制图标可复制快速启动提示词。</p>
         <div id="skills-help-content" style="max-height:58vh;overflow-y:auto;line-height:1.6;"></div>
         <div class="form-actions"><button class="btn" onclick="hideModal('skills-help-modal')">关闭</button></div>

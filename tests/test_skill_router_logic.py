@@ -121,3 +121,91 @@ def test_qa_cache_reloads_when_reference_file_changes(monkeypatch, tmp_path):
     second = router._load_qa_pairs("test-skill")
 
     assert second[0]["a"] == "新答案。"
+
+
+class TestChinaLeadsRouting:
+    """新技能 b2b-china-leads 的路由：该命中的命中，**别抢别人的活**。
+
+    实测踩过三处（都写进断言了）：
+    ① 只写「找厂家/找供应商」这类触发词时，"帮我找浙江的五金厂"**匹配不到任何技能**
+       —— 中文没有词边界，口语说法和触发词很难字面重合；
+    ② 补触发词时加了"工厂"，结果与 b2b-* 的"工厂视频"**双命中（2 > 1）**，
+       把"工厂视频怎么拍"抢了过来 —— 去掉"工厂"、只留单字"厂"后与它打平，
+       靠列表顺序让原技能胜出；
+    ③ v2.0.0 加"找货源/挖竞品"触发词时，裸"OEM"因 **ASCII 词边界命中得 3 分**，
+       把"OEM 合同怎么签""写一封 OEM 合作邮件"这类邻近语义全抢过来；
+       裸"贴牌"同理（"贴牌生产的合规要求"开头即词边界）。改成复合词
+       （"OEM 厂家"/"贴牌厂家"/"找OEM"…）后只在货源语境命中。
+    """
+
+    @pytest.mark.parametrize("query", [
+        # 模式③ / 通用
+        "帮我找国内做注塑模具的厂家",
+        "帮我找浙江的五金厂",
+        "找东莞的模具厂",
+        "开发国内客户",
+        "国内获客",
+        "1688 上找供应商",
+        "帮我找国内的供应商",
+        # 模式① 找货源（v2.0.0）
+        "帮我找货源",
+        "这批货想找代工厂",
+        "找源头厂家",
+        "国内代工",
+        "想找 OEM 工厂",
+        "找OEM供应商",
+        "有没有贴牌厂家",
+        "找能做贴牌的厂",
+        # 模式② 挖竞品国内厂家（v2.0.0）
+        "帮我找竞品厂家",
+        "国内做同类产品的厂家",
+        "同行厂家有哪些",
+        "竞争对手厂家名单",
+        "竞品工厂分布在哪些地区",
+        "找同类厂商",
+    ])
+    def test_domestic_queries_hit_the_new_skill(self, query):
+        from trade.skill_router import match_skill
+
+        matched = match_skill(query)
+        assert matched is not None, f"{query!r} 没匹配到任何技能"
+        assert matched["name"] == "b2b-china-leads", (
+            f"{query!r} 命中了 {matched['name']}，应为 b2b-china-leads"
+        )
+
+    @pytest.mark.parametrize("query,expected", [
+        ("工厂视频怎么拍", "b2b-short-video"),      # 曾被我方"工厂"双命中抢走
+        ("帮我写验厂邀请", "b2b-trade-ops"),
+        ("供应商分析怎么做", "b2b-customs-data"),
+        ("帮我找德国的客户", "b2b-lead-generation"),  # 海外开发不该被国内技能截胡
+        ("帮我做竞品分析", "b2b-market-analysis"),    # 竞品"分析"归 market-analysis，我方只管"找厂家"
+        ("竞品分析怎么写", "b2b-market-analysis"),
+    ])
+    def test_does_not_steal_neighbouring_skills(self, query, expected):
+        from trade.skill_router import match_skill
+
+        matched = match_skill(query)
+        assert matched is not None and matched["name"] == expected, (
+            f"{query!r} 被 {matched and matched['name']} 抢走了，应为 {expected}"
+        )
+
+    @pytest.mark.parametrize("query", [
+        # 裸"OEM"/"贴牌"曾把这些全抢走（词边界 3 分）——回归防线
+        "写一封 OEM 合作邮件",
+        "贴牌生产的合规要求",
+        "OEM 合同怎么签",
+        "外贸 OEM 和 ODM 的区别",
+        "贴牌产品怎么写描述",
+    ])
+    def test_neighbouring_semantics_not_stolen_by_bare_oem_tiezi(self, query):
+        """OEM/贴牌 邻近语义（合同/合规/翻译/产品描述）不许被本技能吸走。
+
+        这些语句可能归别的技能、也可能无人认领（None）——两种都行，
+        唯一不许的就是落到 b2b-china-leads（它的注入提示词会跑错工作流）。
+        """
+        from trade.skill_router import match_skill
+
+        matched = match_skill(query)
+        assert matched is None or matched["name"] != "b2b-china-leads", (
+            f"{query!r} 被抢到了 b2b-china-leads（应为 None 或原技能）"
+        )

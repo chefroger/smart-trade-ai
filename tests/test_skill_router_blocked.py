@@ -51,10 +51,10 @@ class TestSkillCount:
     """测试技能注册表的数量。"""
 
     def test_all_skills_registered(self):
-        """skill_registry 应有 38 个条目。"""
+        """skill_registry 应有 39 个条目。"""
         from trade.skill_registry import _SKILLS
 
-        assert len(_SKILLS) == 38
+        assert len(_SKILLS) == 39
 
     def test_all_skill_names_unique(self):
         """所有 skill 名称不能重复。"""
