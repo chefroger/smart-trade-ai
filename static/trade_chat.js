@@ -1154,7 +1154,7 @@ const _ALL_SKILLS = [
         {n:"b2b-email-intel",d:"邮箱情报 — 120+ 平台检测邮箱注册状态",t:"查邮箱、邮箱注册、邮箱背调、email lookup"},
         {n:"b2b-lead-generation",d:"多通道客户搜索与开发（Google Maps/LinkedIn/Facebook）",t:"找客户、开发客户、lead generation、cold email"},
         {n:"b2b-customer-finder",d:"傻瓜式客户开发向导 — 三问启动 + 自动搜索 + 开发信生成",t:"怎么找客户、客户开发向导、customer finder、找客户"},
-        {n:"b2b-china-leads",d:"国内企业线索挖掘 — 找货源厂家（主）/ 挖竞品国内厂家（重点）/ 找国内客户，免费公开渠道（产业带+搜索引擎+海关记录+人工核对，不依赖付费接口）",t:"国内客户、找货源、找厂家、代工厂、竞品厂家、同类厂家、找供应商、厂商挖掘、1688、企查查、天眼查"},
+        {n:"b2b-china-leads",d:"国内企业线索挖掘 — 找货源厂家（主）/ 挖竞品国内厂家（重点）/ 找国内客户，免费公开渠道（产业带+搜索引擎+海关记录+人工核对，不依赖付费接口）",t:"找货源、竞品厂家、找厂家、代工厂、国内客户、同类厂家、找供应商、厂商挖掘、1688、企查查、天眼查"},
         {n:"b2b-cold-outreach",d:"B2B 冷 outreach 邮件撰写（开发信/推广信/跟进信）",t:"开发信、写推广信、cold email、outreach"},
         {n:"b2b-email-imitation",d:"开发信仿写与再创作 — 分析优秀邮件样本，学结构学风格",t:"仿写开发信、按照样本、模仿邮件、email imitation"},
         {n:"b2b-buyer-persona",d:"买家画像与角色分层 — 按角色定制 FAB 价值主张",t:"买家画像、按角色写、给采购写、buyer persona"},
