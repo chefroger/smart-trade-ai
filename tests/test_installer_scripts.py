@@ -92,96 +92,83 @@ class TestCloneRobustness:
                 f"{name} 仍在截断 pip 报错"
 
 
-class TestHermesVersionPin:
-    """安装脚本必须把 Hermes 固定在**已核对兼容**的版本上，而不是 main 尖端。
+class TestHermesInstallPolicy:
+    """安装脚本必须让机器上只存在**一份** Hermes，且 Trade 用 Python 3.14 与它共存。
 
-    为什么：main 每天前进约 200 个提交，一旦版本号越出 Trade 声明的兼容窗口
-    （0.13.0 ≤ v < 0.22.0，`trade/bootstrap.py` / `pre_install_check.py`），
-    新装机器会「装得上、起不来」—— 最坏的一类安装问题。固定到 release tag
-    同时也让装机结果可复现。
-
-    **另一条硬约束（2026-10-13 实测）**：上游从 v0.21.6 起把 45/46 条核心依赖
-    都标成 `; python_version >= '3.14'`（requires-python 却仍写 >=3.11）。
-    在 Python 3.11–3.13 上 `pip install -e hermes-agent` 会**一条依赖都不装**
-    （实测 3.13：装完只有 2 个包），Hermes 直接起不来。所以安装 pin 必须落在
-    marker 之前的 tag（当前为 v2026.9.24），并实测过「装完依赖齐全」。
+    为什么（都由实测/事故推出来的）：
+      - 上游从 v0.21.6 起只提供 Python 3.14 的依赖集（requires-python 里的 `>=3.11`
+        只是留给旧安装跑完升级步骤的过渡桥）。Trade 是**进程内**嵌 Hermes 的，
+        解释器必须与 Hermes 的托管环境同 ABI，所以脚本必须只接受 3.14。
+      - **旧的固定 tag 方案（v2026.9.24）已废除**：它把 Hermes 装进 Trade 的 venv，
+        并与用户自己那份共用 `~/.hermes/hermes-agent`。结果是固定静默失效（目录里
+        已有检出就原样保留）、还把用户的 Hermes 降级 —— 见 COMPATIBILITY.md。
+        新方案不碰用户的 Hermes；版本过旧由 Trade 启动后在界面里自动升级。
     """
 
     @staticmethod
-    def _pinned_ref(name: str, text: str) -> str:
-        """从 TRADE_HERMES_REF 赋值行取出固定的 **ref（tag 名）**，如 v2026.9.24。
+    def _step_section(text: str, marker: str, *, until: str) -> str:
+        """取出脚本里 marker 到 until 之间的正文（用于断言「某一步没做什么」）。"""
+        start = text.index(marker)
+        end = text.index(until, start)
+        return text[start:end]
 
-        保留完整 ref（不是拆出的语义化版本号）：pin 可能是日期式 tag
-        （v2026.9.24），也可能对回语义化 tag（v0.21.6）—— 两者都要能核对。
-
-        **必须跳过注释行**：注释里举了「临时装别的版本」的例子（含另一个版本号），
-        按行扫描会把例子当成固定值 —— 第一版就是这么写的，mutation 检验时
-        才发现「把 pin 改成不存在的版本」测不出来（解析到了注释里的旧版本）。
-        """
-        import re
-
-        for line in text.splitlines():
-            if line.strip().startswith("#"):
-                continue  # 注释里的示例不算
-            if "TRADE_HERMES_REF" in line:
-                m = re.search(r"(v[0-9][0-9A-Za-z.\-]*)", line)
-                if m:
-                    return m.group(1).rstrip(".")
-        raise AssertionError(f"{name} 未见固定的 Hermes ref（TRADE_HERMES_REF 行）")
-
-    def test_both_scripts_pin_a_version(self):
+    def test_scripts_require_python_314(self):
+        """Step 1 必须只接受 3.14：3.11~3.13 上 Trade 与 Hermes 的托管环境 ABI 不符。"""
         for name, text in (("install.sh", SH), ("install.ps1", PS1)):
-            self._pinned_ref(name, text)  # 取不到会抛错
-            assert "TRADE_HERMES_REF" in text, f"{name} 未提供 TRADE_HERMES_REF 覆盖入口"
+            assert "3.14" in text, f"{name} 未提到 Python 3.14"
+        # 判据是「解释器正好是 3.14」，不是原来的「>= 3.11」下限写法
+        assert "sys.version_info[:2] == (3, 14)" in SH
+        assert "$PSVersionTable" in PS1 or "3, 14" in PS1 or "(3,14)" in PS1
 
-    def test_clone_uses_the_ref_variable_not_hardcoded_main(self):
-        """克隆必须走 ref 变量 —— 写死 main 会让固定版本静默失效。"""
-        assert '--branch "$ref"' in SH, "install.sh 的克隆未使用 ref 变量"
-        assert "--branch $Ref" in PS1, "install.ps1 的克隆未使用 Ref 变量"
+    def test_hermes_step_does_not_install_hermes_into_trade_venv(self):
+        """Step 2 绝不能再把 Hermes 克隆/安装进 Trade 的 venv。
 
-    def test_hermes_step_passes_the_pinned_ref(self):
-        """Step 2 调用克隆辅助函数时必须把固定版本传进去（漏传 = 退回 main）。"""
-        assert (
-            '_clone_or_update "hermes-agent" "$HERMES_REPO" "$HERMES_DIR" "$HERMES_REF"'
-            in SH
-        ), "install.sh 的 Hermes 步骤未传固定版本"
-        assert (
-            'Invoke-CloneOrUpdate "hermes-agent" $HermesRepo $HermesDir $HermesRef'
-            in PS1
-        ), "install.ps1 的 Hermes 步骤未传固定版本"
+        那是旧方案的根因：它与用户自己那份抢同一个 checkout 目录，导致 pin 失效
+        并把用户的 Hermes 降级。新方案只确认 `hermes` 命令存在。
 
-    def test_pinned_version_is_declared_compatible(self):
-        """脚本固定的版本必须在 COMPATIBILITY.md 里标为兼容 —— 两边不许漂移。
-
-        这条防的是「升了脚本的 pin、忘了核对/记录」：那会装出一个没验证过的版本。
+        注意断言要针对**旧方案的具体特征**（克隆 Hermes 到数据目录、pip 装它、
+        固定 ref），不能简单地禁掉 "hermes-agent" —— 安装指引里的仓库 URL
+        （`NousResearch/hermes-agent/...`）本来就含这个词。
         """
-        compat = (ROOT / "COMPATIBILITY.md").read_text(encoding="utf-8")
+        baselines = (
+            ("install.sh", SH, ("$HERMES_HOME/hermes-agent", '$PIP" install -e "."',
+                                'TRADE_HERMES_REF', '_clone_or_update "hermes-agent"')),
+            ("install.ps1", PS1, ("$HermesHome\\hermes-agent", 'install -e "."',
+                                  'TRADE_HERMES_REF', 'Invoke-CloneOrUpdate "hermes-agent"')),
+        )
+        for name, text, forbidden in baselines:
+            section = self._step_section(text, "Step 2/5", until="Step 3/5")
+            for needle in forbidden:
+                assert needle not in section, (
+                    f"{name} 的 Step 2 仍残留旧方案特征：{needle!r}"
+                )
+
+    def test_hermes_step_gives_install_guidance_when_missing(self):
+        """找不到 hermes 时必须给一条可直接复制的安装命令（用户群是电脑小白）。"""
         for name, text in (("install.sh", SH), ("install.ps1", PS1)):
-            ref = self._pinned_ref(name, text)
-            # 兼容矩阵的行既有语义化版本号（0.21.5），也有的备注里写 tag 名；
-            # 只要**某条 ✅ 行提到这个 ref** 就算核对过（v2026.9.24 这种日期式
-            # tag 没有同名版本行，靠 0.21.5 那行的备注关联）。
-            assert any(
-                "✅" in line and ref in line for line in compat.splitlines()
-            ), f"{name} 固定的 {ref} 未在任何 ✅ 兼容行中出现（未核对/未记录）"
+            assert "NousResearch/hermes-agent/main/scripts" in text, (
+                f"{name} 未给出 Hermes 安装指引"
+            )
 
-    def test_pinned_version_matches_between_scripts(self):
-        """两个脚本固定同一 ref（跨平台一致性）。"""
-        assert self._pinned_ref("install.sh", SH) == self._pinned_ref("install.ps1", PS1)
+    def test_installer_does_not_abort_on_old_hermes(self):
+        """安装脚本不得因「Hermes 版本过旧」判定安装失败。
 
-    def test_readme_manual_install_uses_the_same_pin(self):
-        """README 的手动安装命令必须与脚本同一固定版本（三处不许漂移）。
-
-        手动安装是「方式 3」，走 README 的用户不经过安装脚本 —— 这里不钉住的话，
-        脚本固定了、文档还在装 main，问题原样复现。
+        否则用户永远见不到 Trade 界面里那个自动升级面板 —— 而升级正是在那里做的。
         """
-        pin = self._pinned_ref("install.sh", SH)
+        assert "ignore_names=('Hermes 版本',)" in SH, (
+            "install.sh 的自检未忽略「Hermes 版本」致命项"
+        )
+
+    def test_readmes_do_not_pin_a_hermes_checkout(self):
+        """README 不得再教用户把固定 tag 克隆到 ~/.hermes/hermes-agent。
+
+        那会覆盖用户已装的那份 Hermes —— 也正是旧方案的坑。
+        """
         for name in ("README.md", "README.en.md"):
             text = (ROOT / name).read_text(encoding="utf-8")
-            lines = [ln for ln in text.splitlines() if "NousResearch/hermes-agent.git" in ln]
-            assert lines, f"{name} 未见 Hermes 克隆命令"
-            for ln in lines:
-                assert pin in ln, f"{name} 的 Hermes 克隆未用固定版本 {pin}：{ln.strip()}"
+            assert "git clone --branch v" not in text or "hermes-agent.git ~/.hermes" not in text, (
+                f"{name} 仍在用固定 tag 克隆 Hermes 到 ~/.hermes/hermes-agent"
+            )
 
 
 @pytest.mark.skipif(

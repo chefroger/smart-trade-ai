@@ -123,3 +123,63 @@ class TestHermesCheckoutResolution:
         bootstrap._adjust_sys_path()
 
         assert str(checkout) in sys.path
+
+
+class TestHermesActivationRestore:
+    """Hermes 的 pm 激活之后，必须把 Trade 自己的 site-packages 补回 sys.path。
+
+    这是「Trade 跑在 Python 3.14 + 最新 Hermes」整条路线成立的前提：
+    `pm/environments.py:activate_dependencies()` 会在 `import hermes_bootstrap` 时
+    **按目录名剥掉进程原有的全部 site-packages**，Trade 的依赖（pymupdf / holehe /
+    openpyxl …）会全部消失，编译包还因 cp314/3.13 ABI 不符直接崩。不补回来的话，
+    Trade 会在运行到文档解析时才炸 —— 而且现场是一串 `ModuleNotFoundError` 天书。
+    """
+
+    def test_restores_trade_site_packages_after_activation(self, isolated):
+        """激活剥离后必须补回，且补在末尾（让 Hermes 的依赖优先胜出版本冲突）。"""
+        import types
+
+        trade_site = bootstrap._trade_site_packages()
+        assert trade_site, "测试环境应能解析出 site-packages 目录"
+
+        original_path = list(sys.path)
+        original_pythonpath = os.environ.get("PYTHONPATH", "")
+        # 造一个假的 hermes_bootstrap：导入它的副作用就是「激活」——剥离 site-packages。
+        # 放进 sys.modules 后 `import hermes_bootstrap` 直接命中，不会真的执行 import。
+        sys.modules["hermes_bootstrap"] = types.ModuleType("hermes_bootstrap")
+        sys.path[:] = [
+            p for p in sys.path if not p.endswith(("site-packages", "dist-packages"))
+        ]
+        try:
+            bootstrap._activate_hermes_env_and_restore_trade_paths()
+
+            assert trade_site in sys.path, "激活后未把 Trade 的 site-packages 补回 sys.path"
+            # 必须在末尾：一旦两侧版本漂移，让 Hermes 的托管代际优先，避免 Trade 的
+            # 老 pin 把 Hermes 需要的版本压下去
+            assert sys.path[-1] == trade_site
+            # PYTHONPATH 被激活覆盖过，也必须补回 —— 否则 Trade 起的子进程
+            # （如走 holehe 的 OSINT Layer 1）找不到 Trade 的依赖
+            assert trade_site in os.environ.get("PYTHONPATH", "")
+        finally:
+            sys.path[:] = original_path
+            sys.modules.pop("hermes_bootstrap", None)
+            if original_pythonpath:
+                os.environ["PYTHONPATH"] = original_pythonpath
+            else:
+                os.environ.pop("PYTHONPATH", None)
+
+    def test_missing_hermes_does_not_raise(self, isolated, monkeypatch):
+        """Hermes 未安装时不得抛异常：降级模式下这条路也会被走到。"""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "hermes_bootstrap":
+                raise ImportError("no hermes here")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        # 不抛异常即通过
+        bootstrap._activate_hermes_env_and_restore_trade_paths()

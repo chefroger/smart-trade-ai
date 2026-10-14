@@ -170,9 +170,12 @@ class TestVersionUpperBound:
         """占位值在有上限时同样按未知处理，不能因上限而变成 too_new。"""
         assert pic._judge_installed_version("0.0.0", "0.13.0", "0.22.0") == "unknown"
 
-    def test_window_constant_matches_bootstrap(self):
-        """上限必须与 bootstrap 的窗口一致（两处漂移会让检查形同虚设）。"""
-        from trade.bootstrap import _MAX_HERMES_VERSION, _MIN_HERMES_VERSION
+    def test_min_constant_matches_bootstrap(self):
+        """下限必须与 bootstrap 一致（两处漂移会让检查形同虚设）。"""
+        from trade.bootstrap import _MIN_HERMES_VERSION
 
         assert pic.MIN_COMPATIBLE_VERSION == _MIN_HERMES_VERSION
-        assert pic.MAX_COMPATIBLE_VERSION == _MAX_HERMES_VERSION
+
+    def test_no_upper_bound(self):
+        """上限已取消：新版 Hermes 都要跟，卡上限只会把 Trade 自己锁死。"""
+        assert not hasattr(pic, "MAX_COMPATIBLE_VERSION")

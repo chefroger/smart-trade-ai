@@ -115,6 +115,10 @@ curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scri
 
 > 如果安装过程中卡在 "Installing Node.js dependencies (browser tools)"，按 `Ctrl+C` 终止，不影响 Trade 使用。
 
+> 📌 **不用另外装 Python。** Hermes 会自带一个 Python 3.14，Trade 直接用它 —— 两者必须
+> 用同一个 Python 大版本才能配合工作（第八步安装 Trade 时脚本会自动找到它）。
+> 也**不要**手动把某个 Hermes 版本克隆到 `~/.hermes/hermes-agent` 覆盖掉这份安装。
+
 ### 第六步：配置 Hermes（大模型 + 搜索）
 
 在终端输入：
@@ -268,6 +272,10 @@ irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/ins
 等待几分钟，看到「安装完成」提示即可。
 
 > 在 PowerShell 里粘贴的方法是**点一下鼠标右键**（不是 Ctrl+V）。
+
+> 📌 **不用另外装 Python。** Hermes 会自带一个 Python 3.14，Trade 直接用它 —— 两者必须
+> 用同一个 Python 大版本才能配合工作（第八步安装 Trade 时脚本会自动找到它）。
+> 也**不要**手动把某个 Hermes 版本克隆到 `~\.hermes\hermes-agent` 覆盖掉这份安装。
 
 ---
 
@@ -502,6 +510,9 @@ sentence-transformers 属可选项，装了更好、不装自动降级）。
 
 | 你看到的现象 | 怎么解决 |
 |------------|---------|
+| **打开 Trade 后满屏提示「正在升级 Hermes」** | **这是正常的，不用管它。** 说明你电脑上的 Hermes 版本太旧（低于 0.21.6），Trade 正在自动帮你升级。升级需要能访问 GitHub，所以**请确认科学上网已开启**；升级期间不要关闭 Trade，等它跑完会自动重启，之后就能正常用 |
+| 上面的升级进度停在「需要先开启代理」 | 电脑连不上 GitHub。开启科学上网（VPN）后，点界面上的「重试升级」按钮 |
+| 上面的升级提示「升级失败」 | 多半是网络中途断了。确认科学上网正常后点「重试升级」；反复失败就把界面上的日志复制发给技术支持 |
 | 第五步安装 Hermes 卡住不动 | 科学上网没开好。确认 VPN 是全局模式，关掉 PowerShell 重开再试 |
 | `hermes` 输入后提示「不是内部或外部命令」 | 关掉 PowerShell 重新打开一个新的 |
 | `trade` 输入后提示「不是内部或外部命令」 | 改成输入 `cd $env:LOCALAPPDATA\trade\foreign-trade-assistant` 然后 `python server.py` |

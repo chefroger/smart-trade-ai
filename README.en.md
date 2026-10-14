@@ -2,7 +2,7 @@
 
 [![Test](https://github.com/chefroger/smart-trade-ai/actions/workflows/test.yml/badge.svg)](https://github.com/chefroger/smart-trade-ai/actions/workflows/test.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
 
 [中文](README.md) | [English](README.en.md)
 
@@ -128,34 +128,43 @@ python server.py
 
 ### Or do it step by step
 
-**Prerequisites**: Python >= 3.11 · Git · LLM API Key (DeepSeek recommended; OpenAI / Anthropic etc. also compatible)
+**Prerequisites**: **Python 3.14** · Git · LLM API Key (DeepSeek recommended; OpenAI / Anthropic etc. also compatible)
+
+> ⚠️ **Python must be 3.14 — not 3.11–3.13.** Trade embeds Hermes **in-process**, so both
+> must run on the same Python major version. Since v0.21.6 Hermes ships a 3.14-only
+> dependency set (its declared `>=3.11` is just an update bridge for old installs), and on
+> 3.11–3.13 you get a "installs but never starts" failure. The one-click options above use
+> Hermes's own bundled 3.14 automatically.
 
 ```bash
-# 1. Install Hermes Agent (AI engine) — use the pinned tag, never main:
-#    main moves daily, and since v0.21.6 upstream marks its core deps as
-#    Python 3.14+ — on 3.11–3.13 installing main brings ZERO dependencies
-#    (Hermes won't start).
-git clone --branch v2026.9.24 https://github.com/NousResearch/hermes-agent.git ~/.hermes/hermes-agent
-cd ~/.hermes/hermes-agent && pip install -e "."
+# 1. Install Hermes Agent (AI engine) — use the official installer; it bundles Python 3.14.
+#    Do NOT clone a tag over ~/.hermes/hermes-agent — that overwrites the user's own copy.
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
 
 # 2. Configure LLM
 hermes setup      # Choose provider, paste API key
 
-# 3. Install Smart Trade AI
+# 3. Install Smart Trade AI (venv on the 3.14 that Hermes brought)
 git clone --branch main https://github.com/chefroger/smart-trade-ai.git ~/.trade/foreign-trade-assistant
-cd ~/.trade/foreign-trade-assistant && pip install -e ".[docs]"
+cd ~/.trade/foreign-trade-assistant
+python3.14 -m venv ~/.trade/venv
+~/.trade/venv/bin/pip install -r requirements.txt
+~/.trade/venv/bin/pip install -e "." --no-deps
 
 # 4. Install skills and launch
-install-trade-skills
-python server.py
+~/.trade/venv/bin/python -c "from trade.post_install import install_skills; install_skills()"
+~/.trade/venv/bin/python server.py
 # → Open http://127.0.0.1:9119/trade
 ```
+
+> If Trade shows "Hermes version too old" after launch, your Hermes is below 0.21.6.
+> **No manual action needed** — Trade upgrades it in the background and shows progress in the UI.
 
 ### Windows
 
 **Both Python and Git need manual install:**
 
-1. **Python** — Download **Python 3.11 ~ 3.13 Windows installer (64-bit)** from [python.org](https://www.python.org/downloads/). Check "Add Python to PATH" during install.
+1. **Python** — Download **Python 3.14 Windows installer (64-bit)** from [python.org](https://www.python.org/downloads/). Check "Add Python to PATH" during install.
 2. **Git** — Download from [git-scm.com](https://git-scm.com/download/win) and install with default options. Or run `winget install --id Git.Git -e --silent` in PowerShell.
 
 > Node.js is handled automatically by Hermes' one-liner installer — no manual setup needed.

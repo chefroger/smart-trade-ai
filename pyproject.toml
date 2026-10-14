@@ -7,6 +7,11 @@ name = "smart-trade-ai"
 version = "0.6.8"
 description = "Smart Trade AI — AI sales assistant for B2B trade companies. Lead generation, customer due diligence, document analysis, social media, and daily automation."
 readme = "README.md"
+# 注意：**不要**因为「部署必须用 Python 3.14」就把这里抬到 >=3.14。
+# 3.14 是**部署约束**（Trade 进程内嵌 Hermes，必须与 Hermes 的托管环境同 ABI），
+# 不是 Trade 代码本身的约束 —— Trade 的代码仍兼容 3.11，CI 也在 3.11–3.13 上跑。
+# 该约束由 scripts/install.sh / install.ps1 的 Step 1 强制（只接受 3.14），
+# 详见 COMPATIBILITY.md 的「当前策略」。
 requires-python = ">=3.11"
 authors = [{ name = "Roger Lococo" }]
 license = { text = "AGPL-3.0-only" }

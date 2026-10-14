@@ -92,8 +92,13 @@ def _adjust_sys_path():
 
 
 # ── 子命令分发 ────────────────────────────────────────────────────────────
-_MIN_HERMES_VERSION = "0.13.0"
-_MAX_HERMES_VERSION = "0.22.0"  # exclusive upper bound: bumped 2026-09-03 for v0.21.0 compatibility
+# Hermes 与当前 Python 共存的**最低版本**：v0.21.6 起上游才把 Python 支持上界抬到
+# 3.14（也是 `pm` 托管运行时的起点）；上一代硬性要求 <3.14，两侧互斥（实测 3.14 下
+# 装 0.19.0 直接 `requires a different Python`）。**已无上限** —— 新版 Hermes 我们
+# 都要跟，卡上限只会把自己锁死。
+# 权威判据在 trade.hermes_compat.hermes_python_compat()（读 checkout 元数据，不导入
+# Hermes）；这里的常量供 doctor / pre_install_check / 测试引用，两处由测试钉住一致。
+_MIN_HERMES_VERSION = "0.21.6"
 
 
 def dispatch_subcommands() -> bool:
@@ -145,38 +150,60 @@ def dispatch_subcommands() -> bool:
 # ── Hermes 版本检查 ──────────────────────────────────────────────────────
 
 
-def check_hermes_version() -> bool:
-    """验证已安装的 Hermes 版本与当前 Trade 版本兼容。
+# ── Hermes 共存状态（启动降级用）─────────────────────────────────────────
+# 旧版 Hermes 与当前 Python 互斥时，Trade 不能再像以前那样直接 `sys.exit(1)`：
+# 桌面端（tradewin）会开出一个空白窗口，用户一句解释都看不到。改为「记录状态 +
+# 降级启动」——跳过所有会碰 Hermes 的步骤，让服务照常起来，由界面显示升级面板。
+_hermes_compat_state: dict | None = None
 
-    使用 packaging.version 进行 PEP 440 版本比较。
-    Returns True 表示兼容，False 表示不兼容。
+
+def hermes_compat_state() -> dict:
+    """返回本次启动的 Hermes 共存判定结果（供 API / 界面读取），只计算一次。"""
+    global _hermes_compat_state
+    if _hermes_compat_state is None:
+        from trade.hermes_compat import hermes_python_compat
+
+        _hermes_compat_state = hermes_python_compat()
+    return _hermes_compat_state
+
+
+def hermes_is_usable() -> bool:
+    """Hermes 当前是否可用于 agent 功能。
+
+    只有明确判定「版本过旧」才返回 False；「未知」按可用处理（识别失败不等于不兼容，
+    与既有门禁口径一致，避免误拦可用环境）。
     """
-    from packaging.version import Version
+    return hermes_compat_state().get("verdict") != "too_old"
 
-    # 多源识别（version_info → __version__ → checkout pyproject）。
-    # 上游 main 在没有安装印章时会把 __version__ 报成 "0.0.0"（占位值），
-    # 若直接当版本比较就会得出「0.0.0 不兼容」并拒绝启动 —— 那是识别失败，
-    # 不是真的不兼容，所以这里按未知处理、警告后继续。
-    from trade.hermes_compat import hermes_version
 
-    _hv = hermes_version()
-    if _hv is None:
-        print("  ⚠️ 无法确定已安装的 Hermes 版本（常见于从 main 安装且无安装印章）")
-        print("     跳过版本窗口检查，继续启动。")
-        return True
+def check_hermes_version() -> bool:
+    """检查已安装的 Hermes 能否与当前 Python 共存，并打印终端提示。
 
-    current = Version(_hv)
-    min_v = Version(_MIN_HERMES_VERSION)
-    max_v = Version(_MAX_HERMES_VERSION)
+    判据为 `trade.hermes_compat.hermes_python_compat()`：读 checkout 的 requires-python
+    与版本号，**全程不导入 Hermes**。为什么不能用 import 判 —— 旧版 Hermes 在新 Python
+    上崩的是「缺依赖的 ImportError」（缺 openai/pydantic-core 等），用户看到的是依赖
+    天书，而不是「版本过旧、去升级」这个可行动的结论。
 
-    if not (min_v <= current < max_v):
-        print(f"  ✗ Hermes version {_hv} is not compatible with this release.")
-        print(f"    Foreign Trade Assistant requires hermes-agent >={_MIN_HERMES_VERSION},<{_MAX_HERMES_VERSION}.")
-        print(f"    Installed: {_hv}")
-        print(f"    Run: pip install 'hermes-agent>={_MIN_HERMES_VERSION},<{_MAX_HERMES_VERSION}'")
+    Returns True 表示可用（含「未知」），False 表示版本过旧、必须先升级 Hermes。
+    """
+    state = hermes_compat_state()
+    verdict = state.get("verdict")
+
+    if verdict == "too_old":
+        from trade.hermes_compat import incompatible_upgrade_steps
+
+        print(f"  ✗ Hermes 版本过旧，无法与当前 Python 共存：{state.get('reason')}")
+        print(f"    已安装: {state.get('version') or '未知'}    Python: {state.get('python')}")
+        for line in incompatible_upgrade_steps():
+            print(f"    {line}")
         return False
 
-    print(f"  ✓ Hermes {_hv} (compatible: >={_MIN_HERMES_VERSION},<{_MAX_HERMES_VERSION})")
+    if verdict == "unknown":
+        print(f"  ⚠️ 无法确定 Hermes 版本（{state.get('reason')}）")
+        print("     跳过版本检查，继续启动。")
+        return True
+
+    print(f"  ✓ Hermes {state.get('version') or '（版本未知）'}（与 Python {state.get('python')} 可共存）")
     return True
 
 
@@ -376,8 +403,74 @@ def _disable_hermes_lazy_installs() -> None:
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
 
 
+def _trade_site_packages() -> str:
+    """当前解释器的 site-packages 目录（取不到返回空串）。"""
+    try:
+        if os.name == "nt":
+            candidate = Path(sys.prefix) / "Lib" / "site-packages"
+        else:
+            candidate = (
+                Path(sys.prefix)
+                / "lib"
+                / f"python{sys.version_info.major}.{sys.version_info.minor}"
+                / "site-packages"
+            )
+        if candidate.is_dir():
+            return str(candidate)
+    except Exception:
+        pass
+    # 兜底：从 sys.path 里认出属于本解释器 prefix 的那一条
+    try:
+        prefix = os.path.normcase(str(Path(sys.prefix)))
+        for entry in sys.path:
+            if entry.endswith(("site-packages", "dist-packages")) and os.path.normcase(entry).startswith(prefix):
+                return entry
+    except Exception:
+        pass
+    return ""
+
+
+def _activate_hermes_env_and_restore_trade_paths() -> None:
+    """显式触发 Hermes 的 pm 激活，然后立刻把 Trade 自己的 site-packages 补回 sys.path。
+
+    **为什么必须显式触发**：`pm/environments.py::activate_dependencies()` 在
+    `import hermes_bootstrap` 时把 `sys.path` 整体换成 Hermes 托管环境的 site-packages，
+    **按目录名剥掉进程原有的全部 site-packages**（Trade 的依赖就此全灭），并覆盖
+    `PYTHONPATH`。让它「晚一点在某个 import 里发生」会让失败点飘忽 —— 历史事故就是
+    agent 线程静默死亡、前端只显示「Agent 未返回有效回复」。所以这里主动触发一次，
+    紧接着把路径补回去，让时序可预期。
+
+    **为什么补在末尾**：Trade 与 Hermes 的依赖版本是 lockstep 的（`requirements.txt`
+    与上游 pin 对齐），同版本时顺序无关；一旦漂移，让 **Hermes 的托管代际优先胜出**，
+    避免 Trade 的老 pin 把 Hermes 需要的版本压下去。隔离实测确认 `openai` 来自托管代际。
+
+    只在 Hermes 可用时调用 —— 降级模式（版本过旧）下绝不该 import Hermes。
+    """
+    trade_site = _trade_site_packages()
+    try:
+        import hermes_bootstrap  # noqa: F401 — 导入的副作用即目的
+    except Exception:
+        # Hermes 未安装或导入失败：交给调用方按「未知」处理，不在这里抛
+        return
+
+    # 激活剥掉了 Trade 的 site-packages → 补回（放末尾，让 Hermes 的依赖优先）
+    if trade_site and trade_site not in sys.path:
+        sys.path.append(trade_site)
+
+    # 激活也用托管环境的路径覆盖了 PYTHONPATH；不补回来的话，Trade 起的子进程
+    # （如走 holehe 的 OSINT Layer 1）会找不到 Trade 自己的依赖
+    if trade_site:
+        existing = [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
+        if trade_site not in existing:
+            os.environ["PYTHONPATH"] = os.pathsep.join([*existing, trade_site])
+
+
 def load_env_and_set_yolo():
     """加载 Hermes .env、开启 YOLO 模式，并禁用 Hermes 的懒加载重启。"""
+    # 必须在**第一条 Hermes import 之前**完成激活与恢复：晚一步，后续 import 就会
+    # 落在一个被剥离过的 sys.path 上（见函数 docstring）
+    _activate_hermes_env_and_restore_trade_paths()
+
     from hermes_cli.env_loader import load_hermes_dotenv
     from hermes_constants import get_hermes_home
 
@@ -597,12 +690,18 @@ def setup():
     0. Hermes 懒加载守卫（必须最先 —— 见 _disable_hermes_lazy_installs）
     1. sys.path 调整
     2. 子命令分发（如果是子命令则直接 exit）
-    3. 架构检查
-    4. Hermes 版本检查
-    5. .env 加载 + YOLO 设置
-    6. Skills 同步
-    7. 文档依赖检查
-    8. 桌面集成（Windows：自启 + 桌面快捷方式，幂等、失败不阻断）
+    3. 架构检查（不匹配 → 退出：Hermes 的 C 扩展根本装不上，降级也没有意义）
+    4. Hermes 共存检查（**过旧不再退出**，见下）
+    5. .env 加载 + YOLO 设置（需 Hermes）
+    6. Skills 同步（不碰 Hermes）
+    7. 文档依赖检查（不碰 Hermes）
+    8. 桌面集成（不碰 Hermes，幂等、失败不阻断）
+    9. 端到端自检（要起 agent，需 Hermes）
+
+    第 4 步为什么改成降级而不是退出：桌面端（tradewin）先起服务线程再开窗口，
+    一旦在起服务前退出，用户只会看到一个空白窗口、一句解释都没有 —— 而 Trade 的
+    用户群基本是电脑小白，这等于让他们以为软件坏了。改为「记录状态 + 跳过碰 Hermes
+    的步骤 + 照常起服务」，界面才能显示升级面板把他们引到正确的动作上。
     """
     # 第 0 步：子命令分发（doctor/osint/…）与版本检查都会导入 Hermes，都必须有守卫。
     _disable_hermes_lazy_installs()
@@ -615,14 +714,49 @@ def setup():
     if not check_native_architecture():
         sys.exit(1)
 
-    if not check_hermes_version():
-        sys.exit(1)
+    # 第 4 步：共存检查，**故意不退出**（理由见 docstring）
+    hermes_usable = check_hermes_version()
+
+    if not hermes_usable:
+        # 过旧时跳过所有会 import Hermes 的步骤：load_env_and_set_yolo() 会 import
+        # hermes_cli.env_loader / hermes_constants，端到端自检要起 agent —— 两者在
+        # 旧 Hermes + 新 Python 下都会崩，服务就起不来了，升级面板也就无从显示。
+        print("  ⚠️ Hermes 不可用，本次以降级模式启动：界面会引导你升级 Hermes。")
+        # 剩下这几步本意是「不碰 Hermes、照常跑以保持功能完整」，但它们**间接**仍会
+        # 摸到 Hermes（`_local_skills_sync` 要 `hermes_constants` 解析数据目录、
+        # `ensure_document_deps` 会试 Hermes 的 lazy_deps）。这里逐个兜住：
+        # 降级模式唯一不可违反的不变量是**服务必须起得来** —— 任一可选项失败都绝不能
+        # 把升级界面挡在门外，那会让用户彻底无从下手。
+        for _optional_step in (sync_b2b_skills, ensure_document_deps, ensure_desktop_integration):
+            try:
+                _optional_step()
+            except Exception as exc:  # noqa: BLE001 — 见上：降级模式必须走到起服务
+                print(f"  ⚠️ {_optional_step.__name__} 跳过（{exc}）")
+        _start_hermes_upgrade_in_background()
+        return
 
     load_env_and_set_yolo()
     sync_b2b_skills()
     ensure_document_deps()
     ensure_desktop_integration()
     start_doctor_if_needed()
+
+
+def _start_hermes_upgrade_in_background() -> None:
+    """降级模式下自动在后台升级 Hermes。
+
+    用户明确要求「版本过低就直接帮用户升级」—— 桌面端用户看不到终端，让他们自己敲
+    命令等于没做。升级本身会先查 GitHub 可达性（见 trade.hermes_upgrade）：网络不通
+    绝不开始，否则失败会同时弄坏 Hermes 与 Trade。
+
+    这里吞掉所有异常：自动升级失败不能反过来挡住服务启动，否则界面就出不来了。
+    """
+    try:
+        from trade.hermes_upgrade import start_upgrade
+
+        start_upgrade()
+    except Exception as exc:  # noqa: BLE001 — 启动路径必须永不因升级失败而中断
+        print(f"  ⚠️ 后台升级 Hermes 启动失败：{exc}")
 
 
 def start_doctor_if_needed() -> None:

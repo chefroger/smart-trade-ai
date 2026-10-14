@@ -29,10 +29,11 @@ import urllib.request
 
 # trade requires hermes-agent from NousResearch/hermes-agent at or above this version.
 # (Prior to v0.4.0, the chefroger/hermes-agent fork was used; now migrated to upstream.)
-MIN_COMPATIBLE_VERSION = "0.13.0"
-# 上限（排他），必须与 trade/bootstrap.py 的 _MAX_HERMES_VERSION 保持一致 ——
-# 有测试断言两者相等。超上限的 Hermes 启动时会被 bootstrap 拒绝。
-MAX_COMPATIBLE_VERSION = "0.22.0"
+# 下限 = v0.21.6：上游从这一版起把 Python 支持上界抬到 3.14（也是 `pm` 托管运行时
+# 的起点）；上一代硬性要求 <3.14，与 Trade 的 3.14 解释器互斥。**已无上限** ——
+# 新版 Hermes 我们都要跟，卡上限只会把自己锁死。
+# 必须与 trade/bootstrap.py 的 _MIN_HERMES_VERSION 保持一致（有测试断言两者相等）。
+MIN_COMPATIBLE_VERSION = "0.21.6"
 
 # 不是真实版本号的占位值：上游 main 在缺少安装印章时会把 __version__ 报成 "0.0.0"
 _VERSION_PLACEHOLDERS = {"", "0.0.0", "0.0.0.0", "unknown", "none", "dev"}
@@ -402,30 +403,14 @@ def run_check() -> int:
         return 2
 
     # Case 3: installed from official source, check version compatibility
-    verdict = _judge_installed_version(
-        installed_version, MIN_COMPATIBLE_VERSION, MAX_COMPATIBLE_VERSION
-    )
+    # 不再传上限（已无排他上界），只判下限。
+    verdict = _judge_installed_version(installed_version, MIN_COMPATIBLE_VERSION)
     if verdict == "unknown":
         print_warn(f"Cannot tell the version from the reported value: {installed_version!r}")
         print_info("  (upstream reports 0.0.0 when a checkout has no install stamp)")
-        print_info("  Skipping the version-window check and continuing.")
+        print_info("  Skipping the version check and continuing.")
         print()
         return 0
-    if verdict == "too_new":
-        # 上限超出：`trade/bootstrap.py` 会用 sys.exit(1) 拒绝启动。
-        # 安装阶段就拦下来，并给出可执行的补救（回退到已知兼容的 tag）。
-        print_fail(
-            f"hermes-agent version {installed_version} is newer than Trade supports."
-        )
-        print_warn(
-            f"Trade requires version >= {MIN_COMPATIBLE_VERSION} and < {MAX_COMPATIBLE_VERSION}."
-        )
-        print()
-        print_info("Please install a supported version:")
-        print_info("  cd ~/.hermes/hermes-agent")
-        print_info("  git checkout v2026.9.24 && uv pip install -e .")
-        print()
-        return 2
     if verdict == "too_old":
         print_fail(f"hermes-agent version {installed_version} is too old.")
         print_warn(f"Trade requires version >= {MIN_COMPATIBLE_VERSION} from NousResearch/hermes-agent.")

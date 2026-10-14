@@ -73,23 +73,31 @@ def check_hermes_runtime(*, agent_factory=None) -> list[CheckResult]:
     out: list[CheckResult] = []
 
     try:
-        from trade.bootstrap import _MAX_HERMES_VERSION, _MIN_HERMES_VERSION
-        from trade.hermes_compat import hermes_version
+        from trade.bootstrap import _MIN_HERMES_VERSION
+        from trade.hermes_compat import hermes_python_compat
 
-        ver = hermes_version()
-        if not ver:
+        # 判据与启动门禁同源：读 checkout 元数据判「能否与当前 Python 共存」，
+        # 不再用版本窗口 —— 上限已取消（新版 Hermes 都要跟），只剩最低版本这一条。
+        state = hermes_python_compat()
+        verdict = state.get("verdict")
+        label = state.get("version") or "未知"
+
+        if verdict == "too_old":
+            out.append(CheckResult(
+                "Hermes 版本", STATUS_FAIL,
+                f"{label} 无法与 Python {state.get('python')} 共存（{state.get('reason')}）；"
+                f"请升级到 Hermes >= {_MIN_HERMES_VERSION}",
+                fatal=True,
+            ))
+        elif verdict == "unknown":
             out.append(CheckResult(
                 "Hermes 版本", STATUS_WARN,
-                "识别不到版本（无安装印章时上游会报占位值），跳过窗口检查",
+                f"无法确定版本（{state.get('reason')}），跳过检查",
             ))
         else:
-            from packaging.version import Version
-
-            in_window = Version(_MIN_HERMES_VERSION) <= Version(ver) < Version(_MAX_HERMES_VERSION)
             out.append(CheckResult(
-                "Hermes 版本", STATUS_OK if in_window else STATUS_FAIL,
-                f"{ver}（要求 >={_MIN_HERMES_VERSION},<{_MAX_HERMES_VERSION}）",
-                fatal=not in_window,
+                "Hermes 版本", STATUS_OK,
+                f"{label}（与 Python {state.get('python')} 可共存）",
             ))
     except Exception as e:
         out.append(CheckResult("Hermes 版本", STATUS_WARN, f"检查失败：{e}"))
@@ -505,9 +513,19 @@ def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     return results
 
 
-def has_fatal_failure(results: list[CheckResult]) -> bool:
-    """是否存在应阻断安装的失败。"""
-    return any(r.fatal and r.status == STATUS_FAIL for r in results)
+def has_fatal_failure(results: list[CheckResult], ignore_names: tuple[str, ...] = ()) -> bool:
+    """是否存在应阻断安装的失败。
+
+    Args:
+        ignore_names: 需要忽略的检查项名。用于「这项失败不该阻断安装、而由运行时
+            自己处理」的场景 —— 典型是 Hermes 版本过旧：Trade 启动后会在界面里
+            自动升级 Hermes（见 trade/hermes_upgrade.py），安装脚本若因此判定
+            「安装失败」，用户就永远见不到那个升级界面。
+    """
+    return any(
+        r.fatal and r.status == STATUS_FAIL and r.name not in ignore_names
+        for r in results
+    )
 
 
 def format_report(results: list[CheckResult]) -> str:

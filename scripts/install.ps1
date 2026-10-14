@@ -18,26 +18,46 @@ Write-Host ""
 # ─────────────────────────────────────────────────────────────────────────────
 Write-Host "Step 1/5: 检查 Python 环境" -ForegroundColor White
 
+# Trade 必须跑在 **Python 3.14** 上：Hermes 从 v0.21.6 起只提供 3.14 的依赖集
+# （requires-python 里那个 `>=3.11` 只是留给旧安装「跑完自己的升级步骤」的过渡桥），
+# 而 Trade 是**进程内**嵌 Hermes 的，解释器必须与 Hermes 的托管环境同 ABI。
+# 在 3.11~3.13 上会变成「装得上、起不来」，所以这里不再接受 3.11~3.13。
 $PythonCmd = $null
-foreach ($cmd in @("python3", "python")) {
+$HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
+
+# 判据：解释器正好是 3.14（不是「>= 3.11」下限）
+$IsPython314 = { param($cmd) & $cmd -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null; $LASTEXITCODE -eq 0 }
+
+foreach ($cmd in @("python3.14", "python3", "python")) {
     try {
-        $ver = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-        $major = & $cmd -c "import sys; print(sys.version_info.major)" 2>$null
-        $minor = & $cmd -c "import sys; print(sys.version_info.minor)" 2>$null
-        if ([int]$major -gt 3 -or ([int]$major -eq 3 -and [int]$minor -ge 11)) {
+        if (& $IsPython314 $cmd) {
             $PythonCmd = $cmd
-            Write-Host "  ✓ Python $ver ($(& $PythonCmd -c "import sys; print(sys.executable)"))" -ForegroundColor Green
+            Write-Host "  ✓ Python 3.14 ($(& $PythonCmd -c "import sys; print(sys.executable)"))" -ForegroundColor Green
             break
         }
     } catch {}
 }
 
+# 退路：Hermes 自带的托管 Python（上游安装器放在数据目录的 tools\ 下）——
+# 优先用它：与 Hermes 的托管环境 ABI 完全一致，省掉一类难查的崩
 if (-not $PythonCmd) {
-    Write-Host "  ✗ 需要 Python >= 3.11，但未找到。" -ForegroundColor Red
+    $managed = Get-ChildItem -Path "$HermesHome\tools", "$HermesHome\tools\*" -Filter "python3.14.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($managed) {
+        $PythonCmd = $managed.FullName
+        Write-Host "  ✓ 使用 Hermes 自带的 Python 3.14 ($PythonCmd)" -ForegroundColor Green
+    }
+}
+
+if (-not $PythonCmd) {
+    Write-Host "  ✗ 需要 Python 3.14，但未找到。" -ForegroundColor Red
     Write-Host ""
-    Write-Host "  请先安装 Python："
-    Write-Host "    winget install Python.Python.3.12"
-    Write-Host "    或从 https://www.python.org/downloads/ 下载"
+    Write-Host "  Trade 必须与 Hermes 用同一个 Python 大版本（3.14）。任选一种方式：" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  1) 让 Hermes 自带（推荐）—— 先安装 Hermes，它会自带 3.14，本脚本能自动找到：" -ForegroundColor White
+    Write-Host "       irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"
+    Write-Host ""
+    Write-Host "  2) 自己装 3.14：" -ForegroundColor White
+    Write-Host "       winget install Python.Python.3.14"
     exit 1
 }
 
@@ -106,52 +126,38 @@ function Invoke-CloneOrUpdate {
 # Step 2: 安装 hermes-agent
 # ─────────────────────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "Step 2/5: 安装 hermes-agent" -ForegroundColor White
+Write-Host "Step 2/5: 检查 Hermes Agent" -ForegroundColor White
 
-$HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
-
-# Hermes 固定版本（安装时装这个 tag，而不是 main 尖端）。
+# **不再把 Hermes 克隆/安装进 Trade 的 venv**（旧的固定 tag 方案已废除）。
+# 现在机器上只有**一份** Hermes：用户自己装的那份。Trade 通过 sys.path 指向它，
+# 并让它的 pm 托管环境提供 Hermes 的依赖（见 trade/bootstrap.py 与 COMPATIBILITY.md）。
 #
-# 为什么固定（两条都是实测出来的）：
-#   1. main 每天前进约 200 个提交，越出 Trade 的兼容窗口（0.13.0 ≤ v < 0.22.0）后
-#      新机器会「装得上、起不来」。
-#   2. 上游从 v0.21.6 起把 45/46 条核心依赖标成 `; python_version >= '3.14'`
-#      （requires-python 仍写 >=3.11）—— 在 3.11–3.13 上 `pip install -e` 一条依赖
-#      都不装（实测 3.13 只有 2 个包），Hermes 起不来。pin 必须落在 marker 之前。
-# 当前 v2026.9.24（版本 0.21.5）：实测 3.13 装完 64 个包、导入正常。
-# 更新时同步四处：本文件 + install.sh + README.md + README.en.md（有测试钉住）。
-# 临时装别的版本：$env:TRADE_HERMES_REF = "v2026.9.21" 后重跑。
-$HermesRef = if ($env:TRADE_HERMES_REF) { $env:TRADE_HERMES_REF } else { "v2026.9.24" }
+# 旧方案把 Hermes 装进 Trade 的 venv，并与用户那份抢同一个 checkout 目录，
+# 结果是「pin 静默失效 + 把用户的 Hermes 降级」（见 COMPATIBILITY.md 跟进记录）。
+#
+# 版本是否够新由 Trade 启动时判定；过旧会在界面里自动升级（trade/hermes_upgrade.py），
+# 所以这里只确认它存在，不在这里改动用户的 Hermes。
+$hermesCmd = $null
+foreach ($candidate in @("$env:LOCALAPPDATA\hermes\hermes-agent\.hermes\bin\hermes.cmd",
+                         "$env:USERPROFILE\.local\bin\hermes.cmd",
+                         "$env:USERPROFILE\.local\bin\hermes.exe")) {
+    if (Test-Path $candidate) { $hermesCmd = $candidate; break }
+}
+if (-not $hermesCmd) {
+    $onPath = Get-Command hermes -ErrorAction SilentlyContinue
+    if ($onPath) { $hermesCmd = $onPath.Source }
+}
 
-# 注意：PowerShell 里**原生命令非零退出不会抛异常**，所以不能用 try/catch 判断成败，
-# 必须显式看 $LASTEXITCODE（旧代码的 try/catch 从不触发 → 整个安装分支是死代码）。
-& $PyCmd -c "import hermes_cli" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    $hermesVer = & $PyCmd -c "import hermes_cli; print(hermes_cli.__version__)" 2>$null
-    Write-Host "  ✓ hermes-agent 已安装 (v$hermesVer)" -ForegroundColor Green
+if ($hermesCmd) {
+    Write-Host "  ✓ 已找到 hermes 命令（$hermesCmd）" -ForegroundColor Green
 } else {
-    Write-Host "  → 正在安装 hermes-agent（固定版本 $HermesRef）..." -ForegroundColor Cyan
-
-    $HermesRepo = "https://github.com/NousResearch/hermes-agent.git"
-    $HermesDir = "$HermesHome\hermes-agent"
-
-    if (-not (Invoke-CloneOrUpdate "hermes-agent" $HermesRepo $HermesDir $HermesRef)) { exit 1 }
-
-    Push-Location $HermesDir
-    & $PipCmd install -e "."
-    Pop-Location
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ✗ hermes-agent 依赖安装失败（pip 的报错见上）" -ForegroundColor Red
-        exit 1
-    }
-
-    & $PyCmd -c "import hermes_cli"
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  ✓ hermes-agent 安装完成" -ForegroundColor Green
-    } else {
-        Write-Host "  ✗ hermes-agent 安装失败（无法导入 hermes_cli）" -ForegroundColor Red
-        exit 1
-    }
+    Write-Host "  ✗ 未找到 hermes 命令 —— 请先安装 Hermes Agent。" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  复制下面这一行，粘贴到 PowerShell 后回车：" -ForegroundColor White
+    Write-Host "    irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"
+    Write-Host ""
+    Write-Host "  装好后重新运行本安装脚本。" -ForegroundColor White
+    exit 1
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,7 +291,10 @@ if ($LASTEXITCODE -ne 0) {
 # 那时服务与配置都已就位，且结果会落盘、在界面提示。这里只做能立刻发现
 # "装坏了"的快检，避免安装脚本因为网络波动误报失败而挡住用户。
 # ─────────────────────────────────────────────────────────────────────────────
-& $PyCmd -c "import sys; from trade.doctor import run_doctor, format_report, has_fatal_failure; r = run_doctor(deep=False); print(format_report(r)); sys.exit(1 if has_fatal_failure(r) else 0)"
+# 「Hermes 版本」这一项刻意不计入致命项：版本过旧不需要在这里解决 —— Trade 启动后
+# 会在界面里自动升级 Hermes（见 trade/hermes_upgrade.py）。若这里判失败并退出，
+# 用户就永远看不到那个升级界面了。
+& $PyCmd -c "import sys; from trade.doctor import run_doctor, format_report, has_fatal_failure; r = run_doctor(deep=False); print(format_report(r)); sys.exit(1 if has_fatal_failure(r, ignore_names=('Hermes 版本',)) else 0)"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ 自检发现致命问题，安装不完整。请把上面的输出发给技术支持。" -ForegroundColor Red
     exit 1

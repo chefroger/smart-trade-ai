@@ -233,6 +233,23 @@
     </div>
 </div>
 
+<!-- Hermes 版本过旧：全屏升级面板。默认隐藏，由 trade_chat.js 按 /system/hermes-compat 显示。
+     存在的理由：Trade 进程内嵌 Hermes，Hermes 版本过旧时 agent 功能全废；而桌面端
+     （tradewin）用户看不到终端，必须有个界面能告诉他们发生了什么、正在做什么。 -->
+<div class="hermes-upgrade-overlay hidden" id="hermes-upgrade-overlay">
+    <div class="hermes-upgrade-card">
+        <div class="hermes-upgrade-icon" id="hermes-upgrade-icon">⬆️</div>
+        <h2 id="hermes-upgrade-title">正在升级 Hermes</h2>
+        <p class="hermes-upgrade-message" id="hermes-upgrade-message"></p>
+        <div class="hermes-upgrade-steps" id="hermes-upgrade-steps"></div>
+        <div class="hermes-upgrade-actions" id="hermes-upgrade-actions"></div>
+        <details class="hermes-upgrade-details">
+            <summary>升级详情</summary>
+            <pre class="hermes-upgrade-log" id="hermes-upgrade-log"></pre>
+        </details>
+    </div>
+</div>
+
 <div id="toast-container"></div>
 
 <script>let TOKEN = "__TRADE_SESSION_TOKEN__";</script>

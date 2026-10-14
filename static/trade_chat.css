@@ -636,3 +636,47 @@ body {
     border-top: 1px solid var(--border-light);
 }
 #onboarding-actions .btn { flex: 1; }
+
+/* ── Hermes 版本过旧：全屏升级面板 ─────────────────────────────────────── */
+/* 用全屏遮罩而不是 toast：这是「软件当前不可用、且正在被修」的状态，必须挡住其它
+   操作，否则用户会在一个坏掉的界面上乱点，然后来问「为什么点了没反应」。 */
+.hermes-upgrade-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(15,23,42,0.72); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.hermes-upgrade-overlay.hidden { display: none; }
+.hermes-upgrade-card {
+    background: var(--bg-card); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl); max-width: 620px; width: 100%;
+    max-height: 88vh; overflow-y: auto; padding: 32px; text-align: center;
+}
+.hermes-upgrade-icon { font-size: 40px; line-height: 1; margin-bottom: 12px; }
+.hermes-upgrade-card h2 { font-size: 20px; margin-bottom: 10px; }
+.hermes-upgrade-message {
+    color: var(--text-secondary); font-size: 14px; line-height: 1.7;
+    margin-bottom: 18px; white-space: pre-wrap;
+}
+.hermes-upgrade-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+/* 三条可照做的步骤：小白要的是「复制这一行」，所以命令单独成块、可整行选中 */
+.hermes-upgrade-step {
+    text-align: left; border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; margin-bottom: 10px; background: var(--bg-input);
+}
+.hermes-upgrade-step-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.hermes-upgrade-step-detail { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.hermes-upgrade-step code {
+    display: block; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 8px 10px;
+    font-size: 12px; word-break: break-all; user-select: all;
+}
+.hermes-upgrade-details { margin-top: 16px; text-align: left; }
+.hermes-upgrade-details summary {
+    cursor: pointer; font-size: 12px; color: var(--text-muted); outline: none;
+}
+.hermes-upgrade-log {
+    margin-top: 8px; max-height: 180px; overflow-y: auto;
+    background: var(--sidebar-bg); color: #CBD5E1;
+    border-radius: var(--radius-sm); padding: 10px 12px;
+    font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+}

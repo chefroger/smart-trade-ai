@@ -3952,10 +3952,185 @@ async function saveCompanyIdentity() {
     else toast(r?.detail||'保存失败');
 }
 
+// ═════════════════════ HERMES 版本过旧 → 升级面板 ═════════════════════
+// Trade 进程内嵌 Hermes：Hermes 版本过旧时 agent 功能全废。桌面端（tradewin）用户
+// 看不到终端，所以必须有个界面把「出什么问题 / 正在做什么 / 现在该做什么」讲清楚。
+// 自动升级由后端在启动时已经拉起，这里只负责显示进度、失败重试、成功后刷新。
+// #region hermes-upgrade
+
+const HERMES_UPGRADE_TEXT = {
+    idle:             {icon:'⬆️', title:'准备升级 Hermes', message:'Trade 需要更新版本的 Hermes，正在准备升级…'},
+    checking_network: {icon:'🔍', title:'正在检查网络',    message:'正在确认能否访问 GitHub…'},
+    upgrading:        {icon:'⬆️', title:'正在升级 Hermes', message:'升级进行中，请勿关闭 Trade。这一步可能需要几分钟。'},
+    done:             {icon:'✅', title:'升级完成',        message:'Hermes 已升级完成，正在重启 Trade，请稍候…'},
+    offline:          {icon:'🌐', title:'需要先开启代理',  message:'无法访问 GitHub，升级没有开始。请开启代理（VPN）后点「重试」。'},
+    failed:           {icon:'⚠️', title:'升级失败',        message:'Hermes 没有升级成功。请确认网络通畅后点「重试」。'},
+};
+
+let _hermesUpgradeAbort = null;
+let _hermesUpgradeReloading = false;
+
+/**
+ * 启动时检查 Hermes 是否过旧；需要升级则显示面板并返回 true。
+ * 调用方据此中断常规初始化 —— 此时聊天/公司数据都还用不了。
+ *
+ * 用裸 fetch 而不是 api()：本检查发生在公司选择之前，api() 会附带 X-Company-ID
+ * 并在失败时弹 toast，两者在这里都不合适。
+ */
+async function checkHermesCompatOrShowPanel() {
+    let compat = null;
+    try {
+        const r = await fetch('/api/trade/system/hermes-compat', {
+            headers: {'X-Hermes-Session-Token': TOKEN}, cache: 'no-store',
+        });
+        if (r.ok) compat = await r.json();
+    } catch(_) {}
+    // 拿不到状态就不拦 —— 不能因为一个检查把整个软件挡在门外
+    if (!compat || compat.usable) return false;
+    showHermesUpgradePanel(compat);
+    return true;
+}
+
+/** 显示升级面板，渲染已有状态，并开始消费进度流。 */
+function showHermesUpgradePanel(compat) {
+    const overlay = $('hermes-upgrade-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    renderHermesUpgradeSteps(compat.steps || []);
+    applyHermesUpgradeState(compat.upgrade || {status:'idle', message:''});
+    startHermesUpgradeStream(0);
+}
+
+/** 渲染三条可照做的升级步骤；命令整行可选中，方便复制。 */
+function renderHermesUpgradeSteps(steps) {
+    const box = $('hermes-upgrade-steps');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!steps.length) return;
+    steps.forEach(function(step, i) {
+        const div = document.createElement('div');
+        div.className = 'hermes-upgrade-step';
+        const title = document.createElement('div');
+        title.className = 'hermes-upgrade-step-title';
+        title.textContent = (i + 1) + ') ' + (step.title || '');
+        const detail = document.createElement('div');
+        detail.className = 'hermes-upgrade-step-detail';
+        detail.textContent = step.detail || '';
+        const code = document.createElement('code');
+        code.textContent = step.command || '';
+        div.appendChild(title);
+        div.appendChild(detail);
+        div.appendChild(code);
+        box.appendChild(div);
+    });
+}
+
+/** 按状态刷新面板文案与按钮（文案集中在上面的 HERMES_UPGRADE_TEXT）。 */
+function applyHermesUpgradeState(upgrade) {
+    const status = upgrade.status || 'idle';
+    const text = HERMES_UPGRADE_TEXT[status] || HERMES_UPGRADE_TEXT.idle;
+    const icon = $('hermes-upgrade-icon'), title = $('hermes-upgrade-title');
+    const msg = $('hermes-upgrade-message'), actions = $('hermes-upgrade-actions');
+    if (icon) icon.textContent = text.icon;
+    if (title) title.textContent = text.title;
+    // 后端可能给出更具体的说明（如退出码），有就用它
+    if (msg) msg.textContent = upgrade.message || text.message;
+    if (!actions) return;
+    actions.innerHTML = '';
+
+    // 只在「停下来了」的失败态给重试按钮：运行中给按钮会让用户以为可以加速
+    const canRetry = (status === 'failed' || status === 'offline');
+    if (canRetry) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary';
+        btn.textContent = '重试升级';
+        btn.onclick = function() { retryHermesUpgrade(); };
+        actions.appendChild(btn);
+    }
+    // 升级已在进行/已结束时，步骤指引不占地方（失败时再显示出来给用户照做）
+    const stepsBox = $('hermes-upgrade-steps');
+    if (stepsBox) stepsBox.style.display = (status === 'upgrading' || status === 'checking_network' || status === 'done') ? 'none' : 'block';
+}
+
+/** 手动重试：让后端重新走一遍「探网络 → hermes update」。 */
+async function retryHermesUpgrade() {
+    const actions = $('hermes-upgrade-actions');
+    if (actions) actions.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">正在重试…</span>';
+    try {
+        await fetch('/api/trade/system/hermes-upgrade', {
+            method: 'POST', headers: {'X-Hermes-Session-Token': TOKEN},
+        });
+    } catch(_) {}
+    startHermesUpgradeStream(0);
+}
+
+/**
+ * 消费升级进度流（SSE）。断线不致命：面板上的「重试」和刷新页面都能恢复，
+ * 所以这里吞掉异常，不弹错误。
+ */
+async function startHermesUpgradeStream(offset) {
+    if (_hermesUpgradeAbort) _hermesUpgradeAbort.abort();
+    _hermesUpgradeAbort = new AbortController();
+    try {
+        const r = await fetch('/api/trade/system/hermes-upgrade/stream?offset=' + (offset || 0), {
+            headers: {'X-Hermes-Session-Token': TOKEN},
+            signal: _hermesUpgradeAbort.signal,
+        });
+        if (!r.ok || !r.body) return;
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, {stream: true});
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const raw of lines) {
+                const line = raw.replace(/\r$/, '');
+                if (!line.startsWith('data: ')) continue;
+                let data;
+                try { data = JSON.parse(line.slice(6)); } catch(_) { continue; }
+                if (data.type === 'log') appendHermesUpgradeLog(data.line);
+                else if (data.type === 'state') {
+                    applyHermesUpgradeState(data);
+                    // 升级成功 → 后端会重启 Trade，这里等新进程起来再刷新页面
+                    if (data.status === 'done') { reloadAfterHermesUpgrade(); return; }
+                }
+            }
+        }
+    } catch(_) {}
+}
+
+/** 追加一行升级日志（自动滚到底部，让用户看到「有在动」）。 */
+function appendHermesUpgradeLog(line) {
+    const box = $('hermes-upgrade-log');
+    if (!box) return;
+    box.textContent += line + '\n';
+    box.scrollTop = box.scrollHeight;
+}
+
+/** 升级成功后等待 Trade 重启并刷新页面（复用既有的重启探测逻辑）。 */
+function reloadAfterHermesUpgrade() {
+    if (_hermesUpgradeReloading) return;
+    _hermesUpgradeReloading = true;
+    try { sessionStorage.setItem('_trade_upgrade_done', '1'); } catch(_) {}
+    _waitForRestartAndReload(() => {
+        // 超时兜底：仍有提示，避免用户对着「正在重启」干等
+        toast('升级已完成，如果页面没有自动刷新，请手动刷新一次');
+    });
+}
+
+// #endregion hermes-upgrade
+
 // ═════════════════════ INIT ═════════════════════
 document.addEventListener('DOMContentLoaded', async () => {
     // 初始化语言
     initLang();
+
+    // Hermes 版本过旧 → 只显示升级面板，不再走公司/聊天初始化：那些功能此刻全都
+    // 依赖 Hermes，走下去只会让用户在坏掉的界面上乱点
+    if (await checkHermesCompatOrShowPanel()) return;
 
     // 检测是否刚完成系统升级（页面 reload 后显示 toast）
     try {

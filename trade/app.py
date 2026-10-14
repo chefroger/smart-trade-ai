@@ -497,6 +497,83 @@ def _create_system_router() -> APIRouter:
         _perform_restart()
         return {"ok": True, "message": "重启指令已发送"}
 
+    # ── Hermes 共存 / 升级端点 ──────────────────────────────────────────────
+    # 为什么放在系统路由：这些是「修好软件本身」的动作，不属于任何公司的业务数据，
+    # 因此不需要 X-Company-ID，只需要 session token（与 update/restart 同级）。
+
+    @router.get("/system/hermes-compat")
+    def api_hermes_compat():
+        """返回 Hermes 共存状态 + 升级进度（界面据此渲染升级面板）。"""
+        from trade.bootstrap import hermes_compat_state, hermes_is_usable
+        from trade.hermes_compat import upgrade_steps
+        from trade.hermes_upgrade import status as upgrade_status
+
+        state = hermes_compat_state()
+        usable = hermes_is_usable()
+        return {
+            "usable": usable,
+            "verdict": state.get("verdict"),
+            "version": state.get("version"),
+            "python": state.get("python"),
+            "reason": state.get("reason"),
+            # 不可用时附带三条可照做的升级步骤（与终端提示共用同一份文案）
+            "steps": [] if usable else upgrade_steps(),
+            "upgrade": upgrade_status(),
+        }
+
+    @router.post("/system/hermes-upgrade")
+    def api_hermes_upgrade(request: Request):
+        """触发（或重试）后台升级 Hermes；升级进行中重复调用为幂等。"""
+        from trade.hermes_upgrade import start_upgrade
+
+        _tk = request.headers.get("X-Hermes-Session-Token", "")
+        if _tk and not _check_system_rate_limit(_tk[:16]):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="系统端点请求过于频繁，请稍后重试。")
+
+        return start_upgrade()
+
+    @router.get("/system/hermes-upgrade/stream")
+    async def api_hermes_upgrade_stream(offset: int = 0):
+        """SSE：把升级状态与新增日志实时推给界面。
+
+        为什么必须走 SSE：升级要建数百 MB 的托管环境、耗时以分钟计，而前端 `api()`
+        有 120s 硬超时，普通请求必然超时；且用户需要看到「有在动」而不是一个转圈。
+        """
+        import asyncio
+        import json
+
+        from fastapi.responses import StreamingResponse
+
+        from trade.hermes_upgrade import status as upgrade_status
+
+        async def _events():
+            cursor = max(0, offset)
+            # 轮询式推流：升级状态是进程内变量，1 秒粒度足够，且天然处理断线重连
+            while True:
+                snap = upgrade_status(cursor)
+                cursor = snap["log_cursor"]
+                for line in snap["logs"]:
+                    yield "data: " + json.dumps(
+                        {"type": "log", "line": line}, ensure_ascii=False
+                    ) + "\n\n"
+                yield "data: " + json.dumps(
+                    {
+                        "type": "state",
+                        "status": snap["status"],
+                        "message": snap["message"],
+                        "running": snap["running"],
+                        "cursor": cursor,
+                    },
+                    ensure_ascii=False,
+                ) + "\n\n"
+                # 终态即收尾：不再等，避免界面侧长连接挂着
+                if not snap["running"]:
+                    break
+                await asyncio.sleep(1.0)
+
+        return StreamingResponse(_events(), media_type="text/event-stream")
+
     return router
 
 
@@ -680,8 +757,16 @@ def main() -> None:
     serve_trade_chat(app)
     _install_cors(app, args.port)
 
-    if not args.no_gateway:
+    # 降级模式（Hermes 不可用）不拉 Gateway：旧 Hermes 在当前 Python 上根本起不来，
+    # 拉起来也是立刻死，还会在日志里刷错误让用户以为 Trade 坏了
+    from trade.bootstrap import hermes_is_usable
+    if not args.no_gateway and hermes_is_usable():
         _ensure_gateway_running()
+
+    # 注册「Hermes 升级成功 → 重启 Trade」的回调：只有新进程才会加载升级后的 Hermes，
+    # 兼容判定也才会从「过旧」翻成可用。用注入而不是让 hermes_upgrade 反向 import app。
+    from trade.hermes_upgrade import set_success_hook
+    set_success_hook(_perform_restart)
 
     # 后台静默从 GitHub 同步 skills，不阻塞服务启动
     from trade.bootstrap import background_github_skills_sync

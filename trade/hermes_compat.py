@@ -92,6 +92,215 @@ def hermes_version() -> str | None:
     return None
 
 
+# ── Python 共存判定（不导入 Hermes）────────────────────────────────────────
+# Trade 是**进程内**嵌 Hermes（`from run_agent import AIAgent`），所以 Trade 的解释器
+# 必须能加载 Hermes 及其全部依赖。而 Hermes 从 v0.21.6 起改为只支持 Python 3.14
+# （requires-python 上界从 <3.14 翻到 <3.15），上一代则硬性要求 <3.14：
+# 实测 3.14 下装 0.19.0 直接 `ERROR: Package 'hermes-agent' requires a different Python`。
+# 两侧互斥，因此「旧 Hermes + 新版 Trade」永远不可能共存 —— 必须先升级 Hermes。
+#
+# 为什么不用 `import` 判：旧 Hermes 跑在 3.14 上，崩点是**缺依赖的 ImportError**，
+# 不是版本错。用户看到的是天书，而我们需要的是「版本过旧、去升级」这个可行动的结论。
+
+# 分界版本：这一版起上游才把 Python 支持上界抬到 3.14（也是 `pm` 托管运行时的起点）
+_MIN_HERMES_VERSION_314 = "0.21.6"
+
+
+def _checkout_pyproject() -> Path | None:
+    """不导入 Hermes，直接定位 checkout 的 pyproject.toml；找不到返回 None。
+
+    复用 `trade.bootstrap._resolve_hermes_checkout()`（纯路径判定，含 `hermes_cli/` 目录
+    才算数）。延迟导入避免模块级循环：bootstrap 也在函数内延迟导入本模块。
+    """
+    try:
+        from trade.bootstrap import _resolve_hermes_checkout
+    except ImportError:
+        return None
+    checkout = _resolve_hermes_checkout()
+    # 没解析到 checkout（未安装 Hermes）→ 交给上层按「未知」处理
+    if not checkout:
+        return None
+    pyproject = Path(checkout) / "pyproject.toml"
+    return pyproject if pyproject.is_file() else None
+
+
+def _stamp_version() -> str | None:
+    """读 checkout 根目录 install-stamp.json 的版本；读不到返回 None。
+
+    上游把 pyproject 的 version 改成了占位 `0.0.0`（真实版本只在安装印章里），
+    所以印章才是权威来源 —— 这与上游 version_info 的口径一致，只是不导入模块。
+    """
+    pyproject = _checkout_pyproject()
+    if pyproject is None:
+        return None
+    stamp = pyproject.parent / "install-stamp.json"
+    if not stamp.is_file():
+        return None
+    try:
+        import json
+
+        data = json.loads(stamp.read_text(encoding="utf-8-sig"))
+    except Exception:
+        # 印章损坏不应阻断启动，回退到 pyproject
+        return None
+    if not isinstance(data, dict):
+        return None
+    # baseVersion 优先（纯净版本号），displayVersion 带 +N.gHASH 派生后缀作兜底
+    for key in ("baseVersion", "displayVersion", "version"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _read_checkout_metadata() -> tuple[str | None, str | None]:
+    """读 checkout 的 (version, requires-python)；读不到的各项返回 None。
+
+    version 取安装印章优先、pyproject 兜底。显式 utf-8：上游 pyproject 含非 ASCII
+    注释，Windows 默认 cp1252 会解码失败。
+    """
+    version = _stamp_version()
+    pyproject = _checkout_pyproject()
+    if pyproject is None:
+        return version, None
+    try:
+        import tomllib
+
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except Exception:
+        # 元数据读取失败不应阻断启动，交给上层按「未知」处理
+        return version, None
+    project = data.get("project", {})
+    if not isinstance(project, dict):
+        return version, None
+    if version is None:
+        version = str(project.get("version", "") or "") or None
+    requires = str(project.get("requires-python", "") or "") or None
+    return version, requires
+
+
+def hermes_python_compat() -> dict[str, Any]:
+    """判定已安装的 Hermes 能否与当前 Python 解释器共存；**全程不导入 Hermes**。
+
+    判据取 Hermes 自己声明的 `requires-python`（机械真相，不依赖我们对版本号的理解），
+    并用版本号下限做交叉确认——因为极老的版本可能声明了一个宽松的区间，但其依赖
+    在 3.14 上照样装不出来。
+
+    Returns:
+        dict，字段：
+          verdict: "ok" | "too_old" | "unknown"
+          version: 读到的 Hermes 版本（识别不到为 None）
+          requires_python: checkout 声明的 Python 区间
+          python: 当前解释器版本（如 "3.14.7"）
+          checkout: 解析到的 Hermes 源码目录
+          reason: 给人看的判定依据（用于报错文案）
+    """
+    python_version = ".".join(str(part) for part in sys.version_info[:3])
+    version, requires_python = _read_checkout_metadata()
+    checkout = _checkout_pyproject()
+
+    result: dict[str, Any] = {
+        "verdict": "unknown",
+        # 占位值（0.0.0）统一归一为 None —— 给用户看的版本号必须是真实版本
+        "version": version if _is_real_version(version) else None,
+        "requires_python": requires_python,
+        "python": python_version,
+        "checkout": str(checkout.parent) if checkout else None,
+        "reason": "",
+    }
+
+    # 判据一：Hermes 声明的 Python 区间是否包含当前解释器。
+    # 这是**权威判据**（上游自己声明的机械真相）：区间可解析且包含当前解释器时，
+    # 即使版本号读不到（pyproject 是占位 0.0.0 且无印章）也能直接判「可共存」。
+    requires_ok = False
+    if requires_python:
+        try:
+            from packaging.specifiers import SpecifierSet
+
+            if SpecifierSet(requires_python).contains(python_version):
+                requires_ok = True
+            else:
+                result["verdict"] = "too_old"
+                result["reason"] = (
+                    f"Hermes 声明的 Python 区间 {requires_python} 不包含当前解释器 {python_version}"
+                )
+                return result
+        except Exception:
+            # 区间不可解析 → 不据此下结论，退化到版本号那条判据
+            pass
+
+    # 判据二：版本号下限（`pm` 托管运行时与 3.14 支持的起点）。
+    # 极老的版本可能声明了宽松区间，但其依赖在 3.14 上照样装不出来，故需交叉确认。
+    if _is_real_version(version):
+        try:
+            from packaging.version import Version
+
+            if Version(str(version)) < Version(_MIN_HERMES_VERSION_314):
+                result["verdict"] = "too_old"
+                result["reason"] = (
+                    f"Hermes {version} 低于共存所需的最低版本 {_MIN_HERMES_VERSION_314}"
+                )
+                return result
+            requires_ok = True
+        except Exception:
+            pass
+
+    # 任一判据确认可共存 → ok；两条都无结论 → unknown（识别失败不等于不兼容，
+    # 与既有门禁口径一致，放宽放行以免误拦可用环境）
+    if requires_ok:
+        result["verdict"] = "ok"
+        result["reason"] = f"Hermes 支持当前解释器 {python_version}"
+        return result
+    result["reason"] = "无法确定 Hermes 版本或 Python 区间，按未知放行"
+    return result
+
+
+def upgrade_steps() -> list[dict[str, str]]:
+    """给用户照着做的 Hermes 升级步骤（结构化，终端与界面共用同一份文案）。
+
+    受众是电脑小白：每一步都给**可直接复制粘贴**的完整命令，不写「运行相应的升级命令」
+    这类需要用户自己推导的话。文案只有这一处来源，终端与前端都从这里取，避免两边漂移。
+
+    Returns:
+        步骤列表，每项 {"title": 标题, "detail": 怎么做, "command": 可复制的命令}。
+    """
+    # Windows 的重装命令与 POSIX 不同（PowerShell 没有 curl/bash 管道写法）
+    reinstall = (
+        "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"
+        if os.name == "nt"
+        else "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
+    )
+    return [
+        {
+            "title": "让 Hermes 自己升级（最简单）",
+            "detail": "复制下面这一行，粘贴到终端后回车，等它跑完。",
+            "command": "hermes update",
+        },
+        {
+            "title": "让 AI 帮你升级",
+            "detail": "打开 Hermes，把下面这句话整句复制粘贴进去。",
+            "command": "请把我自己的 Hermes 升级到最新版本",
+        },
+        {
+            "title": "前两种都不行时，重装 Hermes",
+            "detail": "复制下面这一行，粘贴到终端后回车。",
+            "command": reinstall,
+        },
+    ]
+
+
+def incompatible_upgrade_steps() -> list[str]:
+    """把 upgrade_steps() 渲染成终端可读的行（给能看见终端的用户）。"""
+    lines = ["", "【现在照着做 —— 三种方式，推荐第 1 种】", ""]
+    for index, step in enumerate(upgrade_steps(), start=1):
+        lines.append(f"{index}) {step['title']}")
+        lines.append(f"   {step['detail']}")
+        lines.append(f"       {step['command']}")
+        lines.append("")
+    lines.append("升级完成后，重新运行：  trade")
+    return lines
+
+
 def _public_provider_catalog() -> list[Any] | None:
     """读取 Hermes 新版统一 provider catalog；接口不存在时返回 None。"""
     try:

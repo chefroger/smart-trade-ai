@@ -66,28 +66,58 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 log_step "Step 1/5: 检查 Python 环境"
 
-PYTHON=""
-for cmd in python3.13 python3.12 python3.11 python3; do
-    if command -v "$cmd" &>/dev/null; then
-        ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-        major=$("$cmd" -c "import sys; print(sys.version_info.major)")
-        minor=$("$cmd" -c "import sys; print(sys.version_info.minor)")
-        if [ "$major" -gt 3 ] || ([ "$major" -eq 3 ] && [ "$minor" -ge 11 ]); then
-            PYTHON="$cmd"
-            log_ok "Python $ver ($(which "$PYTHON"))"
-            break
+# Trade 必须跑在 **Python 3.14** 上：Hermes 从 v0.21.6 起只提供 3.14 的依赖集
+# （requires-python 里那个 `>=3.11` 只是留给旧安装「跑完自己的升级步骤」的过渡桥），
+# 而 Trade 是**进程内**嵌 Hermes 的，解释器必须与 Hermes 的托管环境同 ABI。
+# 在 3.11~3.13 上会变成「装得上、起不来」，所以这里不再接受 3.11~3.13。
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+
+_find_python314() {
+    local cmd cand
+    # 1) PATH 上的解释器（版本号必须正好是 3.14）
+    for cmd in python3.14 python3; do
+        if command -v "$cmd" &>/dev/null \
+           && "$cmd" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' 2>/dev/null; then
+            command -v "$cmd"
+            return 0
         fi
-    fi
-done
+    done
+    # 2) Hermes 自带的托管 Python（上游安装器放在数据目录的 tools/ 下）——
+    #    优先用它：与 Hermes 的托管环境 ABI 完全一致，省掉一类难查的崩
+    for cand in "$HERMES_HOME"/tools/*/bin/python3.14 \
+                "$HERMES_HOME"/tools/*/*/bin/python3.14; do
+        if [ -x "$cand" ] \
+           && "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' 2>/dev/null; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    # 3) Homebrew 常见位置（Intel / Apple Silicon）
+    for cand in /opt/homebrew/bin/python3.14 /usr/local/bin/python3.14; do
+        if [ -x "$cand" ]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+PYTHON="$(_find_python314 || true)"
 
 if [ -z "$PYTHON" ]; then
-    log_err "需要 Python >= 3.11，但未找到。"
+    log_err "需要 Python 3.14，但未找到。"
     echo ""
-    echo "  请先安装 Python："
-    echo "    macOS:  brew install python@3.12"
-    echo "    Ubuntu: sudo apt install python3.12 python3.12-venv"
+    echo "  Trade 必须与 Hermes 用同一个 Python 大版本（3.14）。任选一种方式："
+    echo ""
+    echo "  1) 让 Hermes 自带（推荐）—— 先安装 Hermes，它会自带 3.14，本脚本能自动找到："
+    echo "       curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
+    echo ""
+    echo "  2) 自己装 3.14："
+    echo "       macOS:  brew install python@3.14"
+    echo "       Ubuntu: sudo apt install python3.14 python3.14-venv"
     exit 1
 fi
+log_ok "Python $("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')（$PYTHON）"
 
 # ── 架构检测 + 自动修正（Apple Silicon 兼容性）────────────────────────────
 ARCH=$(uname -m)
@@ -145,47 +175,34 @@ PY="$VENV_DIR/bin/python"
 log_ok "虚拟环境就绪 ($VENV_DIR)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2: 安装 hermes-agent
+# Step 2: 检查 Hermes Agent
 # ─────────────────────────────────────────────────────────────────────────────
-log_step "Step 2/5: 安装 hermes-agent"
+log_step "Step 2/5: 检查 Hermes Agent"
 
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-
-# Hermes 固定版本（安装时装这个 tag，而不是 main 尖端）。
+# **不再把 Hermes 克隆/安装进 Trade 的 venv**（旧的固定 tag 方案已废除）。
+# 现在机器上只有**一份** Hermes：用户自己装的那份。Trade 通过 sys.path 指向它，
+# 并让它的 pm 托管环境提供 Hermes 的依赖（见 trade/bootstrap.py 与 COMPATIBILITY.md）。
 #
-# 为什么固定（两条都是实测出来的）：
-#   1. main 每天前进约 200 个提交，一旦越出 Trade 的兼容窗口（0.13.0 ≤ v < 0.22.0，
-#      见 trade/bootstrap.py 与 pre_install_check.py），新机器会「装得上、起不来」。
-#   2. **上游从 v0.21.6 起把 45/46 条核心依赖标成 `; python_version >= '3.14'`**
-#      （requires-python 仍写 >=3.11）。在 3.11–3.13 上 `pip install -e` 一条依赖
-#      都不装（实测 3.13：装完只有 2 个包），Hermes 直接起不来。
-#      所以 pin 必须落在 marker 之前的 tag —— 当前 v2026.9.24（版本 0.21.5），
-#      实测 3.13 上装完 64 个包、依赖齐全、导入正常。
-# 更新 pin 时同步四处：本文件 + install.ps1 + README.md + README.en.md，
-# 并确认该 tag 在 COMPATIBILITY.md 的 ✅ 行里（有测试钉住）。
-# 临时装别的版本：TRADE_HERMES_REF=v2026.9.21
-HERMES_REF="${TRADE_HERMES_REF:-v2026.9.24}"
-
-if "$PY" -c "import hermes_cli" 2>/dev/null; then
-    hermes_ver=$("$PY" -c "import hermes_cli; print(hermes_cli.__version__)" 2>/dev/null || echo "unknown")
-    log_ok "hermes-agent 已安装 (v$hermes_ver)"
+# 这样做的理由（两条都是实测出来的）：
+#   1. 上游从 v0.21.6 起把核心依赖标成 `python_version >= '3.14'`，Hermes 与它的
+#      依赖是一个 3.14 的整体；Trade 进程必须是 3.14 才能加载它（Step 1 已保证）。
+#   2. 旧方案把 Hermes 装进 Trade 的 venv，会和用户自己那份抢同一个 checkout 目录，
+#      导致「pin 失效 + 把用户的 Hermes 降级」—— 见 COMPATIBILITY.md 的跟进记录。
+#
+# 版本是否够新由 Trade 启动时判定；过旧会在界面里自动升级（trade/hermes_upgrade.py），
+# 所以这里只确认它存在，不在这里改动用户的 Hermes。
+if command -v hermes &>/dev/null; then
+    log_ok "已找到 hermes 命令（$(command -v hermes)）"
+elif [ -x "$HOME/.local/bin/hermes" ]; then
+    log_ok "已找到 hermes 命令（$HOME/.local/bin/hermes）"
 else
-    log_info "正在安装 hermes-agent（固定版本 $HERMES_REF）..."
-    HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
-    HERMES_DIR="$HERMES_HOME/hermes-agent"
-
-    _clone_or_update "hermes-agent" "$HERMES_REPO" "$HERMES_DIR" "$HERMES_REF" || exit 1
-
-    cd "$HERMES_DIR"
-    "$PIP" install -e "."
-    cd - >/dev/null
-
-    if "$PY" -c "import hermes_cli" 2>/dev/null; then
-        log_ok "hermes-agent 安装完成"
-    else
-        log_err "hermes-agent 安装失败"
-        exit 1
-    fi
+    log_err "未找到 hermes 命令 —— 请先安装 Hermes Agent。"
+    echo ""
+    echo "  复制下面这一行，粘贴到终端后回车："
+    echo "    curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
+    echo ""
+    echo "  装好后重新运行本安装脚本。"
+    exit 1
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -284,7 +301,10 @@ fi
 # 配置都已就位，结果会落盘并在界面提示。这里只做能立刻发现「装坏了」的快检，
 # 避免安装因为网络波动误报失败而挡住用户。
 # ─────────────────────────────────────────────────────────────────────────────
-if ! "$PY" -c "import sys; from trade.doctor import run_doctor, format_report, has_fatal_failure; r = run_doctor(deep=False); print(format_report(r)); sys.exit(1 if has_fatal_failure(r) else 0)"; then
+# 「Hermes 版本」这一项刻意不计入致命项：版本过旧不需要在这里解决 —— Trade 启动后
+# 会在界面里自动升级 Hermes（见 trade/hermes_upgrade.py）。若这里判失败并 exit 1，
+# 用户就永远看不到那个升级界面了。
+if ! "$PY" -c "import sys; from trade.doctor import run_doctor, format_report, has_fatal_failure; r = run_doctor(deep=False); print(format_report(r)); sys.exit(1 if has_fatal_failure(r, ignore_names=('Hermes 版本',)) else 0)"; then
     log_err "自检发现致命问题，安装不完整。请把上面的输出发给技术支持。"
     exit 1
 fi
