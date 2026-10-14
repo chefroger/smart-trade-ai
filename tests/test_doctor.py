@@ -332,3 +332,76 @@ class TestQuickMode:
         results = doctor.run_doctor(deep=False)
 
         assert any(r.name == "vision 工具在场" and r.status == doctor.STATUS_FAIL for r in results)
+
+
+class TestEstopCheck:
+    """急停（ESTOP）检查：`hermes pause` 会让定时任务**静默**停跑。
+
+    机制见 Hermes `agent/estop.py`：`hermes pause` 写 `$HERMES_HOME/ESTOP` 哨兵、
+    `hermes resume` 删除；存在期间 cron/kanban/gateway 新回合一律跳过。Trade 界面
+    完全不显示这个状态 —— 客户机上残留了就只会看到"定时任务不跑了"，所以必须
+    能在自检里一眼看出来。
+    """
+
+    def test_no_sentinel_is_ok(self, tmp_path):
+        from trade.doctor import STATUS_OK, check_estop
+
+        results = check_estop(estop_path=tmp_path / "ESTOP")
+
+        assert len(results) == 1 and results[0].status == STATUS_OK
+        assert results[0].fatal is False
+
+    def test_sentinel_is_warn_with_recovery_hint(self, tmp_path):
+        """哨兵存在 → 降级（不是致命：Trade 还能用），且必须告诉用户怎么恢复。"""
+        from trade.doctor import STATUS_WARN, check_estop
+
+        p = tmp_path / "ESTOP"
+        p.write_text('{"reason": "升级前暂停", "engaged_at": "2026-10-14"}', encoding="utf-8")
+
+        results = check_estop(estop_path=p)
+
+        assert results[0].status == STATUS_WARN
+        detail = results[0].detail
+        assert "定时任务" in detail and "hermes resume" in detail
+        assert "升级前暂停" in detail, "哨兵里写了原因就带出来，便于定位"
+
+    def test_corrupt_or_empty_sentinel_still_counts_as_engaged(self, tmp_path):
+        """fail-safe：空文件/损坏内容同样是"已触发"（Hermes 就是这么判的），不是错误。"""
+        from trade.doctor import STATUS_WARN, check_estop
+
+        p = tmp_path / "ESTOP"
+        p.write_text("", encoding="utf-8")
+        assert check_estop(estop_path=p)[0].status == STATUS_WARN
+
+        p.write_text("这不是 JSON{{{", encoding="utf-8")
+        assert check_estop(estop_path=p)[0].status == STATUS_WARN
+
+    def test_stat_error_is_not_a_false_ok(self, monkeypatch, tmp_path):
+        """stat 出错时不能报 OK —— Hermes 自己是 fail-safe（出错也算已触发），
+        而 `Path.exists()` 会吞掉 OSError 返回 False，用它就会给出假的"未急停"。"""
+        import os as _os
+
+        from trade.doctor import STATUS_OK, STATUS_WARN, check_estop
+
+        def _boom(path, *a, **kw):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(_os, "stat", _boom)
+        results = check_estop(estop_path=tmp_path / "ESTOP")
+
+        assert results[0].status == STATUS_WARN, "stat 失败被误报成「未急停」"
+        assert results[0].status != STATUS_OK
+        assert "无法确认" in results[0].detail
+
+    def test_included_in_run_doctor(self, monkeypatch):
+        """run_doctor 的编排里必须带上这项检查（快检也要跑，零成本）。"""
+        from trade import doctor
+
+        seen = []
+        monkeypatch.setattr(doctor, "check_estop", lambda: seen.append(True) or [])
+        monkeypatch.setattr(doctor, "check_hermes_runtime", lambda: [])
+        monkeypatch.setattr(doctor, "check_post_install", lambda: [])
+
+        doctor.run_doctor(deep=False)
+
+        assert seen, "run_doctor 没有调用 check_estop"

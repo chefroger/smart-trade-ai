@@ -432,10 +432,60 @@ def check_post_install() -> list[CheckResult]:
     return out
 
 
+def check_estop(*, estop_path: Path | None = None) -> list[CheckResult]:
+    """急停状态（ESTOP）：Hermes 被 `hermes pause` 暂停时，**定时任务会静默停跑**。
+
+    机制（Hermes `agent/estop.py`）：`hermes pause` 在 `$HERMES_HOME/ESTOP` 写一个
+    哨兵文件，`hermes resume` 删除；存在期间 cron 调度器 / kanban 派发 / gateway
+    新回合一律跳过（在飞任务不杀）。它是 fail-safe 的：空文件、内容损坏都算已触发。
+
+    为什么放进自检：Trade 界面**完全不显示这个状态** —— 客户机上一旦残留这个文件
+    （有人跑过 hermes pause，或上次没清理干净），用户只会看到「定时任务不跑了」，
+    而其它自检项全是绿的，排查会走大弯路。
+
+    边界：只查 `$HERMES_HOME/ESTOP`。Hermes 还会看 fleet root（profile 部署下
+    `~/.hermes/ESTOP` 同样生效）—— Trade 是单一 HERMES_HOME 部署，两者同路径，
+    故此处单路径即完整。
+    """
+    if estop_path is None:
+        # 复用跨平台实现（Windows 走 LOCALAPPDATA，见 skills.py 的约定）
+        from trade.post_install.skills import _get_hermes_home
+
+        estop_path = _get_hermes_home() / "ESTOP"
+    estop_path = Path(estop_path)
+    # 用 os.stat 而不是 Path.exists()：后者会**吞掉** OSError 并返回 False ——
+    # 权限/IO 出错时会误报"未急停"。Hermes 自己的判定是 fail-safe（stat 出错
+    # 也当作已触发），这里对齐：出错 → 降级提示，而不是给一个假的 OK。
+    try:
+        os.stat(estop_path)
+    except FileNotFoundError:
+        return [CheckResult("急停状态（ESTOP）", STATUS_OK, "未处于急停状态，定时任务正常调度")]
+    except OSError as e:
+        return [CheckResult(
+            "急停状态（ESTOP）", STATUS_WARN,
+            f"无法确认（{e}）—— 按可能已急停处理，请人工检查 {estop_path}；恢复：hermes resume",
+        )]
+
+    # 尽量带上原因（哨兵内容是可选的 JSON；读不出来不影响判定）
+    reason = ""
+    try:
+        data = json.loads(estop_path.read_text(encoding="utf-8") or "{}")
+        if isinstance(data, dict) and data.get("reason"):
+            reason = f"（原因：{data['reason']}）"
+    except Exception:
+        reason = ""  # 损坏/空文件同样是"已触发"，不是错误
+    return [CheckResult(
+        "急停状态（ESTOP）", STATUS_WARN,
+        f"已被 hermes pause 急停{reason}：{estop_path} 存在 → 定时任务与新回合都会被跳过。"
+        "恢复：hermes resume",
+    )]
+
+
 def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     """跑全部检查。deep=False 时跳过所有真实请求（快检，零 token）。"""
     results: list[CheckResult] = []
     results += check_hermes_runtime()
+    results += check_estop()
     results += check_post_install()
     if deep:
         results += check_vision()

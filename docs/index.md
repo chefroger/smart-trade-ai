@@ -469,6 +469,7 @@ trade doctor
 ══ Trade 自检 ══
   ✓ Hermes 版本: 0.21.7（要求 >=0.13.0,<0.22.0）
   ✓ Agent 构造: run_agent.AIAgent
+  ✓ 急停状态（ESTOP）: 未处于急停状态，定时任务正常调度
   ✓ holehe（邮箱注册检测）: 已安装，Layer 1 可用
   ⚠ Hindsight（长期记忆）: 未安装/未配置：记忆降级为会话内（不阻断）
   ✓ sqlite-vec（语义检索）: 可用：客户/文档支持语义搜索
