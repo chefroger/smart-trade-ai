@@ -424,15 +424,21 @@ _system_rate_lock = threading.Lock()
 _system_rate_map: dict[str, list[float]] = {}
 _SYS_WINDOW = 60  # 1 分钟窗口
 _SYS_MAX = 5      # 最多 5 次
+# SSE 进度流用更宽松的额度：它是长连接、且界面在重试/重连时会重新连。
+# 真正消耗资源的是**触发升级的那个 POST**（会起探测线程 + git 子进程），
+# 流本身只读进程内状态 —— 所以两边不该用同一个阈值。
+_SYS_STREAM_MAX = 30
 
 
-def _check_system_rate_limit(key: str) -> bool:
-    """系统端点限流：同一 key 每分钟最多 _SYS_MAX 次。返回 True 表示放行。"""
+def _check_system_rate_limit(
+    key: str, *, max_hits: int = _SYS_MAX, window: float = _SYS_WINDOW
+) -> bool:
+    """系统端点限流：同一 key 在窗口内最多 max_hits 次。返回 True 表示放行。"""
     now = time.time()
     with _system_rate_lock:
         stamps = _system_rate_map.get(key, [])
-        stamps = [t for t in stamps if now - t < _SYS_WINDOW]
-        if len(stamps) >= _SYS_MAX:
+        stamps = [t for t in stamps if now - t < window]
+        if len(stamps) >= max_hits:
             _system_rate_map[key] = stamps
             return False
         stamps.append(now)
@@ -537,7 +543,7 @@ def _create_system_router() -> APIRouter:
         return start_upgrade()
 
     @router.get("/system/hermes-upgrade/stream")
-    async def api_hermes_upgrade_stream(offset: int = 0):
+    async def api_hermes_upgrade_stream(request: Request, offset: int = 0):
         """SSE：把升级状态与新增日志实时推给界面。
 
         为什么必须走 SSE：升级要建数百 MB 的托管环境、耗时以分钟计，而前端 `api()`
@@ -546,8 +552,16 @@ def _create_system_router() -> APIRouter:
         import asyncio
         import json
 
+        # 流也要限流（额度比 POST 宽松）：长连接 + 界面重试时会重连，
+        # 用 POST 那档 5/分钟会把正常重连也挡掉
+        _tk = request.headers.get("X-Hermes-Session-Token", "")
+        if _tk and not _check_system_rate_limit(_tk[:16], max_hits=_SYS_STREAM_MAX):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
+
         from fastapi.responses import StreamingResponse
 
+        from trade.hermes_upgrade import DONE, FAILED, OFFLINE
         from trade.hermes_upgrade import status as upgrade_status
 
         async def _events():
@@ -570,8 +584,10 @@ def _create_system_router() -> APIRouter:
                     },
                     ensure_ascii=False,
                 ) + "\n\n"
-                # 终态即收尾：不再等，避免界面侧长连接挂着
-                if not snap["running"]:
+                # 只有**终态**才收尾。不能写成 `if not running` —— IDLE（还没启动）
+                # 的 running 也是 False，那样前端若在 start_upgrade() 之前连上来，
+                # 会拿到一个空流就断开，之后再也收不到进度。
+                if snap["status"] in (DONE, FAILED, OFFLINE):
                     break
                 await asyncio.sleep(1.0)
 

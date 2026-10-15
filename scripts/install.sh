@@ -199,8 +199,17 @@ VENV_DIR="$HOME/.trade/venv"
 # 于是 Hermes 的 pm 激活会把 cp314 的包塞进旧解释器 → 聊天只报「AI Agent 模块未加载」。
 # **删掉它不会丢任何用户数据**：数据在 $TRADE_HOME 下（数据库、公司目录），不在 venv 里。
 if [ -f "$VENV_DIR/bin/python" ] && ! _is_py314 "$VENV_DIR/bin/python"; then
-    _old_ver=$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "未知")
+    # 用 % 格式化而不是 f-string：这里跑的是**即将被删掉的老解释器**，可能是 3.11
+    # （f-string 在 3.12 之前不允许内层用同类引号），写 f-string 会 SyntaxError，
+    # 于是这行永远显示「未知」—— 信息白白丢掉。
+    _old_ver=$("$VENV_DIR/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "未知")
     log_warn "已有的运行环境是 Python $_old_ver，需要 3.14 —— 正在重建（不会动你的数据）..."
+    # rm -rf 之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
+    # 重建不可逆，这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
+    _dump_dir="${TRADE_HOME:-$HOME/.trade}"
+    mkdir -p "$_dump_dir" 2>/dev/null
+    "$VENV_DIR/bin/pip" freeze > "$_dump_dir/venv-packages-before-rebuild.txt" 2>/dev/null \
+        && log_info "已把重建前的包清单留档：$_dump_dir/venv-packages-before-rebuild.txt"
     rm -rf "$VENV_DIR"
 fi
 if [ ! -f "$VENV_DIR/bin/python" ]; then

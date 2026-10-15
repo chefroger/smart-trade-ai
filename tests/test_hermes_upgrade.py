@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -48,6 +49,10 @@ def hu(monkeypatch):
     FakePopen.returncode = 0
     monkeypatch.setattr(hermes_upgrade, "_hermes_launcher", lambda: "/usr/local/bin/hermes")
     monkeypatch.setattr(hermes_upgrade.subprocess, "Popen", FakePopen)
+    # ⓔ 的守卫要求「补救方向必须是 upgrade_hermes 才允许启动」。这一组用例测的是
+    # 升级本身的机制，所以把守卫放行；守卫自身的逻辑与接线由 TestUpgradeApplicability
+    # 单独测（那组只打桩 hermes_compat_state，不绕过守卫）。
+    monkeypatch.setattr(hermes_upgrade, "_not_applicable_reason", lambda: None)
     return hermes_upgrade
 
 
@@ -248,7 +253,9 @@ async def test_upgrade_stream_emits_state_and_ends(compat_too_old):
 
     hu._set(DONE, "升级完成")
 
-    response = await _system_endpoint("/system/hermes-upgrade/stream", "GET")(offset=0)
+    response = await _system_endpoint("/system/hermes-upgrade/stream", "GET")(
+        request=_fake_request(), offset=0
+    )
     frames = [chunk async for chunk in response.body_iterator]
 
     states = [
@@ -344,3 +351,204 @@ def test_update_child_stdin_is_closed(hu, monkeypatch):
     _run(hu)
 
     assert FakePopen.instances[0]["kwargs"]["stdin"] == hu.subprocess.DEVNULL
+
+
+# ── ⓔ：补救方向不对时，start_upgrade 自己必须拒绝 ─────────────────────────
+
+
+class TestUpgradeApplicability:
+    """`start_upgrade()` 自己校验「该不该升」，不依赖调用方判断。
+
+    为什么钉在被调方：调用方有三处（bootstrap 降级分支、/system/hermes-upgrade 端点、
+    前端重试按钮），只要一处漏判，就会在「Trade 运行环境过旧」的场景跑一场毫无用处的
+    hermes update —— 而它的 UPGRADING 状态会经 SSE 覆盖界面上的「重建运行环境」提示。
+    """
+
+    @staticmethod
+    def _stub_fix(monkeypatch, value):
+        """只打桩判定来源，不绕过守卫本身。"""
+        from trade import bootstrap
+
+        monkeypatch.setattr(
+            bootstrap, "hermes_compat_state",
+            lambda: {"verdict": "ok" if value == "none" else "python_too_old",
+                     "fix": value, "reason": "r", "version": "0.22.0", "python": "3.13.5"},
+        )
+
+    @pytest.mark.parametrize("fix,expect", [
+        ("upgrade_hermes", None),
+        ("rebuild_trade_venv", "重建 Trade 的运行环境"),
+        ("none", "无需升级"),
+    ])
+    def test_reason_by_fix_direction(self, monkeypatch, fix, expect):
+        from trade import hermes_upgrade as hu
+
+        self._stub_fix(monkeypatch, fix)
+
+        reason = hu._not_applicable_reason()
+
+        if expect is None:
+            assert reason is None
+        else:
+            assert reason and expect in reason
+
+    def test_start_upgrade_refuses_when_rebuild_is_needed(self, monkeypatch):
+        """方向是「重建」时必须拒绝，且**不得改动状态机**。"""
+        from trade import hermes_upgrade as hu
+
+        hu.reset_for_tests()
+        self._stub_fix(monkeypatch, "rebuild_trade_venv")
+        # 一旦真的启动就会起子进程：用会炸的替身确保它没被启动
+        monkeypatch.setattr(hu, "_hermes_launcher", lambda: pytest.fail("不该启动升级"))
+
+        snap = hu.start_upgrade()
+
+        assert snap.get("rejected"), "必须给出拒绝原因"
+        assert snap["status"] == hu.IDLE, "拒绝时不得改动状态机（否则界面会显示假进度）"
+        assert snap["running"] is False
+
+    def test_start_upgrade_proceeds_when_hermes_is_old(self, hu, monkeypatch):
+        """方向是升级 Hermes（该升的那一档）时照常放行 —— 别把守卫做过头。
+
+        这里**不绕过守卫**：只打桩判定来源，让真实的 `_not_applicable_reason()` 跑一遍。
+        """
+        from trade import bootstrap
+
+        # 撤掉夹具的放行桩，让真实守卫参与（undo 会撤掉全部桩，所以之后要重装）
+        monkeypatch.undo()
+        monkeypatch.setattr(hu, "_hermes_launcher", lambda: "/usr/local/bin/hermes")
+        monkeypatch.setattr(hu.subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(hu, "check_github_reachable", lambda: True)
+        monkeypatch.setattr(
+            bootstrap, "hermes_compat_state",
+            lambda: {"verdict": "too_old", "fix": "upgrade_hermes",
+                     "reason": "r", "version": "0.19.0", "python": "3.14.7"},
+        )
+
+        hu.start_upgrade()
+        _run(hu)
+
+        assert hu.status()["status"] == hu.DONE
+        assert hu.status().get("rejected") is None
+
+
+def test_child_env_forces_unbuffered_output(monkeypatch):
+    """升级子进程必须无缓冲输出。
+
+    不加 PYTHONUNBUFFERED 时子进程 stdout 是块缓冲，界面上会**整段时间一行都看不到**
+    （升级要几分钟），用户以为卡死 —— 而「让用户看到有在动」正是这个面板存在的理由。
+    """
+    from trade import hermes_upgrade as hu
+
+    env = hu._child_env()
+
+    assert env.get("PYTHONUNBUFFERED") == "1"
+
+
+class HangingPopen:
+    """stdout 既不产出也不结束，直到被 kill —— 模拟撞上弹窗/交互询问而卡死。"""
+
+    instances: list[dict] = []
+
+    def __init__(self, args, **kwargs):
+        HangingPopen.instances.append({"args": args, "kwargs": kwargs})
+        self.killed = False
+        self._release = threading.Event()
+
+    @property
+    def stdout(self):
+        def _gen():
+            # 阻塞在这里，直到看门狗 kill 掉我们
+            self._release.wait(30)
+            return
+            yield  # pragma: no cover — 让它成为生成器
+
+        return _gen()
+
+    def kill(self) -> None:
+        self.killed = True
+        self._release.set()
+
+    def wait(self, timeout=None) -> int:
+        return -9
+
+
+def test_watchdog_kills_a_silent_upgrade(hu, monkeypatch):
+    """超过 N 分钟没有任何输出 → 杀掉子进程并落成 FAILED，不能永远停在 UPGRADING。
+
+    为什么必须有这条：`for line in proc.stdout` 会阻塞到子进程关掉 stdout。若
+    `hermes update` 撞上**非凭证类**卡死（管理员权限弹窗、系统服务询问），
+    `_NO_PROMPT_ENV` 挡不住，而用户点「重试」又会被幂等判断顶回 —— 彻底没有出路。
+    复用探测那套硬截止思路即可，不需要架构大改。
+    """
+    monkeypatch.setattr(hu, "check_github_reachable", lambda: True)
+    monkeypatch.setattr(hu.subprocess, "Popen", HangingPopen)
+    # 把窗口压到亚秒级，让用例快
+    monkeypatch.setattr(hu, "_NO_OUTPUT_LIMIT_SECONDS", 0.2)
+    monkeypatch.setattr(hu, "_WATCHDOG_TICK_SECONDS", 0.05)
+    HangingPopen.instances = []
+
+    hu.start_upgrade()
+    _run(hu)
+
+    snap = hu.status()
+    assert snap["status"] == hu.FAILED
+    assert "卡住" in snap["message"], f"失败原因应指明是卡住：{snap['message']}"
+    assert HangingPopen.instances, "应该真的起了子进程"
+
+
+def test_watchdog_leaves_normal_failure_alone(hu, monkeypatch):
+    """子进程正常退出（非零）时，失败原因不能误报成「卡住」。"""
+    monkeypatch.setattr(hu, "check_github_reachable", lambda: True)
+    FakePopen.returncode = 7
+
+    hu.start_upgrade()
+    _run(hu)
+
+    snap = hu.status()
+    assert snap["status"] == hu.FAILED
+    assert "卡住" not in snap["message"], "非零退出不是超时"
+    assert snap["returncode"] == 7
+
+
+class _FakeRequest:
+    """只有 `.headers.get()` 的最小替身 —— 端点只需要读 session token。"""
+
+    def __init__(self, token: str = "") -> None:
+        self.headers = {"X-Hermes-Session-Token": token} if token else {}
+
+
+def _fake_request(token: str = "") -> _FakeRequest:
+    return _FakeRequest(token)
+
+
+async def test_stream_does_not_end_on_idle(compat_too_old):
+    """`IDLE`（还没启动）**不是**终态 —— 流不能一上来就收尾。
+
+    原来的判断是 `if not snap["running"]: break`，而 IDLE 的 running 也是 False，
+    于是「前端先连上来、再点升级」的顺序会拿到一个空流就断开，之后再也收不到进度。
+    现在只有 DONE / FAILED / OFFLINE 才收尾。
+    """
+    import asyncio
+
+    import trade.hermes_upgrade as hu
+
+    hu.reset_for_tests()
+    assert hu.status()["status"] == hu.IDLE, "前置：状态应是 idle"
+
+    response = await _system_endpoint("/system/hermes-upgrade/stream", "GET")(
+        request=_fake_request(), offset=0
+    )
+
+    async def _drain() -> None:
+        async for _chunk in response.body_iterator:
+            pass
+
+    # 流应当**继续挂着**（等升级开始），所以在此窗口内超时才算通过
+    try:
+        await asyncio.wait_for(_drain(), timeout=0.3)
+        raise AssertionError("IDLE 时流不应结束")
+    except TimeoutError:
+        pass
+    finally:
+        await response.body_iterator.aclose()

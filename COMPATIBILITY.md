@@ -112,6 +112,26 @@ Hermes → trade 能开、但一提问就回「AI Agent 模块未加载」。三
    **没测「设置文案后别的代码会不会覆盖它」这个交互**；现已补上并做过变异检验
    （改回旧写法 → 测试变红）。
 
+**逻辑审查后的加固（2026-10-15，按优先级 ⓐ → ⓙ → ⓚ → 其余）**
+
+一次针对「这套新架构自己会不会咬人」的审查，改了 8 处（不改架构）：
+
+| 项 | 问题 | 加固 |
+|---|---|---|
+| ⓐ | `_trade_site_packages()` 解析不到时，路径恢复与 PYTHONPATH 修补**双双静默跳过** —— 进程表面能跑、实际只剩 Hermes 的依赖。这是唯一会「静默降级」的路径 | 改为响亮报错；并加测试钉住「`hermes_bootstrap` 已缓存（import 无副作用）时恢复仍生效」 |
+| ⓙ | 重建 venv 的 `rm -rf` 不可逆，用户手动 `pip install` 的包会丢 | 删除前 `pip freeze` 落档到 `$TRADE_HOME/venv-packages-before-rebuild.txt` |
+| ⓚ | `trade update` 在**非 Trade venv** 的解释器下运行会用 `sys.executable` 装进全局 site-packages | 入口守卫 `_refuse_reason_for_interpreter()`（判据保守：只在确知 Trade venv 存在且当前解释器不在其中、或根本不在任何 venv 时才拒绝），并测**接线**（只测函数本身发现不了漏接线） |
+| ⓒ | 升级子进程 stdout 块缓冲 → 界面整段看不到输出 | `_child_env()` 加 `PYTHONUNBUFFERED=1` |
+| ⓓ | `for line in proc.stdout` 会阻塞到子进程关 stdout；撞上非凭证类卡死（管理员弹窗/服务询问）就**永远停在 UPGRADING**，且重试被幂等判断顶回 | 「无输出看门狗」：超过 10 分钟无输出即 `kill` 并落 FAILED + 可重试。**复用探测那套硬截止思路，不做架构大改**（按用户明确要求） |
+| ⓔ | 若补救方向是「重建 Trade 运行环境」却跑了 `hermes update`，其 UPGRADING 会经 SSE 覆盖界面上的重建提示 | 不变量钉在**被调方**：`start_upgrade()` 自己拒绝（`fix != upgrade_hermes`），且**不改状态机**（改状态机会显示一个根本没在跑的进度） |
+| ⓕ | 升级端点没有限流（其他系统端点都有） | POST 用与其它系统端点同档（5/分钟）；SSE 流用更宽松的 30/分钟（长连接 + 重连，同档会把正常重连挡掉） |
+| ⓗ | SSE 终态判断 `if not running` 把 `IDLE` 也当终态 → 前端若先连上来会拿到空流 | 只有 `DONE / FAILED / OFFLINE` 才收尾 |
+| ⓘ | venv 重建时打印旧版本号用了 f-string，在 3.11 上 SyntaxError → 永远显示「未知」 | 改 `%` 格式化 |
+
+**ⓑ（诚实标注）**：`_MIN_HERMES_VERSION_314 = "0.21.6"` 是**按上游代码推断**的，没有在 0.21.6 真机验证过「它跑在 3.13 上会崩」。已在 `hermes_compat.py` 就地标注来源与置信度，并说明两侧误判代价**不对称**（误报=用户白跑一次重装；漏报=「AI Agent 模块未加载」，且另有 requires-python 区间判据兜住），故维持「宁可误报」。
+
+**明确不做**：ⓖ（多客户端重发日志 —— 同机多标签几乎不会发生）、ⓛ（`_call_with_deadline` 的 daemon 线程不回收 —— 需数千次/秒才撞到）。审查报告另标注 ⓒ/ⓓ 的 **Windows 真机路径**仍未经真机验证（Linux 上验的是通用机制）。
+
 **版本口径**
 
 - 下限：**Hermes 0.21.6**（`trade/bootstrap.py::_MIN_HERMES_VERSION`、

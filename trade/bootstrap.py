@@ -468,7 +468,19 @@ def _activate_hermes_env_and_restore_trade_paths() -> None:
         # Hermes 未安装或导入失败：交给调用方按「未知」处理，不在这里抛
         return
 
-    # 激活剥掉了 Trade 的 site-packages → 补回（放末尾，让 Hermes 的依赖优先）
+    # **唯一会「静默降级」的路径**：解析不到自己的 site-packages 时，下面两段补齐
+    # 全部跳过 —— 进程表面还能跑，实际只剩 Hermes 的依赖（Trade 的被激活剥掉了）。
+    # 2026-10-14 那次事故的现场就是这样：界面只显示「AI Agent 模块未加载」、
+    # 完全指不到真因。所以这里必须响亮报出来，不能一声不响地继续。
+    if not trade_site:
+        print(
+            "  ✗ 无法解析 Trade 自身的 site-packages —— Hermes 激活后可能已剥离 "
+            "Trade 的依赖。请把这一行发给技术支持。"
+        )
+
+    # 激活剥掉了 Trade 的 site-packages → 补回（放末尾，让 Hermes 的依赖优先）。
+    # 注意这段是**无条件**执行的：即使 hermes_bootstrap 已在 sys.modules 里、
+    # 这次 import 没有任何副作用，也要确认路径在位（幂等）。
     if trade_site and trade_site not in sys.path:
         sys.path.append(trade_site)
 

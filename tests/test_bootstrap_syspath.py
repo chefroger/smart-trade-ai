@@ -183,3 +183,63 @@ class TestHermesActivationRestore:
 
         # 不抛异常即通过
         bootstrap._activate_hermes_env_and_restore_trade_paths()
+
+    def test_restore_works_when_hermes_bootstrap_already_cached(self, isolated):
+        """`hermes_bootstrap` 已缓存时，恢复**仍然**必须生效。
+
+        这是审查提出的隐含假设（ⓐ）：函数靠 `import hermes_bootstrap` 的副作用触发激活，
+        而模块已在 `sys.modules` 时那次 import 是**空操作**、没有任何副作用。
+        但恢复段是**无条件**执行的，所以「缓存 → 无副作用」不该影响恢复结果。
+        钉住它：否则未来有人把恢复改成「只在真的发生了激活时才补」，就会在
+        「同一个进程里第二次调用」时静默不补 —— 而那正是界面只显示
+        「AI Agent 模块未加载」那种现场的成因。
+        """
+        import types
+
+        trade_site = bootstrap._trade_site_packages()
+        assert trade_site, "测试环境应能解析出 site-packages 目录"
+
+        original_path = list(sys.path)
+        original_pythonpath = os.environ.get("PYTHONPATH", "")
+        # 已缓存的假模块：**没有任何副作用**（不剥离 sys.path）
+        sys.modules["hermes_bootstrap"] = types.ModuleType("hermes_bootstrap")
+        # 主动把 Trade 的 site-packages 拿掉，模拟「别处已经剥离过」
+        sys.path[:] = [
+            p for p in sys.path if not p.endswith(("site-packages", "dist-packages"))
+        ]
+        try:
+            bootstrap._activate_hermes_env_and_restore_trade_paths()
+
+            assert trade_site in sys.path, (
+                "hermes_bootstrap 已缓存（import 无副作用）时，恢复段被跳过了 —— "
+                "它必须无条件执行"
+            )
+            assert sys.path[-1] == trade_site
+        finally:
+            sys.path[:] = original_path
+            sys.modules.pop("hermes_bootstrap", None)
+            if original_pythonpath:
+                os.environ["PYTHONPATH"] = original_pythonpath
+            else:
+                os.environ.pop("PYTHONPATH", None)
+
+    def test_unresolvable_site_packages_is_loud(self, isolated, monkeypatch, capsys):
+        """解析不到 Trade 自己的 site-packages 时**必须响亮报错**，不能静默继续。
+
+        这是 ⓐ 真正会「静默降级」的那条路径：`_trade_site_packages()` 返回空串时，
+        补齐与 PYTHONPATH 修补**双双跳过** —— 进程表面还能跑，实际只剩 Hermes 的依赖。
+        原来的实现一声不响，用户看到的是运行到文档解析时的一串 ModuleNotFoundError。
+        """
+        import types
+
+        monkeypatch.setattr(bootstrap, "_trade_site_packages", lambda: "")
+        sys.modules["hermes_bootstrap"] = types.ModuleType("hermes_bootstrap")
+        try:
+            bootstrap._activate_hermes_env_and_restore_trade_paths()
+        finally:
+            sys.modules.pop("hermes_bootstrap", None)
+
+        out = capsys.readouterr().out
+        assert "无法解析 Trade 自身的 site-packages" in out, (
+            "静默降级路径必须留下可追踪的输出，否则现场无从排查"
+        )

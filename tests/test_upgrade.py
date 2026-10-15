@@ -14,6 +14,22 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _bypass_interpreter_guard(monkeypatch):
+    """绕过「解释器必须在 Trade venv 内」的守卫。
+
+    这一组用例测的是升级的各**步骤**，而它们跑在开发/CI 解释器里（不是 Trade 的 venv），
+    真实守卫会把整个流程拦掉 —— 那是守卫在正常工作，不是被测代码有问题。
+    守卫自身的逻辑与接线由 tests/test_doctor.py::TestUpdateInterpreterGuard 覆盖。
+    """
+    from trade.post_install import update as upd
+
+    monkeypatch.setattr(upd, "_refuse_reason_for_interpreter", lambda: None)
+
+
 # ── _capture_output 测试 ──────────────────────────────────────────────────
 
 

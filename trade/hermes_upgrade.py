@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -45,6 +46,12 @@ _PROBE_DEADLINE = _PROBE_TIMEOUT + 10.0
 _HERMES_REPO = "https://github.com/NousResearch/hermes-agent.git"
 # 升级成功后延迟多久再重启：留一点时间让界面把「完成」渲染出来，否则用户只看到连接断开
 _RESTART_DELAY_SECONDS = 2.0
+# 升级子进程**多久没有任何输出**就判定卡死并终止。看「无输出」而不是「总时长」：
+# 正常升级可能要十几分钟（建数百 MB 的托管环境），按总时长杀会误杀正常升级。
+# 10 分钟对「卡住」足够短（用户不会白等太久），对「慢」又足够宽。
+_NO_OUTPUT_LIMIT_SECONDS = 600.0
+# 看门狗轮询间隔
+_WATCHDOG_TICK_SECONDS = 5.0
 
 # 升级成功后的收尾回调（由 app 层注入：重启 Trade 以加载新 Hermes）。
 # 用回调而不是在这里 import app：hermes_upgrade 是底层模块，反向依赖 app 会成环。
@@ -195,10 +202,14 @@ def _child_env() -> dict[str, str]:
     同时注入 _NO_PROMPT_ENV：`hermes update` 内部要跑 git fetch，同样会撞上凭证提示；
     而升级子进程**不能像探测那样被超时杀掉**（杀掉一个做到一半的 Hermes 升级很危险），
     所以只能从源头保证它根本不会去等输入。
+
+    还要置 PYTHONUNBUFFERED：不加的话子进程的 stdout 是块缓冲，界面上会**整段时间
+    一行输出都看不到**（升级要几分钟），用户以为卡死。单行、无副作用、零风险。
     """
     env = dict(os.environ)
     env.pop("HERMES_DISABLE_LAZY_INSTALLS", None)
     env.update(_NO_PROMPT_ENV)
+    env["PYTHONUNBUFFERED"] = "1"
     return env
 
 
@@ -250,6 +261,32 @@ def status(log_offset: int = 0) -> dict[str, Any]:
     return snapshot
 
 
+def _not_applicable_reason() -> str | None:
+    """什么时候**不该**跑 `hermes update`；该跑时返回 None。
+
+    只有判定给出的补救方向是 `upgrade_hermes`（Hermes 自己过旧）时才该跑。
+    `rebuild_trade_venv`（Hermes 够新、Trade 的运行环境过旧）跑 hermes update
+    **毫无用处**；更糟的是它会把状态置为 UPGRADING，经 SSE 覆盖界面上的
+    「Trade 需要重建运行环境」提示，把用户引到一条没有结果的路上去。
+
+    为什么把这条不变量钉在**被调方**而不是调用方：调用方有三处（bootstrap 的降级分支、
+    `/system/hermes-upgrade` 端点、前端的重试按钮），只要有一处漏判就会出错。
+    钉在这里，它们怎么写都不会错。
+    """
+    try:
+        from trade.bootstrap import hermes_compat_state
+
+        fix = hermes_compat_state().get("fix")
+    except Exception:
+        # 拿不到判定（如单测环境）→ 不拦，保持原先行为
+        return None
+    if fix == "rebuild_trade_venv":
+        return "当前需要的是重建 Trade 的运行环境，升级 Hermes 解决不了。"
+    if fix == "none":
+        return "Hermes 当前可用，无需升级。"
+    return None
+
+
 def start_upgrade() -> dict[str, Any]:
     """启动后台升级；已在升级中则直接返回当前状态（幂等）。
 
@@ -265,6 +302,15 @@ def start_upgrade() -> dict[str, Any]:
         already_running = _state["status"] in (CHECKING, UPGRADING)
     if already_running:
         return status()
+
+    # 补救方向不对时**不启动、也不改状态机**：返回当前快照并附上原因，让调用方能分辨。
+    # 改状态机会让界面显示一个根本没在跑的进度，比拒绝更糟。
+    reject = _not_applicable_reason()
+    if reject:
+        _append_log(f"[trade] 未启动 Hermes 升级：{reject}")
+        snapshot = status()
+        snapshot["rejected"] = reject
+        return snapshot
 
     launcher = _hermes_launcher()
     if launcher is None:
@@ -312,15 +358,58 @@ def _run_upgrade(launcher: str) -> None:
             bufsize=1,
             env=_child_env(),
         )
+        # 无输出看门狗：卡死降级为「升级失败」，而不是让状态机永远停在 UPGRADING。
+        # 复用探测那套「硬截止」的思路，不引入新架构 —— 失败态 + 重试按钮的路径
+        # 已经验证过是通的。
+        #
+        # 为什么必须有：`for line in proc.stdout` 会一直阻塞到子进程关闭 stdout。
+        # 若 `hermes update` 撞上**非凭证类**卡死（管理员权限弹窗、系统服务询问、
+        # 代理认证），它会永远不关 stdout —— 而 `_NO_PROMPT_ENV` 只挡得住凭证提示。
+        # 更麻烦的是此时用户点「重试」会被 `start_upgrade` 的幂等判断顶回，
+        # 于是彻底没有出路。
+        last_output = [time.monotonic()]
+        # 两个 Event 语义必须分开，否则「正常失败」会被误判成「超时」：
+        #   watchdog_stop —— 子进程结束后停掉循环（退出机制）
+        #   timed_out     —— 仅由看门狗在判定卡死时置位（业务判定）
+        watchdog_stop = threading.Event()
+        timed_out = threading.Event()
+
+        def _watchdog() -> None:
+            """超过 _NO_OUTPUT_LIMIT_SECONDS 没有任何输出 → 杀掉子进程。"""
+            while not watchdog_stop.is_set():
+                if time.monotonic() - last_output[0] > _NO_OUTPUT_LIMIT_SECONDS:
+                    _append_log(
+                        f"[trade] 超过 {int(_NO_OUTPUT_LIMIT_SECONDS / 60)} 分钟没有任何输出，"
+                        "判定升级卡住，已终止。可点「重试」，或改用界面上的手动步骤。"
+                    )
+                    timed_out.set()
+                    proc.kill()
+                    return
+                # 用 Event.wait 而非 sleep：停止时能被立刻唤醒，不必等满一个 tick
+                watchdog_stop.wait(_WATCHDOG_TICK_SECONDS)
+
+        watchdog = threading.Thread(target=_watchdog, daemon=True)
+        watchdog.start()
+
         # 逐行读取以实时喂给界面：升级要建数百 MB 的托管环境，静默几分钟用户会以为卡死
         if proc.stdout is not None:
             for line in proc.stdout:
                 stripped = line.rstrip()
                 if stripped:
+                    last_output[0] = time.monotonic()
                     _append_log(stripped)
         returncode = proc.wait()
+        # 子进程已结束 → 停掉看门狗循环（timed_out 不动，它记录的是业务判定）
+        watchdog_stop.set()
 
-        if returncode == 0:
+        if timed_out.is_set():
+            _set(
+                FAILED,
+                f"升级卡住（超过 {int(_NO_OUTPUT_LIMIT_SECONDS / 60)} 分钟没有任何输出），"
+                "已终止。请确认网络通畅后点「重试」。",
+                returncode=returncode,
+            )
+        elif returncode == 0:
             _set(DONE, "Hermes 升级完成，正在重启 Trade…", returncode=0)
             _trigger_success_hook()
         else:

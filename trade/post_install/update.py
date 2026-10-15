@@ -262,6 +262,39 @@ def _install_optional_deps(emit, warnings: list[str]) -> None:
 
 # ── 一键更新主函数 ────────────────────────────────────────────────────────
 
+def _refuse_reason_for_interpreter() -> str | None:
+    """当前解释器是否允许执行升级；不允许时返回给用户看的原因（允许返回 None）。
+
+    为什么必须挡：升级过程中的全部 `pip install` 都用 `sys.executable`。若 update_trade()
+    是被**系统 python** 调起的（cron / launchd / 计划任务 / 用户手敲 python），依赖会装进
+    **全局 site-packages** —— 既污染用户系统，又因为 Trade 的启动器指向自己的 venv，
+    下次启动仍然缺依赖，白升一场。
+
+    判据刻意保守（宁可放过、不可误拦）：只在**确知** Trade 的 venv 存在、且当前解释器
+    不在其中时才拒绝。在开发机上从仓库直接跑（本机没有 trade venv）不会被拦。
+    """
+    venv_markers = [
+        _get_trade_home() / "venv",
+        Path.home() / ".trade" / "venv",
+    ]
+    # pyvenv.cfg 是两个平台上都可靠的 venv 标志
+    existing = [v for v in venv_markers if (v / "pyvenv.cfg").is_file()]
+
+    if sys.prefix == sys.base_prefix:
+        # 根本不在任何 venv 里 → 一定会写进全局 site-packages
+        return "当前解释器不在任何虚拟环境内，继续升级会污染系统 Python 的包目录。"
+
+    # Windows 路径大小写不敏感 → 归一化后再比，避免把「就是同一个 venv」误判成不同
+    here = os.path.normcase(str(Path(sys.prefix).resolve()))
+    in_trade_venv = any(
+        here == os.path.normcase(str(v.resolve())) for v in existing
+    )
+    if existing and not in_trade_venv:
+        # 在某个 venv 里，但不是 Trade 的那个 → 装了也不会生效
+        return "当前解释器不是 Trade 自己的运行环境，升级不会生效。"
+    return None
+
+
 def update_trade() -> dict:
     """一键更新 Foreign Trade Assistant 系统。
 
@@ -297,6 +330,20 @@ def update_trade() -> dict:
             "ok": False,
             "version": "",
             "errors": ["architecture_mismatch"],
+            "warnings": warnings,
+            "messages": messages,
+        }
+
+    # ── Step 0b: 解释器必须跑在 Trade 自己的 venv 内 ───────────────────────
+    _refuse = _refuse_reason_for_interpreter()
+    if _refuse:
+        _emit(f"  ✗ 升级已中止：{_refuse}")
+        _emit(f"    当前解释器: {sys.executable}")
+        _emit("    请在 Trade 界面里点「更新」，或在终端执行 `trade update`。")
+        return {
+            "ok": False,
+            "version": "",
+            "errors": ["not_in_trade_venv"],
             "warnings": warnings,
             "messages": messages,
         }

@@ -86,6 +86,13 @@ $VenvDir = "$TradeHome\venv"
 # **删掉它不会丢任何用户数据**：数据在 $TradeHome 下（数据库、公司目录），不在 venv 里。
 if ((Test-Path "$VenvDir\Scripts\python.exe") -and -not (& $IsPython314 "$VenvDir\Scripts\python.exe")) {
     Write-Host "  ! 已有的运行环境不是 Python 3.14 —— 正在重建（不会动你的数据）..." -ForegroundColor Yellow
+    # Remove-Item 之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
+    # 重建不可逆，这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
+    try {
+        if (-not (Test-Path $TradeHome)) { New-Item -ItemType Directory -Path $TradeHome -Force | Out-Null }
+        & "$VenvDir\Scripts\pip.exe" freeze 2>$null | Out-File -FilePath "$TradeHome\venv-packages-before-rebuild.txt" -Encoding utf8
+        Write-Host "  → 已把重建前的包清单留档：$TradeHome\venv-packages-before-rebuild.txt" -ForegroundColor Cyan
+    } catch {}
     Remove-Item -Recurse -Force $VenvDir
 }
 if (-not (Test-Path "$VenvDir\Scripts\python.exe")) {

@@ -435,3 +435,20 @@ class TestPowerShellLauncherEncoding:
         # install.ps1：同上
         assert "-Recurse" in PS1 and "-Depth" in PS1, "install.ps1 的 3.14 发现仍是写死布局"
         assert "IsPython314" in PS1, "install.ps1 未按版本号验证"
+
+    def test_venv_rebuild_dumps_pip_freeze_before_removing(self):
+        """重建 venv 之前必须把已装包清单留档。
+
+        删除是不可逆的，而 venv 里可能有用户手动 `pip install` 的东西（对电脑小白是
+        零风险，但对装过额外包的人是唯一的事后线索）。成本一行，值得。
+        """
+        cases = (
+            ("install.sh", SH, 'rm -rf "$VENV_DIR"'),
+            ("install.ps1", PS1, "Remove-Item -Recurse -Force $VenvDir"),
+        )
+        for name, text, rm_marker in cases:
+            assert rm_marker in text, f"{name} 未见删除 venv 的动作"
+            before_rm = text[: text.index(rm_marker)]
+            assert "venv-packages-before-rebuild.txt" in before_rm, (
+                f"{name} 在删除 venv 之前没有留包清单"
+            )

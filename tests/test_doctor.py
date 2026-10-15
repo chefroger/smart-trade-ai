@@ -475,3 +475,90 @@ class TestUnconfiguredLlmIsNotFatal:
         assert agent.status == doctor.STATUS_FAIL
         assert agent.fatal is True
         assert doctor.has_fatal_failure(results) is True
+
+
+class TestUpdateInterpreterGuard:
+    """`trade update` 必须拒绝在非 Trade venv 的解释器下运行。
+
+    为什么：升级过程中的全部 `pip install` 用 `sys.executable`。若被系统 python 调起
+    （cron / launchd / 计划任务 / 手敲 python），依赖会装进**全局 site-packages** ——
+    既污染用户系统，又因为启动器指向 Trade 自己的 venv 而下次启动仍缺依赖，白升一场。
+    """
+
+    @staticmethod
+    def _stub(monkeypatch, tmp_path, *, prefix, base_prefix, trade_venv_exists):
+        """把 sys.prefix 与两处 venv 探测路径都钉进临时目录。
+
+        必须连 `Path.home()` 一起钉：开发机上**真的有** `~/.trade/venv`，
+        不隔离的话判据会被真实环境干扰（第一版就是这么写的，测试结果不可信）。
+        """
+        from trade.post_install import update as upd
+
+        home = tmp_path / "home"
+        trade_home = tmp_path / "tradehome"
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: trade_home)
+        monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+        if trade_venv_exists:
+            venv = trade_home / "venv"
+            venv.mkdir(parents=True, exist_ok=True)
+            (venv / "pyvenv.cfg").write_text("", encoding="utf-8")
+        monkeypatch.setattr(sys, "prefix", prefix)
+        monkeypatch.setattr(sys, "base_prefix", base_prefix)
+        return upd, trade_home
+
+    def test_refuses_outside_any_venv(self, monkeypatch, tmp_path):
+        upd, _ = self._stub(monkeypatch, tmp_path, prefix="/usr", base_prefix="/usr",
+                            trade_venv_exists=False)
+
+        reason = upd._refuse_reason_for_interpreter()
+
+        assert reason and "虚拟环境" in reason
+
+    def test_refuses_inside_another_venv(self, monkeypatch, tmp_path):
+        other = tmp_path / "othervenv"
+        other.mkdir()
+        upd, _ = self._stub(monkeypatch, tmp_path, prefix=str(other), base_prefix="/usr",
+                            trade_venv_exists=True)
+
+        reason = upd._refuse_reason_for_interpreter()
+
+        assert reason and "不是 Trade 自己" in reason
+
+    def test_allows_inside_trade_venv(self, monkeypatch, tmp_path):
+        upd, trade_home = self._stub(monkeypatch, tmp_path,
+                                     prefix=str(tmp_path / "tradehome" / "venv"),
+                                     base_prefix="/usr", trade_venv_exists=True)
+
+        assert upd._refuse_reason_for_interpreter() is None
+
+    def test_allows_when_no_trade_venv_exists(self, monkeypatch, tmp_path):
+        """开发机上从仓库直接跑（本机没有 trade venv）不能被拦。"""
+        upd, _ = self._stub(monkeypatch, tmp_path, prefix=str(tmp_path), base_prefix="/usr",
+                            trade_venv_exists=False)
+
+        assert upd._refuse_reason_for_interpreter() is None
+
+    def test_update_trade_refuses_early_when_guard_trips(self, monkeypatch, tmp_path):
+        """守卫必须真的**接在 update_trade 的入口**上。
+
+        只测 `_refuse_reason_for_interpreter()` 本身发现不了「漏接线」——
+        变异检验时把调用点改成恒 None，上面 4 条用例全绿，就是这个缺口。
+        """
+        from trade.post_install import update as upd
+
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        monkeypatch.setattr(upd, "_refuse_reason_for_interpreter",
+                            lambda: "当前解释器不在任何虚拟环境内。")
+        # 后面每一步都会碰网络/子进程：用会炸的替身，确保"越过守卫"会立刻暴露
+        def _boom(*_a, **_k):
+            raise AssertionError("守卫没接住，升级流程被放行了")
+
+        monkeypatch.setattr(upd.subprocess, "run", _boom)
+        monkeypatch.setattr(upd.subprocess, "Popen", _boom)
+        monkeypatch.setattr(upd.subprocess, "check_output", _boom)
+
+        result = upd.update_trade()
+
+        assert result["ok"] is False
+        assert "not_in_trade_venv" in result["errors"]
