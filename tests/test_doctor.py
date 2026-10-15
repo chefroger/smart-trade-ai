@@ -550,13 +550,21 @@ class TestUpdateInterpreterGuard:
         monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
         monkeypatch.setattr(upd, "_refuse_reason_for_interpreter",
                             lambda: "当前解释器不在任何虚拟环境内。")
-        # 后面每一步都会碰网络/子进程：用会炸的替身，确保"越过守卫"会立刻暴露
+        # 架构检查排在守卫**之前**，而它在 Windows 上会走 platform.uname() →
+        # platform._syscmd_ver → subprocess.check_output(['ver'])。不钉住它，
+        # 下面的 subprocess 炸弹会先炸在 platform 上（CI 在 Windows 上就是这么炸的：
+        # 报「守卫没接住」但其实根本没走到守卫）。钉住之后，炸弹只对
+        # 「守卫被绕过」这一种情况生效。
+        from trade import bootstrap
+
+        monkeypatch.setattr(bootstrap, "check_native_architecture", lambda: True)
+
+        # 守卫之后每一步都会碰网络/子进程：用会炸的替身，确保"越过守卫"会立刻暴露
         def _boom(*_a, **_k):
             raise AssertionError("守卫没接住，升级流程被放行了")
 
         monkeypatch.setattr(upd.subprocess, "run", _boom)
         monkeypatch.setattr(upd.subprocess, "Popen", _boom)
-        monkeypatch.setattr(upd.subprocess, "check_output", _boom)
 
         result = upd.update_trade()
 
