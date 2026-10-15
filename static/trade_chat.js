@@ -4003,13 +4003,17 @@ function showHermesUpgradePanel(compat) {
     renderHermesUpgradeSteps(compat.steps || []);
     const upgrade = compat.upgrade || {status:'idle', message:''};
     // 需要「重建 Trade 运行环境」时后端**没有**升级任务在跑（升级 Hermes 也解决不了），
-    // 所以要显示专属文案，而不是 upgrade.status 的默认态
+    // 所以要显示专属文案，而不是 upgrade.status 的默认态。
+    //
+    // ⚠️ 这条分支**不能**再启动进度流：重建场景下后端状态恒为 idle，流的第一个 state
+    // 事件就是 {status:'idle'}，会把刚设好的标题盖回「准备升级 Hermes」—— 正好又变成
+    // 我们要消灭的那种误导（2026-10-15 用户截图实证）。重建没有进度可看，也不需要流。
     if (compat.fix === 'rebuild_trade_venv' && !upgrade.running) {
         applyHermesUpgradeState({status:'rebuild_needed', message: compat.reason});
     } else {
         applyHermesUpgradeState(upgrade);
+        startHermesUpgradeStream(0);
     }
-    startHermesUpgradeStream(0);
 }
 
 /** 渲染三条可照做的升级步骤；命令整行可选中，方便复制。 */

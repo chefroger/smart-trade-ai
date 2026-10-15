@@ -88,6 +88,30 @@ Hermes → trade 能开、但一提问就回「AI Agent 模块未加载」。三
    同时安装脚本现在会**重建过旧的 venv**（解释器不是 3.14 就删掉重建；数据在 `TRADE_HOME`
    下，删 venv 不丢任何用户数据），这样老装机器只需「关掉 Trade → 重跑安装脚本」。
 
+**第二轮测试追加（2026-10-15 下午，用户报告）**
+
+上一轮那批修复里有两个我做错了，都是第二轮测试抓出来的：
+
+4. **3.14 的发现 glob 依然匹配不到真机布局**。我上一轮把 glob 从
+   `tools/*/bin/python3.14` 改成了 `installs/*/environments/*/bin/python` —— 仍然错，
+   因为**真实布局在代际里还套一层 `venv/`**，而且有**两棵代际树**：
+   ```
+   installs/<key>/environments/<gen>/venv/bin/python          ← 权威：pm/operations.py:152/210
+   installs/<key>/pm-runtime/generations/<gen>/bin/python      ← 权威：pm/install_states.py:72
+   ```
+   实测对比（同一份夹具）：旧 glob 匹配 **0 个**；`environments/*/venv/bin/python` 匹配 2 个
+   （其中一个是 3.13 干扰项）。⇒ 只靠 glob 不够，**必须按版本号验证**。
+   **更值得记的是方法问题**：我上一轮声称"隔离实测通过"，但那个"真实布局"是我按代码
+   推断**自己捏的 mock** —— 用同一个理解去构造夹具，只能验证我的假设，验证不了现实。
+   这次的修法是**不再写死布局**：`find … -maxdepth 6`（递归，对布局免疫）+ `_is_py314`
+   按版本号验；Windows 用 `-Recurse -Depth 6`。回归测试钉住「必须是递归 + 必须验版本」。
+5. **面板 UI 竞态**：`showHermesUpgradePanel` 设好 `rebuild_needed` 文案后，紧接着启动了
+   进度流；而重建场景下后端状态恒为 `idle`，流的第一个 state 事件就把标题盖回
+   「准备升级 Hermes」—— **正好又变成上一轮要消灭的那种误导**。修法：重建分支不启动流
+   （那里没有进度可看）。教训：JS 测试只测了「每个状态有文案」和「前后端字符串契约」，
+   **没测「设置文案后别的代码会不会覆盖它」这个交互**；现已补上并做过变异检验
+   （改回旧写法 → 测试变红）。
+
 **版本口径**
 
 - 下限：**Hermes 0.21.6**（`trade/bootstrap.py::_MIN_HERMES_VERSION`、

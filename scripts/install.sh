@@ -86,20 +86,40 @@ _find_python314() {
             return 0
         fi
     done
+
     # 2) Hermes 自带的托管解释器 —— 优先用它：与 Hermes 的运行时 ABI 完全一致。
-    #    真实布局（依据 pm/environments.py 的 venv_bin_dir/venv_python 与
-    #    installs_root()/install_key()/environments）：
-    #      POSIX   <HERMES_HOME>/installs/<key>/environments/<gen>/bin/python
-    #    （tools/ 下那两条是更早布局的兜底；**之前这里只 glob 了 tools/ 和
-    #      `python3.14` 这个文件名，两个都不对 → 客户机重装时找不到 3.14）
-    for cand in "$HERMES_HOME"/installs/*/environments/*/bin/python \
-                "$HERMES_HOME"/tools/*/bin/python3.14 \
-                "$HERMES_HOME"/tools/*/*/bin/python3.14; do
+    #
+    # **刻意不写死布局**。2026-10-15 用户实测：我按代码推断出来的单一 glob
+    # （installs/*/environments/*/bin/python）在真机上一个都匹配不到 —— 真实布局有两棵
+    # 代际树，且代际里还套一层 venv/（权威来源 pm/operations.py:152/210
+    # `generation / "venv"`、pm/install_states.py:72 的两棵树）。
+    # 写死布局的 glob 一旦猜错就是「静默找不到」，而且我无法在本机观测真实布局。
+    # 所以改成**递归找 + 按版本号验**：对布局变化免疫，多找到的由 _is_py314 兜住。
+    # 任一份 3.14 都能用来建 Trade 的 venv（同为 cp314 ABI），无需挑特定的那一份。
+    #
+    # maxdepth 6 刚好到 <tree>/<gen>/venv/bin/python：再深就进 site-packages 了（慢且无益）。
+    # 先按「名字就带 3.14」找（无歧义），再按通用名 python/python3 找并逐个验版本。
+    # heredoc 而非 `for x in $(...)`：两者都保证在 sh 下能跑，但 heredoc 还保住了
+    # 路径里的空格（`$( )` 会按空白拆词，Windows/Git-Bash 下很容易踩）
+    while IFS= read -r cand; do
         if [ -x "$cand" ] && _is_py314 "$cand"; then
             echo "$cand"
             return 0
         fi
-    done
+    done <<EOF
+$(find "$HERMES_HOME/installs" "$HERMES_HOME/tools" -maxdepth 6 \
+      \( -type f -o -type l \) -name "python3.14" 2>/dev/null | head -400)
+EOF
+    while IFS= read -r cand; do
+        if [ -x "$cand" ] && _is_py314 "$cand"; then
+            echo "$cand"
+            return 0
+        fi
+    done <<EOF
+$(find "$HERMES_HOME/installs" "$HERMES_HOME/tools" -maxdepth 6 \
+      \( -type f -o -type l \) \( -name "python" -o -name "python3" \) 2>/dev/null | head -400)
+EOF
+
     # 3) Homebrew 常见位置（Intel / Apple Silicon）
     for cand in /opt/homebrew/bin/python3.14 /usr/local/bin/python3.14; do
         if [ -x "$cand" ] && _is_py314 "$cand"; then

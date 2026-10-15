@@ -39,15 +39,18 @@ foreach ($cmd in @("python3.14", "python3", "python")) {
 }
 
 # 退路：Hermes 自带的托管解释器 —— 优先用它：与 Hermes 的运行时 ABI 完全一致。
-# 真实布局（依据 pm/environments.py 的 venv_bin_dir/venv_python 与
-# installs_root()/install_key()/environments）：
-#   Windows  <HERMES_HOME>\installs\<key>\environments\<gen>\Scripts\python.exe
-# （tools\ 下那条是更早布局的兜底；**之前这里只 glob 了 tools\ 且用 "python3.14.exe"
-#   这个文件名，两个都不对 → 客户机重装时找不到 3.14，卡在「需要 Python 3.14」）
+#
+# **刻意不写死布局**。2026-10-15 用户实测（Linux 侧同源问题）：按代码推断出来的单一
+# glob 在真机上一个都匹配不到 —— 真实布局有两棵代际树，且代际里还套一层 venv/
+# （权威来源 pm/operations.py:152/210 `generation / "venv"`、
+#   pm/install_states.py:72 的两棵树）。写死布局一旦猜错就是「静默找不到」。
+# 所以改成**递归找 + 按版本号验**：对布局变化免疫，多找到的由 $IsPython314 兜住
+# （任一份 3.14 都能建 Trade 的 venv，同为 cp314 ABI）。
+# -Depth 6 刚好到 <tree>\<gen>\venv\Scripts\python.exe，再深就进 Lib\site-packages 了。
 if (-not $PythonCmd) {
-    $candidates = @()
-    $candidates += Get-ChildItem -Path "$HermesHome\installs\*\environments\*\Scripts\python.exe" -ErrorAction SilentlyContinue
-    $candidates += Get-ChildItem -Path "$HermesHome\tools\*\python.exe" -ErrorAction SilentlyContinue
+    $candidates = Get-ChildItem -Path "$HermesHome\installs", "$HermesHome\tools" `
+        -Filter "python*.exe" -Recurse -Depth 6 -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^python(3\.14)?\.exe$' }
     foreach ($cand in $candidates) {
         try {
             if (& $IsPython314 $cand.FullName) {

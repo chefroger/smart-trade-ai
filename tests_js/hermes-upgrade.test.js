@@ -15,10 +15,18 @@ const { loadRegion } = require('./_extract');
 function makeDom() {
     const nodes = {};
     function makeNode() {
+        const classes = new Set();
         return {
             textContent: '', innerHTML: '', style: {},
             className: '', onclick: null, scrollTop: 0, scrollHeight: 0,
             children: [],
+            // showHermesUpgradePanel 会 classList.remove('hidden') —— stub 缺了它
+            // 会在调用处抛 TypeError，看起来像产品 bug 其实是夹具不完整
+            classList: {
+                add: (c) => classes.add(c),
+                remove: (c) => classes.delete(c),
+                contains: (c) => classes.has(c),
+            },
             appendChild(child) { this.children.push(child); return child; },
         };
     }
@@ -33,14 +41,16 @@ function makeDom() {
     return { document, $, nodes };
 }
 
-function loadPanel() {
+function loadPanel(fetchStub) {
     const dom = makeDom();
+    const calls = [];
+    const fetch_ = fetchStub || ((url) => { calls.push(String(url)); return Promise.reject(new Error('测试里不发请求')); });
     const api = loadRegion(
         'hermes-upgrade',
-        '{ HERMES_UPGRADE_TEXT: HERMES_UPGRADE_TEXT, applyHermesUpgradeState: applyHermesUpgradeState, renderHermesUpgradeSteps: renderHermesUpgradeSteps }',
-        { document: dom.document, $: dom.$, TOKEN: 'tok', toast: () => {}, fetch: () => {}, _waitForRestartAndReload: () => {} },
+        '{ HERMES_UPGRADE_TEXT: HERMES_UPGRADE_TEXT, applyHermesUpgradeState: applyHermesUpgradeState, renderHermesUpgradeSteps: renderHermesUpgradeSteps, showHermesUpgradePanel: showHermesUpgradePanel }',
+        { document: dom.document, $: dom.$, TOKEN: 'tok', toast: () => {}, fetch: fetch_, _waitForRestartAndReload: () => {} },
     );
-    return { api, nodes: dom.nodes };
+    return { api, nodes: dom.nodes, calls };
 }
 
 test('每个状态都有文案（缺一个就会出现空白面板）', () => {
@@ -154,4 +164,38 @@ test('面板的样式类在 CSS 里有定义', () => {
     // .hidden 必须真的能隐藏 —— 否则面板会在正常启动时也盖住界面
     assert.ok(/\.hermes-upgrade-overlay\.hidden\s*\{\s*display:\s*none/.test(CSS),
         'CSS 未定义 .hermes-upgrade-overlay.hidden 的隐藏规则');
+});
+
+// ── 重建场景：标题不许被进度流盖掉（2026-10-15 用户截图实证）──────────────
+// 上一版把文案修对了，但紧接着启动了进度流：重建场景下后端没有升级任务，状态恒为
+// idle，流的第一个 state 事件就把标题盖回「准备升级 Hermes」—— 又变成误导。
+// 这组用例钉的是**交互**，不是文案（只测"每个状态有文案"发现不了它）。
+
+test('rebuild 场景不启动进度流，标题保持"重建运行环境"', () => {
+    const { api, nodes, calls } = loadPanel();
+
+    api.showHermesUpgradePanel({
+        fix: 'rebuild_trade_venv',
+        reason: 'Hermes 0.22.0 需要 Python 3.14 运行时',
+        steps: [{ title: '重新运行安装脚本', detail: '', command: 'curl -fsSL ... | bash' }],
+        upgrade: { status: 'idle', running: false },
+    });
+
+    assert.strictEqual(nodes['hermes-upgrade-title'].textContent, 'Trade 需要重建运行环境');
+    // 关键：一条流请求都不该发出 —— 发出去了就会被 idle 盖掉
+    assert.deepStrictEqual(calls, [], `重建场景不该开进度流，却请求了 ${calls}`);
+});
+
+test('升级场景照常启动进度流（别把上面那条修过头）', () => {
+    const { api, calls } = loadPanel();
+
+    api.showHermesUpgradePanel({
+        fix: 'upgrade_hermes',
+        reason: 'Hermes 过旧',
+        steps: [{ title: '让 Hermes 自己升级', detail: '', command: 'hermes update' }],
+        upgrade: { status: 'upgrading', running: true, message: '正在升级 Hermes' },
+    });
+
+    assert.ok(calls.some((u) => u.includes('hermes-upgrade/stream')),
+        '升级场景必须订阅进度流，否则用户看不到进度');
 });

@@ -418,3 +418,20 @@ class TestPowerShellLauncherEncoding:
             assert line.index("prepare_hermes_import_paths()") < line.index("trade.doctor"), (
                 f"{name} 的自检把 import doctor 排在了路径准备之前"
             )
+
+    def test_python314_discovery_is_layout_agnostic(self):
+        """3.14 的发现必须对布局免疫，不能写死成单一 glob。
+
+        2026-10-15 用户实测：我按代码推断出来的单一 glob
+        （`installs/*/environments/*/bin/python`）在真机上一个都匹配不到 —— 真实布局是
+        **两棵代际树**（`environments/` 与 `pm-runtime/generations/`），且代际里还套一层
+        `venv/`（权威来源 `pm/operations.py:152/210` 的 `generation / "venv"`、
+        `pm/install_states.py:72` 的两棵树）。写死布局一旦猜错就是「静默找不到」，
+        而开发者无法在自己机器上观测真实布局 —— 所以必须是**递归找 + 按版本号验**。
+        """
+        # install.sh：递归 + 深度上限（避免钻进 site-packages）
+        assert "find " in SH and "-maxdepth" in SH, "install.sh 的 3.14 发现仍是写死布局"
+        assert "_is_py314" in SH, "install.sh 未按版本号验证（只信文件名会选到 3.13）"
+        # install.ps1：同上
+        assert "-Recurse" in PS1 and "-Depth" in PS1, "install.ps1 的 3.14 发现仍是写死布局"
+        assert "IsPython314" in PS1, "install.ps1 未按版本号验证"
