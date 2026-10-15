@@ -466,11 +466,11 @@ def _activate_hermes_env_and_restore_trade_paths() -> None:
 
 
 def load_env_and_set_yolo():
-    """加载 Hermes .env、开启 YOLO 模式，并禁用 Hermes 的懒加载重启。"""
-    # 必须在**第一条 Hermes import 之前**完成激活与恢复：晚一步，后续 import 就会
-    # 落在一个被剥离过的 sys.path 上（见函数 docstring）
-    _activate_hermes_env_and_restore_trade_paths()
+    """加载 Hermes .env、开启 YOLO 模式，并禁用 Hermes 的懒加载重启。
 
+    注意：pm 激活后的恢复**不在这里**做，而在 `prepare_hermes_import_paths()` ——
+    它必须早于**任何** Hermes import（含子命令 doctor/osint），见其 docstring。
+    """
     from hermes_cli.env_loader import load_hermes_dotenv
     from hermes_constants import get_hermes_home
 
@@ -683,39 +683,70 @@ def ensure_document_deps():
 # ── 一键 setup ───────────────────────────────────────────────────────────
 
 
+def prepare_hermes_import_paths() -> bool:
+    """把 sys.path 准备到「可以 import Hermes」，返回 Hermes 是否可用。
+
+    供 `setup()` 与**安装脚本的自检**共用 —— 两者都必须在**任何 Hermes import 之前**调用。
+    2026-10-15 干净机器实测踩到的两个坑都源于「漏调这一步」：
+
+      1. 不调 `_adjust_sys_path()` 就 import → `No module named 'run_agent'`。
+         Hermes 不再装进 Trade 的 venv（见 COMPATIBILITY.md 的「当前策略」），
+         全靠这里把 checkout 插进 sys.path。
+      2. 不调 `_activate_hermes_env_and_restore_trade_paths()` → Hermes 的 pm 激活会
+         按目录名把 venv 的 site-packages 从 sys.path 踢掉且**不会自己恢复**，于是
+         后续 `import holehe` / `sqlite_vec` 全部误报「未安装」（其实装了）。
+
+    Returns:
+        Hermes 是否可用。False 时调用方**不得** import Hermes（过旧会崩在缺依赖上）。
+    """
+    _disable_hermes_lazy_installs()
+    _adjust_sys_path()
+    usable = hermes_is_usable()
+    # 只有明确可用才触发激活：过旧时 import Hermes 只会崩在缺依赖上
+    if usable:
+        _activate_hermes_env_and_restore_trade_paths()
+    return usable
+
+
 def setup():
     """执行 Trade 启动所需的所有引导步骤。
 
     调用顺序：
-    0. Hermes 懒加载守卫（必须最先 —— 见 _disable_hermes_lazy_installs）
-    1. sys.path 调整
-    2. 子命令分发（如果是子命令则直接 exit）
-    3. 架构检查（不匹配 → 退出：Hermes 的 C 扩展根本装不上，降级也没有意义）
-    4. Hermes 共存检查（**过旧不再退出**，见下）
+    0. Hermes 懒加载守卫（必须最先 —— 它只是设个环境变量，而后面每步都可能 import Hermes）
+    1. 架构检查（不匹配 → 退出：Hermes 的 C 扩展根本装不上，降级也没有意义）
+    2. 路径准备：sys.path + pm 激活后的恢复（见 prepare_hermes_import_paths）
+    3. Hermes 共存检查（**过旧不再退出**，见下）
+    4. 子命令分发（doctor/osint/… 会 import Hermes，所以必须在第 2 步之后）
     5. .env 加载 + YOLO 设置（需 Hermes）
-    6. Skills 同步（不碰 Hermes）
-    7. 文档依赖检查（不碰 Hermes）
-    8. 桌面集成（不碰 Hermes，幂等、失败不阻断）
-    9. 端到端自检（要起 agent，需 Hermes）
+    6. Skills 同步 / 文档依赖 / 桌面集成（失败不阻断）
+    7. 端到端自检（要起 agent，需 Hermes）
 
-    第 4 步为什么改成降级而不是退出：桌面端（tradewin）先起服务线程再开窗口，
+    **第 1、4 步的顺序与 2026-10-15 之前相反**，这是干净机器实测逼出来的：
+    子命令分发（尤其 `trade doctor`）会在自己的代码里 import Hermes，若排在路径准备
+    之前，doctor 就成了「第一个 import Hermes 的人」—— pm 激活剥离 site-packages 后
+    没有任何人恢复，导致 doctor 自己后面的依赖检查全部误报「未安装」。
+
+    第 3 步为什么改成降级而不是退出：桌面端（tradewin）先起服务线程再开窗口，
     一旦在起服务前退出，用户只会看到一个空白窗口、一句解释都没有 —— 而 Trade 的
     用户群基本是电脑小白，这等于让他们以为软件坏了。改为「记录状态 + 跳过碰 Hermes
     的步骤 + 照常起服务」，界面才能显示升级面板把他们引到正确的动作上。
     """
-    # 第 0 步：子命令分发（doctor/osint/…）与版本检查都会导入 Hermes，都必须有守卫。
+    # 第 0 步：只设环境变量，必须先于一切可能 import Hermes 的动作
     _disable_hermes_lazy_installs()
-    _adjust_sys_path()
 
-    if dispatch_subcommands():
-        sys.exit(0)
-
-    # 架构检查必须在 Hermes 版本检查之前 —— 架构不匹配时 Hermes 无法导入
+    # 第 1 步：架构检查在路径准备之前 —— 它不需要 Hermes，而架构不符时后面全是白跑
     if not check_native_architecture():
         sys.exit(1)
 
-    # 第 4 步：共存检查，**故意不退出**（理由见 docstring）
+    # 第 2 步：路径准备（含 pm 激活后的恢复），必须在任何 Hermes import 之前
+    prepare_hermes_import_paths()
+
+    # 第 3 步：共存检查，**故意不退出**（理由见 docstring）
     hermes_usable = check_hermes_version()
+
+    # 第 4 步：子命令分发。排在路径准备之后 —— doctor/osint 自己会 import Hermes
+    if dispatch_subcommands():
+        sys.exit(0)
 
     if not hermes_usable:
         # 过旧时跳过所有会 import Hermes 的步骤：load_env_and_set_yolo() 会 import

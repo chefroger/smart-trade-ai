@@ -46,6 +46,24 @@ Trade 依赖（pymupdf/openpyxl/python-docx/bs4/fastapi）可在同一进程共�
 - 安装脚本的收尾自检**忽略「Hermes 版本」这一致命项**（`has_fatal_failure(..., ignore_names=('Hermes 版本',))`），
   否则安装会判失败退出，用户永远见不到那个升级界面。
 
+**干净机器实测暴露的两个坑（2026-10-15，已修，回归测试钉住）**
+
+新策略的第一版在干净机器上**装不上**，两个坑都不是「Hermes 版本」问题，而是本策略
+自身的实现缺口 —— 记在这里，因为它们正是「路径准备必须集中且早于一切 Hermes import」
+这条规则的理由：
+
+1. **自检绕过路径准备**：安装脚本收尾用裸 `python -c` 调 doctor，不走 `setup()`。而
+   Hermes 不再装进 Trade 的 venv，于是报 `No module named 'run_agent'` ——
+   **安装永远过不了自检**。修法：自检先调 `bootstrap.prepare_hermes_import_paths()`。
+2. **doctor 成了「第一个 import Hermes 的人」**：它自己 `from run_agent import AIAgent`
+   会触发 pm 激活，剥离 venv 的 site-packages 且**没人恢复**，导致 doctor 后面几项
+   （holehe / sqlite-vec）误报「未安装」。修法：`setup()` 里把
+   `prepare_hermes_import_paths()` 提到 `dispatch_subcommands()` **之前**。
+
+另有一个独立的装机体验问题：**「没配大模型」曾被当作致命安装失败**（`create_agent()`
+抛错 → 「Agent 构造」fatal）→ 新装机器永远看到「安装不完整，请发给技术支持」。现改为
+先查 `check_provider()`，未配置则报 WARN 并指向 `hermes setup`。
+
 **版本口径**
 
 - 下限：**Hermes 0.21.6**（`trade/bootstrap.py::_MIN_HERMES_VERSION`、

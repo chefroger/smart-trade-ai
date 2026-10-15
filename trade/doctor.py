@@ -102,6 +102,24 @@ def check_hermes_runtime(*, agent_factory=None) -> list[CheckResult]:
     except Exception as e:
         out.append(CheckResult("Hermes 版本", STATUS_WARN, f"检查失败：{e}"))
 
+    # 先看大模型配没配：没配时 create_agent() 必然抛错，但那是「**还没配置**」，
+    # 有明确下一步（hermes setup），不是「安装不完整」。2026-10-15 干净机器实测：
+    # 把它当 fatal 会让装机永远卡在「安装不完整，请发给技术支持」—— 用户照着做也没用，
+    # 因为真正该做的是去配大模型。
+    try:
+        from trade.helpers import check_provider
+
+        provider_error = check_provider()
+    except BaseException as exc:  # noqa: BLE001 — 读配置失败同样是「还没就绪」
+        provider_error = f"无法读取大模型配置：{type(exc).__name__}: {exc}"
+
+    if provider_error:
+        out.append(CheckResult(
+            "Agent 构造", STATUS_WARN,
+            f"{provider_error}（这是「还没配置」，不是安装问题；配好后跑 trade doctor 可复检）",
+        ))
+        return out
+
     try:
         factory = agent_factory
         if factory is None:

@@ -31,6 +31,19 @@ def trade_home(monkeypatch, tmp_path):
 
 
 class TestHermesRuntimeCheck:
+    """「Agent 构造」检查：**只在大模型已配置时才真的去构造**。
+
+    2026-10-15 起，「Agent 构造」前面多了一道 `check_provider()` 闸门：没配大模型时
+    直接报 WARN（那是「还没配置」，不是安装问题），既不构造 agent、也就不会连带触发
+    Hermes 的 pm 激活。所以这一组用例要先把闸门设成「已配置」，才测得到构造路径。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _provider_configured(self, monkeypatch):
+        from trade import helpers
+
+        monkeypatch.setattr(helpers, "check_provider", lambda: None)
+
     def test_success(self):
         class _FakeAgent:
             pass
@@ -405,3 +418,60 @@ class TestEstopCheck:
         doctor.run_doctor(deep=False)
 
         assert seen, "run_doctor 没有调用 check_estop"
+
+
+class TestUnconfiguredLlmIsNotFatal:
+    """没配大模型 = 「还没配置」，不是「安装不完整」。
+
+    2026-10-15 干净机器实测：安装脚本的快检走 `run_doctor(deep=False)`，其中
+    「Agent 构造」是 fatal 项，而 `create_agent()` 在没配大模型时必然抛
+    `RuntimeError("未配置 AI 模型…")` —— 于是新装机器**永远**卡在
+    「安装不完整，请发给技术支持」，而用户照着做也没用：真正该做的是去配大模型。
+    """
+
+    @staticmethod
+    def _stub_compat_ok(monkeypatch):
+        """让 Hermes 版本那项直接通过，用例只聚焦「Agent 构造」。"""
+        import trade.hermes_compat as compat
+
+        monkeypatch.setattr(compat, "hermes_python_compat", lambda: {
+            "verdict": "ok", "version": "0.22.0", "python": "3.14.7",
+            "reason": "ok", "checkout": None,
+        })
+
+    def test_missing_provider_reports_warn_not_fatal(self, monkeypatch):
+        from trade import helpers
+
+        self._stub_compat_ok(monkeypatch)
+        monkeypatch.setattr(
+            helpers, "check_provider",
+            lambda: "未配置 AI 模型。请先运行 hermes setup 选择模型。",
+        )
+
+        results = doctor.check_hermes_runtime(agent_factory=lambda: pytest.fail(
+            "未配置大模型时不该去构造 agent（会连带触发 pm 激活）"
+        ))
+
+        agent = next(r for r in results if r.name == "Agent 构造")
+        assert agent.status == doctor.STATUS_WARN
+        assert agent.fatal is False
+        assert "hermes setup" in agent.detail, "要告诉用户下一步是去配大模型"
+        # 关键：安装脚本据此判定「能不能继续」，不能是致命
+        assert doctor.has_fatal_failure(results) is False
+
+    def test_real_construction_failure_still_fatal(self, monkeypatch):
+        """大模型配好了、agent 却构造不出来 —— 这仍必须是致命项（别把真问题放过去）。"""
+        from trade import helpers
+
+        self._stub_compat_ok(monkeypatch)
+        monkeypatch.setattr(helpers, "check_provider", lambda: None)
+
+        def _boom():
+            raise RuntimeError("No LLM provider configured")
+
+        results = doctor.check_hermes_runtime(agent_factory=_boom)
+
+        agent = next(r for r in results if r.name == "Agent 构造")
+        assert agent.status == doctor.STATUS_FAIL
+        assert agent.fatal is True
+        assert doctor.has_fatal_failure(results) is True

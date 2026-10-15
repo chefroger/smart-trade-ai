@@ -278,12 +278,22 @@ class TestDegradedStartup:
 
     @staticmethod
     def _stub_setup(monkeypatch, bootstrap, *, usable, calls):
-        """把 setup() 的每一步替换成记录器，只留我们要验证的分支逻辑。"""
-        monkeypatch.setattr(bootstrap, "_disable_hermes_lazy_installs", lambda: None)
-        monkeypatch.setattr(bootstrap, "_adjust_sys_path", lambda: None)
-        monkeypatch.setattr(bootstrap, "dispatch_subcommands", lambda: False)
-        monkeypatch.setattr(bootstrap, "check_native_architecture", lambda: True)
-        monkeypatch.setattr(bootstrap, "check_hermes_version", lambda: usable)
+        """把 setup() 的每一步替换成记录器（按调用顺序写入 calls），只留分支逻辑。"""
+        monkeypatch.setattr(
+            bootstrap, "_disable_hermes_lazy_installs", lambda: calls.append("guard")
+        )
+        monkeypatch.setattr(
+            bootstrap, "check_native_architecture", lambda: calls.append("arch") or True
+        )
+        monkeypatch.setattr(
+            bootstrap, "prepare_hermes_import_paths", lambda: calls.append("paths") or usable
+        )
+        monkeypatch.setattr(
+            bootstrap, "check_hermes_version", lambda: calls.append("version") or usable
+        )
+        monkeypatch.setattr(
+            bootstrap, "dispatch_subcommands", lambda: calls.append("dispatch") or False
+        )
         monkeypatch.setattr(bootstrap, "load_env_and_set_yolo", lambda: calls.append("env"))
         for name in ("sync_b2b_skills", "ensure_document_deps", "ensure_desktop_integration"):
             monkeypatch.setattr(bootstrap, name, (lambda n: lambda: calls.append(n))(name))
@@ -292,6 +302,24 @@ class TestDegradedStartup:
             lambda: calls.append("upgrade"),
         )
         monkeypatch.setattr(bootstrap, "start_doctor_if_needed", lambda: calls.append("doctor"))
+
+    def test_paths_are_prepared_before_subcommand_dispatch(self, monkeypatch):
+        """路径准备必须早于子命令分发。
+
+        2026-10-15 干净机器实测：`trade doctor` 自己会 import Hermes。若分发排在路径
+        准备之前，doctor 就成了「第一个 import Hermes 的人」—— pm 激活剥离 venv 的
+        site-packages 后没人恢复，doctor 后面几项依赖检查全部误报「未安装」。
+        """
+        from trade import bootstrap
+
+        calls: list[str] = []
+        self._stub_setup(monkeypatch, bootstrap, usable=True, calls=calls)
+
+        bootstrap.setup()
+
+        assert calls.index("paths") < calls.index("dispatch")
+        # 懒加载守卫仍必须最先（子命令与版本检查都可能 import Hermes）
+        assert calls[0] == "guard"
 
     def test_too_old_skips_hermes_steps_and_starts_upgrade(self, monkeypatch, capsys):
         from trade import bootstrap
@@ -327,7 +355,7 @@ class TestDegradedStartup:
         assert "跳过" in capsys.readouterr().out
 
     def test_usable_path_still_runs_hermes_steps(self, monkeypatch):
-        """正常路径不受影响：该跑的 Hermes 步骤一个不少。"""
+        """正常路径不受影响：该跑的 Hermes 步骤一个不少，且顺序符合文档。"""
         from trade import bootstrap
 
         calls: list[str] = []
@@ -335,5 +363,47 @@ class TestDegradedStartup:
 
         bootstrap.setup()
 
-        assert calls == ["env", "sync_b2b_skills", "ensure_document_deps",
-                         "ensure_desktop_integration", "doctor"]
+        assert calls == [
+            "guard", "arch", "paths", "version", "dispatch",
+            "env", "sync_b2b_skills", "ensure_document_deps",
+            "ensure_desktop_integration", "doctor",
+        ]
+
+
+class TestPrepareHermesImportPaths:
+    """`prepare_hermes_import_paths()` —— 任何 Hermes import 之前都必须走它。
+
+    它是 `setup()` 与安装脚本自检的**共用入口**：漏了就会踩 2026-10-15 干净机器上
+    那两个坑（`No module named 'run_agent'`；以及激活剥离 site-packages 后无人恢复）。
+    """
+
+    def test_usable_triggers_activation_and_restore(self, monkeypatch):
+        from trade import bootstrap
+
+        calls: list[str] = []
+        monkeypatch.setattr(bootstrap, "_disable_hermes_lazy_installs", lambda: calls.append("guard"))
+        monkeypatch.setattr(bootstrap, "_adjust_sys_path", lambda: calls.append("path"))
+        monkeypatch.setattr(bootstrap, "hermes_is_usable", lambda: True)
+        monkeypatch.setattr(
+            bootstrap, "_activate_hermes_env_and_restore_trade_paths",
+            lambda: calls.append("activate"),
+        )
+
+        assert bootstrap.prepare_hermes_import_paths() is True
+        assert calls == ["guard", "path", "activate"]
+
+    def test_unusable_never_imports_hermes(self, monkeypatch):
+        """过旧时**绝不能**触发激活 —— 那会 import Hermes 并崩在缺依赖上。"""
+        from trade import bootstrap
+
+        calls: list[str] = []
+        monkeypatch.setattr(bootstrap, "_disable_hermes_lazy_installs", lambda: None)
+        monkeypatch.setattr(bootstrap, "_adjust_sys_path", lambda: None)
+        monkeypatch.setattr(bootstrap, "hermes_is_usable", lambda: False)
+        monkeypatch.setattr(
+            bootstrap, "_activate_hermes_env_and_restore_trade_paths",
+            lambda: calls.append("activate"),
+        )
+
+        assert bootstrap.prepare_hermes_import_paths() is False
+        assert calls == []

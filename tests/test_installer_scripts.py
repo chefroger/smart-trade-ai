@@ -396,3 +396,25 @@ class TestPowerShellLauncherEncoding:
         assert re.search(r"-Encoding\s+(OEM|Default|UTF8|utf8)", body), (
             "应改用能承载非 ASCII 的编码（OEM/Default/UTF8）"
         )
+
+    def test_selfcheck_prepares_hermes_import_paths_first(self):
+        """安装收尾的自检必须先准备 Hermes 的 import 路径。
+
+        2026-10-15 干净机器实测（Bug 1）：自检用 `python -c` 直接调 doctor，绕过了
+        bootstrap 的路径准备 —— 而 Hermes 不再装进 Trade 的 venv，于是报
+        `No module named 'run_agent'`，**安装永远过不了自检**。同一步还负责恢复 pm
+        激活剥离掉的 site-packages，漏了会让 doctor 后面几项误报「未安装」。
+        """
+        for name, text in (("install.sh", SH), ("install.ps1", PS1)):
+            line = next(
+                (ln for ln in text.splitlines() if "run_doctor" in ln and "trade.doctor" in ln),
+                None,
+            )
+            assert line, f"{name} 未见调用 trade.doctor 的自检行"
+            assert "prepare_hermes_import_paths()" in line, (
+                f"{name} 的自检没有先准备 Hermes 的 import 路径"
+            )
+            # 顺序必须真的对：先准备路径，再 import doctor
+            assert line.index("prepare_hermes_import_paths()") < line.index("trade.doctor"), (
+                f"{name} 的自检把 import doctor 排在了路径准备之前"
+            )
