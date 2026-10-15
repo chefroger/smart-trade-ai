@@ -72,29 +72,37 @@ log_step "Step 1/5: 检查 Python 环境"
 # 在 3.11~3.13 上会变成「装得上、起不来」，所以这里不再接受 3.11~3.13。
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 
+# 判据：这个解释器的版本号**正好**是 3.14（不是「>= 3.11」那种下限写法）
+_is_py314() {
+    "$1" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' 2>/dev/null
+}
+
 _find_python314() {
     local cmd cand
     # 1) PATH 上的解释器（版本号必须正好是 3.14）
     for cmd in python3.14 python3; do
-        if command -v "$cmd" &>/dev/null \
-           && "$cmd" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' 2>/dev/null; then
+        if command -v "$cmd" &>/dev/null && _is_py314 "$(command -v "$cmd")"; then
             command -v "$cmd"
             return 0
         fi
     done
-    # 2) Hermes 自带的托管 Python（上游安装器放在数据目录的 tools/ 下）——
-    #    优先用它：与 Hermes 的托管环境 ABI 完全一致，省掉一类难查的崩
-    for cand in "$HERMES_HOME"/tools/*/bin/python3.14 \
+    # 2) Hermes 自带的托管解释器 —— 优先用它：与 Hermes 的运行时 ABI 完全一致。
+    #    真实布局（依据 pm/environments.py 的 venv_bin_dir/venv_python 与
+    #    installs_root()/install_key()/environments）：
+    #      POSIX   <HERMES_HOME>/installs/<key>/environments/<gen>/bin/python
+    #    （tools/ 下那两条是更早布局的兜底；**之前这里只 glob 了 tools/ 和
+    #      `python3.14` 这个文件名，两个都不对 → 客户机重装时找不到 3.14）
+    for cand in "$HERMES_HOME"/installs/*/environments/*/bin/python \
+                "$HERMES_HOME"/tools/*/bin/python3.14 \
                 "$HERMES_HOME"/tools/*/*/bin/python3.14; do
-        if [ -x "$cand" ] \
-           && "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)' 2>/dev/null; then
+        if [ -x "$cand" ] && _is_py314 "$cand"; then
             echo "$cand"
             return 0
         fi
     done
     # 3) Homebrew 常见位置（Intel / Apple Silicon）
     for cand in /opt/homebrew/bin/python3.14 /usr/local/bin/python3.14; do
-        if [ -x "$cand" ]; then
+        if [ -x "$cand" ] && _is_py314 "$cand"; then
             echo "$cand"
             return 0
         fi
@@ -166,6 +174,15 @@ fi
 # 创建 venv（所有后续安装都在 venv 内，不碰系统 Python）
 # ─────────────────────────────────────────────────────────────────────────────
 VENV_DIR="$HOME/.trade/venv"
+# 已有 venv 但解释器**不是 3.14** → 必须重建。旧装机器就地升级 trade 时，代码与依赖
+# 都换了、venv 的解释器还是旧的（`trade update` 只更新代码与依赖，不重建 venv），
+# 于是 Hermes 的 pm 激活会把 cp314 的包塞进旧解释器 → 聊天只报「AI Agent 模块未加载」。
+# **删掉它不会丢任何用户数据**：数据在 $TRADE_HOME 下（数据库、公司目录），不在 venv 里。
+if [ -f "$VENV_DIR/bin/python" ] && ! _is_py314 "$VENV_DIR/bin/python"; then
+    _old_ver=$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "未知")
+    log_warn "已有的运行环境是 Python $_old_ver，需要 3.14 —— 正在重建（不会动你的数据）..."
+    rm -rf "$VENV_DIR"
+fi
 if [ ! -f "$VENV_DIR/bin/python" ]; then
     log_info "创建虚拟环境..."
     "$PYTHON" -m venv "$VENV_DIR"

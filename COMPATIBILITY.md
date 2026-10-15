@@ -64,6 +64,30 @@ Trade 依赖（pymupdf/openpyxl/python-docx/bs4/fastapi）可在同一进程共�
 抛错 → 「Agent 构造」fatal）→ 新装机器永远看到「安装不完整，请发给技术支持」。现改为
 先查 `check_provider()`，未配置则报 WARN 并指向 `hermes setup`。
 
+**客户机事故（2026-10-15，Windows 旧装机器，三个 bug 已修）**
+
+现象：客户机器 trade 升到最新后显示要升级 Hermes → 卡在「正在检查网络」→ 客户手动重装
+Hermes → trade 能开、但一提问就回「AI Agent 模块未加载」。三个 bug 都是本策略自身的：
+
+1. **判定漏了「反向」那一半（致命）**：`requires-python` 里的 `>=3.11` 是上游留给旧安装
+   跑升级步骤的**过渡桥，不代表能运行**。于是「Hermes 0.22.0 + 解释器 3.13」被判成 `ok` ——
+   而旧装机器**就地升级 trade 时 venv 不会重建**（`trade update` 只更新代码与依赖），
+   正好制造了这个组合。判 ok 就走进正常路径 → pm 激活把 **cp314** 的包塞进 3.13 进程 →
+   `from run_agent import AIAgent` 抛 ImportError → 界面只显示「AI Agent 模块未加载」，
+   **完全指不到真正的原因**。修法：新增 verdict `python_too_old` + `fix` 字段
+   （`upgrade_hermes` / `rebuild_trade_venv`），两个方向的用户动作完全不同，必须分开给。
+2. **网络探测会永久挂住**：面板停在「正在检查网络」= 探测线程再也没返回。两道根因：
+   ① `git ls-remote` 撞到凭证提示会挂；② 即使有 `timeout=`，Windows 上孙进程（凭证助手）
+   持着管道句柄时 `communicate()` 会越过超时继续等。修法：**不给任何管道** +
+   `GIT_TERMINAL_PROMPT=0` / `GCM_INTERACTIVE=never` / `-c credential.helper=` +
+   再加一层**线程硬截止**（不依赖 subprocess 的超时语义）。`hermes update` 子进程同样
+   注入这些开关并断开 stdin —— 但它**不能加超时**（杀掉做到一半的 Hermes 升级更危险）。
+3. **安装脚本的 3.14 发现路径两个都错**：glob 的是 `tools/*/bin/python3.14`，而真实布局是
+   `installs/<key>/environments/<gen>/bin/python`（Windows 为 `Scripts\python.exe`）。
+   客户照做「重装」会卡在「需要 Python 3.14，但未找到」—— **自愈路径被堵死**。
+   同时安装脚本现在会**重建过旧的 venv**（解释器不是 3.14 就删掉重建；数据在 `TRADE_HOME`
+   下，删 venv 不丢任何用户数据），这样老装机器只需「关掉 Trade → 重跑安装脚本」。
+
 **版本口径**
 
 - 下限：**Hermes 0.21.6**（`trade/bootstrap.py::_MIN_HERMES_VERSION`、

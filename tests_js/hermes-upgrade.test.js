@@ -43,14 +43,31 @@ function loadPanel() {
     return { api, nodes: dom.nodes };
 }
 
-test('六个状态都有文案（缺一个就会出现空白面板）', () => {
+test('每个状态都有文案（缺一个就会出现空白面板）', () => {
     const { api } = loadPanel();
 
-    for (const status of ['idle', 'checking_network', 'upgrading', 'done', 'offline', 'failed']) {
+    for (const status of [
+        'idle', 'checking_network', 'upgrading', 'done', 'offline', 'failed',
+        // rebuild_needed 不是"升级 Hermes"的进度态，而是「Trade 自己需要重建」——
+        // 2026-10-15 客户机实测时这一档根本不存在，界面只能显示别的态把人引错方向
+        'rebuild_needed',
+    ]) {
         const text = api.HERMES_UPGRADE_TEXT[status];
         assert.ok(text, `状态 ${status} 缺文案`);
         assert.ok(text.title && text.message, `状态 ${status} 的标题或说明为空`);
     }
+});
+
+test('界面认识后端给的 rebuild_trade_venv 方向', () => {
+    // 前端按 compat.fix 决定文案；后端改了取值而前端没跟上，用户就会看到误导性提示。
+    // 这里直接核对两个文件之间的契约字符串（本地 require，不依赖文件后半段的声明顺序）。
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const js = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.js'), 'utf8');
+    const py = fs.readFileSync(path.join(__dirname, '..', 'trade', 'hermes_compat.py'), 'utf8');
+
+    assert.ok(js.includes('rebuild_trade_venv'), 'trade_chat.js 未处理 rebuild_trade_venv');
+    assert.ok(py.includes('"rebuild_trade_venv"'), '后端未产出 rebuild_trade_venv');
 });
 
 test('后端给的具体说明优先于通用文案', () => {

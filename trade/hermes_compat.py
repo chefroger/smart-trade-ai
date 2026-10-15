@@ -207,10 +207,39 @@ def hermes_python_compat() -> dict[str, Any]:
         "python": python_version,
         "checkout": str(checkout.parent) if checkout else None,
         "reason": "",
+        # 补救方向：告诉调用方该升 Hermes 还是该重建 Trade 的运行环境。
+        # 两者的用户动作完全不同（一个去装 Hermes，一个重跑安装脚本），
+        # 给错方向会让用户白折腾 —— 2026-10-15 客户机就是这么卡住的。
+        "fix": "none",
     }
 
-    # 判据一：Hermes 声明的 Python 区间是否包含当前解释器。
-    # 这是**权威判据**（上游自己声明的机械真相）：区间可解析且包含当前解释器时，
+    real_version = _is_real_version(version)
+
+    # 判据一（反向）：pm 时代的 Hermes 需要 **3.14 运行时**，而当前解释器更老。
+    # 这条必须排在下面两条之前，因为 requires-python 写的是 `>=3.11,<3.15` ——
+    # 那个 `>=3.11` 是上游留给**旧安装跑完升级步骤**的过渡桥，**不代表能运行**。
+    # 漏掉这条的后果（2026-10-15 客户机实测）：旧装机器（venv 是 3.11~3.13）把 Hermes
+    # 升到 0.22.0 后，判定翻成 ok → 正常路径 → 激活把 cp314 的 site-packages 塞进 3.13
+    # 进程 → `from run_agent import AIAgent` 抛 ImportError → 界面只显示
+    # 「AI Agent 模块未加载」，完全指不到真正的原因。
+    if real_version and sys.version_info[:2] < (3, 14):
+        try:
+            from packaging.version import Version
+
+            if Version(str(version)) >= Version(_MIN_HERMES_VERSION_314):
+                result["verdict"] = "python_too_old"
+                result["fix"] = "rebuild_trade_venv"
+                result["reason"] = (
+                    f"Hermes {version} 需要 Python 3.14 运行时，"
+                    f"而 Trade 当前的解释器是 {python_version}"
+                )
+                return result
+        except Exception:
+            # 版本不可比较 → 不据此下结论，继续走下面的判据
+            pass
+
+    # 判据二：Hermes 声明的 Python 区间是否包含当前解释器。
+    # 这是权威判据（上游自己声明的机械真相）：区间可解析且包含当前解释器时，
     # 即使版本号读不到（pyproject 是占位 0.0.0 且无印章）也能直接判「可共存」。
     requires_ok = False
     if requires_python:
@@ -221,6 +250,7 @@ def hermes_python_compat() -> dict[str, Any]:
                 requires_ok = True
             else:
                 result["verdict"] = "too_old"
+                result["fix"] = "upgrade_hermes"
                 result["reason"] = (
                     f"Hermes 声明的 Python 区间 {requires_python} 不包含当前解释器 {python_version}"
                 )
@@ -229,14 +259,15 @@ def hermes_python_compat() -> dict[str, Any]:
             # 区间不可解析 → 不据此下结论，退化到版本号那条判据
             pass
 
-    # 判据二：版本号下限（`pm` 托管运行时与 3.14 支持的起点）。
+    # 判据三：版本号下限（`pm` 托管运行时与 3.14 支持的起点）。
     # 极老的版本可能声明了宽松区间，但其依赖在 3.14 上照样装不出来，故需交叉确认。
-    if _is_real_version(version):
+    if real_version:
         try:
             from packaging.version import Version
 
             if Version(str(version)) < Version(_MIN_HERMES_VERSION_314):
                 result["verdict"] = "too_old"
+                result["fix"] = "upgrade_hermes"
                 result["reason"] = (
                     f"Hermes {version} 低于共存所需的最低版本 {_MIN_HERMES_VERSION_314}"
                 )
@@ -245,7 +276,7 @@ def hermes_python_compat() -> dict[str, Any]:
         except Exception:
             pass
 
-    # 任一判据确认可共存 → ok；两条都无结论 → unknown（识别失败不等于不兼容，
+    # 任一判据确认可共存 → ok；都无结论 → unknown（识别失败不等于不兼容，
     # 与既有门禁口径一致，放宽放行以免误拦可用环境）
     if requires_ok:
         result["verdict"] = "ok"
@@ -289,6 +320,46 @@ def upgrade_steps() -> list[dict[str, str]]:
     ]
 
 
+def rebuild_trade_steps() -> list[dict[str, str]]:
+    """「Trade 的运行环境需要重建」时给用户的步骤（与 upgrade_steps 同构）。
+
+    什么时候会用到：Hermes 已是 pm 时代（≥0.21.6，需要 3.14 运行时），但 Trade 的
+    venv 还是旧装时建的 3.11~3.13。典型来源是**旧装机器就地升级 trade** ——
+    `trade update` 只更新代码与依赖，**不会重建 venv**，解释器还是老的。
+    这种时候升级 Hermes 毫无用处（问题在 Trade 这一侧），所以要给的是重装指引。
+
+    安装脚本会自己发现「已有 venv 的解释器不满足要求」并重建，所以用户只需要
+    「关掉 Trade → 跑这一行 → 重新打开」，不需要理解 venv 是什么。
+    """
+    reinstall = (
+        "irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex"
+        if os.name == "nt"
+        else "curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh | bash"
+    )
+    return [
+        {
+            "title": "重新运行安装脚本（会自动重建 Trade 的运行环境）",
+            "detail": "先关掉 Trade 的窗口；然后复制下面这一行，粘贴到终端后回车，等它跑完再重新打开 Trade。",
+            "command": reinstall,
+        },
+    ]
+
+
+def compat_steps(compat: dict[str, Any]) -> list[dict[str, str]]:
+    """按判定给出的补救方向返回对应步骤（界面与终端共用同一份）。
+
+    `fix` 的两个方向对应**完全不同的用户动作**，给错会让人白折腾：
+      - upgrade_hermes     → 去升级 Hermes
+      - rebuild_trade_venv → 重跑 Trade 的安装脚本
+    """
+    fix = compat.get("fix")
+    if fix == "upgrade_hermes":
+        return upgrade_steps()
+    if fix == "rebuild_trade_venv":
+        return rebuild_trade_steps()
+    return []
+
+
 def incompatible_upgrade_steps() -> list[str]:
     """把 upgrade_steps() 渲染成终端可读的行（给能看见终端的用户）。"""
     lines = ["", "【现在照着做 —— 三种方式，推荐第 1 种】", ""]
@@ -298,6 +369,18 @@ def incompatible_upgrade_steps() -> list[str]:
         lines.append(f"       {step['command']}")
         lines.append("")
     lines.append("升级完成后，重新运行：  trade")
+    return lines
+
+
+def incompatible_rebuild_steps() -> list[str]:
+    """把 rebuild_trade_steps() 渲染成终端可读的行。"""
+    lines = ["", "【现在照着做】", ""]
+    for index, step in enumerate(rebuild_trade_steps(), start=1):
+        lines.append(f"{index}) {step['title']}")
+        lines.append(f"   {step['detail']}")
+        lines.append(f"       {step['command']}")
+        lines.append("")
+    lines.append("重装完成后，重新运行：  trade")
     return lines
 
 

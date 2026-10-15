@@ -174,19 +174,31 @@ def compat_ok(monkeypatch):
 
     monkeypatch.setattr(bootstrap, "hermes_compat_state", lambda: {
         "verdict": "ok", "version": "0.22.0", "python": "3.14.7",
-        "reason": "ok", "checkout": "/tmp/x",
+        "reason": "ok", "checkout": "/tmp/x", "fix": "none",
     })
 
 
 @pytest.fixture
 def compat_too_old(monkeypatch):
-    """把共存状态钉成「版本过旧」。"""
+    """把共存状态钉成「Hermes 版本过旧」。"""
     from trade import bootstrap
 
     monkeypatch.setattr(bootstrap, "hermes_compat_state", lambda: {
         "verdict": "too_old", "version": "0.19.0", "python": "3.14.7",
         "reason": "Hermes 声明的 Python 区间 >=3.11,<3.14 不包含当前解释器 3.14.7",
-        "checkout": "/tmp/x",
+        "checkout": "/tmp/x", "fix": "upgrade_hermes",
+    })
+
+
+@pytest.fixture
+def compat_python_too_old(monkeypatch):
+    """把共存状态钉成「Trade 运行环境过旧」（Hermes 够新、解释器太老）。"""
+    from trade import bootstrap
+
+    monkeypatch.setattr(bootstrap, "hermes_compat_state", lambda: {
+        "verdict": "python_too_old", "version": "0.22.0", "python": "3.13.5",
+        "reason": "Hermes 0.22.0 需要 Python 3.14 运行时，而 Trade 当前的解释器是 3.13.5",
+        "checkout": "/tmp/x", "fix": "rebuild_trade_venv",
     })
 
 
@@ -204,8 +216,26 @@ def test_compat_endpoint_too_old_returns_actionable_steps(compat_too_old):
 
     assert body["usable"] is False
     assert body["version"] == "0.19.0"
+    assert body["fix"] == "upgrade_hermes"
     assert len(body["steps"]) == 3
     assert body["steps"][0]["command"] == "hermes update"
+
+
+def test_compat_endpoint_rebuild_case_gives_reinstall_steps(compat_python_too_old):
+    """「Trade 运行环境过旧」给的是**重装**指引，不是升级 Hermes。
+
+    2026-10-15 客户机实测：这一档当时被判成 ok，界面只显示「AI Agent 模块未加载」；
+    而即便判出来，若沿用「升级 Hermes」的步骤，用户跑完 hermes update 也毫无用处 ——
+    问题在 Trade 这一侧。
+    """
+    body = _system_endpoint("/system/hermes-compat", "GET")()
+
+    assert body["usable"] is False
+    assert body["fix"] == "rebuild_trade_venv"
+    assert body["steps"], "必须给步骤，否则用户无从下手"
+    # 步骤里要出现重装脚本，且**不能**是 hermes update
+    assert "scripts/install" in body["steps"][0]["command"]
+    assert "hermes update" not in body["steps"][0]["command"]
 
 
 async def test_upgrade_stream_emits_state_and_ends(compat_too_old):
@@ -226,3 +256,91 @@ async def test_upgrade_stream_emits_state_and_ends(compat_too_old):
         for f in frames if f.startswith("data: ")
     ]
     assert any(s.get("type") == "state" and s.get("status") == DONE for s in states)
+
+
+# ── 探测：绝不能永久挂住（2026-10-15 客户机实测）────────────────────────────
+
+
+def test_probe_uses_no_pipes_and_disables_prompts(monkeypatch):
+    """探测子进程必须：不给任何管道 + 禁掉一切交互提示 + 关掉凭证助手。
+
+    2026-10-15 客户机实测：Windows 上 `git ls-remote` 撞到凭证提示会**永久挂住**，
+    面板就停在「正在检查网络」不动。根源有两个，都要堵：
+      1. 有管道 → 孙进程（凭证助手）持着句柄时 `communicate()` 会越过 timeout 继续等；
+      2. 凭证助手会弹提示 → 必须从环境上禁掉。
+    """
+    from trade import hermes_upgrade as hu
+
+    captured: dict = {}
+
+    class FakeProc:
+        def __init__(self, args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(hu.shutil, "which", lambda _n: "/usr/bin/git")
+    monkeypatch.setattr(hu.subprocess, "Popen", FakeProc)
+
+    assert hu.check_github_reachable() is True
+
+    kwargs = captured["kwargs"]
+    assert kwargs["stdin"] == hu.subprocess.DEVNULL
+    assert kwargs["stdout"] == hu.subprocess.DEVNULL, "有管道就可能在超时后继续等"
+    assert kwargs["stderr"] == hu.subprocess.DEVNULL
+    assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert kwargs["env"]["GCM_INTERACTIVE"] == "never"
+    # 关掉凭证助手，且 -c 必须排在子命令之前（否则 git 把它当成 ls-remote 的参数）
+    assert "credential.helper=" in captured["args"]
+    assert captured["args"].index("credential.helper=") < captured["args"].index("ls-remote")
+
+
+def test_probe_hard_deadline_beats_a_stuck_thread(monkeypatch):
+    """即便探测线程本身卡死（内层超时收不回来），外层硬截止也必须让它返回「不可达」。
+
+    这条钉的是**界面不会永远停住**：状态机只要拿到 False 就会翻到 offline 并显示可重试，
+    而卡在 checking_network 时用户面对的是一个不会动的界面（客户机的实际遭遇）。
+    """
+    import time
+
+    from trade import hermes_upgrade as hu
+
+    monkeypatch.setattr(hu, "_PROBE_DEADLINE", 0.3)
+    monkeypatch.setattr(hu, "_probe_github", lambda: time.sleep(30) or True)
+
+    start = time.time()
+    reached = hu.check_github_reachable()
+    elapsed = time.time() - start
+
+    assert reached is False, "卡住的探测必须按「不可达」处理"
+    assert elapsed < 5, f"外层硬截止没生效（耗时 {elapsed:.1f}s）"
+
+
+def test_probe_disables_prompts_for_the_update_child_too(monkeypatch):
+    """`hermes update` 子进程同样要禁掉提示。
+
+    它内部要跑 git fetch，撞上凭证提示会挂住；而升级子进程**不能像探测那样被超时杀掉**
+    （杀掉一个做到一半的 Hermes 升级很危险），所以只能从源头保证它不会去等输入。
+    """
+    from trade import hermes_upgrade as hu
+
+    monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
+
+    env = hu._child_env()
+
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "never"
+    # 必须剔除 Trade 自己的懒加载开关：带着它 `hermes update` 装不了依赖
+    assert "HERMES_DISABLE_LAZY_INSTALLS" not in env
+
+
+def test_update_child_stdin_is_closed(hu, monkeypatch):
+    """`hermes update` 的 stdin 必须断开：宁可就地失败并显示重试，也不要挂在看不见的提示上。"""
+    monkeypatch.setattr(hu, "check_github_reachable", lambda: True)
+
+    hu.start_upgrade()
+    _run(hu)
+
+    assert FakePopen.instances[0]["kwargs"]["stdin"] == hu.subprocess.DEVNULL

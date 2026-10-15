@@ -38,13 +38,24 @@ foreach ($cmd in @("python3.14", "python3", "python")) {
     } catch {}
 }
 
-# 退路：Hermes 自带的托管 Python（上游安装器放在数据目录的 tools\ 下）——
-# 优先用它：与 Hermes 的托管环境 ABI 完全一致，省掉一类难查的崩
+# 退路：Hermes 自带的托管解释器 —— 优先用它：与 Hermes 的运行时 ABI 完全一致。
+# 真实布局（依据 pm/environments.py 的 venv_bin_dir/venv_python 与
+# installs_root()/install_key()/environments）：
+#   Windows  <HERMES_HOME>\installs\<key>\environments\<gen>\Scripts\python.exe
+# （tools\ 下那条是更早布局的兜底；**之前这里只 glob 了 tools\ 且用 "python3.14.exe"
+#   这个文件名，两个都不对 → 客户机重装时找不到 3.14，卡在「需要 Python 3.14」）
 if (-not $PythonCmd) {
-    $managed = Get-ChildItem -Path "$HermesHome\tools", "$HermesHome\tools\*" -Filter "python3.14.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($managed) {
-        $PythonCmd = $managed.FullName
-        Write-Host "  ✓ 使用 Hermes 自带的 Python 3.14 ($PythonCmd)" -ForegroundColor Green
+    $candidates = @()
+    $candidates += Get-ChildItem -Path "$HermesHome\installs\*\environments\*\Scripts\python.exe" -ErrorAction SilentlyContinue
+    $candidates += Get-ChildItem -Path "$HermesHome\tools\*\python.exe" -ErrorAction SilentlyContinue
+    foreach ($cand in $candidates) {
+        try {
+            if (& $IsPython314 $cand.FullName) {
+                $PythonCmd = $cand.FullName
+                Write-Host "  ✓ 使用 Hermes 自带的 Python 3.14 ($PythonCmd)" -ForegroundColor Green
+                break
+            }
+        } catch {}
     }
 }
 
@@ -66,6 +77,14 @@ if (-not $PythonCmd) {
 # ─────────────────────────────────────────────────────────────────────────────
 $TradeHome = if ($env:TRADE_HOME) { $env:TRADE_HOME } else { "$env:LOCALAPPDATA\trade" }
 $VenvDir = "$TradeHome\venv"
+# 已有 venv 但解释器**不是 3.14** → 必须重建。旧装机器就地升级 trade 时，代码与依赖
+# 都换了、venv 的解释器还是旧的（`trade update` 只更新代码与依赖，不重建 venv），
+# 于是 Hermes 的 pm 激活会把 cp314 的包塞进旧解释器 → 聊天只报「AI Agent 模块未加载」。
+# **删掉它不会丢任何用户数据**：数据在 $TradeHome 下（数据库、公司目录），不在 venv 里。
+if ((Test-Path "$VenvDir\Scripts\python.exe") -and -not (& $IsPython314 "$VenvDir\Scripts\python.exe")) {
+    Write-Host "  ! 已有的运行环境不是 Python 3.14 —— 正在重建（不会动你的数据）..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force $VenvDir
+}
 if (-not (Test-Path "$VenvDir\Scripts\python.exe")) {
     Write-Host "  → 创建虚拟环境..."
     & $PythonCmd -m venv $VenvDir

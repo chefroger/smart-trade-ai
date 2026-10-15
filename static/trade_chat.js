@@ -3965,6 +3965,10 @@ const HERMES_UPGRADE_TEXT = {
     done:             {icon:'✅', title:'升级完成',        message:'Hermes 已升级完成，正在重启 Trade，请稍候…'},
     offline:          {icon:'🌐', title:'需要先开启代理',  message:'无法访问 GitHub，升级没有开始。请开启代理（VPN）后点「重试」。'},
     failed:           {icon:'⚠️', title:'升级失败',        message:'Hermes 没有升级成功。请确认网络通畅后点「重试」。'},
+    // 不是「升级 Hermes」能解决的问题：Hermes 已经是新版，旧的是 Trade 自己的运行环境。
+    // 用独立文案，否则会显示「正在准备升级 Hermes」把用户引到一条没结果的路上去
+    // （2026-10-15 客户机实测：那一版就是这么卡住的）。
+    rebuild_needed:   {icon:'🧰', title:'Trade 需要重建运行环境', message:'你的 Hermes 已经是新版，但 Trade 的运行环境还是旧的。按下面的步骤重装一次即可，数据不会丢。'},
 };
 
 let _hermesUpgradeAbort = null;
@@ -3997,7 +4001,14 @@ function showHermesUpgradePanel(compat) {
     if (!overlay) return;
     overlay.classList.remove('hidden');
     renderHermesUpgradeSteps(compat.steps || []);
-    applyHermesUpgradeState(compat.upgrade || {status:'idle', message:''});
+    const upgrade = compat.upgrade || {status:'idle', message:''};
+    // 需要「重建 Trade 运行环境」时后端**没有**升级任务在跑（升级 Hermes 也解决不了），
+    // 所以要显示专属文案，而不是 upgrade.status 的默认态
+    if (compat.fix === 'rebuild_trade_venv' && !upgrade.running) {
+        applyHermesUpgradeState({status:'rebuild_needed', message: compat.reason});
+    } else {
+        applyHermesUpgradeState(upgrade);
+    }
     startHermesUpgradeStream(0);
 }
 

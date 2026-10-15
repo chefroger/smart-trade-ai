@@ -170,10 +170,13 @@ def hermes_compat_state() -> dict:
 def hermes_is_usable() -> bool:
     """Hermes 当前是否可用于 agent 功能。
 
-    只有明确判定「版本过旧」才返回 False；「未知」按可用处理（识别失败不等于不兼容，
-    与既有门禁口径一致，避免误拦可用环境）。
+    两种明确不可用：
+      - `too_old`        —— Hermes 版本低于共存下限（去升级 Hermes）
+      - `python_too_old` —— Hermes 够新但它需要 3.14，而 Trade 的解释器更老
+                            （去重装 Trade；升级 Hermes 在这里毫无用处）
+    「未知」按可用处理（识别失败不等于不兼容，与既有门禁口径一致，避免误拦可用环境）。
     """
-    return hermes_compat_state().get("verdict") != "too_old"
+    return hermes_compat_state().get("verdict") not in ("too_old", "python_too_old")
 
 
 def check_hermes_version() -> bool:
@@ -195,6 +198,18 @@ def check_hermes_version() -> bool:
         print(f"  ✗ Hermes 版本过旧，无法与当前 Python 共存：{state.get('reason')}")
         print(f"    已安装: {state.get('version') or '未知'}    Python: {state.get('python')}")
         for line in incompatible_upgrade_steps():
+            print(f"    {line}")
+        return False
+
+    if verdict == "python_too_old":
+        # 问题在 Trade 这一侧（venv 太老），升级 Hermes 解决不了 —— 所以给的是重装指引。
+        # 这条分支的存在本身就是一次事故的产物：漏掉它会让界面只显示
+        # 「AI Agent 模块未加载」，用户完全无从下手。
+        from trade.hermes_compat import incompatible_rebuild_steps
+
+        print(f"  ✗ Trade 的运行环境需要重建：{state.get('reason')}")
+        print(f"    Hermes: {state.get('version') or '未知'}    Trade 的 Python: {state.get('python')}")
+        for line in incompatible_rebuild_steps():
             print(f"    {line}")
         return False
 
@@ -752,7 +767,12 @@ def setup():
         # 过旧时跳过所有会 import Hermes 的步骤：load_env_and_set_yolo() 会 import
         # hermes_cli.env_loader / hermes_constants，端到端自检要起 agent —— 两者在
         # 旧 Hermes + 新 Python 下都会崩，服务就起不来了，升级面板也就无从显示。
-        print("  ⚠️ Hermes 不可用，本次以降级模式启动：界面会引导你升级 Hermes。")
+        # 两种不可用的**用户动作完全不同**，提示必须分开，否则会把用户引到白折腾的路上
+        _fix = hermes_compat_state().get("fix")
+        if _fix == "rebuild_trade_venv":
+            print("  ⚠️ Trade 的运行环境过旧，本次以降级模式启动：界面会给出重建步骤。")
+        else:
+            print("  ⚠️ Hermes 不可用，本次以降级模式启动：界面会引导你升级 Hermes。")
         # 剩下这几步本意是「不碰 Hermes、照常跑以保持功能完整」，但它们**间接**仍会
         # 摸到 Hermes（`_local_skills_sync` 要 `hermes_constants` 解析数据目录、
         # `ensure_document_deps` 会试 Hermes 的 lazy_deps）。这里逐个兜住：
@@ -763,7 +783,10 @@ def setup():
                 _optional_step()
             except Exception as exc:  # noqa: BLE001 — 见上：降级模式必须走到起服务
                 print(f"  ⚠️ {_optional_step.__name__} 跳过（{exc}）")
-        _start_hermes_upgrade_in_background()
+        # 只有「Hermes 过旧」才自动升级 Hermes。「Trade 运行环境过旧」时跑 hermes update
+        # 毫无用处（问题在 Trade 这一侧），反而会让用户等一场没有结果的升级。
+        if _fix == "upgrade_hermes":
+            _start_hermes_upgrade_in_background()
         return
 
     load_env_and_set_yolo()

@@ -169,6 +169,35 @@ class TestHermesPythonCompat:
 
         assert compat_module.hermes_python_compat()["verdict"] == "too_old"
 
+    def test_new_hermes_on_old_interpreter_is_python_too_old(self, monkeypatch, compat_module):
+        """反向场景：Hermes 已是 pm 时代（要 3.14），但 Trade 的解释器更老。
+
+        2026-10-15 客户机实测：旧装机器（venv 是 3.11~3.13）把 Hermes 升到 0.22.0 后，
+        这条被判成 ok —— 因为 requires-python 写的是 `>=3.11,<3.15`，而那个 `>=3.11`
+        只是上游留给旧安装跑升级步骤的过渡桥。判 ok 的后果是走正常路径 → 激活把
+        **cp314** 的包塞进 3.13 进程 → 界面只显示「AI Agent 模块未加载」，指不到真因。
+        """
+        self._stub(monkeypatch, compat_module, version="0.22.0",
+                   requires=">=3.11,<3.15", python=(3, 13, 5))
+
+        result = compat_module.hermes_python_compat()
+
+        assert result["verdict"] == "python_too_old"
+        assert result["fix"] == "rebuild_trade_venv", "补救方向必须是重建 Trade 环境"
+
+    def test_old_hermes_on_old_interpreter_points_at_hermes(self, monkeypatch, compat_module):
+        """对比项：Hermes 自己过旧时，补救方向是升 Hermes 而不是重装 Trade。
+
+        两个方向的用户动作完全不同，判错会让人白折腾 —— 所以这里成对钉住。
+        """
+        self._stub(monkeypatch, compat_module, version="0.19.0",
+                   requires=">=3.11,<3.14", python=(3, 13, 5))
+
+        result = compat_module.hermes_python_compat()
+
+        assert result["verdict"] == "too_old"
+        assert result["fix"] == "upgrade_hermes"
+
     def test_version_below_floor_rejected_even_with_loose_specifier(
         self, monkeypatch, compat_module
     ):
@@ -290,6 +319,12 @@ class TestDegradedStartup:
         )
         monkeypatch.setattr(
             bootstrap, "check_hermes_version", lambda: calls.append("version") or usable
+        )
+        # 降级分支要按 fix 决定「要不要自动升级 Hermes」，所以状态必须一起钉住
+        monkeypatch.setattr(
+            bootstrap, "hermes_compat_state",
+            lambda: {"verdict": "ok" if usable else "too_old", "fix": "upgrade_hermes",
+                     "reason": "r", "version": "0.19.0", "python": "3.14.7"},
         )
         monkeypatch.setattr(
             bootstrap, "dispatch_subcommands", lambda: calls.append("dispatch") or False

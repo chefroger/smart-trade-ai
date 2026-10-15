@@ -38,6 +38,9 @@ OFFLINE = "offline"
 _LOG_LIMIT = 400
 # 单次 git 探测超时（秒）。冷启动 + 代理握手实测几秒内，20 秒足够且不会让用户干等太久
 _PROBE_TIMEOUT = 20.0
+# 探测的**外层硬截止**：内层超时 + 余量。内层靠 subprocess 的超时（在 Windows 上不可靠），
+# 外层靠线程 join —— 两道都要有，因为这道决定的是「界面会不会永远停住」
+_PROBE_DEADLINE = _PROBE_TIMEOUT + 10.0
 # 上游仓库地址（与 scripts/install.sh 的 HERMES_REPO 一致）
 _HERMES_REPO = "https://github.com/NousResearch/hermes-agent.git"
 # 升级成功后延迟多久再重启：留一点时间让界面把「完成」渲染出来，否则用户只看到连接断开
@@ -95,26 +98,92 @@ def _hermes_launcher() -> str | None:
     return shutil.which("hermes")
 
 
+# 探测与升级子进程的环境覆盖：**必须让 git / hermes 绝不弹凭证提示**。
+# 2026-10-15 客户机实测：Windows 上 `git ls-remote` 撞到凭证提示会永久挂住，
+# 面板就停在「正在检查网络」不动 —— 用户以为软件卡死，实际是在等一个看不见的输入框。
+_NO_PROMPT_ENV = {
+    "GIT_TERMINAL_PROMPT": "0",   # 禁止在终端索要用户名/密码
+    "GIT_ASKPASS": "echo",        # 走 askpass 时直接回空，不给它阻塞的机会
+    "SSH_ASKPASS": "echo",
+    "GCM_INTERACTIVE": "never",   # Git Credential Manager 不弹 GUI
+}
+
+
+def _call_with_deadline(fn: Callable[[], bool], timeout: float) -> bool | None:
+    """在独立线程里跑 fn；超时返回 None（放弃等待，不阻塞调用方）。
+
+    为什么需要这一层：**subprocess 的超时语义在 Windows 上不可靠** —— 子进程若派生出
+    孙进程（git 的凭证助手就是），`communicate()` 会越过 timeout 继续等管道关闭，
+    于是「有超时」形同虚设。而这里的后果是整个升级流程永久停住。用线程做硬截止，
+    就不依赖 subprocess 的行为。被放弃的线程是 daemon，泄漏无害。
+    """
+    box: list[bool] = []
+
+    def _runner() -> None:
+        try:
+            box.append(bool(fn()))
+        except Exception:  # noqa: BLE001 — 探测失败一律按「不可达」处理
+            box.append(False)
+
+    worker = threading.Thread(target=_runner, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout)
+    return box[0] if box else None
+
+
+def _probe_github() -> bool:
+    """真正执行 `git ls-remote` 的那一步（由 _call_with_deadline 包起来跑）。
+
+    三个关键点，缺一个就可能挂死：
+      1. **不给管道**（stdin/stdout/stderr 全 DEVNULL）—— 没有管道就没有「等 EOF」，
+         而这正是 Windows 上越过 timeout 的根源。
+      2. **关掉凭证助手**（`-c credential.helper=`）并禁掉一切交互提示 ——
+         客户机实测的挂死就是它引起的。
+      3. 超时后 kill 并回收，避免留下僵尸进程。
+    """
+    git = shutil.which("git")
+    if not git:
+        # 没装 git 时无从判断，交由升级命令自己报错（安装脚本本就要求 git）
+        return True
+
+    env = {**os.environ, **_NO_PROMPT_ENV}
+    try:
+        proc = subprocess.Popen(
+            # -c 必须排在子命令**之前**，否则 git 会把它当成 ls-remote 的参数
+            [git, "-c", "credential.helper=", "ls-remote", "--exit-code",
+             _HERMES_REPO, "HEAD"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+    except OSError:
+        return False
+    try:
+        return proc.wait(timeout=_PROBE_TIMEOUT) == 0
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # 已经 kill 过，收不回收都不影响判定
+        return False
+
+
 def check_github_reachable() -> bool:
     """GitHub 是否可达 —— 用 git 自己探，而不是裸 TCP。
 
     为什么不用 TCP：用户可能配了代理（git config / http_proxy），此时裸 TCP 连
     github.com:443 会失败，但 git 能通 —— 那会把「能升级」误判成「不能升级」，
     白白拦住用户。`git ls-remote` 走的是 git 真实使用的链路，口径一致。
+
+    外层再套一层线程硬截止（见 _call_with_deadline）：探测**必须在有界时间内返回**，
+    否则状态机会永远停在「正在检查网络」，用户面对的是一个不会动的界面。
     """
-    git = shutil.which("git")
-    if not git:
-        # 没装 git 时无从判断，交由升级命令自己报错（安装脚本本就要求 git）
-        return True
-    try:
-        proc = subprocess.run(
-            [git, "ls-remote", "--exit-code", _HERMES_REPO, "HEAD"],
-            capture_output=True, text=True, timeout=_PROBE_TIMEOUT,
-        )
-        return proc.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
-        # 超时/无法执行都按不可达处理：宁可让用户先开代理，也不要半途把 Hermes 弄坏
-        return False
+    result = _call_with_deadline(_probe_github, _PROBE_DEADLINE)
+    # None = 硬截止都没能把它收回来 → 一律按不可达处理：
+    # 宁可让用户先去开代理，也绝不让面板停在半路
+    return bool(result)
 
 
 def _child_env() -> dict[str, str]:
@@ -122,9 +191,14 @@ def _child_env() -> dict[str, str]:
 
     必须剔除 HERMES_DISABLE_LAZY_INSTALLS：那是 Trade 给自己设的「禁止 Hermes 重拉/
     装依赖」开关，而 `hermes update` **恰恰需要**安装依赖 —— 带着它会在升级中途失败。
+
+    同时注入 _NO_PROMPT_ENV：`hermes update` 内部要跑 git fetch，同样会撞上凭证提示；
+    而升级子进程**不能像探测那样被超时杀掉**（杀掉一个做到一半的 Hermes 升级很危险），
+    所以只能从源头保证它根本不会去等输入。
     """
     env = dict(os.environ)
     env.pop("HERMES_DISABLE_LAZY_INSTALLS", None)
+    env.update(_NO_PROMPT_ENV)
     return env
 
 
@@ -226,8 +300,12 @@ def _run_upgrade(launcher: str) -> None:
             return
 
         _set(UPGRADING, "正在升级 Hermes，请勿关闭 Trade…（可能需要几分钟）")
+        # stdin 必须断开：万一它要交互输入，宁可立刻失败并显示「升级失败」让用户重试，
+        # 也不要挂在一个看不见的提示上（客户机实测的挂死就是这样）。
+        # **这里刻意不加超时**：中途杀掉一个做到一半的 Hermes 升级比让它跑完危险得多。
         proc = subprocess.Popen(
             [launcher, "update"],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

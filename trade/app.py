@@ -503,9 +503,9 @@ def _create_system_router() -> APIRouter:
 
     @router.get("/system/hermes-compat")
     def api_hermes_compat():
-        """返回 Hermes 共存状态 + 升级进度（界面据此渲染升级面板）。"""
+        """返回 Hermes 共存状态 + 升级进度（界面据此渲染面板）。"""
         from trade.bootstrap import hermes_compat_state, hermes_is_usable
-        from trade.hermes_compat import upgrade_steps
+        from trade.hermes_compat import compat_steps
         from trade.hermes_upgrade import status as upgrade_status
 
         state = hermes_compat_state()
@@ -516,8 +516,11 @@ def _create_system_router() -> APIRouter:
             "version": state.get("version"),
             "python": state.get("python"),
             "reason": state.get("reason"),
-            # 不可用时附带三条可照做的升级步骤（与终端提示共用同一份文案）
-            "steps": [] if usable else upgrade_steps(),
+            # 补救方向：界面据此决定是显示「升级 Hermes」还是「重建 Trade 运行环境」。
+            # 两种动作完全不同，给错会让用户白折腾。
+            "fix": state.get("fix"),
+            # 不可用时附带可照做的步骤（与终端提示共用同一份文案）
+            "steps": [] if usable else compat_steps(state),
             "upgrade": upgrade_status(),
         }
 
