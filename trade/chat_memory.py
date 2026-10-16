@@ -460,7 +460,13 @@ def _start_of_year(dt: _dt.datetime) -> _dt.datetime:
 
 
 def _subtract_one_month(dt: _dt.datetime) -> _dt.datetime:
-    """回退一个月。year-1/12 用于 1 月的特殊情况（stdlib 没有直接的 -1 month）。"""
+    """回退一个月。year-1/12 用于 1 月的特殊情况（stdlib 没有直接的 -1 month）。
+
+    ⚠️ **要求 day 落在每个月都存在**（即 ≤28，实践中就是月初）。
+    对 3/31 这类日期 `replace(month=2)` 会直接 ValueError（2 月没有 31 号）——
+    这是 2026-10-16 实测踩到的月末崩溃。调用方如果传的是"当前时刻"，必须先用
+    `_start_of_month()` 归一。
+    """
     if dt.month == 1:
         return dt.replace(year=dt.year - 1, month=12)
     return dt.replace(month=dt.month - 1)
@@ -548,12 +554,15 @@ def search_history(
             # （"上上周三" = 14；"前 7 天" = 7）。
             start = _start_of_day(_dt.datetime.now() - _dt.timedelta(days=recent_days - 1))
         elif recent_months is not None and recent_months > 0:
-            # 含本月：start = (N-1) 个月前。逐月减 1，遇 1 月走 12/去年。
-            # 这条不能拍脑袋——上月初 1 号 的"过去 2 个月"与"过去 1 个月"差一整月，必须测。
-            cursor = _dt.datetime.now()
+            # 含本月：start = (N-1) 个月前的月初。
+            # **必须先归一到月初再逐月回退**：直接拿"当前时刻"回退，在 3/31、5/31、
+            # 7/31 这类日子会 ValueError（2/4/6 月没有 31 号）—— 2026-10-16 实测到的
+            # 月末崩溃（handler 会兜成 tool_error，但"前几个月"每年有几天是坏的）。
+            # 月初一定在每个月的存在，回退才安全；结果与"先回退再取月初"等价。
+            cursor = _start_of_month(_dt.datetime.now())
             for _ in range(recent_months - 1):
                 cursor = _subtract_one_month(cursor)
-            start = _start_of_month(cursor)
+            start = cursor
         else:
             computer = _BOUNDARY_COMPUTERS.get(time_range)
             if computer is None:

@@ -239,6 +239,13 @@ DEFAULT_ENABLED_TOOLSETS = (
     "web", "search", "file", "terminal", "code_execution",
     "browser", "skills", "memory", "cronjob", "todo",
     "vision",
+    # chat-memory 是 trade 自带的 Hermes 插件提供的工具集（见
+    # trade/hermes_chat_memory_plugin/）。**必须列在这里** —— Hermes 只会把
+    # enabled 列表里那些 toolset 的工具放进工具表；插件加载成功但这里没列，
+    # 工具就只是躺在注册表里、LLM 完全看不见（2026-10-16 实测踩到：
+    # 插件 enabled=True/tools=1，但 agent 工具表里查无此工具）。
+    # 插件未加载时 Hermes 只是跳过这个未知 toolset，不会报错。
+    "chat-memory",
 )
 
 

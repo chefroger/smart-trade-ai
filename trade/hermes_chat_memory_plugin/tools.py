@@ -35,7 +35,9 @@ _TIME_RANGES_DESCRIPTION = """\
 """
 
 _RECENT_DAYS_DESCRIPTION = (
-    "可选。过去 N 天（含今天）的窗口，start = (now - (N-1) 天) 的 00:00。N=1 等价于 'yesterday'。"
+    "可选。过去 N 天（含今天）的窗口，start = (now - (N-1) 天) 的 00:00。"
+    "注意 N=1 等价于 'today'（今天 00:00 起），**不是** 'yesterday' —— "
+    "要昨天的数据请用 time_range='yesterday'。"
     "用于表达枚举表里没有的相对区间（如 '上上周三' = 14）。"
     "**与 time_range 互斥**：若都给了本参数优先；建议在 augment_prompt 里告诉 LLM 不要同时给。"
 )

@@ -483,3 +483,123 @@ class TestChatMemoryPluginE2E:
         assert "error" not in res
         assert res["count"] == 1
         assert res["rows"][0]["query"] == "今天"
+
+
+# ── 回归：2026-10-16 外部验证抓到的三个问题 ────────────────────────────
+
+
+class TestPluginToolsetIsEnabled:
+    """插件声明的 toolset **必须**在 trade 的 DEFAULT_ENABLED_TOOLSETS 里。
+
+    这是本 feature 的"最后一公里"：Hermes 只把 enabled 列表里那些 toolset 的工具
+    放进工具表。插件加载成功（enabled=True / tools=1）但 toolset 没启用的话，
+    工具就只是躺在注册表里、**LLM 完全看不见** —— 和"工具根本不存在"等效。
+
+    2026-10-16 实测就是这么翻车的：我验证"工具在不在工具表里"时**显式传了**
+    chat-memory，而 trade 的真实路径传的是 DEFAULT_ENABLED_TOOLSETS（里面没有它）。
+    这条契约测试直接从插件注册结果反查，任何一边漏了就红。
+    """
+
+    def test_plugin_toolset_is_in_default_enabled_toolsets(self):
+        from trade.helpers import DEFAULT_ENABLED_TOOLSETS
+
+        plugin = TestChatMemoryPluginE2E()._load_plugin()
+        captured = []
+
+        class Ctx:
+            def register_tool(self, **kw):
+                captured.append(kw)
+
+        plugin.register(Ctx())
+
+        assert captured, "插件没有注册任何工具"
+        for kw in captured:
+            toolset = kw["toolset"]
+            assert toolset in DEFAULT_ENABLED_TOOLSETS, (
+                f"插件把工具注册到 toolset={toolset!r}，但它不在 DEFAULT_ENABLED_TOOLSETS "
+                f"里 → Hermes 不会把该工具放进 agent 工具表，LLM 看不见它。"
+                f"现有列表：{list(DEFAULT_ENABLED_TOOLSETS)}"
+            )
+
+
+class TestRecentMonthsAtMonthEnd:
+    """`recent_months ≥ 2` 在月末不得崩。
+
+    2026-10-16 外部验证抓到：直接拿"当前时刻"逐月回退，在 3/31、5/31、7/31、10/31
+    会 ValueError（2/4/6/9 月没有 31 号）。修法是回退前先归一到月初。
+    原测试只覆盖 recent_months=1（循环零次），这条路完全没测到。
+    """
+
+    @pytest.mark.parametrize("month", [1, 3, 5, 7, 8, 10, 12])
+    def test_month_end_does_not_crash(self, freeze_now, tmp_path, monkeypatch, month):
+        """这些月份的 31 号都要能跑（2/4/6/9/11 月没有 31 号，不在参数里）。"""
+        from datetime import datetime as _dt
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        import trade.database as db
+        db.init_db()
+
+        freeze_now(_dt(2026, month, 31, 11, 30, 0))
+        from trade.chat_memory import search_history
+
+        for n in (2, 3, 6):
+            rows = search_history(1, time_range="all", recent_months=n)
+            assert isinstance(rows, list)
+
+    def test_window_is_month_start_not_day_end(self, freeze_now, tmp_path, monkeypatch):
+        """归一到月初后，窗口起点仍是"N-1 个月前的 1 号"，不是被截断的月末。"""
+        from datetime import datetime as _dt
+
+        from trade.chat_memory import _start_of_month, _subtract_one_month
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        import trade.database as db
+        db.init_db()
+
+        now = _dt(2026, 3, 31, 11, 30, 0)
+        freeze_now(now)
+        # 复算实现的窗口起点：3/31 → 归一 3/1 → 回退 1 次 → 2/1
+        expected = _subtract_one_month(_start_of_month(now))
+        assert expected == _dt(2026, 2, 1, 0, 0, 0)
+
+        from trade.chat_memory import search_history
+        ts = _dt(2026, 2, 15, 10, 0, 0).strftime("%Y-%m-%d %H:%M:%S")
+        with_ts = _dt(2026, 1, 15, 10, 0, 0).strftime("%Y-%m-%d %H:%M:%S")
+        con = db.get_connection()
+        con.execute("INSERT INTO companies (id, name, slug) VALUES (1,'t','t')")
+        con.execute("INSERT INTO conversations (company_id,query,response,created_at) VALUES (1,'2月中','r',?)", (ts,))
+        con.execute("INSERT INTO conversations (company_id,query,response,created_at) VALUES (1,'1月中','r',?)", (with_ts,))
+        con.commit()
+
+        rows = search_history(1, time_range="all", recent_months=2)
+        # 窗口是 [2/1, now=3/31]，所以只该拿到"2月中"，拿不到"1月中"
+        assert sorted(r["query"] for r in rows) == ["2月中"]
+
+
+class TestSchemaDescriptionAccuracy:
+    """schema 描述不能把 LLM 引到错的参数上。
+
+    2026-10-16 外部验证抓到：`recent_days` 的描述写"N=1 等价于 'yesterday'"，而实现是
+    "今天 00:00 起"（= today）。LLM 照着描述走，用户问"昨天"就会传 recent_days=1，
+    拿到的是**今天**的数据 —— 静默答错，比报错更糟。
+    """
+
+    def test_recent_days_description_does_not_claim_yesterday(self):
+        from trade.hermes_chat_memory_plugin import tools as cm_tools
+
+        desc = cm_tools._RECENT_DAYS_DESCRIPTION
+        assert "yesterday" not in desc or "不是" in desc or "**不是**" in desc, (
+            "描述里把 recent_days=1 说成 yesterday 了 —— 会误导 LLM 用错参数"
+        )
+        assert "today" in desc, "应明确说 N=1 等价于 today"
+
+    def test_enum_values_match_implementation(self):
+        """schema 的 enum 必须与 search_history 认的枚举一一对应（两边漏一个就漂移）。"""
+        from trade.chat_memory import _VALID_TIME_RANGES
+        from trade.hermes_chat_memory_plugin.tools import CHAT_MEMORY_LIST_SCHEMA
+
+        enum = set(CHAT_MEMORY_LIST_SCHEMA["parameters"]["properties"]["time_range"]["enum"])
+        assert enum == set(_VALID_TIME_RANGES), (
+            f"schema enum 与实现不一致：schema-only={enum - set(_VALID_TIME_RANGES)}, "
+            f"impl-only={set(_VALID_TIME_RANGES) - enum}"
+        )
