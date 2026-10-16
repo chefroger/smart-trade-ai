@@ -57,6 +57,11 @@ injection_prompt: |
   从 Trade 的 conversations 表（已按 company_id 隔离）中提取本周期对话记录。
   使用 chat_memory_list 工具查询本周所有对话，筛选出含询盘/报价/谈判关键词的记录。
 
+  **company_id 从 system prompt 的 Trade Context 段读取，不要让用户输入。**
+  周会如需"最近一周/两周"按需调 time_range（`this_week` / `last_week`）或
+  `recent_days=7/14`，不要无脑 `time_range="all"`。枚举完整列表与相对区间的用法
+  见 `skills/chat-memory/SKILL.md`。
+
   如果用户使用的是 B2B 平台（阿里国际站/MIC等），引导用户提供后台截图或导出数据。没有平台数据时，基于 Trade 本地对话记录进行分析。
 
   ### Step 3 — 聚合会议事实

@@ -776,18 +776,46 @@ STOP RULE（防止无效搜索）:
     },
     {
         "name": "chat-memory",
-        "triggers": ["之前", "上次", "以前", "那天", "上周", "历史", "记录", "对话", "说过", "聊过", "讨论过",
+        "triggers": ["之前", "上次", "以前", "那天", "昨天", "前天",
+                     "上周", "上礼拜", "上上周", "上个月", "上个月初", "上个月底",
+                     "今年", "今年年初", "去年", "前几个月", "几个月前", "再上一周",
+                     "历史", "记录", "对话", "说过", "聊过", "讨论过",
                      "还记得", "记不记得", "回忆", "翻看", "回去看", "过去", "往事", "旧", "曾经",
                      "上次聊天", "上次对话", "之前提到", "之前说过", "历史记录", "历史对话",
-                     "聊天记录", "对话记录", "聊天历史", "查一下之前", "看到过", "帮我查", "查一下之前说过的", "上次推荐", "这周谈过",
+                     "聊天记录", "对话记录", "聊天历史", "查一下之前", "看到过", "帮我查", "查一下之前说过的",
+                     "上次推荐", "这周谈过",
             # English
+            "yesterday", "last week", "this week", "last month", "this month",
+            "last year", "this year", "a few months ago", "early this year",
             "what did we discuss", "previous conversation", "chat history", "last time"],
         "aliases": ["memory", "记忆", "历史对话", "聊天记忆", "会话历史"],
         "input_fmt": "用户的查询意图（查询历史/时间范围）",
         "output_fmt": "历史对话列表（带时间戳）",
         "augment_prompt": """你是 chat-memory 技能。当用户需要查询历史对话时，主动调用 chat_memory_list 工具。
-适用场景：用户提到"之前""上次""以前""那天""上周"等时间词；询问过去讨论过的内容；需要了解用户的长期偏好。
-调用方式：chat_memory_list(time_range="all", limit=20)
+适用场景：用户提到"之前""上次""以前""那天""上礼拜"等时间词；询问过去讨论过的内容；需要了解用户的长期偏好。
+
+**company_id 必填**，必须从 system prompt 的 Trade Context 段读取；**不要**让用户输入或自己编。
+
+**触发词到 time_range 的映射（必须严格按这张表传）**：
+- "今天" / "today"                → time_range=today
+- "昨天" / "yesterday"              → time_range=yesterday
+- "这周" / "本周" / "this week"     → time_range=this_week
+- "上周" / "上礼拜" / "last week"  → time_range=last_week
+- "这个月" / "本月" / "this month"  → time_range=this_month
+- "上个月" / "上个月底" / "last month" → time_range=last_month
+- "今年" / "今年年初" / "this year"  → time_range=this_year
+- "去年" / "last year"              → time_range=last_year
+
+**枚举表达不了的相对区间**（"上上周三""3 月初""前几个月""再上一周"）：
+- "上上周/上上周三/再上一周" → recent_days=14
+- "前几个月"                 → recent_months=N（N 由用户语义决定：2~6）
+- "3 月初"                    → recent_months=2 或 3
+- 实在算不出来                → recent_days=30 兜底
+
+**recent_days 与 recent_months 互斥**（与 time_range 也互斥，二选一）。
+
+调用方式：chat_memory_list(company_id=<从 Trade Context 段读>, time_range="all", limit=20)
+最近模式：chat_memory_list(company_id=N, recent_days=14, limit=20)
 结果格式：[{created_at, query, response}, ...]""",
     },
     {

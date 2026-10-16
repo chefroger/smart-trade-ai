@@ -589,6 +589,350 @@ def sync_b2b_skills():
     _local_skills_sync()
 
 
+# ── Hermes 插件同步（chat-memory） ────────────────────────────────────────
+
+def _local_chat_memory_plugin_source() -> Path | None:
+    """定位 chat-memory 插件的"源目录"（即 trade 仓库内自带的那个副本）。
+
+    三个候选位置（按"该用谁"优先级）：
+      1. PyInstaller _MEIPASS（打包后的运行目录）
+      2. 运行时目录 ~/.trade/foreign-trade-assistant/hermes_chat_memory_plugin
+         （upgrade 拉到本地的副本）
+      3. 开发目录 <repo>/trade/hermes_chat_memory_plugin
+
+    这与 _local_skills_sync 的源定位策略同构，照抄。
+    """
+    _meipass = getattr(sys, "_MEIPASS", None)
+    if _meipass:
+        cand = Path(_meipass) / "trade" / "hermes_chat_memory_plugin"
+        if cand.is_dir():
+            return cand
+
+    _trade_home = os.environ.get("TRADE_HOME", "").strip()
+    if not _trade_home:
+        if os.name == "nt":
+            _local = os.environ.get(
+                "LOCALAPPDATA", str(Path.home() / "AppData" / "Local")
+            )
+            _trade_home = str(Path(_local) / "trade")
+        else:
+            _trade_home = str(Path.home() / ".trade")
+    cand = Path(_trade_home) / "foreign-trade-assistant" / "trade" / "hermes_chat_memory_plugin"
+    if cand.is_dir():
+        return cand
+
+    cand = Path(__file__).resolve().parent / "hermes_chat_memory_plugin"
+    if cand.is_dir():
+        return cand
+    return None
+
+
+def sync_chat_memory_plugin() -> None:
+    """把 trade 自带的 chat-memory 插件部署到 ~/.hermes/plugins/chat-memory/。
+
+    部署是**幂等**的：文件存在且内容一致就不写。安装脚本与每次 setup() 都调它，
+    所以旧版升级时这步会自动让用户的 Hermes 看到新插件。
+
+    副本来自 trade 仓库内的 <repo>/trade/hermes_chat_memory_plugin/（_local_chat_memory_plugin_source），
+    目标位置 ~/.hermes/plugins/chat-memory/。与 _local_skills_sync 同样的"hash 比对、逐文件复制"，
+    但因为是**目录级**（不是文件级），且插件要求 plugin.yaml + __init__.py + tools.py 三件同存，
+    这里用"全文件 hash 集合相等"的判断避免误判。
+    """
+    src_root = _local_chat_memory_plugin_source()
+    if src_root is None:
+        # 开发环境改了 trade 的目录结构（极少见）；不抛、不影响主流程
+        print("  chat-memory plugin: source not found, skipping")
+        return
+
+    # 目标位置：~/.hermes/plugins/chat-memory/
+    # 路径来源与 _local_skills_sync 一致 —— 走 _get_hermes_home()（HERMES_HOME 优先）
+    from trade.post_install.skills import _get_hermes_home
+
+    _hermes_home = _get_hermes_home()
+    dst_root = _hermes_home / "plugins" / "chat-memory"
+
+    if not src_root.is_dir():
+        print(f"  chat-memory plugin: source missing {src_root}, skipping")
+        return
+
+    # 收集源端的相对路径 → 内容 hash；只处理"真文件"（排除 __pycache__、.pyc 等）
+    src_hashes: dict[str, str] = {}
+    for p in src_root.rglob("*"):
+        if p.is_file() and p.suffix not in {".pyc", ".pyo"}:
+            rel = p.relative_to(src_root).as_posix()
+            try:
+                src_hashes[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+            except OSError:
+                continue
+
+    if not src_hashes:
+        print("  chat-memory plugin: no source files, skipping")
+        return
+
+    # 收集目标端现有文件 → hash
+    dst_hashes: dict[str, str] = {}
+    if dst_root.is_dir():
+        for p in dst_root.rglob("*"):
+            if p.is_file() and p.suffix not in {".pyc", ".pyo"}:
+                rel = p.relative_to(dst_root).as_posix()
+                try:
+                    dst_hashes[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+                except OSError:
+                    continue
+
+    if src_hashes == dst_hashes:
+        print("  chat-memory plugin: up-to-date")
+        return
+
+    # 不同：整体覆盖（增量写容易漏改 .pyc / __pycache__ 等，不如整目录重写）
+    if dst_root.exists():
+        shutil.rmtree(dst_root)
+    dst_root.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for rel in src_hashes:
+        src_file = src_root / rel
+        dst_file = dst_root / rel
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_file, dst_file)
+        copied += 1
+    print(f"  chat-memory plugin: deployed {copied} files to {dst_root}")
+
+
+# ── 写 ~/.hermes/config.yaml：仅追加 chat-memory 到 enabled ───────────────
+
+# 重要约束：trade 在 0.21.6+ 起以"插件形式"为 Hermes 提供 chat_memory_list 工具。
+# 插件是 opt-in —— 不在 config.yaml 的 plugins.enabled 里写进去，Hermes 不会加载。
+# 这函数只**追加**两个键（plugins.enabled 与 enabled_toolsets），其它键一行不碰：
+# ① 用文件级 read_text/write_text（不走 hermes_cli.config.load_config，避免它的副作用
+#    —— 比如它会触发迁移、覆写注释、规范化键顺序，把用户的格式搅乱）；
+# ② 仅修改这两个键的**列表值**（list），不动 dict/str/int；
+# ③ 已是 list 时只在末尾追加 "chat-memory"（去重）；
+# ④ 不是 list → 静默 skip + log 警告（不覆盖用户改坏的数据）；
+# ⑤ 用户的 plugins.disabled 包含 "chat-memory" → 跳过（disallow 总是赢）；
+# ⑥ 用户**已有** "chat-memory" → 跳过（幂等）。
+# 写盘前先备份 .bak —— 不是为了 rollback（fail-safe），是为了让"我刚才误改了什么"能查。
+
+def _read_yaml_simple(path: Path) -> str:
+    """只读文本返回（不做 yaml 解析 —— 避免把注释/格式/键顺序搅乱）。"""
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _write_yaml_with_backup(path: Path, content: str) -> None:
+    """写盘前在 .bak 留一份，幂等（多轮 setup 不会反复覆盖 .bak）。"""
+    if path.is_file():
+        bak = path.with_suffix(path.suffix + ".bak")
+        # .bak 自身已存在时不重写 —— 保留最旧的一份
+        if not bak.is_file():
+            try:
+                shutil.copy2(path, bak)
+            except OSError:
+                pass  # 备份失败不阻断主流程
+    path.write_text(content, encoding="utf-8")
+
+
+def _patch_yaml_list(text: str, key_path: tuple[str, ...], value: str) -> str:
+    """在 yaml 文本里把 key_path 路径下的 list 追加 value；**不改动其它任何内容**。
+
+    设计原则（这是写用户 Hermes 配置的函数，安全性优先于功能）：
+      - **只在值确实是 list 时追加**；值是 dict / 标量 / 形态不明 → 原样返回
+        （宁可不生效，也不能破坏用户配置 —— 在 dict 后面混一个 list 会直接产出非法 yaml）；
+      - 文本级追加（不重新 dump yaml）→ 保留用户的注释、键顺序、缩进风格；
+      - 目标 key 不存在时，只在**父 key 存在且为空值**时插一行；父 key 也不存在 → 原样返回
+        （由调用方决定整块追加）。
+
+    支持的两种 list 形态（`~/.hermes/config.yaml` 的实际形态）：
+        key: [a, b]           ← 行内
+        key:
+          - a
+          - b                 ← 多行
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    target = key_path[-1]
+
+    def _indent_of(line: str) -> str:
+        body = line.lstrip()
+        return line[: len(line) - len(body)]
+
+    # ① 目标 key 已存在 → 按它的值形态决定
+    for i, ln in enumerate(lines):
+        stripped = ln.lstrip()
+        if stripped.rstrip() != target + ":" and not stripped.startswith(target + ":"):
+            continue
+        indent = _indent_of(ln)
+        inline = stripped[len(target) + 1:].strip()
+
+        # 行内 list：key: [a, b]
+        if inline.startswith("["):
+            if value in inline:
+                return text  # 已存在 → 幂等
+            if not inline.endswith("]"):
+                return text  # 跨行/畸形 → 不动
+            inner = inline[1:-1].strip().rstrip(",")
+            body = f"[{inner}, {value}]" if inner else f"[{value}]"
+            lines[i] = f"{indent}{target}: {body}\n"
+            return "".join(lines)
+
+        # 行内标量（key: foo）→ 不是 list，不动
+        if inline:
+            return text
+
+        # 多行：由**第一个子行**决定形态
+        block_indent: str | None = None
+        existing: list[str] = []
+        insert_at: int | None = None
+        for j in range(i + 1, len(lines)):
+            jl = lines[j]
+            jstrip = jl.lstrip()
+            if not jstrip:
+                continue
+            child_indent = _indent_of(jl)
+            if len(child_indent) <= len(indent):
+                insert_at = j  # 子块结束（空值 / 同级 key）
+                break
+            if block_indent is None:
+                if not jstrip.startswith("- "):
+                    return text  # 第一个子行不是 list item → 是 dict/嵌套，不动
+                block_indent = child_indent
+            if len(child_indent) < len(block_indent):
+                insert_at = j  # 缩进回退 → list 块到此结束
+                break
+            if len(child_indent) == len(block_indent) and jstrip.startswith("- "):
+                existing.append(jstrip[2:].strip())
+        if value in existing:
+            return text  # 幂等
+        # 没有子行（`key:` 后直接是同级 key 或文件末尾）→ 按"空 list"处理，
+        # 插一个 list item，把它变成 `[value]`
+        if block_indent is None:
+            block_indent = indent + "  "
+        if insert_at is None:
+            insert_at = len(lines)
+        lines.insert(insert_at, f"{block_indent}- {value}\n")
+        return "".join(lines)
+
+    # ② 目标 key 不存在 → 只在**父 key 是顶层且空值**时插一行
+    if len(key_path) < 2:
+        return text
+    parent = key_path[-2]
+    for i, ln in enumerate(lines):
+        stripped = ln.lstrip()
+        if stripped.rstrip() != parent + ":" and not stripped.startswith(parent + ":"):
+            continue
+        if _indent_of(ln):
+            return text  # 父 key 不是顶层（我们的用法是顶层 plugins:）→ 不动
+        if stripped[len(parent) + 1:].strip():
+            return text  # plugins: {...} 行内有值 → 不动
+        lines.insert(i + 1, f"  {target}: [{value}]\n")
+        return "".join(lines)
+    return text
+
+
+_CHAT_MEMORY_PLUGIN_KEY = "chat-memory"
+# 没有配置文件时写下的最小骨架（**只**写这一个键，不碰工具集键）
+_FRESH_CONFIG_SKELETON = (
+    "# Written by trade-bootstrap on first install.\n"
+    "# Trade only touches plugins.enabled below; everything else in this file is yours.\n"
+    "plugins:\n"
+    "  enabled: [chat-memory]\n"
+)
+
+
+def ensure_chat_memory_plugin_enabled() -> None:
+    """把 chat-memory 加进 ~/.hermes/config.yaml 的 `plugins.enabled`。
+
+    **为什么必须做**：Hermes 的插件是 **opt-in** —— `gate_manifest` 里
+    `if enabled is None or not names & enabled: → 跳过`，即插件目录摆在
+    `~/.hermes/plugins/` 不算数，必须在这份配置的 allow-list 里列出来（见
+    `hermes_cli/plugins_discovery.py::_get_enabled_plugins` 的 docstring）。
+
+    **为什么不管工具集键**（enabled_toolsets / default_toolsets）：启用插件工具集的键名
+    取决于用户自己的 Hermes 配置写法（`default_toolsets` / `enabled_toolsets` /
+    per-profile 各有不同），trade 无法可靠推断；写错只会在用户配置里留下无用段。所以
+    这里只做「plugins.enabled」这一件确定的事。
+
+    安全约束（这是写**用户的**配置，安全性优先于功能）：
+      - 只动 `plugins.enabled` 一个键；其它键一行不碰；
+      - 先用 PyYAML **只读**地确认值形态：是 list 或缺失才继续；是 dict/标量 → 不动；
+      - `plugins.disabled` 含 chat-memory → 直接跳过（deny-list 总是赢）；
+      - 文本级追加（不重新 dump yaml）→ 保留用户的注释、键顺序、缩进；
+      - 写盘前留 `.bak`（只留最旧一份，多轮调用不反复覆盖）；
+      - 任何失败只打印警告 —— 写不了配置不能挡住 trade 启动（插件降级为"不生效"）。
+
+    降级模式（Hermes 不可用）也会调它：不碰 Hermes、只写一个 yaml，与"现在能不能加载
+    插件"解耦 —— 先把配置写好，等下次 Hermes 启动就生效。
+    """
+    from trade.post_install.skills import _get_hermes_home
+
+    config_path = _get_hermes_home() / "config.yaml"
+    original = _read_yaml_simple(config_path)
+
+    # ── 没有配置文件 → 建最小骨架 ────────────────────────────────────────
+    if not original.strip():
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_yaml_with_backup(config_path, _FRESH_CONFIG_SKELETON)
+            print(f"  Hermes config: created {config_path} with plugins.enabled=[chat-memory]")
+        except OSError as exc:
+            print(f"  ⚠️ failed to write Hermes config: {exc}")
+        return
+
+    # ── 只读地确认当前值形态（解析失败一律不动）────────────────────────────
+    data = _try_load_yaml(original)
+    if not isinstance(data, dict):
+        print("  Hermes config: not parseable as a mapping, leaving it alone")
+        return
+    plugins = data.get("plugins")
+    if isinstance(plugins, dict):
+        disabled = plugins.get("disabled")
+        if isinstance(disabled, list) and _CHAT_MEMORY_PLUGIN_KEY in disabled:
+            print("  Hermes config: chat-memory is in plugins.disabled, skipping")
+            return
+        enabled_val = plugins.get("enabled")
+        if enabled_val is not None and not isinstance(enabled_val, list):
+            print(
+                "  Hermes config: plugins.enabled is "
+                f"{type(enabled_val).__name__}, not a list — leaving it alone"
+            )
+            return
+
+    # ── 文本级追加 ──────────────────────────────────────────────────────
+    try:
+        new_text = _patch_yaml_list(original, ("plugins", "enabled"), _CHAT_MEMORY_PLUGIN_KEY)
+    except Exception as exc:  # noqa: BLE001 — 任何解析意外都只警告，不改文件
+        print(f"  ⚠️ failed to patch Hermes config: {exc}")
+        return
+
+    # 配置里根本没有 plugins 段（_patch_yaml_list 会原样返回）→ 追加整块。
+    # 注意判据用解析结果而不是字符串搜索：注释里的 "plugins:" 不该被当成已有段。
+    if new_text == original and plugins is None:
+        sep = "" if original.endswith("\n") else "\n"
+        new_text = original + sep + _FRESH_CONFIG_SKELETON.split("\n", 2)[2]
+
+    if new_text == original:
+        print("  Hermes config: chat-memory already enabled, no change")
+        return
+
+    try:
+        _write_yaml_with_backup(config_path, new_text)
+        print(f"  Hermes config: enabled chat-memory in {config_path}")
+    except OSError as exc:
+        print(f"  ⚠️ failed to write Hermes config: {exc}")
+
+
+def _try_load_yaml(text: str):
+    """只读解析 yaml；失败返回 None（调用方据此放弃改动，绝不覆盖）。"""
+    try:
+        import yaml
+
+        return yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 — 用户的 yaml 可能有任何语法问题
+        return None
+
+
 def background_github_skills_sync():
     """后台 daemon 线程：启动后静默同步一次，此后每天中午 12:30 定时同步。
 
@@ -790,7 +1134,7 @@ def setup():
         # `ensure_document_deps` 会试 Hermes 的 lazy_deps）。这里逐个兜住：
         # 降级模式唯一不可违反的不变量是**服务必须起得来** —— 任一可选项失败都绝不能
         # 把升级界面挡在门外，那会让用户彻底无从下手。
-        for _optional_step in (sync_b2b_skills, ensure_document_deps, ensure_desktop_integration):
+        for _optional_step in (sync_b2b_skills, sync_chat_memory_plugin, ensure_chat_memory_plugin_enabled, ensure_document_deps, ensure_desktop_integration):
             try:
                 _optional_step()
             except Exception as exc:  # noqa: BLE001 — 见上：降级模式必须走到起服务
@@ -803,6 +1147,8 @@ def setup():
 
     load_env_and_set_yolo()
     sync_b2b_skills()
+    sync_chat_memory_plugin()
+    ensure_chat_memory_plugin_enabled()
     ensure_document_deps()
     ensure_desktop_integration()
     start_doctor_if_needed()

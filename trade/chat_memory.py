@@ -425,55 +425,170 @@ def get_recent(company_id: int, limit: int = 20) -> list[dict]:
         conn.close()
 
 
+# ── search_history 时间范围边界计算 ──────────────────────────────────
+# 抽成查表是为了**让以后加新枚举只是加一行**（否则又写漏一档——这就是这条 review 的根因）。
+# 所有区间都是**左闭右开**（含 start、不含隐含 end），与 created_at 的字符串字典序语义一致。
+# 区间端点都是 00:00:00 本地时间，与 created_at 同源；this_* 含"现在"，last_* 不含"现在"。
+#
+# 时区口径：与 save_with_context 一致（datetime('now', 'localtime')）。所有计算都在
+# Python 进程的本地时区完成，**不**做时区归一化——这是 trade 现有口径，保持一致。
+#
+# "本周"基准：Monday=weekday(0)。"上周"= 本周一 00:00 减 7 天。注意这是中国大陆
+# 出口场景的默认（贸易员认知的"上周一→本周一"）；如果哪天产品决定改"周日=一周第一天"，
+# 改这里 8 个 lambda 即可——**是改一处而不是改 8 处 if**。
+import datetime as _dt
+from collections.abc import Callable
+
+# 区间计算器的签名：吃一个 now，吐该区间的**起点**（或 None = 不过滤）
+_BoundaryFn = Callable[[_dt.datetime], "_dt.datetime | None"]
+
+
+def _start_of_day(dt: _dt.datetime) -> _dt.datetime:
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _start_of_week(dt: _dt.datetime) -> _dt.datetime:
+    return _start_of_day(dt - _dt.timedelta(days=dt.weekday()))
+
+
+def _start_of_month(dt: _dt.datetime) -> _dt.datetime:
+    return _start_of_day(dt.replace(day=1))
+
+
+def _start_of_year(dt: _dt.datetime) -> _dt.datetime:
+    return _start_of_day(dt.replace(month=1, day=1))
+
+
+def _subtract_one_month(dt: _dt.datetime) -> _dt.datetime:
+    """回退一个月。year-1/12 用于 1 月的特殊情况（stdlib 没有直接的 -1 month）。"""
+    if dt.month == 1:
+        return dt.replace(year=dt.year - 1, month=12)
+    return dt.replace(month=dt.month - 1)
+
+
+def _subtract_one_week(dt: _dt.datetime) -> _dt.datetime:
+    return dt - _dt.timedelta(days=7)
+
+
+def _subtract_one_year(dt: _dt.datetime) -> _dt.datetime:
+    return dt.replace(year=dt.year - 1)
+
+
+# 区间计算器：每个 lambda 接受 now，返回对应区间的**起点**（左闭右开的 start）。
+# 返回 None 表示"无时间过滤"（= all）。
+#
+# **区间口径**：
+#   - 含"现在"的：today / this_week / this_month / this_year
+#   - 不含"现在"的（前一周期完整窗口）：yesterday / last_week / last_month / last_year
+# 这与 chat-memory 的 augment_prompt 表严格一致。
+_BOUNDARY_COMPUTERS: dict[str, "_BoundaryFn"] = {
+    "today":      lambda now: _start_of_day(now),
+    # yesterday 是"昨天那一整天"，不含今天 00:00 之后；用 end 关键字显式表达上界
+    "yesterday":  lambda now: _start_of_day(now - _dt.timedelta(days=1)),
+    "this_week":  lambda now: _start_of_week(now),
+    "last_week":  lambda now: _subtract_one_week(_start_of_week(now)),
+    "this_month": lambda now: _start_of_month(now),
+    "last_month": lambda now: _subtract_one_month(_start_of_month(now)),
+    "this_year":  lambda now: _start_of_year(now),
+    "last_year":  lambda now: _subtract_one_year(_start_of_year(now)),
+    "all":        lambda now: None,
+}
+
+# 对应"不含现在"的枚举，需要上界 end（与 start 一起把区间夹出来）。
+# 结构：start_computer / end_computer —— end 是个"开区间右端"，不参与等号。
+_BOUNDARY_END_COMPUTERS: dict[str, "_BoundaryFn"] = {
+    "yesterday":  lambda now: _start_of_day(now),
+    "last_week":  lambda now: _start_of_week(now),
+    "last_month": lambda now: _start_of_month(now),
+    "last_year":  lambda now: _start_of_year(now),
+}
+
+
+# 工具暴露的合法枚举：search_history 接受这些值，其它一律视为 "all"（fail-safe —— 与
+# 旧实现的"else: start = None"行为一致）。新加枚举**只需**改这里 + _BOUNDARY_COMPUTERS + 测试，
+# 不用动 SQL。
+_VALID_TIME_RANGES = frozenset(_BOUNDARY_COMPUTERS.keys())
+
+
 def search_history(
     company_id: int,
     time_range: str = "all",
     limit: int = 20,
+    *,
+    recent_days: int | None = None,
+    recent_months: int | None = None,
 ) -> list[dict]:
     """按时间范围查询历史对话记录（供 LLM 工具调用使用）。
 
     Args:
         company_id: 作用域，限定到公司
-        time_range: "today" | "this_week" | "this_month" | "all"
+        time_range: "today" | "yesterday" | "this_week" | "last_week"
+                  | "this_month" | "last_month" | "this_year" | "last_year" | "all"
+                  （未知值 → 等同 "all"；fail-safe）
+        recent_days: 若非 None，按"过去 N 天（含今天）"过滤。**优先于 time_range**。
+                          用来表达"上周三"等不能精确落到枚举的情况。
+        recent_months: 同 recent_days，按"过去 N 个月（含本月）"。**优先于 time_range**。
         limit: 最大返回行数
 
     Returns:
         字典列表，包含 id, query, response, created_at。
     """
+    # recent_days / recent_months 优先于 time_range：它们解决"上上周/上个月初/上周三"等
+    # 枚举表达不了的相对区间。schema 里标为可选（与 time_range 互斥，靠 augment_prompt 约束）。
+    import datetime as _dt
+
     conn = get_connection()
     try:
-        import datetime as _dt
-        now = _dt.datetime.now()
-        if time_range == "today":
-            # 当天的 00:00:00 作为起始时间
-            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif time_range == "this_week":
-            # 本周一 00:00:00 作为起始时间（周一 = weekday=0）
-            start = now - _dt.timedelta(days=now.weekday())
-            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif time_range == "this_month":
-            # 本月 1 号的 00:00:00 作为起始时间
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:  # "all"
-            # 查询全部历史，不设时间过滤
-            start = None
-
-        if start:
-            # 有时间范围限制，添加 created_at >= start 的过滤条件
-            start_str = start.strftime("%Y-%m-%d %H:%M:%S")
-            rows = conn.execute(
-                "SELECT id, company_id, library_id, query, response, files_read, created_at "
-                "FROM conversations WHERE company_id = ? AND created_at >= ? "
-                "ORDER BY id ASC LIMIT ?",
-                (company_id, start_str, limit),
-            ).fetchall()
+        if recent_days is not None and recent_days > 0:
+            # **含今天**所有数据：start = (N-1) 天前的 00:00。
+            # 例如 N=1 → start = 今天 00:00（仅今天的对话，**不等于 yesterday** —— yesterday
+            # 不含今天）；N=2 → start = 昨天 00:00（今天 + 昨天）；N=7 → 过去 7 整天。
+            #
+            # 这与 time_range=today 起点同，但 recent_days 解决枚举表达不了的相对区间
+            # （"上上周三" = 14；"前 7 天" = 7）。
+            start = _start_of_day(_dt.datetime.now() - _dt.timedelta(days=recent_days - 1))
+        elif recent_months is not None and recent_months > 0:
+            # 含本月：start = (N-1) 个月前。逐月减 1，遇 1 月走 12/去年。
+            # 这条不能拍脑袋——上月初 1 号 的"过去 2 个月"与"过去 1 个月"差一整月，必须测。
+            cursor = _dt.datetime.now()
+            for _ in range(recent_months - 1):
+                cursor = _subtract_one_month(cursor)
+            start = _start_of_month(cursor)
         else:
-            # 无时间范围限制，查询该公司的所有历史记录
+            computer = _BOUNDARY_COMPUTERS.get(time_range)
+            if computer is None:
+                # 未知枚举 → 当 "all" 处理（与旧实现的"else: start = None"行为一致，
+                # fail-safe：宁可返回更多结果，也不要因 schema 漂移抛 KeyError）
+                computer = _BOUNDARY_COMPUTERS["all"]
+            start = computer(_dt.datetime.now())
+
+        # "不含现在"的枚举（yesterday / last_*）：有 end 上界（开区间右端）
+        end_computer = _BOUNDARY_END_COMPUTERS.get(time_range)
+        end = end_computer(_dt.datetime.now()) if end_computer else None
+
+        if start is None and end is None:
             rows = conn.execute(
                 "SELECT id, company_id, library_id, query, response, files_read, created_at "
                 "FROM conversations WHERE company_id = ? "
                 "ORDER BY id ASC LIMIT ?",
                 (company_id, limit),
+            ).fetchall()
+        else:
+            # start / end 都不空 → start <= created_at < end；任一为空 → 该侧不限制
+            clauses = ["company_id = ?"]
+            params: list = [company_id]
+            if start is not None:
+                clauses.append("created_at >= ?")
+                params.append(start.strftime("%Y-%m-%d %H:%M:%S"))
+            if end is not None:
+                clauses.append("created_at < ?")
+                params.append(end.strftime("%Y-%m-%d %H:%M:%S"))
+            params.append(limit)
+            rows = conn.execute(
+                f"SELECT id, company_id, library_id, query, response, files_read, created_at "
+                f"FROM conversations WHERE {' AND '.join(clauses)} "
+                f"ORDER BY id ASC LIMIT ?",
+                params,
             ).fetchall()
 
         return [_row_to_dict(r) for r in rows]

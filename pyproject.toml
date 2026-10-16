@@ -122,6 +122,10 @@ include = ["trade", "trade.*"]
 # Include skills as package data so post_install can read them
 [tool.setuptools.package-data]
 trade = ["py.typed"]
+# chat-memory 插件的 manifest 是数据文件，必须显式声明 —— 否则 wheel 里缺 plugin.yaml，
+# 而 sync_chat_memory_plugin() 是靠"整个目录的文件 hash 集合是否相等"判断要不要重写的，
+# 缺文件就会被判成"需要部署"，于是每次启动都重写一遍（幂等性失效）。
+"trade.hermes_chat_memory_plugin" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

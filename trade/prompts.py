@@ -221,6 +221,28 @@ def get_brand_safety(company_slug: str | None = None) -> str:
     return BRAND_SAFETY_BLOCK
 
 
+def _build_trade_context_block(company_id: int | None) -> str:
+    """生成"当前 trade 会话上下文"段；company_id 为 None 时返回空串。
+
+    这段**目前不直接被 resolve_system_prompt 使用** —— 实际注入点放在 trade.helpers.build_query
+    里，紧跟在它已有的"## 当前工作公司"段后面（"ID 是 X / 数据操作必须限定在该公司" 后面），
+    让 LLM 在看到 ID 数字**紧接着**看到"带 company_id 参数的工具必须用这个数字"，**强绑定**。
+
+    为什么必须显式写出 company_id 数字：chat_memory_list 等公司隔离工具要 company_id
+    参数（chat_memory 的 conversations 表按 company_id 严格隔离，搜错会读到别人的数据），
+    而 LLM 自身没有"当前会话是哪个公司"的可靠来源 —— 没有这段就只能瞎填。
+
+    返回空串时（company_id=None），trade.helpers 会**不追加**这段；这与它的
+    "降级场景（chat_memory_list 不可用）"行为一致（见 trade.hermes_compat.hermes_python_compat）。
+    """
+    if company_id is None:
+        return ""
+    return (
+        f"\n- **任何带 `company_id` 参数的 trade 工具**（如 `chat_memory_list`）"
+        f"**必须**传这个数字 {company_id} —— 这是当前会话的公司，**不是**用户消息里能取的值。"
+    )
+
+
 def resolve_system_prompt(
     company_slug: str | None = None,
     db_identity: str | None = None,

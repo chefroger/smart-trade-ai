@@ -261,6 +261,15 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "  ⚠ B2B skills 安装可能不完整（首次启动时会自动同步）" -ForegroundColor Yellow
 }
 
+# chat-memory 插件：trade 自带的工具（让 LLM 能查 conversations 表的历史对话）。
+# setup() 会兜底同步 + 写 config.yaml；这里做一次显式的初始安装，幂等。
+& $PyCmd -c "from trade.bootstrap import sync_chat_memory_plugin, ensure_chat_memory_plugin_enabled; sync_chat_memory_plugin(); ensure_chat_memory_plugin_enabled()"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  ✓ chat-memory 插件已部署到 ~/.hermes\plugins\chat-memory" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠ chat-memory 插件部署失败（首次启动时会自动重试）" -ForegroundColor Yellow
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5: 初始化数据目录
 # ─────────────────────────────────────────────────────────────────────────────

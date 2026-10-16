@@ -132,6 +132,26 @@ Hermes → trade 能开、但一提问就回「AI Agent 模块未加载」。三
 
 **明确不做**：ⓖ（多客户端重发日志 —— 同机多标签几乎不会发生）、ⓛ（`_call_with_deadline` 的 daemon 线程不回收 —— 需数千次/秒才撞到）。审查报告另标注 ⓒ/ⓓ 的 **Windows 真机路径**仍未经真机验证（Linux 上验的是通用机制）。
 
+**新增耦合点：Hermes 插件机制（2026-10-16）**
+
+Trade 现在通过 **Hermes 的插件扩展点**给 agent 提供一个工具（`chat_memory_list`，查
+`conversations` 表的历史对话）。这引入两个**上游 API 依赖**，升级 Hermes 时要一并复核：
+
+| 依赖 | 位置（v0.22.1） | 复核要点 |
+|---|---|---|
+| `ctx.register_tool(name, toolset, schema, handler, check_fn, emoji)` | `hermes_cli/plugins.py`（插件加载器传入的 `ctx`） | 签名/关键字是否变；`toolset` 的注册语义是否变 |
+| 插件发现路径 + **opt-in 语义** | `hermes_cli/plugins.py` 头（`~/.hermes/plugins/<name>/`）、`plugins_discovery.py::_get_enabled_plugins`/`gate_manifest` | 发现路径是否变；**是否仍是 opt-in**（现在是：不在 `plugins.enabled` 里就不加载）；`plugins.disabled` 是否仍压过 `enabled` |
+
+**实测确认的版本区间**：`ctx.register_tool` 在 `v0.21.6 / v0.21.7 / v0.22.1` 三个版本都存在
+（`git grep "def register_tool" <tag> -- hermes_cli/plugins.py` 各命中 1 处）。
+
+**Trade 侧的对应实现**（改 Hermes 时对照看）：
+- 插件本体：`trade/hermes_chat_memory_plugin/{plugin.yaml,tools.py,__init__.py}`
+- 部署：`trade/bootstrap.py::sync_chat_memory_plugin()`（hash 比对、幂等，装到
+  `~/.hermes/plugins/chat-memory/`）
+- 启用：`trade/bootstrap.py::ensure_chat_memory_plugin_enabled()`（**只**追加
+  `plugins.enabled` 一个键；先 PyYAML 只读确认值形态，形态不对就不写；写前留 `.bak`）
+
 **版本口径**
 
 - 下限：**Hermes 0.21.6**（`trade/bootstrap.py::_MIN_HERMES_VERSION`、

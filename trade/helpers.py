@@ -384,10 +384,19 @@ def _get_history_block(company_id: int | None, total_prompt_chars: int) -> tuple
         hint = None
     elif total_prompt_chars < 200_000:   # ~< 50k tokens — 中等上下文，注入 10 条并提示用户
         limit = 10
-        hint = "如需更早的对话历史，请使用 chat_memory_list 工具。"
+        hint = (
+            "如需更早的对话历史，请调用 chat_memory_list 工具。"
+            "可用 time_range：today / yesterday / this_week / last_week / "
+            "this_month / last_month / this_year / last_year / all；"
+            "或 recent_days / recent_months 表达上上周三/前几个月等。"
+            "company_id 从 system prompt 的 Trade Context 段读取。"
+        )
     else:                                # >= 50k tokens — 上下文紧张，仅注入 5 条
         limit = 5
-        hint = "当前上下文较长，历史对话已精简。如需查询更早内容，请使用 chat_memory_list 工具。"
+        hint = (
+            "当前上下文较长，历史对话已精简。"
+            "如需查询更早内容，请调用 chat_memory_list 工具（参数同 50k 档提示）。"
+        )
 
     rows = _cm.get_recent(company_id, limit=limit)
     if not rows:
@@ -534,7 +543,10 @@ def build_query(
         from trade.prompt import LANGUAGE_POLICY_BLOCK, LANGUAGE_POLICY_BLOCK_EN
         system_prompt = system_prompt.replace(LANGUAGE_POLICY_BLOCK, LANGUAGE_POLICY_BLOCK_EN)
 
-    # 1.5 注入当前公司信息 — Agent 需要明确知道自己为哪家公司工作
+    # 1.5 注入当前公司信息 — Agent 需要明确知道自己为哪家公司工作。
+    # 公司 ID 这条**特别重要**：chat_memory_list 等公司隔离工具要带 company_id 参数
+    # （conversations 表按 company_id 严格隔离，搜错会读到别人的数据），
+    # 而 LLM 自身没有"当前是哪个公司"的可靠来源 —— 没有这一行就只能瞎填。
     if company_id:
         co = _company.get(company_id)
         if co:
@@ -555,6 +567,10 @@ def build_query(
                 f"- 公司 ID：{co['id']}\n"
                 f"- Slug：「{slug}」\n\n"
                 "**所有数据操作（记忆读取、客户查询、文档搜索）必须限定在上述公司范围内。**"
+                # 紧跟其后**强绑定**"带 company_id 参数的 trade 工具必须传这个数字"——
+                # 不然 LLM 看到 ID 也未必会联想到工具调用。文案来源：
+                # trade/prompts._build_trade_context_block，**共用同一段文案**避免漂移。
+                + _prompts._build_trade_context_block(co['id'])
             )
 
     # 1.6 品牌安全护栏 — 所有对外内容生成都需遵守

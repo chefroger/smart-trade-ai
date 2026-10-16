@@ -295,6 +295,15 @@ else
     log_warn "B2B skills 安装可能不完整（首次启动时会自动同步）"
 fi
 
+# chat-memory 插件：trade 自带的工具（让 LLM 能用 trade.conversations 表查历史对话）。
+# setup() 也会兜底同步 + 写 config.yaml，这里做一次显式的初始安装，避免用户装完
+# 还没启动 trade 之前就看不到工具（虽然通常不实际发生，但稳）。
+if "$PY" -c "from trade.bootstrap import sync_chat_memory_plugin, ensure_chat_memory_plugin_enabled; sync_chat_memory_plugin(); ensure_chat_memory_plugin_enabled()"; then
+    log_ok "chat-memory 插件已部署到 ~/.hermes/plugins/chat-memory"
+else
+    log_warn "chat-memory 插件部署失败（首次启动时会自动重试）"
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5: 初始化数据目录
 # ─────────────────────────────────────────────────────────────────────────────

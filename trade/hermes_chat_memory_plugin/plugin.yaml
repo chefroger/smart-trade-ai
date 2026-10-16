@@ -1,0 +1,6 @@
+name: chat-memory
+version: 1.0.0
+description: 查 trade 用户的对话历史（SQLite conversations 表，按 company_id 严格隔离）。用户问"上礼拜/上个月/前几个月/今年年初"等时间词时使用；augment_prompt 含触发词到 time_range 的完整映射。
+author: Foreign Trade Assistant
+provides_tools:
+  - chat_memory_list
