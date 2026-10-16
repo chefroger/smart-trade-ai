@@ -1030,9 +1030,13 @@ function _restoreReloadState() {
 
 // 通过 /api/status 的 started_at 时间戳检测进程是否已重启，然后 hard-reload
 // 不依赖 DOWN→UP 序列：新进程启动快时 DOWN 瞬间无法捕捉
-async function _waitForRestartAndReload(onTimeout) {
+//
+// maxSeconds：兜底等待秒数，默认 120（重启场景足够）。
+// **重建运行环境必须传更大的值** —— 那一步要建 venv + 装全部依赖，5~10 分钟是常态，
+// 用默认的 2 分钟会在真正成功之前就报「超时」，把用户吓去手动折腾。
+async function _waitForRestartAndReload(onTimeout, maxSeconds) {
     let attempts = 0;
-    const maxAttempts = 120;   // 120 × 1s = 2 分钟兜底
+    const maxAttempts = maxSeconds || 120;   // 每 1 秒一次轮询
     // 保存当前 started_at，重启后新进程的时间戳会不同
     let oldStartedAt = -1;  // -1 = 无法获取（旧服务无此字段 / 请求失败）
     try {
@@ -3968,7 +3972,10 @@ const HERMES_UPGRADE_TEXT = {
     // 不是「升级 Hermes」能解决的问题：Hermes 已经是新版，旧的是 Trade 自己的运行环境。
     // 用独立文案，否则会显示「正在准备升级 Hermes」把用户引到一条没结果的路上去
     // （2026-10-15 客户机实测：那一版就是这么卡住的）。
-    rebuild_needed:   {icon:'🧰', title:'Trade 需要重建运行环境', message:'你的 Hermes 已经是新版，但 Trade 的运行环境还是旧的。按下面的步骤重装一次即可，数据不会丢。'},
+    rebuild_needed:   {icon:'🧰', title:'Trade 需要重建运行环境', message:'你的 Hermes 已经是新版，但 Trade 的运行环境还是旧的。点下面的按钮重建一次即可，数据不会丢。'},
+    // 重建进行中：服务已经被停掉（否则换不了 venv），所以这一段界面是「最后一屏」——
+    // 用户接下来看到的是轮询等待，不是进度条。文案必须说清「会自己回来」，否则他会以为卡死。
+    rebuilding:       {icon:'🧰', title:'正在重建运行环境', message:'正在重装 Trade 的运行环境（约 5~10 分钟），期间 Trade 会暂时打不开。完成后页面会自动刷新，请不要关闭。'},
 };
 
 let _hermesUpgradeAbort = null;
@@ -4062,9 +4069,20 @@ function applyHermesUpgradeState(upgrade) {
         btn.onclick = function() { retryHermesUpgrade(); };
         actions.appendChild(btn);
     }
-    // 升级已在进行/已结束时，步骤指引不占地方（失败时再显示出来给用户照做）
+    // 需要重建运行环境：给「开始重建」按钮，取代原来让用户自己去终端粘一行 curl。
+    // 客群是电脑小白，那一行对他们等于「软件坏了」—— 按钮才是他们能用的东西。
+    // 下面的步骤指引仍保留（折叠在按钮之后），作为万一自动重建走不通时的手动兜底。
+    if (status === 'rebuild_needed') {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary';
+        btn.textContent = '开始重建';
+        btn.onclick = function() { startVenvRebuild(btn); };
+        actions.appendChild(btn);
+    }
+    // 升级已在进行/已结束时，步骤指引不占地方（失败时再显示出来给用户照做）。
+    // rebuilding 也要隐藏：那时服务已经停了，屏上的「步骤」只会让人以为还要自己动手。
     const stepsBox = $('hermes-upgrade-steps');
-    if (stepsBox) stepsBox.style.display = (status === 'upgrading' || status === 'checking_network' || status === 'done') ? 'none' : 'block';
+    if (stepsBox) stepsBox.style.display = (status === 'upgrading' || status === 'checking_network' || status === 'done' || status === 'rebuilding') ? 'none' : 'block';
 }
 
 /** 手动重试：让后端重新走一遍「探网络 → hermes update」。 */
@@ -4077,6 +4095,48 @@ async function retryHermesUpgrade() {
         });
     } catch(_) {}
     startHermesUpgradeStream(0);
+}
+
+/**
+ * 一键重建 Trade 的运行环境（venv 的解释器版本不对时）。
+ *
+ * 为什么不复用 doTradeUpdate：那是「升级代码」，这是「换掉跑代码的解释器」——
+ * 后者要停服务 5~10 分钟、且必须替换 venv 目录，用户必须知情并确认（客群是电脑
+ * 小白，服务毫无预兆地消失会让他们以为软件坏了）。
+ *
+ * 后端收到请求后会派一个独立子进程、随即本进程退出，所以这里的 fetch
+ * **大概率拿不到响应**（连接被掐断）—— 那不是失败，是预期行为，照常进入等待。
+ */
+async function startVenvRebuild(btn) {
+    const okToGo = confirm(
+        '重建运行环境大约需要 5~10 分钟。\n\n' +
+        '期间 Trade 会暂时打不开，完成后页面会自动刷新。\n\n' +
+        '现在开始吗？'
+    );
+    if (!okToGo) return;
+
+    if (btn) { btn.disabled = true; btn.textContent = '正在启动…'; }
+    let rejected = null;
+    try {
+        const r = await fetch('/api/trade/system/rebuild-venv', {
+            method: 'POST', headers: {'X-Hermes-Session-Token': TOKEN},
+        });
+        const data = await r.json().catch(function(){ return null; });
+        // 只有后端**明确拒绝**（例如当前其实不需要重建）才停手；
+        // 拿不到响应时按「已开始」处理 —— 见上面的说明
+        if (data && data.ok === false) rejected = data.error || '重建没有启动。';
+    } catch(_) { /* 服务在响应回来之前就被子进程停掉了 —— 预期之内 */ }
+
+    if (rejected) {
+        applyHermesUpgradeState({status:'failed', message: rejected + ' 可以按下面的步骤手动重装。'});
+        return;
+    }
+    applyHermesUpgradeState({status:'rebuilding'});
+    // 重建比普通重启慢得多，兜底窗口给到 15 分钟
+    // （默认的 2 分钟会在它真正成功之前就报「超时」，把用户吓去手动折腾）
+    _waitForRestartAndReload(function() {
+        toast('重建耗时较长。如果页面没有自动刷新，请手动刷新一次；若一直打不开，请联系技术支持。');
+    }, 900);
 }
 
 /**

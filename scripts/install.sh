@@ -37,7 +37,7 @@ _clone_or_update() {
         # 固定版本模式（ref != main，Hermes 用）：不 pull —— 在 tag 检出上 pull main
         # 会把它拖到 main 尖端，固定就失去意义。已有检出保持原样。
         if [ "$ref" != "main" ]; then
-            log_info "已有 $name 检出，保持现状（固定版本 $ref，不跟随 main）"
+            log_info "已有 $name 检出，保持现状（固定版本 ${ref}，不跟随 main）"
             return 0
         fi
         log_info "更新已有仓库..."
@@ -51,7 +51,7 @@ _clone_or_update() {
     fi
     mkdir -p "$(dirname "$dest")"
     git clone --depth 1 --branch "$ref" "$repo" "$dest" || {
-        log_err "无法克隆 $name（git 的报错见上）。请确认网络/VPN 后重新运行本脚本。"
+        log_err "无法克隆 ${name}（git 的报错见上）。请确认网络/VPN 后重新运行本脚本。"
         return 1
     }
     return 0
@@ -145,7 +145,7 @@ if [ -z "$PYTHON" ]; then
     echo "       Ubuntu: sudo apt install python3.14 python3.14-venv"
     exit 1
 fi
-log_ok "Python $("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')（$PYTHON）"
+log_ok "Python $("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')（${PYTHON}）"
 
 # ── 架构检测 + 自动修正（Apple Silicon 兼容性）────────────────────────────
 ARCH=$(uname -m)
@@ -193,23 +193,34 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 # 创建 venv（所有后续安装都在 venv 内，不碰系统 Python）
 # ─────────────────────────────────────────────────────────────────────────────
-VENV_DIR="$HOME/.trade/venv"
+_VENV_REAL="$HOME/.trade/venv"
+VENV_DIR="$_VENV_REAL"
+# 非空 = 旧环境还在原地、新环境建在 .new 里、依赖装完才切换（切换点见 Step 3 末尾）
+_VENV_OLD=""
+
 # 已有 venv 但解释器**不是 3.14** → 必须重建。旧装机器就地升级 trade 时，代码与依赖
 # 都换了、venv 的解释器还是旧的（`trade update` 只更新代码与依赖，不重建 venv），
 # 于是 Hermes 的 pm 激活会把 cp314 的包塞进旧解释器 → 聊天只报「AI Agent 模块未加载」。
-# **删掉它不会丢任何用户数据**：数据在 $TRADE_HOME 下（数据库、公司目录），不在 venv 里。
+# **重建不会丢任何用户数据**：数据在 $TRADE_HOME 下（数据库、公司目录），不在 venv 里。
 if [ -f "$VENV_DIR/bin/python" ] && ! _is_py314 "$VENV_DIR/bin/python"; then
-    # 用 % 格式化而不是 f-string：这里跑的是**即将被删掉的老解释器**，可能是 3.11
+    # 用 % 格式化而不是 f-string：这里跑的是**即将被替换的老解释器**，可能是 3.11
     # （f-string 在 3.12 之前不允许内层用同类引号），写 f-string 会 SyntaxError，
     # 于是这行永远显示「未知」—— 信息白白丢掉。
     _old_ver=$("$VENV_DIR/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "未知")
-    log_warn "已有的运行环境是 Python $_old_ver，需要 3.14 —— 正在重建（不会动你的数据）..."
-    # rm -rf 之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
-    # 重建不可逆，这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
+    log_warn "已有的运行环境是 Python ${_old_ver}，需要 3.14 —— 正在重建（不会动你的数据）..."
+    # 换掉之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
+    # 这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
     _dump_dir="${TRADE_HOME:-$HOME/.trade}"
     mkdir -p "$_dump_dir" 2>/dev/null
     "$VENV_DIR/bin/pip" freeze > "$_dump_dir/venv-packages-before-rebuild.txt" 2>/dev/null \
         && log_info "已把重建前的包清单留档：$_dump_dir/venv-packages-before-rebuild.txt"
+    # **不在原地重建**（2026-10-16 改）。原实现是 `rm -rf "$VENV_DIR"` 后立刻重建，于是
+    # 中间任何一步失败（断网 / 磁盘满 / 找不到 3.14 / 依赖装不上）都会留下
+    # 「旧的已经删了、新的没建成」——用户软件直接打不开，而客群是电脑小白，无力自救。
+    # 改为把新环境建到 .new、依赖全部装成功后才切换，失败时旧环境原样可用。
+    _VENV_OLD="$VENV_DIR"
+    VENV_DIR="${_VENV_REAL}.new"
+    # 只清上一次失败残留的 .new —— 它从来不是用户数据，删了不影响任何人
     rm -rf "$VENV_DIR"
 fi
 if [ ! -f "$VENV_DIR/bin/python" ]; then
@@ -259,12 +270,41 @@ log_step "Step 3/5: 安装 Foreign Trade Assistant"
 TRADE_REPO="https://github.com/chefroger/smart-trade-ai.git"
 TRADE_DIR="$HOME/.trade/foreign-trade-assistant"
 
+# 记录回滚点（2026-10-16 加）。重建场景下依赖若装不上，代码必须能退回升级前 ——
+# 否则「新代码 + 旧 venv」照样起不来，等于把「重建失败」升级成「彻底打不开」。
+# 新装用户这里是空的（目录还不存在），_rollback_code 自然什么都不做。
+_TRADE_HEAD_BEFORE=""
+if [ -d "$TRADE_DIR/.git" ] && git -C "$TRADE_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
+    _TRADE_HEAD_BEFORE=$(git -C "$TRADE_DIR" rev-parse HEAD)
+fi
+
+_rollback_code() {
+    [ -z "$_TRADE_HEAD_BEFORE" ] && return 0
+    log_warn "正在把代码回退到升级前的版本（${_TRADE_HEAD_BEFORE:0:8}）..."
+    git -C "$TRADE_DIR" reset --hard "$_TRADE_HEAD_BEFORE" 2>/dev/null \
+        && log_ok "代码已回退，旧版本仍可正常使用" \
+        || log_err "代码回退失败 —— 请把上面的输出发给技术支持"
+    # 丢弃半成品的新环境；旧环境（$_VENV_OLD）始终没被动过
+    [ -n "$_VENV_OLD" ] && rm -rf "$VENV_DIR"
+    return 0
+}
+
 _clone_or_update "foreign-trade-assistant" "$TRADE_REPO" "$TRADE_DIR" || exit 1
 
 cd "$TRADE_DIR"
 # 装依赖（不含 hermes-agent，它在 Step 2 已装进 venv）+ trade 自身
-"$PIP" install -r requirements.txt
-"$PIP" install -e "." --no-deps
+# 用 if 而非裸命令：`set -e` 会让失败直接退出，跳过代码回滚，机器就卡在
+# 「新代码 + 旧依赖」的半吊子状态。
+if ! "$PIP" install -r requirements.txt; then
+    log_err "依赖安装失败（多为网络或磁盘问题）。"
+    _rollback_code
+    exit 1
+fi
+if ! "$PIP" install -e "." --no-deps; then
+    log_err "Trade 自身安装失败。"
+    _rollback_code
+    exit 1
+fi
 
 # 可选依赖：客户语义检索用的向量扩展（sqlite-vec）。
 # **单独装、失败只警告** —— 它不是主链依赖：不装则语义检索自动降级关键词，
@@ -278,6 +318,32 @@ else
     log_warn "sqlite-vec 未安装：客户语义检索将降级为关键词检索（其余功能不受影响）"
 fi
 cd - >/dev/null
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 依赖全部装成功后，才把新运行环境切换到位（对应 Step 1 的 .new 方案）
+#
+# 为什么把切换放在这里而不是建 venv 时：切换是**唯一不可逆的一步**，把它压到
+# 所有可能失败的动作（建 venv、git pull、pip install）之后，失败面就只剩「两个
+# 目录改名」——那是本地文件操作，几乎不会失败；即便失败，下面也保留了 .old 供恢复。
+# ─────────────────────────────────────────────────────────────────────────────
+if [ -n "$_VENV_OLD" ]; then
+    log_info "新运行环境已就绪，正在切换..."
+    rm -rf "${_VENV_OLD}.old"
+    if mv "$_VENV_OLD" "${_VENV_OLD}.old" 2>/dev/null && mv "$VENV_DIR" "$_VENV_OLD" 2>/dev/null; then
+        rm -rf "${_VENV_OLD}.old"
+        VENV_DIR="$_VENV_OLD"
+        PIP="$VENV_DIR/bin/pip"
+        PY="$VENV_DIR/bin/python"
+        log_ok "已切换到 Python 3.14 运行环境"
+    else
+        # 把旧环境挪回来（.old 是刚才那一步改的名），丢弃半成品
+        log_err "切换运行环境失败，正在恢复原环境..."
+        [ -d "${_VENV_OLD}.old" ] && mv "${_VENV_OLD}.old" "$_VENV_OLD" 2>/dev/null
+        rm -rf "${_VENV_REAL}.new"
+        _rollback_code
+        exit 1
+    fi
+fi
 
 log_ok "Foreign Trade Assistant 安装完成"
 

@@ -79,21 +79,32 @@ if (-not $PythonCmd) {
 # 创建 venv
 # ─────────────────────────────────────────────────────────────────────────────
 $TradeHome = if ($env:TRADE_HOME) { $env:TRADE_HOME } else { "$env:LOCALAPPDATA\trade" }
-$VenvDir = "$TradeHome\venv"
+$VenvReal = "$TradeHome\venv"
+$VenvDir  = $VenvReal
+# 非空 = 旧环境还在原地、新环境建在 .new 里、依赖装完才切换（切换点见 Step 3 末尾）
+$VenvOld  = $null
+
 # 已有 venv 但解释器**不是 3.14** → 必须重建。旧装机器就地升级 trade 时，代码与依赖
 # 都换了、venv 的解释器还是旧的（`trade update` 只更新代码与依赖，不重建 venv），
 # 于是 Hermes 的 pm 激活会把 cp314 的包塞进旧解释器 → 聊天只报「AI Agent 模块未加载」。
-# **删掉它不会丢任何用户数据**：数据在 $TradeHome 下（数据库、公司目录），不在 venv 里。
+# **重建不会丢任何用户数据**：数据在 $TradeHome 下（数据库、公司目录），不在 venv 里。
 if ((Test-Path "$VenvDir\Scripts\python.exe") -and -not (& $IsPython314 "$VenvDir\Scripts\python.exe")) {
     Write-Host "  ! 已有的运行环境不是 Python 3.14 —— 正在重建（不会动你的数据）..." -ForegroundColor Yellow
-    # Remove-Item 之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
-    # 重建不可逆，这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
+    # 换掉之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
+    # 这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
     try {
         if (-not (Test-Path $TradeHome)) { New-Item -ItemType Directory -Path $TradeHome -Force | Out-Null }
         & "$VenvDir\Scripts\pip.exe" freeze 2>$null | Out-File -FilePath "$TradeHome\venv-packages-before-rebuild.txt" -Encoding utf8
         Write-Host "  → 已把重建前的包清单留档：$TradeHome\venv-packages-before-rebuild.txt" -ForegroundColor Cyan
     } catch {}
-    Remove-Item -Recurse -Force $VenvDir
+    # **不在原地重建**（2026-10-16 改，与 install.sh 同步）。原实现是 Remove-Item 后立刻重建，
+    # 中间任何一步失败（断网 / 磁盘满 / 找不到 3.14 / 依赖装不上）都会留下
+    # 「旧的已经删了、新的没建成」——用户软件直接打不开，而客群是电脑小白，无力自救。
+    # 改为把新环境建到 .new、依赖全部装成功后才切换，失败时旧环境原样可用。
+    $VenvOld = $VenvDir
+    $VenvDir = "$VenvReal.new"
+    # 只清上一次失败残留的 .new —— 它从来不是用户数据，删了不影响任何人
+    if (Test-Path $VenvDir) { Remove-Item -Recurse -Force $VenvDir }
 }
 if (-not (Test-Path "$VenvDir\Scripts\python.exe")) {
     Write-Host "  → 创建虚拟环境..."
@@ -198,6 +209,28 @@ Write-Host "Step 3/5: 安装 Foreign Trade Assistant" -ForegroundColor White
 $TradeRepo = "https://github.com/chefroger/smart-trade-ai.git"
 $TradeDir = "$TradeHome\foreign-trade-assistant"
 
+# 记录回滚点（2026-10-16 加，与 install.sh 同步）。重建场景下依赖若装不上，代码必须能
+# 退回升级前 —— 否则「新代码 + 旧 venv」照样起不来，等于把「重建失败」升级成「彻底打不开」。
+# 新装用户这里是空的，Invoke-RollbackCode 自然什么都不做。
+$TradeHeadBefore = $null
+if (Test-Path "$TradeDir\.git") {
+    $sha = git -C $TradeDir rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $sha) { $TradeHeadBefore = "$sha".Trim() }
+}
+
+function Invoke-RollbackCode {
+    if (-not $TradeHeadBefore) { return }
+    Write-Host "  ⚠ 正在把代码回退到升级前的版本（$($TradeHeadBefore.Substring(0,8))）..." -ForegroundColor Yellow
+    git -C $TradeDir reset --hard $TradeHeadBefore 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  ✓ 代码已回退，旧版本仍可正常使用" -ForegroundColor Green
+    } else {
+        Write-Host "  ✗ 代码回退失败 —— 请把上面的输出发给技术支持" -ForegroundColor Red
+    }
+    # 丢弃半成品的新环境；旧环境（$VenvOld）始终没被动过
+    if ($VenvOld -and (Test-Path $VenvDir)) { Remove-Item -Recurse -Force $VenvDir }
+}
+
 if (-not (Invoke-CloneOrUpdate "foreign-trade-assistant" $TradeRepo $TradeDir)) { exit 1 }
 
 Push-Location $TradeDir
@@ -208,12 +241,14 @@ Push-Location $TradeDir
 & $PipCmd install -r requirements.txt
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ 依赖安装失败（pip 的报错见上）。请检查网络后重新运行本脚本。" -ForegroundColor Red
+    Invoke-RollbackCode
     Pop-Location
     exit 1
 }
 & $PipCmd install -e "." --no-deps
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ Foreign Trade Assistant 安装失败（pip 的报错见上）。" -ForegroundColor Red
+    Invoke-RollbackCode
     Pop-Location
     exit 1
 }
@@ -240,7 +275,41 @@ Pop-Location
 & $PyCmd -c "import trade.app"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ Foreign Trade Assistant 装好了但无法导入，安装不完整。" -ForegroundColor Red
+    Invoke-RollbackCode
     exit 1
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 新运行环境验证通过后，才切换到位（对应前面的 .new 方案）
+#
+# 为什么压到这么后面：切换是**唯一不可逆的一步**。把它放在「建 venv / git pull /
+# pip install / import 探针」全部成功之后，失败面就只剩两个目录改名 —— 本地文件
+# 操作，几乎不会失败；即便失败，下面也保留了 .old 供恢复。
+# ─────────────────────────────────────────────────────────────────────────────
+if ($VenvOld) {
+    Write-Host "  → 新运行环境已就绪，正在切换..." -ForegroundColor Cyan
+    $VenvOldBak = "$VenvOld.old"
+    if (Test-Path $VenvOldBak) { Remove-Item -Recurse -Force $VenvOldBak }
+    $swapOk = $false
+    try {
+        Move-Item -Path $VenvOld -Destination $VenvOldBak -Force
+        Move-Item -Path $VenvDir -Destination $VenvOld -Force
+        $swapOk = $true
+    } catch {}
+    if ($swapOk) {
+        if (Test-Path $VenvOldBak) { Remove-Item -Recurse -Force $VenvOldBak }
+        $VenvDir = $VenvOld
+        $PipCmd  = "$VenvDir\Scripts\pip.exe"
+        $PyCmd   = "$VenvDir\Scripts\python.exe"
+        Write-Host "  ✓ 已切换到 Python 3.14 运行环境" -ForegroundColor Green
+    } else {
+        # 把旧环境挪回来，丢弃半成品
+        Write-Host "  ✗ 切换运行环境失败，正在恢复原环境..." -ForegroundColor Red
+        if (Test-Path $VenvOldBak) { Move-Item -Path $VenvOldBak -Destination $VenvOld -Force }
+        if (Test-Path "$VenvReal.new") { Remove-Item -Recurse -Force "$VenvReal.new" }
+        Invoke-RollbackCode
+        exit 1
+    }
 }
 
 Write-Host "  ✓ Foreign Trade Assistant 安装完成" -ForegroundColor Green

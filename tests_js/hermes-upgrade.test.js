@@ -199,3 +199,113 @@ test('升级场景照常启动进度流（别把上面那条修过头）', () =>
     assert.ok(calls.some((u) => u.includes('hermes-upgrade/stream')),
         '升级场景必须订阅进度流，否则用户看不到进度');
 });
+
+// ── 一键重建：把「复制命令」换成「点按钮」（2026-10-16）──────────────────────
+// 原来的重建路径是让用户自己去终端粘一行 `curl … | bash`。客群是电脑小白，那一行
+// 对他们等于「软件坏了」。这组用例钉两件事：按钮存在，且**确认之后才动手**。
+
+test('rebuild_needed 给「开始重建」按钮，其它状态不给', () => {
+    const { api, nodes } = loadPanel();
+
+    api.applyHermesUpgradeState({ status: 'rebuild_needed' });
+    const buttons = nodes['hermes-upgrade-actions'].children;
+    assert.strictEqual(buttons.length, 1, 'rebuild_needed 应该有一个按钮');
+    assert.strictEqual(buttons[0].textContent, '开始重建');
+
+    // 其它状态不该冒出这个按钮 —— 尤其 rebuilding：那时服务已经停了，
+    // 再给一个可点的按钮只会让用户反复点（而每次都什么也不会发生）
+    for (const status of ['rebuilding', 'upgrading', 'done', 'checking_network']) {
+        const s = loadPanel();
+        s.api.applyHermesUpgradeState({ status });
+        const texts = s.nodes['hermes-upgrade-actions'].children.map((b) => b.textContent);
+        assert.ok(!texts.includes('开始重建'), `${status} 不该有「开始重建」按钮`);
+    }
+});
+
+test('rebuilding 时隐藏步骤指引（服务已停，步骤只会让人以为还要自己动手）', () => {
+    const { api, nodes } = loadPanel();
+
+    api.applyHermesUpgradeState({ status: 'rebuilding' });
+
+    assert.strictEqual(nodes['hermes-upgrade-steps'].style.display, 'none');
+});
+
+/** 造一个只导出 startVenvRebuild 的沙箱，可注入 confirm / fetch 的行为。 */
+function loadRebuild({ confirmResult, fetchImpl }) {
+    const dom = makeDom();
+    const calls = [];
+    const api = loadRegion(
+        'hermes-upgrade',
+        '{ startVenvRebuild: startVenvRebuild, HERMES_UPGRADE_TEXT: HERMES_UPGRADE_TEXT }',
+        {
+            document: dom.document, $: dom.$,
+            TOKEN: 'tok',
+            confirm: () => confirmResult,
+            fetch: (url) => { calls.push(String(url)); return fetchImpl(); },
+            _waitForRestartAndReload: (onTimeout, maxSeconds) => { api._waitedSeconds = maxSeconds; },
+            toast: () => {},
+        },
+    );
+    return { api, nodes: dom.nodes, calls };
+}
+
+test('用户取消确认时一个请求都不发', async () => {
+    const { api, calls } = loadRebuild({
+        confirmResult: false,   // 用户点了「取消」
+        fetchImpl: () => Promise.resolve({ ok: true, json: async () => ({ ok: true }) }),
+    });
+
+    await api.startVenvRebuild(null);
+
+    assert.deepStrictEqual(calls, [], '用户取消后不该发任何请求');
+});
+
+test('确认后调重建端点，转入「正在重建」，且等待窗口放大到 10 分钟以上', async () => {
+    const { api, nodes, calls } = loadRebuild({
+        confirmResult: true,
+        fetchImpl: () => Promise.resolve({ ok: true, json: async () => ({ ok: true }) }),
+    });
+
+    await api.startVenvRebuild(null);
+
+    assert.ok(calls.some((u) => u.includes('/system/rebuild-venv')), '没有调用重建端点');
+    // 面板必须切到 rebuilding —— 否则用户盯着「开始重建」按钮以为没反应
+    assert.strictEqual(
+        nodes['hermes-upgrade-title'].textContent,
+        api.HERMES_UPGRADE_TEXT.rebuilding.title,
+    );
+    // 重建（建 venv + 装全部依赖）比普通重启慢得多。用默认的 2 分钟窗口会在它
+    // 真正成功之前就报「超时」，把用户吓去手动折腾。
+    assert.ok(api._waitedSeconds >= 600,
+        `重建的等待窗口太小（${api._waitedSeconds}s），会在成功之前误报超时`);
+});
+
+test('后端明确拒绝时不进入等待（如实显示失败）', async () => {
+    const { api, nodes } = loadRebuild({
+        confirmResult: true,
+        fetchImpl: () => Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: false, error: '当前运行环境不需要重建。' }),
+        }),
+    });
+
+    await api.startVenvRebuild(null);
+
+    assert.strictEqual(api._waitedSeconds, undefined, '后端拒绝了却还在等重启');
+    assert.ok(nodes['hermes-upgrade-message'].textContent.includes('不需要重建'),
+        '没有把后端给的原因显示出来');
+});
+
+test('服务在响应回来之前就被停掉（fetch 抛错）不算失败，照常等待', async () => {
+    // 这是重建的**正常路径**：后端派完子进程就把自己杀了，连接必然被掐断。
+    // 把它当失败处理会让用户看到「重建失败」而实际正在顺利进行。
+    const { api, calls } = loadRebuild({
+        confirmResult: true,
+        fetchImpl: () => Promise.reject(new Error('connection reset')),
+    });
+
+    await api.startVenvRebuild(null);
+
+    assert.ok(calls.length > 0, '应该已经尝试过发请求');
+    assert.ok(api._waitedSeconds >= 600, '连接被掐断后没有进入等待 —— 会被误报成失败');
+});

@@ -452,3 +452,117 @@ class TestPowerShellLauncherEncoding:
             assert "venv-packages-before-rebuild.txt" in before_rm, (
                 f"{name} 在删除 venv 之前没有留包清单"
             )
+
+
+class TestVenvRebuildIsAtomic:
+    """重建运行环境必须**原子**：新环境先建到 .new，依赖全部装成功后才切换。
+
+    2026-10-16 改。原实现是 `rm -rf "$VENV_DIR"` 之后**原地**重建，于是中间任何一步
+    失败（断网 / 磁盘满 / 找不到 3.14 / 依赖装不上）都会留下「旧的已经删了、新的没
+    建成」—— 用户的软件直接打不开。
+
+    命中这条路径的正是**旧装机器**：2026-10-14 之前装的机器 venv 跑的是
+    Python 3.11~3.13，而 Hermes ≥0.21.6 只发 3.14 的依赖集，所以它们一升级 trade
+    就必须重建 venv。而客群是电脑小白，读不懂也修不了 `ModuleNotFoundError`。
+
+    改成原子切换后，失败时旧环境原样可用 —— 这是「升级不会把能用的软件搞坏」
+    这条承诺的兑现处。
+    """
+
+    def test_sh_builds_into_a_staging_dir(self):
+        body = _code_lines(SH)
+        assert "_VENV_REAL" in body, "install.sh 没有区分「真实 venv」与「暂存目录」"
+        assert "${_VENV_REAL}.new" in body, "install.sh 未把新环境建到 .new 暂存目录"
+
+    def test_sh_swap_happens_after_dependency_install(self):
+        """切换必须排在 pip install **之后**。
+
+        这是本设计的核心：把唯一不可逆的动作压到所有可能失败的动作之后。
+        若有人把切换挪回「建完 venv 就换」，失败面立刻回到改动前的样子。
+        """
+        body = _code_lines(SH)
+        pip_at = body.index('"$PIP" install -r requirements.txt')
+        swap_at = body.index('if [ -n "$_VENV_OLD" ]', pip_at)
+        assert swap_at > pip_at, "install.sh 在装依赖之前就切换运行环境了"
+
+    def test_sh_rolls_back_code_when_pip_fails(self):
+        """依赖装不上时必须回退代码。
+
+        否则「新代码 + 旧 venv」照样起不来 —— 把「重建失败」升级成「彻底打不开」。
+        """
+        body = _code_lines(SH)
+        assert "_rollback_code()" in body, "install.sh 未定义代码回滚函数"
+        assert "_TRADE_HEAD_BEFORE" in body, "install.sh 未记录回滚点"
+        # 两处 pip 失败分支都要调用回滚（requirements.txt 与 trade 自身）
+        assert body.count("_rollback_code") >= 3, (
+            "install.sh 的 pip 失败分支没有调用回滚（应至少：定义 1 次 + 两处失败分支各 1 次）"
+        )
+
+    def test_ps1_mirrors_the_same_design(self):
+        """Windows 版必须与 sh 版同构 —— 跨平台一致性是项目硬规则。"""
+        body = _code_lines(PS1)
+        assert "$VenvReal" in body, "install.ps1 没有区分「真实 venv」与「暂存目录」"
+        assert "$VenvReal.new" in body, "install.ps1 未把新环境建到 .new 暂存目录"
+        assert "$VenvOld" in body, "install.ps1 未保留旧环境引用"
+        assert "Invoke-RollbackCode" in body, "install.ps1 未实现代码回滚"
+
+    def test_ps1_swap_happens_after_import_probe(self):
+        """ps1 的切换点还要更靠后 —— 排在 `import trade.app` 探针之后。
+
+        sh 版没有这个探针，ps1 版有（第 240 行附近），所以它的失败面可以更小：
+        新环境连 `import trade.app` 都过不了就绝不切换。
+        """
+        body = _code_lines(PS1)
+        probe_at = body.index('import trade.app')
+        swap_at = body.index("if ($VenvOld)", probe_at)
+        assert swap_at > probe_at, "install.ps1 在 import 探针之前就切换运行环境了"
+
+
+class TestNoBareVarBeforeMultibyte:
+    """`$var` 后面**紧跟多字节字符**时必须写成 `${var}`。
+
+    2026-10-16 实测（macOS 自带 GNU bash 3.2.57）：它解析变量名时不认 UTF-8
+    边界 —— `$_old_ver，` 会把中文逗号的首字节 `\\xef` 吞进变量名，整个展开成空。
+    用户看到的是：
+
+        已有的运行环境是 Python ，需要 3.14      ← 版本号整段消失
+
+    而 `✓ Python 3.14（/path/to/python）`（每次安装都会打印）也被截成乱码。
+    加花括号即正常（`${_old_ver}，` ✓）—— 所以这不是「bash 太老」，是写法没有
+    把变量名边界说清楚，在任何版本上都值得写对。
+
+    只查**代码行**：注释里的同类写法不参与输出，改了没有收益。
+    """
+
+    def test_sh_has_no_bare_var_before_multibyte(self):
+        import re
+
+        offenders: list[str] = []
+        for lineno, line in enumerate(SH.splitlines(), start=1):
+            if line.strip().startswith("#"):
+                continue
+            for m in re.finditer(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", line):
+                offenders.append(f"{lineno}: {m.group()!r} — {line.strip()[:70]}")
+
+        assert not offenders, (
+            "install.sh 里有 `$var` 紧跟多字节字符（bash 3.2 下会吞掉字符）：\n  "
+            + "\n  ".join(offenders)
+            + "\n  改用 ${var} 明确变量名边界。"
+        )
+
+    def test_guard_itself_catches_the_bug_shape(self):
+        """守卫自身的回归：确认它能匹配到当初那个 bug 写法。
+
+        一个永远通过的守卫比没有守卫更糟 —— 它给人虚假的安全感。
+        """
+        import re
+
+        bug = 'log_warn "已有的运行环境是 Python $_old_ver，需要 3.14"'
+        assert re.search(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", bug), (
+            "守卫匹配不到当初的 bug 写法，已失效"
+        )
+        # 反例：加了花括号就不该被报
+        fixed = 'log_warn "已有的运行环境是 Python ${_old_ver}，需要 3.14"'
+        assert not re.search(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", fixed), (
+            "守卫把已经修好的写法也报了"
+        )

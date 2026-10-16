@@ -1,0 +1,128 @@
+"""运行环境重建（/system/rebuild-venv）的测试。
+
+背景：2026-10-14 之前装的机器，trade 的 venv 跑的是 Python 3.11~3.13，而 Hermes
+从 v0.21.6 起只发 3.14 的依赖集（见 COMPATIBILITY.md 的「当前策略」）。这类机器
+一旦升级 trade 就必然进降级模式 —— agent 起不来，界面显示「需要重建运行环境」。
+
+原来的界面给用户的是一行 `curl … | bash`，让他自己开终端粘 —— 而客群是电脑小白，
+这一行实际等于「软件坏了」。这个端点把「复制命令」变成「点一次按钮」。
+
+这里测的是**子进程脚本的结构**（顺序错了就等于没做防护），不实际执行重建 ——
+真的重建要 5~10 分钟且会替换 venv，属于端到端验证的范畴。
+"""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+
+@pytest.fixture
+def fake_trade_home(tmp_path, monkeypatch):
+    """造一个带安装脚本的假 TRADE_HOME。"""
+    monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+    scripts = tmp_path / "foreign-trade-assistant" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "install.sh").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    (scripts / "install.ps1").write_text("# fake\n", encoding="utf-8")
+    return tmp_path
+
+
+class TestVenvRebuildScript:
+    """子进程脚本的**顺序**就是它的正确性。
+
+    每一步的理由（顺序不能换）：
+      1. 等 2 秒 —— 让本次 HTTP 响应先发回浏览器，否则前端只看到连接被掐断
+      2. 杀当前进程 —— 腾出 venv 与 9119 端口
+      3. 跑安装脚本 —— 脚本本身是原子的（失败保留旧 venv）
+      4. **无论成败都启动 Trade** —— 失败了也要用旧环境把服务拉回来。
+         漏掉这一步，用户面对的是一台彻底打不开的机器，比升级前还糟。
+    """
+
+    def _posix_script(self, fake_trade_home):
+        from trade.app import _venv_rebuild_script
+
+        built = _venv_rebuild_script()
+        assert built is not None, "POSIX 下应该能构造出重建脚本"
+        argv, log_file = built
+        assert argv[0] == "/bin/sh" and argv[1] == "-c"
+        return argv[2], log_file
+
+    def test_waits_before_killing_itself(self, fake_trade_home):
+        """先 sleep 再 kill —— 否则前端收不到「重建已开始」这个响应。"""
+        script, _ = self._posix_script(fake_trade_home)
+        assert "sleep 2" in script, "没有等待就直接杀进程，前端会看到连接被掐断"
+        assert script.index("sleep 2") < script.index("kill -TERM"), (
+            "kill 排在 sleep 之前 —— HTTP 响应还没发出去就把自己杀了"
+        )
+
+    def test_installs_after_killing(self, fake_trade_home):
+        """重建必须在旧进程退出之后 —— 否则是在自己脚下换地板。"""
+        script, _ = self._posix_script(fake_trade_home)
+        assert script.index("kill -TERM") < script.index("install.sh"), (
+            "还在跑就先重建，venv 正被本进程占用"
+        )
+
+    def test_always_starts_trade_even_if_rebuild_fails(self, fake_trade_home):
+        """重建失败也必须把服务拉起来 —— 这是「不把能用的机器搞坏」的最后一环。
+
+        安装脚本本身是原子的（失败保留旧 venv），所以失败后用旧环境启动，
+        用户拿到的是「升级没成功，但软件还能用」，而不是一台打不开的机器。
+        """
+        script, _ = self._posix_script(fake_trade_home)
+        # 必须是有分支的（成功/失败都往下走），不是 `install.sh && exec trade`
+        assert "if /bin/bash" in script, "重建失败会跳过后面的启动步骤"
+        start_at = script.index("exec ")
+        assert start_at > script.index("install.sh"), "启动排在重建之前"
+        # trade 启动器必须带 --no-browser（后台拉起，不能弹用户浏览器）
+        assert "--no-browser" in script[start_at:], "拉起服务时没有 --no-browser"
+
+    def test_log_file_is_under_trade_home(self, fake_trade_home):
+        """日志落到 TRADE_HOME/logs —— 服务停掉后它是唯一的事后线索。"""
+        _, log_file = self._posix_script(fake_trade_home)
+        assert str(fake_trade_home) in log_file
+        assert log_file.endswith("rebuild-venv.log")
+
+    def test_returns_none_when_install_script_missing(self, tmp_path, monkeypatch):
+        """找不到安装脚本时不能硬跑 —— 返回 None 让调用方如实报错。"""
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))  # 空目录，没有 scripts/
+        from trade.app import _venv_rebuild_script
+
+        assert _venv_rebuild_script() is None
+
+
+class TestRebuildEndpointGuard:
+    """端点必须只在**确实需要重建**时才动手。
+
+    缺了这道闸，界面按钮被误触（或前端状态过期）就会在健康的机器上白停
+    5~10 分钟服务 —— 那正是当初把「系统更新」按钮藏起来的同类风险。
+    """
+
+    def test_endpoint_checks_fix_before_scheduling(self, monkeypatch, fake_trade_home):
+        import trade.app as app_module
+
+        scheduled: list[bool] = []
+        monkeypatch.setattr(app_module, "_schedule_venv_rebuild", lambda: scheduled.append(True) or True)
+
+        # 不需要重建：fix 是别的值 → 必须拒绝，且**不派发**子进程
+        monkeypatch.setattr(
+            "trade.bootstrap.hermes_compat_state",
+            lambda: {"fix": "upgrade_hermes"},
+        )
+        router = app_module._create_system_router()
+        endpoint = next(
+            r.endpoint for r in router.routes
+            if getattr(r, "path", "") == "/system/rebuild-venv"
+        )
+
+        class _Req:
+            headers = {"X-Hermes-Session-Token": ""}
+
+        result = endpoint(_Req())
+        assert result["ok"] is False
+        assert not scheduled, "明明不需要重建，却派发了子进程"

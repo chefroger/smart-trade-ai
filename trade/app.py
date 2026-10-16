@@ -414,6 +414,112 @@ def _perform_restart() -> None:
         pass
 
 
+# ── 运行环境重建（venv 的 Python 版本不对时）──────────────────────────────────
+#
+# 什么时候会用到：2026-10-14 之前装的机器，trade 的 venv 跑的是 Python 3.11~3.13，
+# 而 Hermes 从 v0.21.6 起只发 3.14 的依赖集（见 COMPATIBILITY.md）。这类机器升级
+# trade 之后必然进降级模式（agent 起不来），必须重建 venv 才能恢复。
+#
+# **为什么不放在 update_trade() 里顺带做**：重建要停机 5~10 分钟。用户点「系统更新」
+# 时被顺带停掉一次服务，体验上等于「点了个按钮软件就没了」——必须让他先看到说明、
+# 主动确认（界面上的「开始重建」按钮），这也是当初把「系统更新」按钮藏起来的同一个理由。
+#
+# **为什么必须交给独立子进程**：重建要替换 venv 目录，而当前进程的 sys.executable
+# 就在那个 venv 里 —— 在原地重建等于把自己脚下的地板换掉。所以本进程只负责
+# 「派一个不受自己存亡影响的子进程，然后退出」，重建与新服务的启动都归子进程。
+
+
+def _trade_runtime_dir() -> Path:
+    """运行时仓库目录（`~/.trade/foreign-trade-assistant`）。"""
+    return _get_trade_home_path() / "foreign-trade-assistant"
+
+
+def _venv_rebuild_script() -> tuple[list[str], str] | None:
+    """构造重建用的独立子进程命令。返回 (argv, 说明) 或 None（平台未支持）。
+
+    子进程做的事，顺序不能变：
+      1. 等 2 秒 —— 让本次 HTTP 响应先发回浏览器（否则前端只看到连接被掐断）
+      2. 杀掉当前 Trade 进程（腾出 venv 与端口）
+      3. 跑安装脚本重建运行环境（脚本本身是原子的，失败会保留旧 venv）
+      4. 无论成败都启动 Trade —— 失败了也要用旧环境把服务拉回来，
+         否则用户面对的是一台彻底打不开的机器，比升级前还糟
+    """
+    trade_dir = _trade_runtime_dir()
+    trade_home = _get_trade_home_path()
+    log_dir = trade_home / "logs"
+    log_file = log_dir / "rebuild-venv.log"
+
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+
+    old_pid = os.getpid()
+
+    if os.name == "nt":
+        # Windows：安装脚本是 PowerShell，启动器是 install.ps1 生成的 trade.cmd
+        ps1 = trade_dir / "scripts" / "install.ps1"
+        launcher = Path(os.environ.get("LOCALAPPDATA", "")) / "trade" / "trade.cmd"
+        if not ps1.is_file():
+            return None
+        # 用 -ExecutionPolicy Bypass 是因为脚本来自用户自己的机器、且此前就是这么装的
+        script = (
+            f"@echo off\r\n"
+            f"timeout /t 2 /nobreak >nul\r\n"
+            f"taskkill /PID {old_pid} /F >nul 2>&1\r\n"
+            f"echo [rebuild] start %DATE% %TIME%\r\n"
+            f"powershell -NoProfile -ExecutionPolicy Bypass -File \"{ps1}\"\r\n"
+            f"echo [rebuild] install exit=%ERRORLEVEL%\r\n"
+            f"start \"\" \"{launcher}\" --no-browser\r\n"
+        )
+        return (["cmd", "/c", script], str(log_file))
+
+    # POSIX：安装脚本是 install.sh，启动器是 ~/.local/bin/trade
+    sh = trade_dir / "scripts" / "install.sh"
+    launcher = Path.home() / ".local" / "bin" / "trade"
+    if not sh.is_file():
+        return None
+
+    script = (
+        f"sleep 2; "
+        f"kill -TERM {old_pid} 2>/dev/null; sleep 1; kill -KILL {old_pid} 2>/dev/null; "
+        f"echo \"[rebuild] 开始重建运行环境\"; "
+        # 重建失败不阻止启动 —— 安装脚本是原子的，失败时旧 venv 原样可用
+        f"if /bin/bash {sh!r}; then echo \"[rebuild] 重建成功\"; "
+        f"else echo \"[rebuild] 重建失败（退出码 $?），将用原环境启动\"; fi; "
+        f"echo \"[rebuild] 启动 Trade\"; "
+        f"exec {launcher!r} --no-browser"
+    )
+    return (["/bin/sh", "-c", script], str(log_file))
+
+
+def _schedule_venv_rebuild() -> bool:
+    """派独立子进程执行重建。返回是否成功派发（不代表重建本身成功）。"""
+    built = _venv_rebuild_script()
+    if built is None:
+        return False
+    argv, log_file = built
+
+    try:
+        # 日志重定向到文件：服务停掉之后前端读不到任何东西，这份日志是事后唯一的线索
+        with open(log_file, "ab") as fh:
+            if os.name == "nt":
+                _sp.Popen(
+                    argv, stdout=fh, stderr=fh, stdin=_sp.DEVNULL,
+                    creationflags=0x00000200,
+                )
+            else:
+                _sp.Popen(
+                    argv, stdout=fh, stderr=fh, stdin=_sp.DEVNULL,
+                    start_new_session=True,   # 脱离本进程的会话，不受其退出影响
+                )
+    except Exception as exc:  # noqa: BLE001 — 派发失败要让调用方知道，不能静默
+        print(f"  ✗ 重建子进程派发失败：{exc}")
+        return False
+    print(f"  🔧 运行环境重建已调度 (old PID={os.getpid()}, log={log_file})")
+    return True
+
+
 # ── System endpoints (无需 session token) ────────────────────────────────────
 
 
@@ -541,6 +647,44 @@ def _create_system_router() -> APIRouter:
             raise HTTPException(status_code=429, detail="系统端点请求过于频繁，请稍后重试。")
 
         return start_upgrade()
+
+    @router.post("/system/rebuild-venv")
+    def api_rebuild_venv(request: Request):
+        """一键重建 Trade 的运行环境（venv 的解释器不是 3.14 时）。
+
+        为什么要有这个端点：这类机器（2026-10-14 前装的）升级 trade 后必然进降级
+        模式，而旧界面给用户的是一行 `curl … | bash` 让他自己去终端粘 —— 客群是
+        电脑小白，这一行就等于「软件坏了」。改成按钮后，用户只需点一次。
+
+        返回 {"ok": bool, "message"/"error": str}。派发成功**不等于**重建成功：
+        本进程马上就会退出，前端靠轮询 /api/status 判断是否恢复。
+        """
+        _tk = request.headers.get("X-Hermes-Session-Token", "")
+        if _tk and not _check_system_rate_limit(_tk[:16]):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="系统端点请求过于频繁，请稍后重试。")
+
+        # 只在确实需要重建时才动手。缺了这道闸，界面上的按钮一旦被误触（或前端状态
+        # 过期），就会在健康的机器上白停 5~10 分钟服务。
+        from trade.bootstrap import hermes_compat_state
+
+        state = hermes_compat_state()
+        if state.get("fix") != "rebuild_trade_venv":
+            return {
+                "ok": False,
+                "error": "当前运行环境不需要重建。",
+                "fix": state.get("fix"),
+            }
+
+        if not _schedule_venv_rebuild():
+            return {
+                "ok": False,
+                "error": "重建子进程派发失败，请查看日志或联系技术支持。",
+            }
+        return {
+            "ok": True,
+            "message": "重建已开始，Trade 会在完成后自动恢复（约 5~10 分钟）。",
+        }
 
     @router.get("/system/hermes-upgrade/stream")
     async def api_hermes_upgrade_stream(request: Request, offset: int = 0):
