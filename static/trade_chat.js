@@ -35,10 +35,11 @@ const I18N = {
         'chat.ph.docgen':'描述要生成的文档：如「做一份欧洲客户的报价单PPT」...',
         'chat.ph.osint':'输入邮箱/域名/公司名，我来做全面的背景调查...',
         'chat.clr':'🗑️ 清屏','chat.library':'— 选择文档库 —','chat.lib.add':'添加文档库',
-        // footer buttons
-        'footer.update':'⬆️ 系统更新','footer.restart':'🔄 重启',
-        'footer.skills':'📖 技能帮助','footer.skills_update':'🔄 Skills',
-        'footer.upgrade':'⬆️ 升级说明','footer.onboarding':'🎓 新手引导',
+        // footer buttons —— 只写文字：图标固定在 HTML 里（不随语言变），
+        // 这些文案由 applyI18n 填进按钮的 data-tip，悬停时显示。
+        'footer.update':'更新系统','footer.restart':'重启',
+        'footer.skills':'技能帮助','footer.skills_update':'更新技能',
+        'footer.upgrade':'升级说明','footer.onboarding':'新手引导',
         // modals - company
         'modal.co.title':'🏢 公司设置','modal.co.tab_list':'公司列表','modal.co.tab_identity':'Agent 身份',
         'modal.co.add_title':'添加新公司','modal.co.name':'公司名称 *','modal.co.name_ph':'例如：我的外贸公司',
@@ -227,9 +228,9 @@ const I18N = {
         'chat.ph.docgen':'Describe the document: e.g. "Create a quotation PPT for EU client"...',
         'chat.ph.osint':'Enter email/domain/company name for background check...',
         'chat.clr':'🗑️ Clear','chat.library':'— Select Library —','chat.lib.add':'Add Library',
-        'footer.update':'⬆️ Update','footer.restart':'🔄 Restart',
-        'footer.skills':'📖 Skills Help','footer.skills_update':'🔄 Skills',
-        'footer.upgrade':'⬆️ Upgrade Guide','footer.onboarding':'🎓 Tutorial',
+        'footer.update':'Update','footer.restart':'Restart',
+        'footer.skills':'Skills Help','footer.skills_update':'Update Skills',
+        'footer.upgrade':'Upgrade Guide','footer.onboarding':'Tutorial',
         'modal.co.title':'🏢 Company Settings','modal.co.tab_list':'Companies','modal.co.tab_identity':'Agent Identity',
         'modal.co.add_title':'Add Company','modal.co.name':'Company Name *','modal.co.name_ph':'e.g. My Trading Co.',
         'modal.co.slug_ph':'Auto-generated','modal.co.slug_tt':'Auto-generated from company name',
@@ -407,14 +408,19 @@ function _applyLanguage() {
     if (cs && cs.options[0]) cs.options[0].text = t('company.select');
     var addBtn = document.querySelector('.csel-row button');
     if (addBtn) { addBtn.title = t('company.add'); addBtn.textContent = '+'; }
-    // 3. Footer 按钮
+    // 3. Footer 按钮 —— 图标（textContent）写在 HTML 里，这里只填悬停提示。
+    //    早期把图标和文字一起塞进 i18n（'⬆️ 系统更新'），改图标要同步改两份翻译；
+    //    现在翻译只管文字。
     var map = {
         'system-update-btn': 'footer.update', 'system-restart-btn': 'footer.restart',
         'skills-help-btn': 'footer.skills', 'skills-update-btn': 'footer.skills_update',
         'upgrade-help-btn': 'footer.upgrade',
         'onboarding-btn': 'footer.onboarding',
     };
-    for (var id in map) { var b = document.getElementById(id); if (b) b.textContent = t(map[id]); }
+    for (var id in map) {
+        var b = document.getElementById(id);
+        if (b) b.setAttribute('data-tip', t(map[id]));
+    }
     // 4. 静态 modal 文本更新
     _updateStaticModals();
     // 5. 重新渲染当前视图
@@ -1078,13 +1084,31 @@ async function _waitForRestartAndReload(onTimeout, maxSeconds) {
     setTimeout(tick, 500);
 }
 
+/**
+ * 切换侧边栏按钮的「忙」态：忙时图标换成沙漏并禁用，闲时恢复原图标。
+ *
+ * 图标化之后不能再沿用旧写法（把 textContent 设成「更新中…」这样的文字）——
+ * 那会把按钮上的图标直接抹掉，恢复时还得重新知道原图标长什么样。
+ * 原图标记在 dataset 里，连续多次 busy 也不会把沙漏本身记成原图标。
+ */
+function _setBtnBusy(btn, busy) {
+    if (!btn) return;
+    if (busy) {
+        if (btn.dataset.idleIcon === undefined) btn.dataset.idleIcon = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '⏳';
+    } else {
+        btn.disabled = false;
+        if (btn.dataset.idleIcon !== undefined) btn.textContent = btn.dataset.idleIcon;
+    }
+}
+
 // ── 系统更新 ──
 async function doTradeUpdate(e) {
     // 用 currentTarget 或回退到事件对象，再不行直接查 DOM
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-update-btn');
     if (!btn) return;
-    btn.disabled = true;
-    btn.textContent = t('sys.updating');
+    _setBtnBusy(btn, true);
     toast(t('sys.restart_toast').replace('Restarting','Updating'));
     var updateFailed = false;
     var restartScheduled = false;
@@ -1116,15 +1140,13 @@ async function doTradeUpdate(e) {
         updateFailed = true;
     }
     if (updateFailed || !restartScheduled) {
-        btn.disabled = false;
-        btn.textContent = t('footer.update');
+        _setBtnBusy(btn, false);
         return;
     }
     // 存入标记，页面 reload 后检测并显示 toast
     try { sessionStorage.setItem('_trade_upgrade_done', '1'); } catch(_) {}
     _waitForRestartAndReload(() => {
-        btn.disabled = false;
-        btn.textContent = t('footer.update');
+        _setBtnBusy(btn, false);
     });
 }
 
@@ -1132,8 +1154,7 @@ async function doTradeUpdate(e) {
 async function doRestartTrade(e) {
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-restart-btn');
     if (!btn) return;
-    btn.disabled = true;
-    btn.textContent = t('sys.restarting');
+    _setBtnBusy(btn, true);
     toast(t('sys.restart_toast'));
     try {
         const resp = await api('POST', '/api/trade/system/restart');
@@ -1146,8 +1167,7 @@ async function doRestartTrade(e) {
         toast(t('sys.restart_wait'));
     }
     _waitForRestartAndReload(() => {
-        btn.disabled = false;
-        btn.textContent = t('footer.restart');
+        _setBtnBusy(btn, false);
     });
 }
 
@@ -1231,8 +1251,7 @@ function showSkillsHelp() {
 async function updateSkills(e) {
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#skills-update-btn');
     if (!btn) return;
-    btn.disabled = true;
-    btn.textContent = t('sys.skills_updating');
+    _setBtnBusy(btn, true);
     try {
         const resp = await api('POST', '/api/trade/skills/update');
         if (resp?.ok) {
@@ -1243,8 +1262,7 @@ async function updateSkills(e) {
     } catch(e) {
         toast(t('sys.skills_error') + e.message);
     } finally {
-        btn.disabled = false;
-        btn.textContent = t('footer.skills_update');
+        _setBtnBusy(btn, false);
     }
 }
 

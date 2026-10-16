@@ -90,13 +90,19 @@
     </nav>
 
     <div id="license-bar" style="padding:6px 16px;font-size:11px;text-align:center;display:none;"></div>
+    <!-- 图标按钮：文字改成悬停时用 data-tip 显示（样式见 trade_chat.css 的
+         .sidebar-footer，文案由 trade_chat.js 的 applyI18n 填）。
+         带文字的按钮一行放不下 4 个，会被挤成两行 —— 图标加悬停提示既放得下，
+         又不牺牲可发现性。
+         ⚠️ 按钮上**不能**再留 title 属性：它和自定义提示会同时弹出来。
+         图标刻意两两不同（⬆️/♻️、📖/📚、ℹ️），否则纯图标后用户分不清谁是谁。 -->
     <div class="sidebar-footer">
-        <button id="system-update-btn" onclick="doTradeUpdate(event)" title="一键更新系统（git pull + skills + db）" hidden>⬆️ 系统更新</button>
-        <button id="system-restart-btn" onclick="doRestartTrade(event)" title="重启 Trade 服务" hidden>🔄 重启</button>
-        <button id="skills-help-btn" onclick="showSkillsHelp()" title="查看所有 39 个技能和使用示例">📖 技能帮助</button>
-        <button id="skills-update-btn" onclick="updateSkills(event)" title="从 GitHub 更新 B2B skills 到最新版本" hidden>🔄 Skills</button>
-        <button id="upgrade-help-btn" onclick="showUpgradeHelp()" title="如何升级 Trade 系统">⬆️ 升级说明</button>
-        <button id="onboarding-btn" onclick="restartOnboarding()" title="重新执行新手引导">🎓 新手引导</button>
+        <button id="system-update-btn" onclick="doTradeUpdate(event)" data-tip="更新系统">⬆️</button>
+        <button id="system-restart-btn" onclick="doRestartTrade(event)" data-tip="重启" hidden>♻️</button>
+        <button id="skills-help-btn" onclick="showSkillsHelp()" data-tip="技能帮助">📖</button>
+        <button id="skills-update-btn" onclick="updateSkills(event)" data-tip="更新技能" hidden>📚</button>
+        <button id="upgrade-help-btn" onclick="showUpgradeHelp()" data-tip="升级说明">ℹ️</button>
+        <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导">🎓</button>
     </div>
 
 </aside>

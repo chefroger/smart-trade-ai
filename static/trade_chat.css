@@ -102,14 +102,41 @@ body {
     font-size: 10px; padding: 2px 6px; border-radius: 999px; background: var(--accent-red);
     color: #fff; font-weight: 600; display: none;
 }
+/* 图标按钮：一行放 4 个，每个正方形、图标居中。
+   原来按钮带文字（「⬆️ 系统更新」），4 个并排会被挤成两行 —— 改成图标 + 悬停提示
+   （data-tip），既放得下又不丢可发现性。 */
 .sidebar-footer { padding: 10px 16px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; gap: 6px; }
 .sidebar-footer button {
-    flex: 1; padding: 8px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    flex: 1; aspect-ratio: 1; padding: 0; border-radius: 6px; font-size: 16px; cursor: pointer;
     background: rgba(255,255,255,0.04); color: var(--sidebar-text); border: none;
-    transition: all 0.2s var(--ease-out);
+    display: flex; align-items: center; justify-content: center;
+    position: relative; transition: all 0.2s var(--ease-out);
 }
 .sidebar-footer button:hover { background: rgba(255,255,255,0.1); color: #E2E8F0; }
 .sidebar-footer button:active { transform: scale(0.97); }
+/* 忙态（图标已换成 ⏳）：灰掉并禁用点击反馈 —— 否则用户会继续点一个正在跑的按钮 */
+.sidebar-footer button:disabled { opacity: 0.5; cursor: default; }
+.sidebar-footer button:disabled:active { transform: none; }
+
+/* 悬停提示。
+   为什么不用 title 属性：原生提示有 1~2 秒延迟，用户悬停后半天不弹会以为没反应；
+   ::after 是即时的，样式也可控。
+   按钮在 sidebar 底部、提示向上弹，不会超出 .sidebar 的滚动区。 */
+.sidebar-footer button::after {
+    content: attr(data-tip);
+    position: absolute; bottom: calc(100% + 8px); left: 50%;
+    transform: translateX(-50%);
+    padding: 5px 10px; border-radius: 6px;
+    background: rgba(15,23,42,0.97); color: #E2E8F0;
+    border: 1px solid rgba(255,255,255,0.08);
+    font-size: 12px; line-height: 1.4; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity 0.15s;
+    z-index: 50;
+}
+.sidebar-footer button:hover::after { opacity: 1; }
+/* i18n 还没跑完时 data-tip 是空的 —— 别弹一个空气泡出来 */
+.sidebar-footer button[data-tip=""]::after,
+.sidebar-footer button:not([data-tip])::after { display: none; }
 
 /* ── Main ────────────────────────────────────────────────────────────── */
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-main); position: relative; }
