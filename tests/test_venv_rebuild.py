@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
@@ -33,6 +34,10 @@ def fake_trade_home(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="这组验证的是 POSIX 分支（/bin/sh）；Windows 分支见下面的 TestVenvRebuildScriptWindows",
+)
 class TestVenvRebuildScript:
     """子进程脚本的**顺序**就是它的正确性。
 
@@ -94,6 +99,39 @@ class TestVenvRebuildScript:
         from trade.app import _venv_rebuild_script
 
         assert _venv_rebuild_script() is None
+
+
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="只在 Windows 上跑：验证 cmd 分支（macOS/Linux 上是 sh 分支）",
+)
+class TestVenvRebuildScriptWindows:
+    """Windows 分支：cmd + taskkill + PowerShell。
+
+    ⚠️ 这条分支在开发机（macOS）上没法真跑，只能静态核对结构 —— 所以这里钉的是
+    「该有的命令都在、顺序对」。真机行为要靠 Windows 用户反馈。
+
+    2026-10-16：这组用例是因为 CI 挂掉才补的 —— 原来那 4 条把 POSIX 的期望
+    （argv == /bin/sh）写死了，在 windows-latest 上必然失败。
+    """
+
+    def test_uses_cmd_taskkill_and_powershell_in_order(self, fake_trade_home):
+        from trade.app import _venv_rebuild_script
+
+        built = _venv_rebuild_script()
+        assert built is not None, "Windows 下应该能构造出重建脚本"
+        argv, log_file = built
+        assert argv[0] == "cmd" and argv[1] == "/c"
+        script = argv[2]
+
+        # 顺序与 POSIX 分支同构：等响应 → 杀旧进程 → 重建 → 拉起服务
+        assert "timeout /t 2" in script, "没有等待就直接杀进程，前端会看到连接被掐断"
+        assert "taskkill" in script
+        assert script.index("timeout /t 2") < script.index("taskkill")
+        assert script.index("taskkill") < script.index("powershell"), "还在跑就先重建了"
+        assert "install.ps1" in script and "-File" in script
+        assert "--no-browser" in script, "拉起服务时没有 --no-browser"
+        assert str(fake_trade_home) in log_file
 
 
 class TestRebuildEndpointGuard:
