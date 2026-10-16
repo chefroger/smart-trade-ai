@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -412,8 +411,12 @@ class TestSyncChatMemoryPlugin:
 class TestChatMemoryPluginE2E:
 
     def _load_plugin(self):
-        """直接 import 插件模块（不通过 trade.bootstrap）。"""
-        plugin_path = Path("/Users/rogerlau/Desktop/Foreign Trade Assistant/trade/hermes_chat_memory_plugin")
+        """直接 import 插件模块（不通过 trade.bootstrap）。
+
+        路径必须**从本文件位置推**，不能写死 —— 第一版写死了开发机的绝对路径，
+        本地全绿、CI 上 6 个用例全挂在 FileNotFoundError（仓库不在那个路径下）。
+        """
+        plugin_path = Path(__file__).resolve().parent.parent / "trade" / "hermes_chat_memory_plugin"
         spec = importlib.util.spec_from_file_location("chat_memory_plugin", plugin_path / "__init__.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -461,7 +464,9 @@ class TestChatMemoryPluginE2E:
 
     def test_handler_succeeds_with_valid_args(self, tmp_path, monkeypatch):
         """端到端：真 SQLite + 真 handler。"""
-        os.environ["TRADE_HOME"] = str(tmp_path)
+        # 用 monkeypatch 而不是直接赋值 —— 后者不会在用例结束时还原，
+        # 会把 TRADE_HOME 渗给后续用例（它们拿到的是已删除的 tmp_path）
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
         import trade.database as db
         db.init_db()
         con = db.get_connection()
