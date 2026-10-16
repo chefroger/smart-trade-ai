@@ -457,9 +457,16 @@ def _venv_rebuild_script() -> tuple[list[str], str] | None:
     old_pid = os.getpid()
 
     if os.name == "nt":
-        # Windows：安装脚本是 PowerShell，启动器是 install.ps1 生成的 trade.cmd
+        # Windows：安装脚本是 PowerShell，启动器是 install.ps1 生成的 trade.cmd。
+        #
+        # ⚠️ 这个路径必须与 install.ps1 的 `$LocalBin = "$env:LOCALAPPDATA\local\bin"`
+        # 严格一致。2026-10-16 评审抓到过一次写错的后果：原来少了 `local\bin` 一层，
+        # 于是重建**全部成功**、最后一步 `start` 却找不到文件 → 服务起不来、界面卡在
+        # 「正在重建」直到 15 分钟超时 —— 比不重建还糟，因为用户以为在正常推进。
+        # 回归测试：tests/test_venv_rebuild.py::TestWindowsLauncherPath。
+        _local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
         ps1 = trade_dir / "scripts" / "install.ps1"
-        launcher = Path(os.environ.get("LOCALAPPDATA", "")) / "trade" / "trade.cmd"
+        launcher = Path(_local) / "local" / "bin" / "trade.cmd"
         if not ps1.is_file():
             return None
         # 用 -ExecutionPolicy Bypass 是因为脚本来自用户自己的机器、且此前就是这么装的
