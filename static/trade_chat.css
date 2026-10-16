@@ -118,6 +118,13 @@ body {
 .sidebar-footer button:disabled { opacity: 0.5; cursor: default; }
 .sidebar-footer button:disabled:active { transform: none; }
 
+/* `hidden` 必须能真的藏住按钮。
+   ⚠️ 上面给 button 设了 `display: flex`（为了让图标居中），而 [hidden] 的默认样式
+   就是 `display: none` —— 任何显式 display 声明都会盖掉它，于是被 hidden 的
+   「重启」「Skills 更新」照样显示出来（2026-10-16 真机截图发现）。
+   这条必须排在 display: flex 之后。 */
+.sidebar-footer button[hidden] { display: none; }
+
 /* 悬停提示。
    为什么不用 title 属性：原生提示有 1~2 秒延迟，用户悬停后半天不弹会以为没反应；
    ::after 是即时的，样式也可控。
