@@ -209,3 +209,49 @@ class TestChinaLeadsRouting:
         assert matched is None or matched["name"] != "b2b-china-leads", (
             f"{query!r} 被抢到了 b2b-china-leads（应为 None 或原技能）"
         )
+
+
+class TestTriggerMutualExclusivity:
+    """跨技能触发词互斥性审计（2026-10-20，意图路由加固第一项）。
+
+    关键词路由的准度完全取决于触发词的互斥性：两个 skill 拥有同一个词时，结果由
+    打分/注册顺序决定，等于"谁先注册谁赢"，而赢家未必是对的。审计时实测 15/1074
+    条被抢，典型误路由："market research"→customs-data（应 market-analysis）、
+    "一键开发客户"→向导（应全自动流水线）、"催单"→lead-generation（应 sales-pipeline）。
+
+    两条不变量（新增 skill / 触发词时若打破，先做归属决策，再改测试）：
+    ① 同一触发词（大小写不敏感）只能属于一个 skill；
+    ② 每条触发词单独作为查询时，必须路由回它自己的 skill。
+    """
+
+    @staticmethod
+    def _active_skills():
+        from trade.skill_registry import _BLOCKED_SKILLS, _SKILLS
+
+        return [s for s in _SKILLS if s["name"] not in _BLOCKED_SKILLS]
+
+    def test_no_cross_skill_duplicate_triggers(self):
+        owners: dict[str, list[str]] = {}
+        for skill in self._active_skills():
+            # 路由匹配不区分大小写，这里也必须不区分（"Incoterms"/"incoterms" 曾是漏网之鱼）
+            for trigger in skill.get("triggers", []):
+                owners.setdefault(trigger.lower(), []).append(skill["name"])
+        dupes = {t: ns for t, ns in owners.items() if len(ns) > 1}
+        assert not dupes, (
+            "触发词跨技能重复 —— 路由结果将取决于打分/注册顺序，而不是语义：\n"
+            + "\n".join(f"  {t!r} → {ns}" for t, ns in sorted(dupes.items()))
+        )
+
+    def test_every_trigger_routes_to_its_owner(self):
+        from trade.skill_router import match_skill
+
+        stolen = []
+        for skill in self._active_skills():
+            for trigger in skill.get("triggers", []):
+                matched = match_skill(trigger)
+                if matched is None or matched["name"] != skill["name"]:
+                    stolen.append((trigger, skill["name"], matched and matched["name"]))
+        assert not stolen, (
+            "以下触发词单独查询时没有路由回自己的技能（被抢或无命中）：\n"
+            + "\n".join(f"  {t!r} 属于 {owner}，实际 → {got}" for t, owner, got in stolen)
+        )

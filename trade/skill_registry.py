@@ -256,7 +256,7 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-customer-finder",
         "triggers": [
             # Chinese — 傻瓜式 / 一键 / 快速 / 新手
-            "傻瓜式找客户", "傻瓜式开发", "一键找客户", "一键开发客户",
+            "傻瓜式找客户", "傻瓜式开发", "一键找客户",
             "快速找客户", "快速开发客户", "新手找客户", "不会找客户",
             "简单找客户", "客户开发向导", "找客户向导", "三问找客户",
             "教我怎么找客户", "我要开发客户", "找客户太难了",
@@ -281,7 +281,7 @@ STOP RULE（防止无效搜索）:
             "找客户", "开发客户", "客户开发", "找潜在客户", "新客户",
             "询盘", "报价谈判", "谈判", "成交",
             "价格谈判", "报价技巧", "报价",
-            "付款方式", "付款条件", "交期", "催单",
+            "付款方式", "付款条件", "交期",
             # 邮件主题 + 多语言
             "邮件主题", "主题行优化", "邮件标题", "邮件标题优化",
             "多语言开发信", "多语言邮件", "阿拉伯语开发信", "西班牙语开发信",
@@ -583,12 +583,11 @@ STOP RULE（防止无效搜索）:
             "查采购商", "找买家", "进出口数据",
             # English
             "customs data", "import export records", "trade data mining",
-            "buyer analysis", "supplier analysis", "market research",
-            "competitor analysis", "trade intelligence",
+            "buyer analysis", "supplier analysis", "trade intelligence",
             # Fragments
             "谁在进口", "哪些公司在买", "海关记录", "进出口查询",
             # English fragments
-            "find buyers", "import data", "export data", "trade data",
+            "import data", "export data", "trade data",
         ],
         "aliases": [],
         "input_fmt": "产品HS编码 或 产品名称 + 目标市场（国家/地区）",
@@ -624,8 +623,8 @@ STOP RULE（防止无效搜索）:
             "开始使用", "首次设置",
             # English
             "new company", "deploy", "setup", "marketing plan",
-            "company profile", "product introduction", "marketing positioning",
-            "competitor analysis", "first time setup",
+            "product introduction", "marketing positioning",
+            "first time setup",
             # Fragments
             "怎么开始", "新手上路", "第一步做什么", "我需要准备什么",
         ],
@@ -843,7 +842,7 @@ STOP RULE（防止无效搜索）:
             "索赔", "投诉", "质量投诉", "货有问题", "客户投诉",
             "退货", "退款", "理赔", "赔偿",
             # Chinese — 展会
-            "邀请函", "广交会", "参展",
+            "邀请函",
             "邀请客户来展会",
             # Chinese — 验厂
             "验厂", "客户要来工厂", "验厂邀请", "工厂审核", "audit",
@@ -861,7 +860,7 @@ STOP RULE（防止无效搜索）:
             # English
             "payment reminder", "overdue", "chase payment",
             "claim", "complaint", "refund", "compensation",
-            "exhibition", "trade fair", "invitation",
+            "trade fair", "invitation",
             "factory audit", "factory visit", "plant tour",
             "holiday greeting", "season's greetings",
             "sample shipping", "sample tracking",
@@ -905,7 +904,7 @@ STOP RULE（防止无效搜索）:
             "缩写", "全称", "ETA", "ETD", "LC", "BL", "DP", "DA",
             "外贸术语", "贸易术语缩写",
             # Chinese — Incoterms
-            "Incoterms", "ICC", "贸易术语", "FOB", "CIF", "EXW",
+            "ICC", "贸易术语", "FOB", "CIF", "EXW",
             "DDP", "DAP", "FCA", "CFR", "CPT", "CIP",
             "贸易术语检查",
             # Chinese — 翻译
@@ -1121,7 +1120,7 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-buyer-persona",
         "triggers": [
             # Chinese
-            "买家画像", "客户画像", "角色分析", "人物画像", "分析一下买家画像", "分析买家画像",
+            "买家画像", "角色分析", "人物画像", "分析一下买家画像", "分析买家画像",
             "采购角色", "决策者分析", "客户分层", "买家角色",
             "按角色写", "给采购写", "给工程师写", "给老板写",
             "针对不同角色", "价值主张定制",
@@ -1144,7 +1143,7 @@ STOP RULE（防止无效搜索）:
             "作战地图", "出口分析", "国家分析", "区域分析",
             "竞品分析", "竞争对手分析", "市场机会", "市场研究", "出口国分析",
             # English
-            "market analysis", "market research", "country analysis",
+            "market analysis", "market research", "competitor analysis", "country analysis",
             "go to market", "target market", "market entry",
             "competitive landscape", "export strategy",
             "market intelligence", "region analysis",
@@ -1186,7 +1185,7 @@ STOP RULE（防止无效搜索）:
             "回复优化", "询盘模拟", "不匹配询盘",
             # English
             "inquiry training", "practice replying", "practice replying to a difficult inquiry", "practice reply", "role play buyer",
-            "objection handling", "sales training", "improve reply",
+            "objection handling", "improve reply",
         ],
         "aliases": [],
         "input_fmt": "目标买家场景（国家/类型/关注点），或一封真实询盘，或一个具体反对意见",
@@ -1264,8 +1263,8 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-product-description",
         "triggers": [
-            "产品描述", "产品介绍", "产品文案", "Sales Kit", "产品资料",
-            "销售资料", "产品卖点", "产品说明", "产品推广",
+            "产品描述", "产品介绍", "产品文案", "产品资料",
+            "销售资料", "产品卖点", "产品说明",
             "product description", "product copy", "sales kit",
             "value proposition", "product selling points",
         ],
@@ -1293,10 +1292,10 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-customer-intel",
         "triggers": [
             "客户画像", "深度画像", "客户分析", "分析一下这个客户", "了解客户",
-            "客户情报", "客户档案", "怎么跟这个客户谈",
+            "客户情报", "怎么跟这个客户谈",
             "客户偏好", "送礼建议", "回扣怎么给", "记住客户",
             "客户家底", "客户决策风格", "深入了解客户",
-            "customer intel", "customer profile", "customer dossier", "customer insight", "client analysis", "what do we know about", "know your customer",
+            "customer intel", "customer dossier", "customer insight", "client analysis", "what do we know about", "know your customer",
             "deep profile", "buyer intelligence",
         ],
         "aliases": ["b2b-customer-mgmt", "b2b-buyer-persona"],
@@ -1328,7 +1327,7 @@ STOP RULE（防止无效搜索）:
             "新人培训", "销售技巧", "跟进话术", "谈判话术",
             "异议处理", "逼单技巧", "客户激活", "谈单流程",
             "sales playbook", "sales knowledge base", "sales SOP",
-            "objection handling", "sales training",
+            "sales training",
         ],
         "aliases": ["b2b-inquiry-training", "b2b-lead-generation"],
         "input_fmt": "行业/产品线 + 客户画像 + 具体场景（首回/报价/异议/逼单/激活/售后）",
