@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -106,7 +106,11 @@ class TestSearchHistoryE2E:
 
     @pytest.fixture
     def db_with_rows(self, tmp_path, monkeypatch):
-        """临时 TRADE_HOME + 真实 init_db + 插若干对话。"""
+        """临时 TRADE_HOME + 真实 init_db + 插若干对话。
+
+        返回 {"path", "rows": [(query, datetime)]}：日期相关的断言要用 rows 现算期望 ——
+        写死期望会随日历变红（"前天"在周一/周二是上周；"10 天前"在月初是上个月）。
+        """
         monkeypatch.setenv("TRADE_HOME", str(tmp_path))
         import trade.database as db
         db.init_db()
@@ -115,19 +119,27 @@ class TestSearchHistoryE2E:
 
         from datetime import timedelta as _td
 
+        rows: list[tuple[str, datetime]] = []
+
         def insert(days_ago, q, r):
-            ts = (datetime.now() - _td(days=days_ago)).strftime("%Y-%m-%d %H:%M:%S")
+            ts = datetime.now() - _td(days=days_ago)
             con.execute(
                 "INSERT INTO conversations (company_id, query, response, created_at) "
-                "VALUES (1, ?, ?, ?)", (q, r, ts),
+                "VALUES (1, ?, ?, ?)", (q, r, ts.strftime("%Y-%m-%d %H:%M:%S")),
             )
+            rows.append((q, ts))
 
         insert(0, "今天的问题", "今天的回复")
         insert(1, "昨天的问题", "昨天的回复")
         insert(2, "前天的问题", "前天的回复")
         insert(10, "上周的问题", "上周的回复")
         con.commit()
-        return tmp_path
+        return {"path": tmp_path, "rows": rows}
+
+    @staticmethod
+    def _rows_desc(db_with_rows):
+        """按时间倒序（与 search_history 的排序一致）的 (query, ts) 列表。"""
+        return sorted(db_with_rows["rows"], key=lambda r: r[1], reverse=True)
 
     def test_today_returns_only_today(self, db_with_rows):
         from trade.chat_memory import search_history
@@ -143,17 +155,34 @@ class TestSearchHistoryE2E:
         assert [x["query"] for x in r] == ["昨天的问题"]
 
     def test_this_week_includes_today(self, db_with_rows):
-        """this_week 含"现在"——所以今天/昨天/前天都进。"""
+        """this_week 起点 = 本周一 0:00（含"现在"）—— 期望值按实际插入日期现算。"""
         from trade.chat_memory import search_history
+
+        now = datetime.now()
+        week_start = (now - timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        expected = [q for q, ts in self._rows_desc(db_with_rows) if ts >= week_start]
 
         r = search_history(1, time_range="this_week")
-        assert [x["query"] for x in r] == ["今天的问题", "昨天的问题", "前天的问题"]
+        assert [x["query"] for x in r] == expected
 
     def test_last_week_does_not_include_this_week(self, db_with_rows):
+        """last_week = 上周一 0:00 到本周一 0:00（前一侧完整窗口）—— 现算期望。"""
         from trade.chat_memory import search_history
 
+        now = datetime.now()
+        week_start = (now - timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        last_week_start = week_start - timedelta(days=7)
+        expected = [
+            q for q, ts in self._rows_desc(db_with_rows)
+            if last_week_start <= ts < week_start
+        ]
+
         r = search_history(1, time_range="last_week")
-        assert [x["query"] for x in r] == ["上周的问题"]
+        assert [x["query"] for x in r] == expected
 
     def test_all_returns_everything(self, db_with_rows):
         from trade.chat_memory import search_history
@@ -186,9 +215,13 @@ class TestSearchHistoryE2E:
     def test_recent_months_1_returns_only_this_month(self, db_with_rows):
         from trade.chat_memory import search_history
 
+        now = datetime.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        expected = [q for q, ts in self._rows_desc(db_with_rows) if ts >= month_start]
+
         r = search_history(1, time_range="all", recent_months=1)
-        # 所有 4 条都在本月 → 全返
-        assert len(r) == 4
+        # 期望按实际日期现算：月初时"10 天前"会落到上个月
+        assert [x["query"] for x in r] == expected
 
     def test_unknown_enum_falls_through_to_all(self, db_with_rows):
         from trade.chat_memory import search_history
