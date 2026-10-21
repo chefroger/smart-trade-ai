@@ -73,8 +73,38 @@ def _install_cors(app: FastAPI, port: int) -> None:
 # ── Hermes Gateway ────────────────────────────────────────────────────────────
 
 
-def _is_gateway_running() -> bool:
-    """检查是否有 Hermes Gateway 进程在运行（跨平台）。"""
+def _gateway_running_via_hermes() -> bool | None:
+    """用 Hermes 自己的严格探测判断 gateway 是否在跑（与 `hermes gateway status` 同源）。
+
+    为什么不再用端口/进程名猜：
+      - **端口 8642 不可靠**：0.22 起 api_server 未启用时该端口不监听 → 把已在跑的
+        gateway 判成没跑（每次启动多余 spawn 一次，2026-10-21 实测）；
+      - **`pgrep -f hermes.*gateway` 会假阳性**：`hermes gateway status` / dashboard
+        这类兄弟命令的命令行也含 "hermes … gateway"，会被误判成 gateway 在跑，
+        而真没跑时就会漏启动 → 定时任务静默不跑（更危险的方向）。
+    上游 `hermes gateway status` 内部调用 `find_gateway_pids()`：PID 文件 + 服务管理器
+    （launchd/systemd/SCM）+ 严格 argv 扫描，且排除当前调用链。Trade 直接复用同一
+    判断（0.21.6 与 0.22.x 均提供该函数）。
+
+    Returns:
+        True/False 为权威结论；None 表示 Hermes 不可导入/探测异常 —— 调用方回退旧探测。
+    """
+    try:
+        from hermes_cli.gateway import find_gateway_pids
+    except Exception:
+        return None
+    try:
+        return bool(find_gateway_pids())
+    except Exception:
+        return None
+
+
+def _gateway_running_fallback() -> bool:
+    """旧探测（仅在 Hermes 严格探测不可用时使用）。
+
+    POSIX：`pgrep -f`（可能假阳性，见 `_gateway_running_via_hermes` 的说明）；
+    Windows：TCP 8642（≤0.21.x 的 api_server 会监听该端口）。两者都只在导入失败时兜底。
+    """
     try:
         if os.name == "nt":
             import socket as _sock
@@ -96,6 +126,17 @@ def _is_gateway_running() -> bool:
             return result.returncode == 0 and bool(result.stdout.strip())
     except Exception:
         return False
+
+
+def _is_gateway_running() -> bool:
+    """检查 Hermes Gateway 是否在运行（跨平台）。
+
+    首选 Hermes 的严格探测器（与 `hermes gateway status` 同源）；它不可用时回退旧探测。
+    """
+    hermes_result = _gateway_running_via_hermes()
+    if hermes_result is not None:
+        return hermes_result
+    return _gateway_running_fallback()
 
 
 def _find_hermes_binary(*, executable: str | None = None) -> str:
@@ -300,7 +341,7 @@ def _kill_gateway() -> None:
     try:
         if os.name == "nt":
             # Windows: taskkill 不直接支持命令行匹配，回退到通过端口找进程
-            # （需 psutil；没有就跳过——下次启动时新 Trade 启动会判端口已占用而跳过启动新 Gateway）
+            # （需 psutil；没有就跳过——下次启动时新 Trade 会用 Hermes 探测器重新判断并按需启动）
             try:
                 import psutil
                 for proc in psutil.process_iter(["pid", "name", "cmdline"]):
