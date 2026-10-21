@@ -341,6 +341,18 @@ def _rollback_checkout(
         warnings.append(msg)
         return False
 
+    # 退出码不等于回退成功：`git reset --keep` 在遇到冲突的未提交改动时
+    # **静默放弃、既不改工作树也不报错，退出码仍是 0**（2026-10-21 真机实测）。
+    # 只信退出码会把"没回退"误报成"已回退" —— 用户以为回到了旧版本，
+    # 实际代码还停在新版。唯一可靠的判据是回读 HEAD。
+    now_head = _git_head(trade_dir)
+    if now_head is None or not now_head.startswith(target_sha[:8]):
+        msg = f"rollback to {target_sha[:8]} did not take effect (HEAD={now_head})"
+        emit("  ❌ 回退未生效（工作区有与回退冲突的未提交改动，git 已放弃回退）")
+        emit(f"  💡 手动恢复：cd {trade_dir} && git stash && git reset --keep {target_sha}")
+        warnings.append(msg)
+        return False
+
     emit(f"  ↩ 已回退代码到升级前版本（{target_sha[:8]}），继续用旧版本运行。")
     # Step 2/3 已把新代码的技能复制进 ~/.hermes/skills —— 回退代码后重新同步一次，
     # 保持「代码版本 ↔ 技能版本」自洽；失败只是多一条警告，不掩盖回滚本身成功。

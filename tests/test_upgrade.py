@@ -1123,3 +1123,53 @@ class TestPreUpgradeBackup:
         assert not [c for c in calls if c[:1] in (["git"], [sys.executable])], (
             "备份失败后不应再执行任何 git/pip 命令"
         )
+
+
+class TestRollbackVerifiedByHead:
+    """回退必须用**回读 HEAD** 验证，不能只信退出码。
+
+    2026-10-21 真机实测：`git reset --keep` 遇到冲突的未提交改动时**静默放弃** ——
+    既不改工作树也不报错，退出码仍是 0。只信退出码会把"没回退"误报成"已回退"，
+    用户以为回到旧版本，实际代码还停在新版。
+    """
+
+    def test_keep_conflict_is_reported_as_failed(self, tmp_path, monkeypatch):
+        from trade.post_install import update as update_module
+
+        # 模拟：git reset --keep 返回 0，但 HEAD 没变（冲突静默放弃）
+        monkeypatch.setattr(update_module, "_git_head", lambda d: "f" * 40)
+        monkeypatch.setattr(
+            update_module.subprocess, "run",
+            lambda cmd, *a, **k: MagicMock(returncode=0, stdout="", stderr=""),
+        )
+
+        out: list[str] = []
+        warnings: list[str] = []
+        ok = update_module._rollback_checkout(
+            tmp_path, "a" * 40, out.append, warnings,
+        )
+
+        assert ok is False, "HEAD 未变 → 必须报回退失败"
+        assert any("回退未生效" in m for m in out)
+        assert any("rollback" in w for w in warnings)
+
+    def test_successful_rollback_is_confirmed(self, tmp_path, monkeypatch):
+        from trade.post_install import update as update_module
+
+        # 先返回旧 sha（记录回滚点），回退后 HEAD 应等于目标
+        seq = iter(["a" * 40, "a" * 40])
+        monkeypatch.setattr(update_module, "_git_head", lambda d: next(seq))
+        monkeypatch.setattr(
+            update_module.subprocess, "run",
+            lambda cmd, *a, **k: MagicMock(returncode=0, stdout="", stderr=""),
+        )
+        monkeypatch.setattr(update_module, "install_skills", lambda: None)
+
+        out: list[str] = []
+        warnings: list[str] = []
+        ok = update_module._rollback_checkout(
+            tmp_path, "a" * 40, out.append, warnings,
+        )
+
+        assert ok is True
+        assert any("已回退代码" in m for m in out)
