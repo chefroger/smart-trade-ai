@@ -696,3 +696,46 @@ class TestTradeUiTokenScope:
 
         monkeypatch.setenv("TRADE_ALLOW_REMOTE_UI", "1")
         assert app_mod._client_may_receive_token(_FakeClient("192.168.1.5")) is True
+
+
+class TestCustomerSearchScoreField:
+    """`/customers/search` 的检索分必须走独立字段，不许覆盖业务评级。
+
+    2026-10-21 审计：路由原先把向量相似度写进 `match_score`（models.py 声明为
+    int 0-5 的业务评级）。前端把它灌进 0-5 输入框，`parseInt("0.8731")` → 0，
+    用户一保存就把真实评分清零。检索分是 0.41~1.0 的浮点，两者语义不同。
+    """
+
+    def test_search_score_does_not_clobber_match_score(self, monkeypatch):
+        import trade.api.customers as customers_api
+        from trade import customer as customer_module
+
+        # 一个已有业务评级的客户（0-5 的 int）
+        stored = {"id": 7, "company_id": 1, "name": "Acme", "match_score": 4}
+        monkeypatch.setattr(customer_module, "get", lambda cid, company_id: dict(stored))
+
+        # 向量检索命中，得分是 0.8731 这种浮点
+        class _Conn:
+            def close(self):
+                pass
+
+        monkeypatch.setattr("trade.database.get_connection", lambda: _Conn())
+        import trade.vec_search as vec_search
+
+        monkeypatch.setattr(
+            vec_search, "search_customers",
+            lambda conn, query, company_id, top_k: [{"customer_id": 7, "score": 0.8731}],
+        )
+
+        out = customers_api.search_customers(q="acme", limit=20, cid=1)
+
+        assert len(out) == 1
+        # 业务评级原封不动
+        assert out[0]["match_score"] == 4, "检索分不能覆盖 0-5 的业务评级"
+        # 检索分单独返回
+        assert out[0]["search_score"] == 0.8731
+
+    def test_empty_query_returns_empty_list(self):
+        import trade.api.customers as customers_api
+
+        assert customers_api.search_customers(q="   ", limit=20, cid=1) == []

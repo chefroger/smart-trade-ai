@@ -505,9 +505,11 @@ class TestUpdateTradeDir:
         updater = TestUpdateStepSeverity()
         updater._run_update(existing_dir=True)
 
-        first_call = updater.last_subprocess.run.call_args_list[0]
-        assert first_call[0][0][:3] == ["git", "pull", "--ff-only"], first_call
-        assert first_call[1]["cwd"] == str(_get_trade_home() / "foreign-trade-assistant"), first_call[1]
+        # 首个调用现在是 `git rev-parse HEAD`（升级前记录回滚点，见 TestUpdateRollback），
+        # 所以这里按命令找 pull，而不是假设它是第一次调用。
+        calls = updater.last_subprocess.run.call_args_list
+        pull = next(c for c in calls if c[0][0][:3] == ["git", "pull", "--ff-only"])
+        assert pull[1]["cwd"] == str(_get_trade_home() / "foreign-trade-assistant"), pull[1]
 
     def test_guess_running_project_dir_removed(self):
         """_guess_running_project_dir 应已被删除。"""
@@ -871,3 +873,253 @@ class TestTextEncodingIsExplicit:
         missing = [kind for kind, enc in seen if not enc]
         assert not missing, f"存在未指定编码的读写：{missing}"
         assert all(str(enc).lower().replace("-", "") == "utf8" for _, enc in seen), seen
+
+
+class TestUpdateRollback:
+    """致命失败必须回退源码，不能留下「新源码 + 旧依赖」的半升级状态。
+
+    2026-10-21 审计 P0：git pull 成功后 pip 失败时，原实现直接 return —— 源码
+    已经是新版、依赖还是旧版、服务也没重启。下次重启就会用新代码配旧依赖启动，
+    直接起不来，且用户没有任何办法回到能跑的状态。
+    """
+
+    SHA = "a" * 40
+
+    def _run(
+        self, tmp_path, monkeypatch, *, pip_fail: str | None = None,
+        db_fail: bool = False, reset_rc: int = 0,
+    ):
+        """跑一次 update_trade，按需让某一步失败；返回 (结果, 调用记录)。"""
+        from trade.post_install import update as update_module
+
+        fake_trade_dir = tmp_path / "foreign-trade-assistant"
+        fake_trade_dir.mkdir()
+        (fake_trade_dir / ".trade-template").mkdir()
+        (fake_trade_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+        monkeypatch.setattr(update_module, "_get_trade_home", lambda: tmp_path)
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(list(cmd))
+            cp = MagicMock()
+            cp.stdout = cp.stderr = ""
+            cp.returncode = 0
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                cp.stdout = self.SHA + "\n"
+            elif cmd[:2] == ["git", "pull"]:
+                cp.stdout = "Fast-forward"
+            elif cmd[:2] == ["git", "reset"]:
+                cp.returncode = reset_rc
+                cp.stderr = "error: could not reset" if reset_rc else ""
+            elif cmd[:3] == ["git", "stash"]:
+                cp.stdout = "No local changes"
+            elif cmd[0:4] == [sys.executable, "-m", "pip", "install"]:
+                # requirements.txt 与自身安装都是 pip install；用参数区分
+                if pip_fail == "requirements" and "-r" in cmd:
+                    cp.returncode = 1
+                    cp.stderr = "ERROR: Could not install requirement"
+                elif pip_fail == "self" and "--no-deps" in cmd:
+                    cp.returncode = 1
+                    cp.stderr = "ERROR: package build failed"
+            return cp
+
+        monkeypatch.setattr(update_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(update_module, "install_skills", lambda: None)
+        monkeypatch.setattr(update_module, "update_skills", lambda: None)
+        monkeypatch.setattr(update_module, "_sync_trade_template", lambda s, d: None)
+        monkeypatch.setattr(update_module, "_ensure_auto_start", lambda d: None)
+
+        import trade.database as db_module
+        if db_fail:
+            def boom():
+                raise sqlite3_error_ref()
+            monkeypatch.setattr(db_module, "init_db", boom)
+        else:
+            monkeypatch.setattr(db_module, "init_db", lambda: tmp_path / "trade.db")
+
+        return update_module.update_trade(), calls
+
+    @pytest.mark.parametrize("which", ["requirements", "self"])
+    def test_pip_failure_rolls_back_to_pre_update_commit(self, tmp_path, monkeypatch, which):
+        result, calls = self._run(tmp_path, monkeypatch, pip_fail=which)
+
+        assert result["ok"] is False
+        resets = [c for c in calls if c[:2] == ["git", "reset"]]
+        assert resets, "pip 失败后必须回退源码"
+        assert "--keep" in resets[0], "必须用 --keep（--hard 会静默删掉用户的未提交改动）"
+        assert self.SHA in resets[0]
+        assert any("rolled back" in w for w in result["warnings"])
+
+    def test_database_failure_also_rolls_back(self, tmp_path, monkeypatch):
+        result, calls = self._run(tmp_path, monkeypatch, db_fail=True)
+
+        assert result["ok"] is False
+        assert [c for c in calls if c[:2] == ["git", "reset"]], (
+            "数据库迁移失败也必须回退源码（新代码 + 半迁移的库重启只会更糟）"
+        )
+
+    def test_rollback_failure_is_reported_not_swallowed(self, tmp_path, monkeypatch):
+        result, _calls = self._run(tmp_path, monkeypatch, pip_fail="self", reset_rc=1)
+
+        assert result["ok"] is False
+        # 原始错误仍在
+        assert any("pip install" in e for e in result["errors"])
+        # 回退失败必须让用户看见（含手动恢复命令）
+        assert any("rollback" in w for w in result["warnings"])
+
+    def test_success_does_not_roll_back(self, tmp_path, monkeypatch):
+        result, calls = self._run(tmp_path, monkeypatch)
+
+        assert result["ok"] is True
+        assert not [c for c in calls if c[:2] == ["git", "reset"]], (
+            "升级成功时不该回退"
+        )
+
+
+def sqlite3_error_ref():
+    """构造一个不是 ImportError 的通用异常（模拟迁移失败）。"""
+    return RuntimeError("migration failed")
+
+
+class TestPreUpgradeBackup:
+    """升级前必须有可回退的数据库快照，且快照要包含 WAL 里的已提交事务。
+
+    2026-10-21 审计 P1：备份链路从不被升级调用；且原实现直接 copy2 主库，
+    WAL 模式下会漏掉还在 -wal 里的已提交事务。
+    """
+
+    def test_snapshot_includes_wal_transactions(self, tmp_path):
+        import sqlite3
+
+        from trade.post_install.backup import snapshot_db
+
+        db = tmp_path / "trade.db"
+        writer = sqlite3.connect(db)
+        try:
+            writer.execute("PRAGMA journal_mode=WAL")
+            writer.execute("CREATE TABLE t (x INTEGER)")
+            writer.commit()
+            writer.execute("INSERT INTO t VALUES (42)")
+            writer.commit()
+            # 写入者保持连接打开：这条已提交事务可能还在 -wal 里
+            snap = tmp_path / "snap.db"
+            snapshot_db(db, snap)
+        finally:
+            writer.close()
+
+        reader = sqlite3.connect(snap)
+        try:
+            assert reader.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1, (
+                "快照必须包含 WAL 中已提交的事务"
+            )
+        finally:
+            reader.close()
+
+    def test_backup_prunes_old_files(self, tmp_path):
+        import sqlite3
+
+        from trade.post_install.backup import backup_db_before_upgrade
+
+        db = tmp_path / "trade.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE t (x INTEGER)")
+        conn.commit()
+        conn.close()
+
+        backups = tmp_path / "backups"
+        backups.mkdir()
+        for i in range(8):
+            (backups / f"trade-2026010{i}-000000-before-upgrade.db").write_bytes(b"old")
+
+        out = backup_db_before_upgrade(db, backups, keep=5)
+        assert out is not None and out.is_file()
+        remaining = list(backups.glob("trade-*-before-upgrade.db"))
+        assert len(remaining) == 5, f"应只保留最近 5 份，实际 {len(remaining)}"
+
+    def test_update_backs_up_before_git_pull(self, tmp_path, monkeypatch):
+        """update_trade 必须在 git pull 之前落一份备份。"""
+        import sqlite3
+
+        from trade.post_install import update as update_module
+
+        fake_trade_dir = tmp_path / "foreign-trade-assistant"
+        fake_trade_dir.mkdir()
+        (fake_trade_dir / ".trade-template").mkdir()
+        (fake_trade_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+        (tmp_path / "data").mkdir()
+        db = tmp_path / "data" / "trade.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE t (x INTEGER)")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(update_module, "_get_trade_home", lambda: tmp_path)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(list(cmd))
+            cp = MagicMock()
+            cp.stdout = cp.stderr = ""
+            cp.returncode = 0
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                cp.stdout = "b" * 40
+            return cp
+
+        monkeypatch.setattr(update_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(update_module, "install_skills", lambda: None)
+        monkeypatch.setattr(update_module, "update_skills", lambda: None)
+        monkeypatch.setattr(update_module, "_sync_trade_template", lambda s, d: None)
+        monkeypatch.setattr(update_module, "_ensure_auto_start", lambda d: None)
+
+        import trade.database as db_module
+        monkeypatch.setattr(db_module, "init_db", lambda: db)
+
+        # 给备份打一个调用顺序标记（架构检查会先跑 uname/sysctl，不能用 calls[0] 判序）
+        from trade.post_install import backup as backup_module
+
+        real_backup = backup_module.backup_db_before_upgrade
+
+        def recording_backup(*a, **k):
+            calls.append(["backup"])
+            return real_backup(*a, **k)
+
+        monkeypatch.setattr(backup_module, "backup_db_before_upgrade", recording_backup)
+
+        result = update_module.update_trade()
+        assert result["ok"] is True
+
+        backups = list((tmp_path / "backups").glob("*-before-upgrade.db"))
+        assert len(backups) == 1, "升级必须留下数据库快照"
+        assert any("升级前数据库备份" in m for m in result["messages"])
+
+        backup_at = calls.index(["backup"])
+        first_git = next(i for i, c in enumerate(calls) if c[:1] == ["git"])
+        assert backup_at < first_git, "备份必须发生在任何 git 命令之前"
+
+    def test_backup_failure_aborts_upgrade(self, tmp_path, monkeypatch):
+        """备份失败必须中止升级 —— 没有回退点就不换代码、不迁 schema。"""
+        from trade.post_install import backup as backup_module
+        from trade.post_install import update as update_module
+
+        fake_trade_dir = tmp_path / "foreign-trade-assistant"
+        fake_trade_dir.mkdir()
+        monkeypatch.setattr(update_module, "_get_trade_home", lambda: tmp_path)
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(backup_module, "backup_db_before_upgrade", boom)
+
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            update_module.subprocess, "run",
+            lambda cmd, *a, **k: calls.append(list(cmd)),
+        )
+
+        result = update_module.update_trade()
+        assert result["ok"] is False
+        assert any("backup" in e for e in result["errors"])
+        assert not [c for c in calls if c[:1] in (["git"], [sys.executable])], (
+            "备份失败后不应再执行任何 git/pip 命令"
+        )

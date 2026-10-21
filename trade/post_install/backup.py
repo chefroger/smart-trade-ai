@@ -23,6 +23,61 @@ from pathlib import Path
 
 from trade.post_install.skills import _get_hermes_home, _get_trade_home
 
+# ── 数据库一致性快照 ──────────────────────────────────────────────────────
+
+def snapshot_db(db_path: Path, dest: Path) -> None:
+    """生成 SQLite 的一致性快照（含 WAL 中已提交但未回写的事务）。
+
+    为什么不能 `shutil.copy2(trade.db)`：数据库跑在 WAL 模式（database.py:47），
+    近期已提交的事务可能还只在 `-wal` 文件里 —— 只拷主库会静默丢掉这些改动。
+    这里用 sqlite3 官方的在线备份 API（Connection.backup）：它自己在源库上加锁、
+    把 WAL 内容一起快照，不依赖文件系统拷贝的时序。只读打开源库，不改动它。
+    """
+    import sqlite3
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # 先 checkpoint 一次，缩短后续备份窗口（失败不阻断：backup() 本身仍然一致）
+    try:
+        with sqlite3.connect(str(db_path)) as src:
+            src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        pass
+
+    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def backup_db_before_upgrade(db_path: Path, backups_dir: Path, keep: int = 5) -> Path | None:
+    """升级前自动备份数据库；返回备份路径（数据库不存在时返回 None）。
+
+    只保留最近 `keep` 份 `*-before-upgrade.db`，防止无限增长。
+    备份失败会抛异常 —— 由调用方决定是否中止升级（宁可中止，也不要在没有
+    可回退备份的情况下做 schema 迁移）。
+    """
+    if not db_path.is_file():
+        return None
+
+    stamp = _real_datetime.now().strftime("%Y%m%d-%H%M%S")
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    dest = backups_dir / f"trade-{stamp}-before-upgrade.db"
+    snapshot_db(db_path, dest)
+
+    try:
+        olds = sorted(backups_dir.glob("trade-*-before-upgrade.db"), reverse=True)
+        for stale in olds[keep:]:
+            stale.unlink(missing_ok=True)
+    except OSError:
+        pass  # 清理失败不影响本次备份
+    return dest
+
+
 # ── 系统备份 ──────────────────────────────────────────────────────────────
 
 def backup_trade(output_dir: str | None = None) -> str:
@@ -64,9 +119,21 @@ def backup_trade(output_dir: str | None = None) -> str:
     sources: list[tuple[Path, str]] = []  # (绝对路径, tar 内的 arcname)
 
     # 1) SQLite 数据库：最关键的备份目标
+    #    必须走一致性快照而不是直接拷贝 —— 见 snapshot_db 的说明（WAL / -wal 丢事务）
     db_path = trade_home / "data" / "trade.db"
+    tmp_dir: Path | None = None
     if db_path.is_file():
-        sources.append((db_path, ".trade/data/trade.db"))
+        try:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="trade-backup-db-"))
+            snap = tmp_dir / "trade.db"
+            snapshot_db(db_path, snap)
+            sources.append((snap, ".trade/data/trade.db"))
+        except Exception as e:
+            # 快照失败 → 绝不回退到"拷主库"（那正是会丢 WAL 事务的错误做法）
+            print(f"[backup] ERROR: 数据库快照失败，已中止备份：{e}", file=sys.stderr)
+            if tmp_dir is not None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            sys.exit(1)
 
     # 2) 公司数据目录：递归收集所有文件
     companies_dir = trade_home / "companies"
@@ -111,9 +178,14 @@ def backup_trade(output_dir: str | None = None) -> str:
 
     # 打包为 tar.gz
     print(f"[backup] Packaging {len(sources)} files ...")
-    with tarfile.open(out_path, "w:gz") as tar:
-        for abs_path, arcname in sources:
-            tar.add(str(abs_path), arcname=arcname)
+    try:
+        with tarfile.open(out_path, "w:gz") as tar:
+            for abs_path, arcname in sources:
+                tar.add(str(abs_path), arcname=arcname)
+    finally:
+        # 数据库快照是临时文件，无论打包成败都要清掉
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     size_mb = out_path.stat().st_size / (1024 * 1024)
     print(f"[backup] Done: {out_path} ({size_mb:.1f} MB)")

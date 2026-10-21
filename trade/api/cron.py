@@ -70,7 +70,12 @@ def get_today_cron(_cid: int = Depends(require_company)):
 
     for task in tasks:
         task_name = task["name"]
-        task_time = task["time"].split("-")[0] if "-" in task["time"] else task["time"]
+        # `"09:00-10:30"` 是**执行窗口**：起点决定"scheduled"（几点开始），
+        # 终点决定"missed"（到什么时候为止还算没跑）。原先只取起点判 missed，
+        # 09:30 时一个窗口到 10:30 的任务会被误标"已过时"（2026-10-21 审计 P2）。
+        parts = task["time"].split("-", 1)
+        task_time = parts[0]
+        task_window_end = parts[1] if len(parts) > 1 else parts[0]
         output = _find_cron_output(task_name, today)
 
         if output:
@@ -92,7 +97,8 @@ def get_today_cron(_cid: int = Depends(require_company)):
             })
             continue
 
-        if task_time <= current_time:
+        # 过了窗口终点才算 missed；窗口内（current <= end）仍是"待执行"
+        if task_window_end < current_time:
             pending.append({
                 "name": task_name, "time": task["time"],
                 "scheduled": task_time, "missed": True,

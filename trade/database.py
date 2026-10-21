@@ -246,85 +246,106 @@ def _add_context_column(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+# v0→v1 需要补 company_id 的三张业务表
+_V0_TABLES = ("libraries", "customers", "conversations")
+
+
 def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
     """将 v0（单公司）schema 迁移到 v1（多公司）。
 
-    检查旧表是否缺少 company_id 列。
-    如果缺少，则添加 company_id 列并创建一个 slug='default' 的默认公司，
-    由 Trade 系统拥有。
     如果已执行迁移则返回 True，如果已是 v1 则返回 False。
+
+    **2026-10-21 审计修复（P1）**：
+    ① 判据原先只看 `libraries` 一张表 —— 迁移中途失败（`libraries` 列已加、
+       `customers`/`conversations` 还没加）时，下次启动会误判「已是 v1」，
+       剩余表的行 `company_id` 停在 NULL，被所有 `WHERE company_id=?` 静默过滤。
+       现在**逐表检查**，缺哪张补哪张。
+    ② 迁移体原先 `executescript`（隐式提交）+ ALTER/UPDATE 交替，没有事务 ——
+       中途失败会留下"列已加、值没填"的半迁移。现在整段包在**一个显式事务**里，
+       任何一步失败整体回滚（SQLite 的 DDL 也是事务性的）。
     """
-    # 通过检查 libraries 表是否缺少 company_id 列来检测旧 schema
-    cur = conn.execute("PRAGMA table_info(libraries)")
-    cols = {row[1] for row in cur.fetchall()}
-    # 如果已有 company_id 列，说明已是 v1 schema，无需迁移
-    if "company_id" in cols:
+    status = {
+        table: "company_id" in {
+            r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for table in _V0_TABLES
+    }
+    if all(status.values()):
         return False  # 已是 v1
+    if any(status.values()):
+        partial = [t for t, done in status.items() if not done]
+        print(f"  检测到部分迁移的 v0 库 — 补齐缺失列：{', '.join(partial)}")
+    else:
+        print("  检测到 v0 schema — 正在迁移到多公司 v1 …")
 
-    print("  检测到 v0 schema — 正在迁移到多公司 v1 …")
+    # executescript 会隐式提交未决事务；先收尾再显式开启，保证整段原子性
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # 先创建 companies + trade_companies 表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS companies (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT    NOT NULL,
+                slug         TEXT    NOT NULL UNIQUE,
+                logo_url     TEXT    DEFAULT '',
+                website      TEXT    DEFAULT '',
+                contact_name TEXT    DEFAULT '',
+                contact_email TEXT   DEFAULT '',
+                address      TEXT    DEFAULT '',
+                is_active    INTEGER DEFAULT 1,
+                created_at   TEXT    DEFAULT (datetime('now', 'localtime')),
+                updated_at   TEXT    DEFAULT (datetime('now', 'localtime')),
+                extra1       TEXT    DEFAULT '{}',
+                extra2       TEXT    DEFAULT '{}',
+                extra3       TEXT    DEFAULT '{}'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_companies (
+                company_id        INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+                data_dir          TEXT    NOT NULL,
+                agent_identity_md TEXT    DEFAULT '',
+                is_active         INTEGER DEFAULT 1,
+                created_at        TEXT    DEFAULT (datetime('now', 'localtime')),
+                extra1            TEXT    DEFAULT '{}',
+                extra2            TEXT    DEFAULT '{}',
+                extra3            TEXT    DEFAULT '{}'
+            )
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO companies (name, slug, is_active)
+            VALUES ('我的公司', 'default', 1)
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO trade_companies (company_id, data_dir, is_active)
+            VALUES (1, '', 1)
+        """)
 
-    # 先创建 companies + trade_companies 表
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS companies (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            name         TEXT    NOT NULL,
-            slug         TEXT    NOT NULL UNIQUE,
-            logo_url     TEXT    DEFAULT '',
-            website      TEXT    DEFAULT '',
-            contact_name TEXT    DEFAULT '',
-            contact_email TEXT   DEFAULT '',
-            address      TEXT    DEFAULT '',
-            is_active    INTEGER DEFAULT 1,
-            created_at   TEXT    DEFAULT (datetime('now', 'localtime')),
-            updated_at   TEXT    DEFAULT (datetime('now', 'localtime')),
-            extra1       TEXT    DEFAULT '{}',
-            extra2       TEXT    DEFAULT '{}',
-            extra3       TEXT    DEFAULT '{}'
-        );
+        # 逐表补齐 company_id 列，并把现有记录关联到默认公司 (id=1)
+        for table in _V0_TABLES:
+            if status[table]:
+                continue  # 上一轮已迁完的表，不动它的数据
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN company_id INTEGER "
+                f"REFERENCES companies(id) ON DELETE CASCADE"
+            )
+            conn.execute(f"UPDATE {table} SET company_id = 1")
 
-        CREATE TABLE IF NOT EXISTS trade_companies (
-            company_id        INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
-            data_dir          TEXT    NOT NULL,
-            agent_identity_md TEXT    DEFAULT '',
-            is_active         INTEGER DEFAULT 1,
-            created_at        TEXT    DEFAULT (datetime('now', 'localtime')),
-            extra1            TEXT    DEFAULT '{}',
-            extra2            TEXT    DEFAULT '{}',
-            extra3            TEXT    DEFAULT '{}'
-        );
+        # 新索引
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_libraries_company    ON libraries(company_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_company     ON customers(company_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_company ON conversations(company_id)")
 
-        INSERT OR IGNORE INTO companies (name, slug, is_active)
-        VALUES ('我的公司', 'default', 1);
+        # 备用列同属本次 schema 变更，放在同一事务里
+        _add_spare_columns(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        print("  ❌ v0→v1 迁移失败，已整体回滚（数据库保持迁移前状态）")
+        raise
 
-        INSERT OR IGNORE INTO trade_companies (company_id, data_dir, is_active)
-        VALUES (1, '', 1);
-    """)
-
-    # 向现有 v0 表添加 company_id 列
-    conn.execute("ALTER TABLE libraries ADD COLUMN company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE")
-    # 将所有现有记录关联到默认公司 (id=1)
-    conn.execute("UPDATE libraries SET company_id = 1")
-
-    conn.execute("ALTER TABLE customers ADD COLUMN company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE")
-    # 将所有现有客户关联到默认公司 (id=1)
-    conn.execute("UPDATE customers SET company_id = 1")
-
-    conn.execute("ALTER TABLE conversations ADD COLUMN company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE")
-    # 将所有现有会话关联到默认公司 (id=1)
-    conn.execute("UPDATE conversations SET company_id = 1")
-
-    # 添加新索引
-    conn.executescript("""
-        CREATE INDEX IF NOT EXISTS idx_libraries_company    ON libraries(company_id);
-        CREATE INDEX IF NOT EXISTS idx_customers_company     ON customers(company_id);
-        CREATE INDEX IF NOT EXISTS idx_conversations_company ON conversations(company_id);
-    """)
-
-    # 向所有现有表添加备用列（v1 DB 原地升级，或全新 v1 安装）。
-    # 使用 ALTER TABLE ADD COLUMN 是幂等的 — 即使列已存在也可以安全调用。
-    _add_spare_columns(conn)
-
-    conn.commit()
     print("  迁移完成。已创建默认公司 '我的公司' (slug=default)。")
     return True
 
@@ -399,7 +420,11 @@ def _backup_db(db_path: Path) -> Path | None:
     backup_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_path = backup_dir / f"trade-{ts}.db"
-    shutil.copy2(str(db_path), str(backup_path))
+    # 必须用 SQLite 在线备份 API 而不是 copy2：数据库是 WAL 模式，直接拷主库
+    # 会漏掉还在 -wal 里的已提交事务（与 post_install/backup.py 同一修法）。
+    from trade.post_install.backup import snapshot_db
+
+    snapshot_db(db_path, backup_path)
     prune_old_backups(backup_dir)
     return backup_path
 

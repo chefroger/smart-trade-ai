@@ -266,3 +266,73 @@ class TestWALMode:
             conn.close()
         finally:
             trade.database._get_db_path = original
+
+
+class TestMigrationTransactionAndPartial:
+    """v0→v1 迁移的事务性与逐表判据（2026-10-21 审计 P1）。
+
+    原先：判据只看 libraries 一张表 + executescript（隐式提交）无事务。
+    中途失败的库下次启动会被误判"已是 v1"，剩余表行 company_id 为 NULL，
+    被所有 WHERE company_id=? 静默过滤 —— 数据还在，但用户永远看不到。
+    """
+
+    def _v0(self, conn):
+        conn.executescript("""
+            CREATE TABLE libraries (id INTEGER PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL);
+            CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, contact TEXT DEFAULT '');
+            CREATE TABLE conversations (id INTEGER PRIMARY KEY, query TEXT NOT NULL, response TEXT DEFAULT '');
+        """)
+        conn.execute("INSERT INTO libraries (name, root_path) VALUES ('L', '/tmp/x')")
+        conn.execute("INSERT INTO customers (name) VALUES ('C')")
+        conn.execute("INSERT INTO conversations (query) VALUES ('Q')")
+        conn.commit()
+
+    def test_partial_migration_completes_missing_tables(self):
+        """libraries 已迁完、其余表没迁 —— 不能再判"已是 v1"，必须补齐。"""
+        import sqlite3
+
+        from trade.database import _migrate_from_v0
+
+        conn = sqlite3.connect(":memory:")
+        self._v0(conn)
+        # 人为制造"上一次迁移在加完 libraries 列后崩了"的中间状态
+        conn.execute("ALTER TABLE libraries ADD COLUMN company_id INTEGER")
+        conn.execute("UPDATE libraries SET company_id = 1")
+        conn.commit()
+
+        migrated = _migrate_from_v0(conn)
+        assert migrated is True, "部分迁移的库必须继续补迁，而不是误判已是 v1"
+
+        for table in ("libraries", "customers", "conversations"):
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert "company_id" in cols, f"{table} 缺 company_id"
+            nulls = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE company_id IS NULL").fetchone()[0]
+            assert nulls == 0, f"{table} 仍有 company_id 为 NULL 的孤儿行"
+        conn.close()
+
+    def test_failure_rolls_back_whole_migration(self, monkeypatch):
+        """迁移中途失败 → 整个迁移回滚，不留"列已加、值没填"的半成品。"""
+        import sqlite3
+
+        import trade.database as db
+
+        conn = sqlite3.connect(":memory:")
+        self._v0(conn)
+
+        def boom(_conn):
+            raise RuntimeError("simulated failure")
+
+        # 放在最后一步失败：此时三张表的 ALTER/UPDATE 都已执行
+        monkeypatch.setattr(db, "_add_spare_columns", boom)
+
+        with __import__("pytest").raises(RuntimeError):
+            db._migrate_from_v0(conn)
+
+        # 回滚后：三张表都不该有 company_id（含 libraries）
+        for table in ("libraries", "customers", "conversations"):
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert "company_id" not in cols, f"{table} 的 company_id 未随事务回滚"
+        # companies 表也不该残留
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "companies" not in tables
+        conn.close()

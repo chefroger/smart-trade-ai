@@ -2105,14 +2105,16 @@ function addMsg(role, content, files, save, convId) {
                 + '<button class="rating-btn" data-r="👎" style="border:1px solid #D1D5DB;border-radius:4px;padding:2px 8px;font-size:13px;cursor:pointer;background:#fff;">👎</button>';
             body.appendChild(ratingDiv);
 
-            ratingDiv.querySelectorAll('.rating-btn').forEach(function(btn) {
-                btn.addEventListener('click', async function(e) {
-                    e.stopPropagation();
-                    var rVal = this.dataset.r === '👍' ? 4 : 2;
-                    await api('POST', '/api/trade/conversations/' + convIdForRating + '/rate', { rating: rVal, feedback: '' });
-                    ratingDiv.innerHTML = '<span style="font-size:11px;color:var(--accent-green);">✅ '+(currentLang==='en'?'Thanks for feedback':'感谢反馈')+'</span>';
+                ratingDiv.querySelectorAll('.rating-btn').forEach(function(btn) {
+                    btn.addEventListener('click', async function(e) {
+                        e.stopPropagation();
+                        var rVal = this.dataset.r === '👍' ? 4 : 2;
+                        var rated = await api('POST', '/api/trade/conversations/' + convIdForRating + '/rate', { rating: rVal, feedback: '' });
+                        // 失败时 api() 已 toast 原因；评分没存上，不能显示"感谢反馈"
+                        if (!rated) return;
+                        ratingDiv.innerHTML = '<span style="font-size:11px;color:var(--accent-green);">✅ '+(currentLang==='en'?'Thanks for feedback':'感谢反馈')+'</span>';
+                    });
                 });
-            });
         }
     }
 
@@ -2668,8 +2670,10 @@ async function saveCustomerDetail(cid) {
     const backupEmail = $('detail-backup-email')?.value?.trim()||'';
     const followUpNote = $('detail-follow-up-note')?.value?.trim()||'';
 
-    await api('PUT', `/api/trade/customers/${cid}`, {name, contact, note, country, tier, linkedin_url: linkedin,
+    const saved = await api('PUT', `/api/trade/customers/${cid}`, {name, contact, note, country, tier, linkedin_url: linkedin,
         title, email, phone, whatsapp, company_website: website, backup_email: backupEmail, buyer_type: buyerType, follow_up_note: followUpNote, main_category: mainCategory, match_score: matchScore});
+    // 失败时 api() 已 toast 原因；保留详情面板让用户看到自己填的内容
+    if (!saved) return;
     toast(t('toast.saved'));
     closeCustomerDetail();
     await loadCustomersData();
@@ -2812,11 +2816,12 @@ async function saveOrder() {
         payment_terms: $('order-payment').value.trim(),
         notes: $('order-notes').value.trim(),
     };
-    if (editId) {
-        await api('PUT', `/api/trade/orders/${editId}`, body);
-    } else {
-        await api('POST', '/api/trade/orders', body);
-    }
+    const saved = editId
+        ? await api('PUT', `/api/trade/orders/${editId}`, body)
+        : await api('POST', '/api/trade/orders', body);
+    // api() 失败返回 null 且已自行 toast 失败原因 —— 此时不能关弹窗，
+    // 否则用户填的内容随弹窗一起消失，还会看到一个假的"已创建"提示。
+    if (!saved) return;
     _closeOrderModal();
     loadOrdersForCustomer(custId);
     toast(editId ? t('order.updated') : t('order.created'));
@@ -2824,7 +2829,9 @@ async function saveOrder() {
 
 async function deleteOrder(oid) {
     if (!confirm(t('order.confirm_delete'))) return;
-    await api('DELETE', `/api/trade/orders/${oid}`);
+    const gone = await api('DELETE', `/api/trade/orders/${oid}`);
+    // 失败时 api() 已 toast 原因；订单还在列表里，不能弹"已删除"
+    if (!gone) return;
     _closeOrderModal();
     // 刷新当前打开的客户详情
     const custId = $('order-cust-id').value;
@@ -2887,11 +2894,11 @@ async function saveCustomer() {
 
     const body = {name, contact, note, country, tier, linkedin_url: linkedin,
         title, email, phone, whatsapp, company_website: website, backup_email: backupEmail, buyer_type: buyerType, follow_up_note: followUpNote, main_category: mainCategory, match_score: matchScore};
-    if (editId) {
-        await api('PUT', `/api/trade/customers/${editId}`, body);
-    } else {
-        await api('POST', `/api/trade/customers`, body);
-    }
+    const saved = editId
+        ? await api('PUT', `/api/trade/customers/${editId}`, body)
+        : await api('POST', `/api/trade/customers`, body);
+    // 失败时 api() 已 toast 原因；保留弹窗，用户填的内容不能跟着消失
+    if (!saved) return;
     hideModal('customer-modal');
     await loadCustomersData();
     if (currentView === 'customers') renderCustomersTable(allCustomers);

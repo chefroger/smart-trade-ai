@@ -69,3 +69,51 @@ class TestUnknownScheduleFlagged:
 
         assert item.get("unknown_schedule") is not True
         assert item["missed"] in (True, False)
+
+
+class TestTaskWindowMissed:
+    """`"09:00-10:30"` 是执行窗口，missed 必须按**终点**判定（2026-10-21 审计 P2）。
+
+    原先只取起点：09:30 时一个窗口到 10:30 的任务被标成"已过时"，
+    每日简报/邮件处理这类任务会被用户误以为错过了。
+    """
+
+    @staticmethod
+    def _at(monkeypatch, cron, hh, mm):
+        import datetime as _dt
+
+        class _Fixed(_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 10, 21, hh, mm)
+
+        monkeypatch.setattr(cron, "datetime", _Fixed)
+
+    def _window_item(self, result, window="09:00-10:30"):
+        return next(i for i in result["pending"] if i["time"] == window)
+
+    def test_inside_window_is_not_missed(self, cron_env, monkeypatch):
+        cron = cron_env  # 无 jobs.json → 用内置任务表（含 09:00-10:30）
+        self._at(monkeypatch, cron, 9, 30)
+
+        item = self._window_item(cron.get_today_cron(1))
+        assert item["missed"] is False, "09:30 仍在 09:00-10:30 窗口内，不该判 missed"
+        assert item["scheduled"] == "09:00"
+
+    def test_after_window_is_missed(self, cron_env, monkeypatch):
+        cron = cron_env
+        self._at(monkeypatch, cron, 10, 31)
+
+        item = self._window_item(cron.get_today_cron(1))
+        assert item["missed"] is True, "过了 10:30 才算错过"
+
+    def test_single_time_task_unchanged(self, cron_env, monkeypatch):
+        """没有窗口的单点任务（09:00）行为不变：8:59 未到、9:01 已过。"""
+        cron = cron_env
+        self._at(monkeypatch, cron, 8, 59)
+        item = next(i for i in cron.get_today_cron(1)["pending"] if i["time"] == "09:00")
+        assert item["missed"] is False
+
+        self._at(monkeypatch, cron, 9, 1)
+        item = next(i for i in cron.get_today_cron(1)["pending"] if i["time"] == "09:00")
+        assert item["missed"] is True

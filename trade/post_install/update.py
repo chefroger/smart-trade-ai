@@ -295,6 +295,62 @@ def _refuse_reason_for_interpreter() -> str | None:
     return None
 
 
+def _git_head(trade_dir: Path) -> str | None:
+    """读取检出当前的 HEAD sha；目录不存在 / 非 git 仓库 / 无 git 时返回 None。"""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(trade_dir), capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    sha = r.stdout.strip()
+    return sha if r.returncode == 0 and len(sha) >= 7 else None
+
+
+def _rollback_checkout(
+    trade_dir: Path, target_sha: str, emit, warnings: list[str],
+) -> bool:
+    """把检出回退到升级前的提交，返回是否成功。
+
+    为什么必须回滚：git pull 成功后，后面任何一步致命失败（pip 装不上、数据库
+    迁移失败）都会留下「源码已是新版、依赖还是旧版」的半升级状态 —— 服务不重启，
+    但下次重启就会用新代码配旧依赖启动，直接起不来（2026-10-21 审计 P0）。
+    回到旧源码，至少让失败升级保持「可继续用旧版本运行」。
+
+    为什么用 `reset --keep` 而不是 `--hard`：`--keep` 保留用户在运行目录里的
+    未提交改动，且当回退会覆盖这些改动时**直接中止** —— `--hard` 会静默删掉
+    用户的工作，比半升级更难挽回。
+    """
+    try:
+        r = subprocess.run(
+            ["git", "reset", "--keep", target_sha],
+            cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError) as e:
+        msg = f"rollback to {target_sha[:8]} failed: {e}"
+        emit(f"  ❌ 回退失败：{e}")
+        warnings.append(msg)
+        return False
+
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout).strip()
+        msg = f"rollback to {target_sha[:8]} failed: {detail[:200]}"
+        emit(f"  ❌ 回退失败（可能有未提交改动与之冲突）：{detail[:200]}")
+        emit(f"  💡 手动恢复：cd {trade_dir} && git reset --keep {target_sha}")
+        warnings.append(msg)
+        return False
+
+    emit(f"  ↩ 已回退代码到升级前版本（{target_sha[:8]}），继续用旧版本运行。")
+    # Step 2/3 已把新代码的技能复制进 ~/.hermes/skills —— 回退代码后重新同步一次，
+    # 保持「代码版本 ↔ 技能版本」自洽；失败只是多一条警告，不掩盖回滚本身成功。
+    try:
+        install_skills()
+    except (SystemExit, Exception) as e:
+        warnings.append(f"skills resync after rollback failed: {e}")
+    return True
+
+
 def update_trade() -> dict:
     """一键更新 Foreign Trade Assistant 系统。
 
@@ -347,6 +403,41 @@ def update_trade() -> dict:
             "warnings": warnings,
             "messages": messages,
         }
+
+    # ── Step 0c: 升级前数据库备份 ──────────────────────────────────────────
+    # 为什么必须在 Step 1 之前：数据库迁移不可逆，一旦迁移失败或新版本行为有变，
+    # 没有开工前的快照就无法回到"能跑"的状态。备份失败必须**中止升级** ——
+    # 在没有可回退备份的情况下换代码 + 迁移 schema，比"升级失败"严重得多。
+    try:
+        from trade.post_install.backup import backup_db_before_upgrade
+
+        _trade_home = _get_trade_home()
+        backup_path = backup_db_before_upgrade(
+            _trade_home / "data" / "trade.db",
+            _trade_home / "backups",
+        )
+        if backup_path:
+            _emit(f"  ✓ 升级前数据库备份：{backup_path.name}")
+        else:
+            _emit("  ℹ️ 尚无数据库（首次安装），跳过备份")
+    except Exception as e:
+        _emit(f"  ❌ 升级前备份失败，已中止升级：{e}")
+        errors.append(f"pre-upgrade backup failed: {e}")
+        return {
+            "ok": False, "version": "", "error": f"升级前备份失败：{e}",
+            "errors": errors, "warnings": warnings, "messages": messages,
+        }
+
+    # 升级前的提交：Step 1 之后任何致命失败都要回退到这里（见 _rollback_checkout）。
+    # clone 场景没有旧提交 —— 目录本身不存在，失败时无事可回退。
+    pre_update_sha = _git_head(trade_dir) if trade_dir.is_dir() else None
+
+    def _rollback_if_possible(reason: str) -> None:
+        """致命失败后回退源码（有旧提交时）；回滚失败只记警告，不掩盖原始错误。"""
+        if not pre_update_sha:
+            return
+        if _rollback_checkout(trade_dir, pre_update_sha, _emit, warnings):
+            warnings.append(f"checkout rolled back after {reason}")
 
     # ── Step 1: git pull / clone ───────────────────────────────────────────
     if not trade_dir.is_dir():
@@ -482,6 +573,7 @@ def update_trade() -> dict:
             err = result.stderr.strip()
             _emit(f"  ❌ 依赖安装失败: {err}")
             errors.append(f"pip install -r requirements.txt failed: {err[:200]}")
+            _rollback_if_possible("pip install -r requirements.txt failed")
             return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
     pip_args = [sys.executable, "-m", "pip", "install", "-e", str(trade_dir), "--no-deps"]
     result = subprocess.run(pip_args, capture_output=True, text=True, timeout=600)
@@ -489,6 +581,7 @@ def update_trade() -> dict:
         err = result.stderr.strip()
         _emit(f"  ❌ pip install failed: {err}")
         errors.append(f"pip install failed: {err[:200]}")
+        _rollback_if_possible("pip install -e . failed")
         return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
     _emit("  ✓ Package updated")
 
@@ -525,6 +618,8 @@ def update_trade() -> dict:
     except Exception as e:
         _emit(f"  ❌ Database check failed: {e}")
         errors.append(f"Database check failed: {e}")
+        # DB 迁移失败同样回退源码：新代码 + 未迁移完的库，重启只会更糟
+        _rollback_if_possible("database check failed")
         return {"ok": False, "version": "", "error": str(e), "errors": errors, "warnings": warnings, "messages": messages}
 
     # ── 结果 ──────────────────────────────────────────────────────────────

@@ -205,7 +205,10 @@ def search_customers(
         for h in hits:
             cust = customer_module.get(h["customer_id"], company_id=cid)
             if cust:
-                cust["match_score"] = h.get("score")  # 排序依据，附带返回
+                # 用独立字段承载检索得分（0.41~1.0 的浮点），**不能写进 match_score** ——
+                # 那是业务评级（int 0-5，前端是 0-5 输入框），覆盖后前端 parseInt("0.87")
+                # 会得到 0，用户一保存就把真实评分清零（2026-10-21 审计发现）。
+                cust["search_score"] = h.get("score")
                 out.append(cust)
         return out
     finally:

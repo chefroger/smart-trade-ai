@@ -570,3 +570,56 @@ class TestUpdateInterpreterGuard:
 
         assert result["ok"] is False
         assert "not_in_trade_venv" in result["errors"]
+
+
+class TestSkillsConsistency:
+    """技能一致性检查（2026-10-21 审计 P1）。
+
+    升级时技能同步失败只记 warning，而 doctor 原先没有任何技能检查 ——
+    结果 doctor 全绿、技能停在旧版，用户无从察觉。
+    """
+
+    def _tree(self, root, files):
+        for name, content in files.items():
+            d = root / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "SKILL.md").write_text(content, encoding="utf-8")
+
+    def test_all_match_reports_ok(self, tmp_path):
+        from trade.doctor import STATUS_OK, check_skills
+
+        pkg, inst = tmp_path / "pkg", tmp_path / "inst"
+        self._tree(pkg, {"b2b-a": "v1", "b2b-b": "v1"})
+        self._tree(inst, {"b2b-a": "v1", "b2b-b": "v1"})
+
+        result = check_skills(package_dir=pkg, installed_dir=inst)[0]
+        assert result.status == STATUS_OK
+
+    def test_missing_and_stale_are_warned(self, tmp_path):
+        from trade.doctor import STATUS_WARN, check_skills
+
+        pkg, inst = tmp_path / "pkg", tmp_path / "inst"
+        self._tree(pkg, {"b2b-a": "v1", "b2b-b": "v1", "b2b-c": "v1"})
+        self._tree(inst, {"b2b-a": "v1", "b2b-b": "v0"})  # b 旧版，c 缺失
+
+        result = check_skills(package_dir=pkg, installed_dir=inst)[0]
+        assert result.status == STATUS_WARN
+        assert "缺失 1" in result.detail and "b2b-c" in result.detail
+        assert "旧版本 1" in result.detail and "b2b-b" in result.detail
+
+    def test_user_extra_skills_are_not_flagged(self, tmp_path):
+        """用户自己加的技能不属于包内清单，不算问题。"""
+        from trade.doctor import STATUS_OK, check_skills
+
+        pkg, inst = tmp_path / "pkg", tmp_path / "inst"
+        self._tree(pkg, {"b2b-a": "v1"})
+        self._tree(inst, {"b2b-a": "v1", "my-custom": "whatever"})
+
+        assert check_skills(package_dir=pkg, installed_dir=inst)[0].status == STATUS_OK
+
+    def test_missing_package_dir_is_not_a_false_alarm(self, tmp_path):
+        from trade.doctor import STATUS_WARN, check_skills
+
+        result = check_skills(package_dir=tmp_path / "nope", installed_dir=tmp_path)[0]
+        assert result.status == STATUS_WARN
+        assert "找不到包内" in result.detail

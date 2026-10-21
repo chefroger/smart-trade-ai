@@ -507,11 +507,83 @@ def check_estop(*, estop_path: Path | None = None) -> list[CheckResult]:
     )]
 
 
+def check_skills(*, package_dir: Path | None = None, installed_dir: Path | None = None) -> list[CheckResult]:
+    """已装技能与包内技能的一致性（数量 / SKILL.md 内容哈希）。
+
+    为什么放进自检：升级时技能同步失败**只记 warning**（update.py），而原来的
+    doctor 没有任何技能相关检查 —— 结果就是 doctor 全绿、技能却停在旧版本或
+    整个缺失，用户直到发现某个 skill 的行为不对才察觉。
+
+    检查口径：
+      - 以包内（源码 `skills/`）为准：缺目录 / SKILL.md 哈希不同 → WARN；
+      - 用户自己额外加的技能不算问题（不属于包内清单）；
+      - 包内目录找不到（PyInstaller 精简环境等）→ 跳过，不误报。
+    """
+    if package_dir is None or installed_dir is None:
+        from trade.post_install.skills import (
+            _get_hermes_home,
+            _get_package_skills_dir,
+        )
+
+        package_dir = package_dir or _get_package_skills_dir()
+        installed_dir = installed_dir or (_get_hermes_home() / "skills")
+    if package_dir is None or not Path(package_dir).is_dir():
+        return [CheckResult("技能一致性", STATUS_WARN, "找不到包内 skills 目录，跳过比对")]
+    installed_dir = Path(installed_dir)
+
+    def _skill_names(root: Path) -> list[str]:
+        return sorted(
+            d.name for d in root.iterdir()
+            if d.is_dir()
+            and (d.name.startswith(("b2b-", "auto-")) or d.name == "chat-memory")
+            and (d / "SKILL.md").is_file()
+        )
+
+    try:
+        packaged = _skill_names(Path(package_dir))
+        installed = set(_skill_names(installed_dir)) if installed_dir.is_dir() else set()
+    except OSError as e:
+        return [CheckResult("技能一致性", STATUS_WARN, f"无法读取技能目录：{e}")]
+
+    missing = [n for n in packaged if n not in installed]
+    stale = []
+    for name in packaged:
+        if name in missing:
+            continue
+        try:
+            src = (Path(package_dir) / name / "SKILL.md").read_bytes()
+            dst = (installed_dir / name / "SKILL.md").read_bytes()
+        except OSError:
+            stale.append(name)
+            continue
+        if src != dst:
+            stale.append(name)
+
+    if not missing and not stale:
+        return [CheckResult(
+            "技能一致性", STATUS_OK,
+            f"{len(packaged)} 个技能与包内版本一致",
+        )]
+
+    parts = []
+    if missing:
+        parts.append(f"缺失 {len(missing)} 个：{', '.join(missing[:5])}"
+                     + ("…" if len(missing) > 5 else ""))
+    if stale:
+        parts.append(f"旧版本 {len(stale)} 个：{', '.join(stale[:5])}"
+                     + ("…" if len(stale) > 5 else ""))
+    return [CheckResult(
+        "技能一致性", STATUS_WARN,
+        "；".join(parts) + " —— 在界面点「更新 Skills」或执行 `install-trade-skills`",
+    )]
+
+
 def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     """跑全部检查。deep=False 时跳过所有真实请求（快检，零 token）。"""
     results: list[CheckResult] = []
     results += check_hermes_runtime()
     results += check_estop()
+    results += check_skills()
     results += check_post_install()
     if deep:
         results += check_vision()
