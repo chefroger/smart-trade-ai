@@ -37,9 +37,15 @@ def snapshot_db(db_path: Path, dest: Path) -> None:
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     # 先 checkpoint 一次，缩短后续备份窗口（失败不阻断：backup() 本身仍然一致）
+    # 注意：sqlite3 连接的 with 语句只提交事务、**不关闭连接** —— 显式 close，
+    # 否则句柄泄漏，Windows 上会锁住 trade.db（实测：restore 测试清理临时目录
+    # 时报 WinError 32）。
     try:
-        with sqlite3.connect(str(db_path)) as src:
-            src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        _ck = sqlite3.connect(str(db_path))
+        try:
+            _ck.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            _ck.close()
     except sqlite3.Error:
         pass
 
