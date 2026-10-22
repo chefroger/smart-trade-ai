@@ -1569,7 +1569,7 @@ function _renderGuidanceBar(currentTimeStr, completed, pending) {
         barHtml += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">`;
         barHtml += `<span style="font-size:15px;">⏰</span>`;
         barHtml += `<span style="font-weight:600;font-size:13px;color:var(--primary);">${esc(guidance.name)}</span>`;
-        barHtml += `<span style="font-size:13px;color:var(--text-secondary);">${guidance.desc}</span>`;
+        barHtml += `<span style="font-size:13px;color:var(--text-secondary);">${esc(guidance.desc)}</span>`;
         barHtml += `</div>`;
     } else {
         barHtml += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">`;
@@ -1707,7 +1707,7 @@ async function loadCronStatus(isPoll = false) {
         if (completed.length) {
             panelHtml += `<div style="font-size:12px;color:var(--accent-green);margin-bottom:6px;">已完成 (${completed.length})</div>`;
             for (const t of completed) {
-                panelHtml += `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;"><span style="color:var(--accent-green);">✓</span><span style="font-weight:500;">${esc(t.name)}</span><span style="color:var(--text-muted);font-size:11px;">${t.time}</span></div>`;
+                panelHtml += `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;"><span style="color:var(--accent-green);">✓</span><span style="font-weight:500;">${esc(t.name)}</span><span style="color:var(--text-muted);font-size:11px;">${esc(t.time)}</span></div>`;
             }
         }
         if (pending.length) {
