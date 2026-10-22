@@ -712,3 +712,98 @@ class TestFactWriteIsolation:
         content = (hermes / "memories" / "MEMORY.md").read_text(encoding="utf-8")
         assert "测试事实" in content
         assert "公司:" in content, "标签必须由代码写入（模型不传参）"
+
+
+class TestMemoryEntryFormat:
+    """MEMORY.md 的条目分隔符必须与 Hermes 一致（2026-10-22）。
+
+    Hermes 按 `ENTRY_DELIMITER`（`tools/memory_tool_store.py:25` = `"\n§\n"`）把文件
+    解析成多条 entry。Trade 早期用空行分隔 → Hermes 把**整个文件当成一条** entry：
+    模型照样读得到全文（Hermes 不截断），但 Hermes 侧的记忆管理（add/replace/remove）
+    只会命中那一整条 → 改一条连**别家公司的记忆**一起改掉。
+    """
+
+    def test_written_entries_use_hermes_delimiter(self, tmp_path, monkeypatch):
+        from trade import company as company_module
+        from trade.memory import (
+            HERMES_MEMORY_ENTRY_DELIMITER,
+            retain_fact_to_hermes_memory,
+        )
+
+        hermes = tmp_path / "hermes"
+        (hermes / "memories").mkdir(parents=True)
+        monkeypatch.setenv("HERMES_HOME", str(hermes))
+        monkeypatch.setattr(
+            company_module, "get", lambda cid: {"id": cid, "name": "测试公司"}
+        )
+
+        assert retain_fact_to_hermes_memory("一条事实", company_id=1) is True
+        raw = (hermes / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+        assert HERMES_MEMORY_ENTRY_DELIMITER in raw, (
+            "写入必须用 Hermes 的 entry 分隔符，否则 Hermes 把整个文件当成一条"
+        )
+
+    def test_migration_splits_by_entry_start(self, tmp_path, monkeypatch):
+        """迁移按条目起始行切，条目内部的空行不能把一条切成多块。"""
+        from trade.memory import (
+            HERMES_MEMORY_ENTRY_DELIMITER,
+            migrate_memory_to_hermes_entries,
+        )
+
+        mem = tmp_path / "MEMORY.md"
+        mem.write_text(
+            "## Header\n\n"
+            "[2026-10-20 10:00] [公司: A]\n"
+            "  Q: 问题一\n"
+            "  A: 答案一\n"
+            "\n"
+            "  补充说明：中间有空行\n"
+            "\n"
+            "[2026-10-21 10:00] [公司: B]\n"
+            "  Q: 问题二\n"
+            "  A: 答案二\n",
+            encoding="utf-8",
+        )
+        n = migrate_memory_to_hermes_entries(memory_path=mem)
+        raw = mem.read_text(encoding="utf-8")
+
+        entries = [e for e in (x.strip() for x in raw.split(HERMES_MEMORY_ENTRY_DELIMITER)) if e]
+        real = [e for e in entries if e.startswith("[")]
+        assert len(real) == 2, f"应切出 2 条 entry，实际 {len(real)}"
+        assert "补充说明：中间有空行" in raw, "条目内部内容不能丢"
+        assert n == 3  # 文件头 + 2 条
+
+    def test_migration_is_idempotent(self, tmp_path):
+        from trade.memory import migrate_memory_to_hermes_entries
+
+        mem = tmp_path / "MEMORY.md"
+        mem.write_text(
+            "[2026-10-20 10:00] [公司: A]\n  Q: 一\n\n[2026-10-21 10:00] [公司: B]\n  Q: 二\n",
+            encoding="utf-8",
+        )
+        first = migrate_memory_to_hermes_entries(memory_path=mem)
+        after_first = mem.read_text(encoding="utf-8")
+        second = migrate_memory_to_hermes_entries(memory_path=mem)
+        assert second == 0, "已是 Hermes 格式时不该再改"
+        assert mem.read_text(encoding="utf-8") == after_first
+        assert first >= 1
+
+    def test_migration_keeps_all_content(self, tmp_path):
+        """迁移不能丢任何内容。"""
+        from trade.memory import migrate_memory_to_hermes_entries
+
+        mem = tmp_path / "MEMORY.md"
+        original = (
+            "## Header\n\n"
+            "[2026-10-20 10:00] [公司: A]\n"
+            "  Q: 问题一\n"
+            "  A: 答案一\n\n"
+            "| 表格 | 值 |\n|---|---|\n| x | 1 |\n\n"
+            "[2026-10-21 10:00] [公司: B]\n  Q: 问题二\n"
+        )
+        mem.write_text(original, encoding="utf-8")
+        migrate_memory_to_hermes_entries(memory_path=mem)
+        after = mem.read_text(encoding="utf-8")
+        for line in original.splitlines():
+            if line.strip():
+                assert line.rstrip() in after, f"迁移丢了内容：{line!r}"
