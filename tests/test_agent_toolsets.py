@@ -40,26 +40,13 @@ class TestDefaultEnabledToolsets:
     @pytest.mark.parametrize(
         "toolset",
         ["web", "search", "file", "terminal", "code_execution",
-         "browser", "skills", "cronjob", "todo", "vision", "chat-memory"],
+         "browser", "skills", "memory", "cronjob", "todo"],
     )
     def test_core_toolsets_retained(self, toolset):
-        """核心 toolset 一个都不能丢（这条改动只应做加法）。"""
+        """原有的核心 toolset 一个都不能丢（这条改动只应做加法）。"""
         from trade.helpers import DEFAULT_ENABLED_TOOLSETS
 
         assert toolset in DEFAULT_ENABLED_TOOLSETS
-
-    def test_hermes_memory_toolset_not_enabled(self):
-        """**不启用** Hermes 的 `memory` toolset（2026-10-22 的跨公司串户修复）。
-
-        它的 `memory` 工具写进 ~/.hermes/memories/MEMORY.md 但**不带公司标签**，而 Hermes
-        把整个文件原样注入 system prompt（零过滤）—— 模型写的无标签条目会在别家公司面前
-        浮现。长期记忆改由 trade 自己的 `fact_write` 工具写（company_id 由代码判定）。
-        """
-        from trade.helpers import DEFAULT_ENABLED_TOOLSETS
-
-        assert "memory" not in DEFAULT_ENABLED_TOOLSETS, (
-            "Hermes 的 memory toolset 必须关闭 —— 它的写入不带公司标签，会跨公司串户"
-        )
 
     def test_no_duplicates(self):
         """列表不应有重复项（重复会让 Hermes 侧的解析做无谓功）。"""

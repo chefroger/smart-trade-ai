@@ -237,15 +237,8 @@ def get_agent_kwargs() -> dict:
 # (check_fn)，只在工具已被 toolset 启用后才会评估，不代表工具在场。
 DEFAULT_ENABLED_TOOLSETS = (
     "web", "search", "file", "terminal", "code_execution",
-    "browser", "skills", "cronjob", "todo",
+    "browser", "skills", "memory", "cronjob", "todo",
     "vision",
-    # **不启用 Hermes 的 `memory` toolset**（2026-10-22）：它的 `memory` 工具写进
-    # ~/.hermes/memories/MEMORY.md，但**不带公司标签**；而 Hermes 把整个文件原样
-    # 注入 system prompt（`agent/system_prompt.py:516` → `memory_tool_store.py:618`，
-    # **零过滤**）—— 模型写的无标签条目会在别家公司的对话里浮现（跨公司串户）。
-    # 长期记忆改由 trade 自己的 `fact_write` 工具写（下面的 chat-memory 插件）：
-    # company_id 由**代码**从 thread-local 取，标签由代码写，模型不参与 → 不可能漏。
-    #
     # chat-memory 是 trade 自带的 Hermes 插件提供的工具集（见
     # trade/hermes_chat_memory_plugin/）。**必须列在这里** —— Hermes 只会把
     # enabled 列表里那些 toolset 的工具放进工具表；插件加载成功但这里没列，

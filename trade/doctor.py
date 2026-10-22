@@ -507,60 +507,6 @@ def check_estop(*, estop_path: Path | None = None) -> list[CheckResult]:
     )]
 
 
-def check_memory_file(*, memory_path: Path | None = None) -> list[CheckResult]:
-    """长期记忆文件（~/.hermes/memories/MEMORY.md）的两个风险。
-
-    ① **无标签条目 = 跨公司串户**：Hermes 把整个 MEMORY.md 原样注入 system prompt
-       （`agent/system_prompt.py:516` → `memory_tool_store.py:618`，**零过滤**），
-       所以"条目带 `[公司: XXX]` 标签 + 模型自己过滤"是唯一防线。模型漏写一次标签，
-       那条事实就会在别家公司的对话里浮现。
-    ② **体积 = 每次请求的固定 token 成本**：MEMORY.md 全文进 system prompt，
-       随对话无限增长（2026-10-22 实测本机已 8055 token / 每次请求）。
-    """
-    if memory_path is None:
-        from trade.post_install.skills import _get_hermes_home
-
-        memory_path = _get_hermes_home() / "memories" / "MEMORY.md"
-    memory_path = Path(memory_path)
-
-    if not memory_path.is_file():
-        return [CheckResult("长期记忆（MEMORY.md）", STATUS_OK, "尚无记忆文件")]
-
-    try:
-        text = memory_path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        return [CheckResult("长期记忆（MEMORY.md）", STATUS_WARN, f"无法读取：{e}")]
-
-    # 条目以 "[YYYY-MM-DD HH:MM]" 开头；带公司标签的行里含 "公司:"
-    entry_lines = [l for l in text.splitlines() if l.startswith("[") and "]" in l]
-    untagged = [l for l in entry_lines if "公司:" not in l]
-
-    # token 估算：中文 1.5 字/token，其余 4 字符/token
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
-    est_tokens = int(cjk / 1.5 + (len(text) - cjk) / 4)
-
-    if untagged:
-        return [CheckResult(
-            "长期记忆（MEMORY.md）", STATUS_WARN,
-            f"{len(untagged)} 条条目**没有公司标签**（共 {len(entry_lines)} 条）—— "
-            "Hermes 把整个文件注入 system prompt 且零过滤，这些条目会在别的公司面前浮现。"
-            "样例：" + " / ".join(l.strip()[:40] for l in untagged[:2]),
-        )]
-
-    if est_tokens > 3000:
-        return [CheckResult(
-            "长期记忆（MEMORY.md）", STATUS_WARN,
-            f"{len(entry_lines)} 条条目全部带公司标签 ✓，但体积已达约 {est_tokens} token —— "
-            "每次请求都全量注入 system prompt。建议清理旧条目"
-            "（trade memory 里没有自动清理，可在 Hermes 侧用 hermes sessions 或手工编辑）。",
-        )]
-
-    return [CheckResult(
-        "长期记忆（MEMORY.md）", STATUS_OK,
-        f"{len(entry_lines)} 条条目全部带公司标签，约 {est_tokens} token",
-    )]
-
-
 def check_skills(*, package_dir: Path | None = None, installed_dir: Path | None = None) -> list[CheckResult]:
     """已装技能与包内技能的一致性（数量 / SKILL.md 内容哈希）。
 
@@ -638,7 +584,6 @@ def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     results += check_hermes_runtime()
     results += check_estop()
     results += check_skills()
-    results += check_memory_file()
     results += check_post_install()
     if deep:
         results += check_vision()

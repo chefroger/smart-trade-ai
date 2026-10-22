@@ -455,35 +455,16 @@ class TestChatMemoryPluginE2E:
         spec.loader.exec_module(mod)
         return mod
 
-    def test_register_registers_both_tools(self):
-        """插件注册两个工具：读对话历史 + 写长期记忆（2026-10-22 新增 fact_write）。"""
+    def test_register_registers_one_tool(self):
         plugin = self._load_plugin()
         calls = []
         class Ctx:
             def register_tool(self, **kw): calls.append(kw)
         plugin.register(Ctx())
-        assert len(calls) == 2
-        by_name = {c["name"]: c for c in calls}
-        assert set(by_name) == {"chat_memory_list", "fact_write"}
-        for call in calls:
-            assert call["toolset"] == "chat-memory"
-            assert "schema" in call and "handler" in call
-
-    def test_fact_write_takes_no_company_id_argument(self):
-        """fact_write **不允许模型传 company_id** —— 由代码从 thread-local 取。
-
-        模型传错 company_id 是最毒的一类 bug（现有 chat_memory_list 就是那个模式，
-        schema 里特意警告过）。fact_write 必须没有这个参数。
-        """
-        plugin = self._load_plugin()
-        calls = []
-        class Ctx:
-            def register_tool(self, **kw): calls.append(kw)
-        plugin.register(Ctx())
-        fact = next(c for c in calls if c["name"] == "fact_write")
-        props = fact["schema"]["parameters"]["properties"]
-        assert "company_id" not in props, "fact_write 不得让模型传 company_id"
-        assert fact["schema"]["parameters"]["required"] == ["fact"]
+        assert len(calls) == 1
+        assert calls[0]["name"] == "chat_memory_list"
+        assert calls[0]["toolset"] == "chat-memory"
+        assert "schema" in calls[0] and "handler" in calls[0]
 
     def test_handler_rejects_missing_company_id(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TRADE_HOME", str(tmp_path))
@@ -655,60 +636,3 @@ class TestSchemaDescriptionAccuracy:
             f"schema enum 与实现不一致：schema-only={enum - set(_VALID_TIME_RANGES)}, "
             f"impl-only={set(_VALID_TIME_RANGES) - enum}"
         )
-
-
-class TestFactWriteIsolation:
-    """fact_write 的跨公司串户防线（2026-10-22）。
-
-    核心保证：**company_id 由代码判定，标签由代码写**，模型既不传参也不可能传错。
-    """
-
-    def _load_plugin(self):
-        import importlib.util
-        from pathlib import Path
-
-        path = Path(__file__).resolve().parent.parent / "trade" / "hermes_chat_memory_plugin" / "__init__.py"
-        spec = importlib.util.spec_from_file_location("chat_memory_plugin_t", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
-    def test_refuses_without_company_context(self):
-        """没有公司上下文 → 拒绝写入（宁可失败，也不写无标签条目）。"""
-        import json
-
-        from trade.company_context import set_current_company
-        from trade.hermes_chat_memory_plugin.tools import handle_fact_write
-
-        set_current_company(None)
-        result = json.loads(handle_fact_write({"fact": "一条事实"}))
-        assert "error" in result
-        assert "company context" in result["error"]
-
-    def test_writes_with_tag_from_code(self, tmp_path, monkeypatch):
-        """有公司上下文 → 写入成功，且标签是代码写的。"""
-        import json
-
-        from trade.company_context import set_current_company
-        from trade.hermes_chat_memory_plugin.tools import handle_fact_write
-
-        # 隔离 HERMES_HOME → 写到临时目录，不碰真实记忆
-        hermes = tmp_path / "hermes"
-        (hermes / "memories").mkdir(parents=True)
-        monkeypatch.setenv("HERMES_HOME", str(hermes))
-
-        # 写入器要从 company_id 查出公司名才能打标签 —— 这里 mock 掉公司查询
-        # （不依赖完整 DB schema，聚焦"标签由代码写"这一点）
-        from trade import company as company_module
-        monkeypatch.setattr(
-            company_module, "get", lambda cid: {"id": cid, "name": "测试公司"}
-        )
-
-        set_current_company(1)
-        result = json.loads(handle_fact_write({"fact": "测试事实：客户 X 在迪拜。"}))
-        assert result.get("ok") is True, result
-        assert result.get("company_id") == 1
-
-        content = (hermes / "memories" / "MEMORY.md").read_text(encoding="utf-8")
-        assert "测试事实" in content
-        assert "公司:" in content, "标签必须由代码写入（模型不传参）"

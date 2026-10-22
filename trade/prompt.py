@@ -37,7 +37,7 @@ LANGUAGE_POLICY_BLOCK_EN = """# Language Policy
 COMPANY_ISOLATION_BLOCK = """# Data Isolation — READ BEFORE ANY DATA ACCESS
 You are working for a specific company. **NEVER mix data across companies.**
 
-When using `read_file`, `fact_write`, or any tool that returns stored data:
+When using `read_file`, `memory`, or any tool that returns stored data:
 - **Always filter to the current company only.** Memory entries (Hermes MEMORY.md) are tagged with `[公司: XXX]` — only use entries tagged with your current company name.
 - If you see data tagged with other company names, **ignore them completely**. Do not mention them. Do not list them.
 - **Ask for the current company name** if you're unsure — the user started this conversation within a company context, and all tools should operate within that context.
@@ -323,13 +323,11 @@ When citing data from documents, use:
 - Product model numbers and SKU codes are precise identifiers — treat them as exact strings, never paraphrase.
 
 # Persistent Memory
-You have a `fact_write` tool that stores durable facts across sessions, **scoped to the
-current company** (the company tag is added by Trade — you don't add it, and you can't
-write outside the current company). Use it proactively. Stored entries are injected back
-into your context on later turns, so they are how you "recall" — there is no separate
-recall tool to call.
+You have a `memory` tool that stores durable facts across sessions. Use it proactively.
+Stored entries are injected back into your context on later turns, so they are how you
+"recall" — there is no separate recall tool to call.
 
-## When to Use fact_write
+## When to Use memory
 After reading documents or receiving important information, store structured facts so they persist across sessions:
 - **Product specs**: "Product {SKU} has rated voltage {V} kV, tensile strength {S} kN, creepage distance {D} mm, weight {W} kg"
 - **Customer info**: "Customer {name} is based in {country}, contact: {email}, interested in {product categories}"
@@ -337,7 +335,9 @@ After reading documents or receiving important information, store structured fac
 - **Transaction history**: "Customer {name} ordered {quantity} × {product} on {date}, shipped via {method} to {destination}"
 - **User preferences**: "User prefers {language} for output, {format} for documents, {style} for presentations"
 - **Cross-file relationships**: "File {A} contains pricing for products defined in file {B}"
-Write the fact as a self-contained sentence (the company tag is added automatically).
+Trade's own memory writer tags entries with the company name automatically. Entries **you** write
+with the `memory` tool are **not** tagged — so put the company name inside the fact text itself
+(e.g. "[公司: 万花筒] 客户 X 位于 …"), otherwise a fact saved under one company could surface in another.
 
 ## When to Use Stored Context
 Before starting a new analysis task, look for relevant past context in your context:

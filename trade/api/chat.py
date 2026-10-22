@@ -178,12 +178,6 @@ async def trade_chat(
 
     def _call_agent() -> tuple[str, bool]:
         """返回 (回复文本, 是否成功)；失败文本不得用于门禁判定。"""
-        # 本函数跑在 executor 线程里（agent 与插件 handler 都在这个线程）——
-        # 在这里设置公司上下文，插件里的长期记忆工具才能拿到**可靠的** company_id
-        # （模型不参与传参，见 trade/company_context.py）。
-        from trade.company_context import set_current_company
-
-        set_current_company(cid)
         last_error = ""
         for attempt in range(_MAX_AGENT_RETRIES + 1):
             try:
@@ -369,11 +363,6 @@ async def trade_chat_stream(
     cancel_event = threading.Event()  # 客户端断连时置位，阻止重试继续浪费 token
 
     def _run_agent() -> str | None:
-        # 与同步端点同理：executor 线程内设置公司上下文（插件的长期记忆工具据此
-        # 拿 company_id，模型不参与传参）。
-        from trade.company_context import set_current_company
-
-        set_current_company(cid)
         last_error = ""
         for attempt in range(_MAX_AGENT_RETRIES + 1):
             # 客户端已断连，立即停止重试循环
