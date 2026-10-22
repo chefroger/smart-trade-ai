@@ -147,9 +147,10 @@ When analyzing B2B documents, look for these cross-file relationships (applicabl
 - **Multiple Quotes**: Same product from different vendors → compare prices.
 - **Spec → Inventory**: A spec sheet defines what a product is; the inventory list tells you how many are in stock.
 
-## Knowledge Graph Memory (Cognee) — B2B Usage
+## Long-Term Memory — B2B Usage
 
-Cognee stores extracted facts as entities and relationships in a knowledge graph. Use `cognee_remember` to persist key findings after each significant analysis step:
+You have a `memory` tool that stores durable facts across sessions, and a `chat_memory_list` tool
+that reads Trade's conversation history (scoped by company). Use them to carry findings forward.
 
 ### What to Store
 - **Product facts extracted from docs**: model numbers, specs, prices, MOQs, lead times
@@ -164,7 +165,9 @@ Cognee stores extracted facts as entities and relationships in a knowledge graph
 - After generating a document → store what was generated and for whom
 
 ### Recall Before Analysis
-Use `cognee_recall` at the start of a new task to check for relevant past context. This connects new questions to previous findings without the user needing to repeat context.
+At the start of a new task, check for relevant past context: previously stored facts are already
+in your context, and past conversations are reachable via `chat_memory_list`. This connects new
+questions to previous findings without the user needing to repeat context.
 
 ## Privacy & Confidentiality
 

@@ -231,8 +231,11 @@ class TestPromptTiers:
             assert "Document Analysis Workflow" in t
             assert "List Integrity" in t
 
+    # 已从 Hermes 移除、不得再被任何地方教给模型的工具名
+    DEAD_TOOL_NAMES = ("cognee_remember", "cognee_recall", "memory_recall")
+
     def test_no_dead_memory_tool_names(self):
-        """提示词不得引用 Hermes 里已不存在的工具。
+        """主提示词不得引用 Hermes 里已不存在的工具。
 
         上游现状（2026-10-22 核实）：Cognee 已弃用（`cognee_remember`/`cognee_recall`
         都不在了），记忆也只剩**一个** `memory` 工具（action=add/patch/replace/delete）——
@@ -241,15 +244,45 @@ class TestPromptTiers:
         """
         from trade import prompt
 
-        dead = ("cognee_remember", "cognee_recall", "memory_recall")
         for name in dir(prompt):
             if not name.startswith("TRADE_SYSTEM_PROMPT"):
                 continue
             text = getattr(prompt, name)
-            for tool_name in dead:
+            for tool_name in self.DEAD_TOOL_NAMES:
                 assert tool_name not in text, (
                     f"{name} 还在教模型用不存在的工具 {tool_name!r}"
                 )
+
+    def test_no_dead_tools_in_skills_and_templates(self):
+        """**skills 与 .trade-template 也不得**引用已不存在的工具。
+
+        为什么主提示词的守卫不够：2026-10-22 实测漏检过两处 ——
+        `skills/b2b-document/SKILL.md`（技能触发时注入死指令）与
+        `.trade-template/prompts/system.md`（**每个新部署的脚手架**都带死指令）。
+        只扫主 prompt 的守卫抓不到它们。
+        """
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        targets = [
+            *sorted((root / "skills").glob("*/SKILL.md")),
+            root / ".trade-template" / "prompts" / "system.md",
+            *sorted((root / ".trade-template").rglob("*.md")),
+        ]
+        offenders = []
+        for path in targets:
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for tool_name in self.DEAD_TOOL_NAMES:
+                if tool_name in text:
+                    offenders.append(f"{path.relative_to(root)} → {tool_name!r}")
+        assert not offenders, (
+            "这些文件还在教模型用已不存在的工具：\n  " + "\n  ".join(offenders)
+        )
 
     def test_company_isolation_rule_survived(self):
         """删死工具名时不能把整条数据可信度指令删掉（公司过滤规则必须还在）。"""
