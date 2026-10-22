@@ -627,27 +627,6 @@ def _local_chat_memory_plugin_source() -> Path | None:
     return None
 
 
-def _migrate_memory_entries_format() -> None:
-    """把存量 MEMORY.md 的条目分隔符转成 Hermes 的格式（幂等，失败静默）。
-
-    为什么需要：Hermes 按 `ENTRY_DELIMITER`（`tools/memory_tool_store.py:25` = `\n§\n`）
-    把 MEMORY.md 解析成**多条 entry**；Trade 早期用空行分隔 → Hermes 把整个文件当成
-    **一条** entry（2026-10-22 实测：本机 21753 字符被解析成 1 条）。后果不是"读不到"
-    （Hermes 不截断），而是 Hermes 侧的记忆管理（add/replace/remove）只会命中那一整条
-    → 改一条会连**别家公司的记忆**一起改掉。
-
-    迁移后每条独立成 entry，Hermes 的字符上限（2200）也按条计算。
-    """
-    try:
-        from trade.memory import migrate_memory_to_hermes_entries
-
-        n = migrate_memory_to_hermes_entries()
-        if n:
-            print(f"  ✓ 记忆条目格式已迁移：{n} 条")
-    except Exception as e:
-        print(f"  ⚠ 记忆条目格式迁移跳过（{e}）")
-
-
 def sync_chat_memory_plugin() -> None:
     """把 trade 自带的 chat-memory 插件部署到 ~/.hermes/plugins/chat-memory/。
 
@@ -1169,7 +1148,6 @@ def setup():
     load_env_and_set_yolo()
     sync_b2b_skills()
     sync_chat_memory_plugin()
-    _migrate_memory_entries_format()
     ensure_chat_memory_plugin_enabled()
     ensure_document_deps()
     ensure_desktop_integration()

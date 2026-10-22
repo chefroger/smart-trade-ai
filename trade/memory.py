@@ -11,8 +11,6 @@ Trade AI Assistant — 记忆桥接层（Hindsight 集成）。
 import json
 import logging
 import os
-import re
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -270,17 +268,6 @@ def retain_conversation(
     return retain(content, context=context, bank_id=bid)
 
 
-# Hermes 的 entry 分隔符（`tools/memory_tool_store.py:25`）。
-# **必须用它分隔**：Hermes 靠它把文件解析成多条 entry，用空行分隔的话整个文件会被
-# 当成**一条** entry —— 模型读得到全部内容（Hermes 不截断），但 Hermes 侧的
-# 记忆管理（add/replace/remove）会命中这一整条，改一条就连别家公司的记忆一起改
-# （2026-10-22 实测：本机 21753 字符被解析成 1 条）。
-HERMES_MEMORY_ENTRY_DELIMITER = "\n\u00a7\n"
-
-# Trade 写入的 entry 起始行：[YYYY-MM-DD HH:MM] 或 [YYYY-MM-DD HH:MM] [公司: X]
-_MEMORY_ENTRY_START_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]")
-
-
 def retain_to_hermes_memory(
     query: str,
     response: str,
@@ -389,14 +376,12 @@ def retain_to_hermes_memory(
                 existing = MEMORY_FILE.read_text(encoding="utf-8")
             SECTION = "## Foreign Trade Assistant — B2B Trade Memory\n"
             # 如果文件中还没有 B2B 记忆段落，则在文件开头创建
-            # entry 末尾带 Hermes 的分隔符 —— Hermes 靠它把文件解析成多条 entry
-            entry = entry.rstrip("\n") + HERMES_MEMORY_ENTRY_DELIMITER
             if SECTION not in existing:
-                content_str = SECTION + entry + "\n" + existing if existing else SECTION + entry
+                content_str = SECTION + entry + "\n\n" + existing if existing else SECTION + entry
             else:
                 # 如果已有段落，将新条目插入到段落标题之后（最新在最前）
                 idx_s = existing.find(SECTION) + len(SECTION)
-                content_str = existing[:idx_s] + entry + "\n" + existing[idx_s:]
+                content_str = existing[:idx_s] + entry + "\n\n" + existing[idx_s:]
             MEMORY_FILE.write_text(content_str, encoding="utf-8")
         finally:
             # 释放文件锁，确保即使写入失败也会解锁
@@ -467,7 +452,7 @@ def retain_fact_to_hermes_memory(
     entry = (
         f"[{now}] [公司: {name}]\n"
         f"  FACT: {fact.strip()}\n"
-        + HERMES_MEMORY_ENTRY_DELIMITER
+        "\n"
     )
 
     try:
@@ -543,68 +528,3 @@ def retain_fact_to_hermes_memory(
         return True
     except Exception:
         return False
-
-
-def migrate_memory_to_hermes_entries(*, memory_path: Path | None = None) -> int:
-    """把存量 MEMORY.md 的条目分隔符改成 Hermes 的格式，返回改写的条目数。
-
-    ## 为什么需要
-
-    Hermes 把 MEMORY.md 按 `ENTRY_DELIMITER`（`tools/memory_tool_store.py:25` = `"\n§\n"`）
-    解析成**多条 entry**。而 Trade 早期一直用空行分隔 → Hermes 把**整个文件当成一条
-    entry**（2026-10-22 实测：本机 21753 字符被解析成 1 条）。
-
-    后果不是"读不到"（Hermes 不截断，模型照样看得到全文），而是：
-      - Hermes 侧的记忆管理（add/replace/remove）只会命中这一整条 →
-        改一条会连**别家公司的记忆**一起改掉；
-      - 字符上限（2200）按整条算 → 早就超限 → Hermes 拒绝一切新写入。
-
-    迁移把每条历史 entry 用 Hermes 的分隔符接起来，于是：
-      - 解析回 N 条（每条独立可管理）；
-      - 字符上限按条计算，不再一超全超。
-
-    幂等：已经是 Hermes 格式时不做任何事。
-    """
-    if memory_path is None:
-        _hermes_env = os.environ.get("HERMES_HOME", "")
-        if _hermes_env:
-            memory_path = Path(_hermes_env) / "memories" / "MEMORY.md"
-        elif os.name == "nt":
-            _local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-            memory_path = Path(_local) / "hermes" / "memories" / "MEMORY.md"
-        else:
-            memory_path = Path.home() / ".hermes" / "memories" / "MEMORY.md"
-    memory_path = Path(memory_path)
-
-    if not memory_path.is_file():
-        return 0
-    try:
-        raw = memory_path.read_text(encoding="utf-8")
-    except OSError:
-        return 0
-
-    if HERMES_MEMORY_ENTRY_DELIMITER in raw:
-        return 0  # 已是 Hermes 格式
-
-    # 按**条目起始行**切：Trade 的每条 entry 以 "[YYYY-MM-DD HH:MM]" 开头，
-    # 条目内部（Q/A、markdown 表格）可能有空行 —— 按空行切会把一条 entry 切成多块
-    # （实测：83 条被切成 347 块），条目边界必须认准起始行。
-    # 文件头（第一个起始行之前的内容，如 "## Foreign Trade Assistant — …"）单独保留。
-    lines = raw.splitlines()
-    starts = [i for i, l in enumerate(lines) if _MEMORY_ENTRY_START_RE.match(l)]
-    if len(starts) <= 1:
-        return 0  # 只有一条或切不动，不动它（避免破坏内容）
-
-    header = "\n".join(lines[:starts[0]]).rstrip("\n")
-    entries: list[str] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
-        entries.append("\n".join(lines[start:end]).rstrip())
-
-    blocks = ([header] if header else []) + entries
-    content = HERMES_MEMORY_ENTRY_DELIMITER.join(blocks) + "\n"
-    try:
-        memory_path.write_text(content, encoding="utf-8")
-    except OSError:
-        return 0
-    return len(blocks)
