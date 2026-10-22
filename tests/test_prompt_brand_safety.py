@@ -232,15 +232,41 @@ class TestPromptTiers:
             assert "List Integrity" in t
 
     def test_no_dead_memory_tool_names(self):
-        """提示词不得引用 Hermes 里已不存在的工具（cognee_remember/cognee_recall）。"""
+        """提示词不得引用 Hermes 里已不存在的工具。
+
+        上游现状（2026-10-22 核实）：Cognee 已弃用（`cognee_remember`/`cognee_recall`
+        都不在了），记忆也只剩**一个** `memory` 工具（action=add/patch/replace/delete）——
+        **没有独立的 `memory_recall`**。召回靠已存条目被注入上下文，不是调工具。
+        引用任何不存在的工具名 = 白占 token + 诱发无效工具调用。
+        """
+        from trade import prompt
+
+        dead = ("cognee_remember", "cognee_recall", "memory_recall")
+        for name in dir(prompt):
+            if not name.startswith("TRADE_SYSTEM_PROMPT"):
+                continue
+            text = getattr(prompt, name)
+            for tool_name in dead:
+                assert tool_name not in text, (
+                    f"{name} 还在教模型用不存在的工具 {tool_name!r}"
+                )
+
+    def test_company_isolation_rule_survived(self):
+        """删死工具名时不能把整条数据可信度指令删掉（公司过滤规则必须还在）。"""
         from trade import prompt
 
         for name in dir(prompt):
             if not name.startswith("TRADE_SYSTEM_PROMPT"):
                 continue
             text = getattr(prompt, name)
-            assert "cognee_remember" not in text, f"{name} 还在教模型用已移除的工具"
-            assert "cognee_recall" not in text, f"{name} 还在教模型用已移除的工具"
+            if "Data Isolation" not in text:
+                continue
+            assert "filter to the current company only" in text, (
+                f"{name} 的公司过滤指令被误删了"
+            )
+            assert "ignore them completely" in text, (
+                f"{name} 的「忽略别家公司的数据」指令被误删了"
+            )
 
     def test_tiers_are_ordered_by_cost(self):
         """档位必须是递减的（否则"精简"是反的）。"""

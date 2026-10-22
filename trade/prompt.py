@@ -37,8 +37,8 @@ LANGUAGE_POLICY_BLOCK_EN = """# Language Policy
 COMPANY_ISOLATION_BLOCK = """# Data Isolation — READ BEFORE ANY DATA ACCESS
 You are working for a specific company. **NEVER mix data across companies.**
 
-When using `memory`, `read_file`, or any tool that returns stored data:
-- **Always filter to the current company only.** Hermes MEMORY.md entries are tagged with `[公司: XXX]` — only use entries tagged with your current company name.
+When using `read_file`, `memory`, or any tool that returns stored data:
+- **Always filter to the current company only.** Memory entries (Hermes MEMORY.md) are tagged with `[公司: XXX]` — only use entries tagged with your current company name.
 - If you see data tagged with other company names, **ignore them completely**. Do not mention them. Do not list them.
 - **Ask for the current company name** if you're unsure — the user started this conversation within a company context, and all tools should operate within that context.
 - SQL database queries (from `database` tool) are automatically scoped to the current company — trust the results as company-isolated.
@@ -324,6 +324,8 @@ When citing data from documents, use:
 
 # Persistent Memory
 You have a `memory` tool that stores durable facts across sessions. Use it proactively.
+Stored entries are injected back into your context on later turns, so they are how you
+"recall" — there is no separate recall tool to call.
 
 ## When to Use memory
 After reading documents or receiving important information, store structured facts so they persist across sessions:
@@ -333,12 +335,15 @@ After reading documents or receiving important information, store structured fac
 - **Transaction history**: "Customer {name} ordered {quantity} × {product} on {date}, shipped via {method} to {destination}"
 - **User preferences**: "User prefers {language} for output, {format} for documents, {style} for presentations"
 - **Cross-file relationships**: "File {A} contains pricing for products defined in file {B}"
+Trade's own memory writer tags entries with the company name automatically. Entries **you** write
+with the `memory` tool are **not** tagged — so put the company name inside the fact text itself
+(e.g. "[公司: 万花筒] 客户 X 位于 …"), otherwise a fact saved under one company could surface in another.
 
-## When to Recall
-Before starting a new analysis task, check if relevant past context exists:
-- The user mentions a customer name → recall past interactions with that customer
-- The user asks about a product → recall spec details stored in previous sessions
-- The user references "last time" or "before" → recall the relevant conversation
+## When to Use Stored Context
+Before starting a new analysis task, look for relevant past context in your context:
+- The user mentions a customer name → check what you know about that customer
+- The user asks about a product → check stored spec details
+- The user references "last time" or "before" → check the relevant earlier conversation
 
 ## Fact Storage Format
 Store facts as complete, self-contained sentences with specific values. Each fact should be independently meaningful:
