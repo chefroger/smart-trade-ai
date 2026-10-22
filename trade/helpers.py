@@ -524,11 +524,16 @@ def build_query(
         # OSINT 背调场景：精简档，去掉文档生成/Cognee 等无关段落
         from trade.prompt import TRADE_SYSTEM_PROMPT_OSINT
         code_fallback = TRADE_SYSTEM_PROMPT_OSINT
+    elif _prompts.prompt_tier(
+        matched_name=matched_name, library_id=library_id, explicit_paths=explicit_paths
+    ) == "full_docgen":
+        # 文档**生成**：FULL + 产出规则（PPTX/DOCX/XLSX/PDF 怎么写）
+        from trade.prompt import TRADE_SYSTEM_PROMPT_FULL_DOCGEN
+        code_fallback = TRADE_SYSTEM_PROMPT_FULL_DOCGEN
     elif _prompts.needs_full_prompt(
         matched_name=matched_name, library_id=library_id, explicit_paths=explicit_paths
     ):
-        # 文档处理类任务：注入完整档（含文档生成指南、文档分析协议等，
-        # 约 22674 字符 ≈ 5700 token）—— 只在真正需要时才付这个成本
+        # 文档**分析**类任务：含文档分析协议，不含产出规则（约 5500 token）
         from trade.prompt import TRADE_SYSTEM_PROMPT_FULL
         code_fallback = TRADE_SYSTEM_PROMPT_FULL
     elif has_history:

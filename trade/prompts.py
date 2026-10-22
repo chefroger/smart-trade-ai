@@ -301,28 +301,58 @@ _DOC_TASK_SKILLS = frozenset({
     "b2b-customs-data",
 })
 
+# 文档**生成**类技能：只有这些才需要额外的产出规则（PPTX/DOCX/XLSX/PDF 怎么写）
+_DOC_GENERATION_SKILLS = frozenset({
+    "b2b-doc-generation",
+})
+
+
+def prompt_tier(
+    matched_name: str | None = None,
+    library_id: int | None = None,
+    explicit_paths: list[str] | None = None,
+) -> str:
+    """返回本次应使用的 system prompt 档位名。
+
+    档位（2026-10-22 按 token 成本重新分层）：
+      "minimal"     — 非首轮、无文档任务（≈1760 token）
+      "first_turn"  — 首轮（≈1836 token）
+      "osint"       — 背调类（≈1875 token）
+      "full"        — 文档**分析**类（≈5497 token）
+      "full_docgen" — 文档**生成**类（≈6091 token，多付产出规则约 570 token）
+
+    判定顺序（先特后普）：
+      1. 命中生成类 skill → full_docgen
+      2. 命中文档类 skill / 选了库 / 点名文件 → full
+      3. 否则按首轮与否给 first_turn / minimal
+
+    旧接口 `needs_full_prompt()` 保留（返回 bool），但内部改为调用本函数 ——
+    它的调用点只关心"要不要 FULL 那一大段"。
+    """
+    if matched_name and matched_name in _DOC_GENERATION_SKILLS:
+        return "full_docgen"
+    if matched_name and matched_name in _DOC_TASK_SKILLS:
+        return "full"
+    if library_id or explicit_paths:
+        return "full"
+    return "minimal"
+
 
 def needs_full_prompt(
     matched_name: str | None = None,
     library_id: int | None = None,
     explicit_paths: list[str] | None = None,
 ) -> bool:
-    """是否需要注入 FULL 提示词（22674 字符 ≈ 5700 token，含文档生成指南与文档分析协议）。
+    """是否需要注入 FULL 提示词（文档分析/生成指南，约 5500 token 起）。
 
     判定为文档处理类任务（任一命中即可）：
       1. 命中文档相关技能
       2. 用户选定了文档库
       3. 用户问题里点名了具体文件/目录
 
-    普通问答（营销/背调/闲聊）不注入，避免每次多付约 5700 token。
+    普通问答（营销/背调/闲聊）不注入，避免每次多付约 5500 token。
     """
-    if matched_name and matched_name in _DOC_TASK_SKILLS:
-        return True
-    if library_id:
-        return True
-    if explicit_paths:
-        return True
-    return False
+    return prompt_tier(matched_name, library_id, explicit_paths) in ("full", "full_docgen")
 
 
 def invalidate_cache(path: Path | str | None = None) -> None:

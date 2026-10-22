@@ -180,3 +180,78 @@ class TestBrandSafetyBlock:
         assert BRAND_SAFETY_BLOCK.strip()
         # 护栏应包含禁止编造/贬损等核心约束
         assert "NEVER" in BRAND_SAFETY_BLOCK or "禁止" in BRAND_SAFETY_BLOCK
+
+
+class TestPromptTiers:
+    """档位分层（2026-10-22 按 token 成本重整）。
+
+    背景：实测发现「分档」此前基本空转 ——
+      - MINIMAL（1873）比 FIRST_TURN（1949）只少 76 token，8 个段落完全相同；
+      - FULL（6121）把「文档生成产出规则」和「文档分析协议」捆在一起，
+        纯分析场景白付约 570 token；
+      - 提示词里教的 `cognee_remember`/`cognee_recall` 在当前 Hermes 里
+        **已不存在**（只剩单一 `memory` 工具）—— 285 token 在教模型调用不存在的工具。
+    """
+
+    def test_tier_selection(self):
+        from trade.prompts import prompt_tier
+
+        # 文档生成 → 带产出规则
+        assert prompt_tier(matched_name="b2b-doc-generation") == "full_docgen"
+        # 文档分析 → 不带产出规则
+        assert prompt_tier(matched_name="b2b-document") == "full"
+        assert prompt_tier(matched_name="b2b-tech-drawing") == "full"
+        # 选了库 / 点名文件 → 分析档
+        assert prompt_tier(library_id=3) == "full"
+        assert prompt_tier(explicit_paths=["/tmp/a.pdf"]) == "full"
+        # 其它 → 最小档
+        assert prompt_tier(matched_name="b2b-cold-outreach") == "minimal"
+        assert prompt_tier() == "minimal"
+
+    def test_full_docgen_is_the_only_tier_with_generation_rules(self):
+        """产出规则（PPTX/DOCX/XLSX/PDF 怎么写）只在生成档里。"""
+        from trade.prompt import (
+            TRADE_SYSTEM_PROMPT_FULL,
+            TRADE_SYSTEM_PROMPT_FULL_DOCGEN,
+        )
+
+        assert "PPTX-Specific Guidelines" in TRADE_SYSTEM_PROMPT_FULL_DOCGEN
+        assert "PPTX-Specific Guidelines" not in TRADE_SYSTEM_PROMPT_FULL, (
+            "纯文档分析场景不该注入产出规则（白付约 570 token）"
+        )
+
+    def test_analysis_protocol_stays_in_both_full_tiers(self):
+        """文档分析协议在两个 FULL 档里都要在 —— 拆分不能削掉约束。"""
+        from trade.prompt import (
+            TRADE_SYSTEM_PROMPT_FULL,
+            TRADE_SYSTEM_PROMPT_FULL_DOCGEN,
+        )
+
+        for t in (TRADE_SYSTEM_PROMPT_FULL, TRADE_SYSTEM_PROMPT_FULL_DOCGEN):
+            assert "Document Analysis Workflow" in t
+            assert "List Integrity" in t
+
+    def test_no_dead_memory_tool_names(self):
+        """提示词不得引用 Hermes 里已不存在的工具（cognee_remember/cognee_recall）。"""
+        from trade import prompt
+
+        for name in dir(prompt):
+            if not name.startswith("TRADE_SYSTEM_PROMPT"):
+                continue
+            text = getattr(prompt, name)
+            assert "cognee_remember" not in text, f"{name} 还在教模型用已移除的工具"
+            assert "cognee_recall" not in text, f"{name} 还在教模型用已移除的工具"
+
+    def test_tiers_are_ordered_by_cost(self):
+        """档位必须是递减的（否则"精简"是反的）。"""
+        import re as _re
+
+        from trade import prompt
+
+        def est(text):
+            cjk = len(_re.findall(r'[\u4e00-\u9fff]', text))
+            return int(cjk / 1.5 + (len(text) - cjk) / 4)
+
+        assert est(prompt.TRADE_SYSTEM_PROMPT_MINIMAL) < est(prompt.TRADE_SYSTEM_PROMPT_FIRST_TURN)
+        assert est(prompt.TRADE_SYSTEM_PROMPT_FULL) < est(prompt.TRADE_SYSTEM_PROMPT_FULL_DOCGEN)
+        assert est(prompt.TRADE_SYSTEM_PROMPT_MINIMAL) < est(prompt.TRADE_SYSTEM_PROMPT_FULL)
