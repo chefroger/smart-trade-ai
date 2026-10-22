@@ -255,3 +255,55 @@ class TestTriggerMutualExclusivity:
             "以下触发词单独查询时没有路由回自己的技能（被抢或无命中）：\n"
             + "\n".join(f"  {t!r} 属于 {owner}，实际 → {got}" for t, owner, got in stolen)
         )
+
+
+class TestPlatformSpecificInjectionIsSelfDetected:
+    """平台专属规则必须**由 agent 自己识别**触发，不能要求用户指明。
+
+    背景（2026-10-22）：b2b-platform 的阿里国际站专属规则（约 900 token）原先
+    放在 injection_prompt 里 —— 94% 的用户不是阿里站，却每次对话都付这份钱。
+    移到正文后，如果写成「仅当用户是阿里国际站」，等于把判断责任推给用户：
+    真实提问常常只写「帮我优化下产品页」，不会说自己用的是阿里站。
+    正确做法是给 agent **可判定的信号**（URL 域名 / 提到的后台模块名 / 页面特有字段），
+    让它自己识别后用 skill_view 加载。
+    """
+
+    def _skill_text(self, name="b2b-platform"):
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parent.parent
+                / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_injection_does_not_demand_user_confirmation(self):
+        """注入里不能出现「仅当用户是阿里站」这类要用户指明的措辞。"""
+        import re
+
+        import yaml
+
+        text = self._skill_text()
+        fm = yaml.safe_load(re.match(r"^---\n(.*?)\n---\n", text, re.S).group(1))
+        ip = fm["injection_prompt"]
+
+        for bad in ("仅当用户是阿里", "只有用户是阿里", "如果用户是阿里国际站",
+                    "若用户是阿里国际站", "请用户确认是否阿里"):
+            assert bad not in ip, f"注入里出现要用户指明的措辞：{bad!r}"
+
+    def test_injection_carries_detectable_signals(self):
+        """注入必须给出可判定的识别信号，让 agent 能自己判断。"""
+        import re
+
+        import yaml
+
+        text = self._skill_text()
+        fm = yaml.safe_load(re.match(r"^---\n(.*?)\n---\n", text, re.S).group(1))
+        ip = fm["injection_prompt"]
+
+        assert "alibaba.com" in ip, "注入里要给出可判定的 URL 域名信号"
+        assert "不要问用户" in ip, "注入里要明确「自己判断，不要问用户」"
+        assert "skill_view" in ip, "注入里要写清命中后怎么加载（skill_view）"
+
+    def test_body_keeps_the_full_rules(self):
+        """下沉到正文的规则必须完整保留（不能为了省 token 丢约束）。"""
+        body = self._skill_text().split("---\n", 2)[2]
+        for kw in ("P4P 词效分层", "数据参谋", "旺铺", "问鼎", "商家星等级"):
+            assert kw in body, f"正文的阿里专属规则丢了：{kw}"
