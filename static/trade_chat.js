@@ -2435,7 +2435,7 @@ function renderCustomersTable(data) {
             <td style="padding:8px 10px;">
                 <div style="font-weight:600;font-size:13px;color:var(--text-primary);">${esc(c.name)}${contact ? '<span style="font-weight:400;color:var(--text-muted);margin-left:6px;">' + esc(contact) + '</span>' : ''}</div>
                 <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span style="color:${tierColor};font-weight:600;">● ${tierLabel} 级</span>
+                    <span style="color:${tierColor};font-weight:600;">● ${esc(tierLabel)} 级</span>
                     ${buyerType ? '<span style="background:var(--bg-muted);padding:1px 6px;border-radius:3px;font-size:10px;">' + esc(buyerType) + '</span>' : ''}
                     ${matchStars ? '<span style="color:var(--accent);font-size:10px;">' + matchStars + '</span>' : ''}
                     ${subLine ? '<span>' + esc(subLine) + '</span>' : ''}
@@ -2717,7 +2717,7 @@ async function loadOrdersForCustomer(cid) {
             return `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px;cursor:pointer;" onclick="showOrderEditModal(${o.id})">
                 <span style="color:${stColor};font-weight:500;">● ${esc(o.status)}</span>
                 <b>${esc(o.product_name)}</b>
-                ${o.quantity ? '<span style="color:var(--text-secondary);">'+esc(o.quantity)+(o.unit||'')+'</span>' : ''}
+                ${o.quantity ? '<span style="color:var(--text-secondary);">'+esc(o.quantity)+esc(o.unit||'')+'</span>' : ''}
                 ${o.total_amount ? '<span style="color:var(--accent);font-weight:500;"> '+esc(o.total_amount)+' '+esc(o.currency||'USD')+'</span>' : ''}
                 ${o.order_no ? '<span style="color:var(--text-muted);margin-left:8px;">#'+esc(o.order_no)+'</span>' : ''}
             </div>`;
@@ -3947,6 +3947,12 @@ async function onCompanyChange(cid) {
     _abortChatStream();
     // 清空 cron 输出记录，防止跨公司污染
     _shownCronOutputs = new Set();
+    // 清空"当前选中的库/客户"——它们是**上一家公司**的 id。留着会让下一次
+    // 发消息把旧库塞进请求体：后端按新公司过滤后查不到（不会串数据），
+    // 但 build_query 仍会走文档库分支注入 doc_context → 每次对话多付
+    // 约 5700 token，并让 Agent 去扫一个不属于当前公司的目录。
+    currentLibraryId = null;
+    currentCustomerId = null;
     if (cid) {
         const newCid = parseInt(cid);
         // 先更新前端状态（让后续 API 调用带上正确的 X-Company-ID header）

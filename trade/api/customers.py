@@ -201,9 +201,16 @@ def search_customers(
     conn = get_connection()
     try:
         hits = _search(conn, query, company_id=cid, top_k=max(1, min(limit, 100)))
+        if not hits:
+            return []
+        # 一次取回所有命中客户（一条 IN 查询）——原先逐个 get()，
+        # top_k=100 就是 101 个连接（2026-10-22 审计 P2）
+        found = customer_module.get_by_ids(
+            [h["customer_id"] for h in hits], company_id=cid,
+        )
         out = []
         for h in hits:
-            cust = customer_module.get(h["customer_id"], company_id=cid)
+            cust = found.get(h["customer_id"])
             if cust:
                 # 用独立字段承载检索得分（0.41~1.0 的浮点），**不能写进 match_score** ——
                 # 那是业务评级（int 0-5，前端是 0-5 输入框），覆盖后前端 parseInt("0.87")

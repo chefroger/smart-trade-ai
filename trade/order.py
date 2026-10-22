@@ -125,7 +125,11 @@ def update(order_id: int, *, company_id: int | None = None, **kwargs) -> dict | 
 
     conn = get_connection()
     try:
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE（直接拿写锁）—— 与 customer.update 同一理由：
+        # deferred BEGIN 只开读快照，之后升级成写锁时若期间有别的连接提交过，
+        # SQLite 抛 SQLITE_BUSY_SNAPSHOT 且**不重试**（busy_timeout 不生效），
+        # 并发下必然 "database is locked"（2026-10-21 实测）。
+        conn.execute("BEGIN IMMEDIATE")
         # 如果更新了 customer_id 且提供了 company_id，校验新客户归属
         if "customer_id" in updates and company_id is not None:
             if not _customer_in_company(conn, updates["customer_id"], company_id):

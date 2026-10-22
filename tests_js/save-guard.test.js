@@ -74,3 +74,22 @@ test('公司切换的 /switch 是唯一允许丢弃返回值的写点', () => {
         '/switch 调用点应保持 try/catch 包裹（切换失败由后续请求的 403 暴露）',
     );
 });
+
+
+test('切公司时清空当前库/客户（避免注入旧公司的文档上下文）', () => {
+    // currentLibraryId / currentCustomerId 是上一家公司的 id；不清会让下一次
+    // 发消息带上旧库 → build_query 走文档库分支注入 doc_context，
+    // 每次对话多付约 5700 token（2026-10-22 审计 P1）。
+    const idx = SRC.indexOf('async function onCompanyChange(cid)');
+    assert.ok(idx !== -1, '找不到 onCompanyChange');
+    const body = SRC.slice(idx, idx + 2000);
+
+    assert.ok(
+        /currentLibraryId\s*=\s*null/.test(body),
+        'onCompanyChange 必须清空 currentLibraryId',
+    );
+    assert.ok(
+        /currentCustomerId\s*=\s*null/.test(body),
+        'onCompanyChange 必须清空 currentCustomerId',
+    );
+});

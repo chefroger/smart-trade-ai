@@ -149,6 +149,35 @@ def get(customer_id: int, *, company_id: int) -> dict | None:
         conn.close()
 
 
+def get_by_ids(customer_ids: list[int], *, company_id: int) -> dict[int, dict]:
+    """一次取回多个客户，返回 {id: 客户dict}；按公司作用域过滤。
+
+    为什么需要：语义搜索端点原先对每个命中调 `get()` —— 每命中一个新连接
+    一次 SELECT（top_k 上限 100 → 最多 101 个连接），在 SQLite 上是明显的
+    连接风暴，也放大写锁竞争（2026-10-22 审计 P2）。
+    """
+    if not customer_ids:
+        return {}
+    conn = get_connection()
+    try:
+        # SQLite 的 IN 参数上限是 999，这里按批处理避免超限
+        out: dict[int, dict] = {}
+        ids = [int(i) for i in customer_ids]
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT * FROM customers WHERE company_id = ? AND id IN ({placeholders})",
+                (company_id, *chunk),
+            ).fetchall()
+            for r in rows:
+                d = _row_to_dict(r)
+                out[d["id"]] = d
+        return out
+    finally:
+        conn.close()
+
+
 def update(
     customer_id: int,
     *,
@@ -174,7 +203,13 @@ def update(
 
     conn = get_connection()
     try:
-        conn.execute("BEGIN")
+        # 必须 BEGIN IMMEDIATE（直接拿写锁），不能是 deferred 的 BEGIN：
+        # deferred 只开**读快照**，随后要把快照升级成写锁时，若期间有别的连接
+        # 提交过，SQLite 直接抛 SQLITE_BUSY_SNAPSHOT —— **不重试**，
+        # busy_timeout 完全不生效（2026-10-21 实测：瞬间 "database is locked"）。
+        # 场景：用户点「保存客户」的同时，chat 请求正往 chat_memory 插一条对话
+        # → 保存直接失败。IMMEDIATE 从一开始就排队拿写锁，busy_timeout 生效。
+        conn.execute("BEGIN IMMEDIATE")
 
         # 读取当前 JSON 用于合并（company_id 贯穿所有写操作）
         row = conn.execute(

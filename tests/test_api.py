@@ -712,7 +712,10 @@ class TestCustomerSearchScoreField:
 
         # 一个已有业务评级的客户（0-5 的 int）
         stored = {"id": 7, "company_id": 1, "name": "Acme", "match_score": 4}
-        monkeypatch.setattr(customer_module, "get", lambda cid, company_id: dict(stored))
+        monkeypatch.setattr(
+            customer_module, "get_by_ids",
+            lambda ids, company_id: {i: dict(stored) for i in ids},
+        )
 
         # 向量检索命中，得分是 0.8731 这种浮点
         class _Conn:
@@ -739,3 +742,49 @@ class TestCustomerSearchScoreField:
         import trade.api.customers as customers_api
 
         assert customers_api.search_customers(q="   ", limit=20, cid=1) == []
+
+
+class TestCustomerSearchBatchFetch:
+    """语义搜索必须一次取回命中客户，不能逐个开连接（2026-10-22 审计 P2）。
+
+    原实现对每个命中调 customer.get() —— top_k 上限 100 时最多 101 个
+    SQLite 连接，在本地数据库上既慢又放大写锁竞争。
+    """
+
+    def test_search_uses_single_batch_query(self, monkeypatch):
+        import trade.api.customers as customers_api
+        from trade import customer as customer_module
+
+        conn_calls = []
+
+        class _Conn:
+            def close(self):
+                pass
+
+        monkeypatch.setattr("trade.database.get_connection", lambda: _Conn())
+        import trade.vec_search as vec_search
+
+        monkeypatch.setattr(
+            vec_search, "search_customers",
+            lambda conn, query, company_id, top_k: [
+                {"customer_id": i, "score": 0.9 - i * 0.01} for i in range(1, 21)
+            ],
+        )
+
+        def counting_get(cid, company_id):
+            conn_calls.append(cid)
+            return {"id": cid, "company_id": company_id, "name": f"C{cid}"}
+
+        monkeypatch.setattr(customer_module, "get", counting_get)
+
+        def batch(ids, company_id):
+            return {i: {"id": i, "company_id": company_id, "name": f"C{i}"} for i in ids}
+
+        monkeypatch.setattr(customer_module, "get_by_ids", batch)
+
+        out = customers_api.search_customers(q="acme", limit=20, cid=1)
+
+        assert len(out) == 20
+        assert not conn_calls, (
+            f"逐个 get() 被调用了 {len(conn_calls)} 次 —— 应改为一次 get_by_ids()"
+        )
