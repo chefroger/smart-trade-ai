@@ -174,3 +174,76 @@ def _json(obj: Any) -> str:
 
 def _err(msg: str) -> str:
     return _json({"error": msg})
+
+
+# ── fact_write：写一条带公司标签的长期记忆 ────────────────────────────────
+#
+# 为什么不用 Hermes 自带的 `memory` 工具：它写进同一个 MEMORY.md，但**不带任何
+# 公司标签**，而 Hermes 把整个文件原样注入 system prompt（零过滤）—— 模型写的
+# 无标签条目会在别家公司的对话里浮现（跨公司串户）。
+#
+# 这里 company_id **由代码从 thread-local 取**，模型不参与传参（见
+# trade/company_context.py）：模型传错 company_id 是最毒的一类 bug
+# （现有 chat_memory_list 就是那个模式，schema 里专门警告过）。
+
+FACT_WRITE_SCHEMA = _schema(
+    "fact_write",
+    "把一条值得长期记住的**事实**存进 Trade 的长期记忆（按公司隔离）。"
+    "只有真正值得跨会话记住的结论才存 —— 产品规格、客户背景、报价与成交记录、"
+    "用户偏好。不要存闲聊内容、临时数据或已存在于当前对话里的信息。"
+    "**company_id 由 Trade 自动判定，你不需要也无法指定。**",
+    {
+        "fact": {
+            "type": "string",
+            "description": (
+                "自包含的完整句子，含具体数值。"
+                "例：「[公司: 万花筒] 客户 X 位于迪拜，关注 33kV 及以上复合绝缘子」。"
+                "不要写成「客户: 迪拜, 绝缘子」这种碎片。"
+            ),
+        },
+    },
+    required=["fact"],
+)
+
+
+def handle_fact_write(args: dict[str, Any], **_kw) -> str:
+    """写一条带公司标签的长期记忆。company_id 从 thread-local 取（模型不参与）。"""
+    fact = args.get("fact")
+    if not isinstance(fact, str) or not fact.strip():
+        return _err("fact is required and must be a non-empty string")
+
+    try:
+        from trade.company_context import get_current_company
+    except ImportError as exc:
+        return _err(f"trade.company_context not importable: {exc}")
+
+    company_id = get_current_company()
+    if not isinstance(company_id, int) or company_id <= 0:
+        # 没有公司上下文 → 不能打标签 → 不能写（宁可失败也不写无标签条目）
+        return _err(
+            "no company context for this request — refusing to write an untagged fact "
+            "(it would surface in other companies' conversations). "
+            "This usually means the tool was called outside a Trade chat request."
+        )
+
+    try:
+        from trade.memory import retain_fact_to_hermes_memory
+    except ImportError as exc:
+        return _err(
+            f"trade.memory not importable from Hermes process: {exc}. "
+            "Check that trade-bootstrap adds Trade to sys.path before Hermes loads plugins."
+        )
+
+    try:
+        ok = retain_fact_to_hermes_memory(fact.strip(), company_id=company_id)
+    except Exception:
+        return _err(f"write failed: {traceback.format_exc(limit=2)}")
+
+    if not ok:
+        return _err("write failed (company name not resolvable or file lock unavailable)")
+
+    return _json({
+        "ok": True,
+        "company_id": company_id,
+        "bytes": len(fact.strip()),
+    })

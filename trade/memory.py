@@ -400,3 +400,131 @@ def retain_to_hermes_memory(
         return True
     except Exception:
         return False
+
+
+def retain_fact_to_hermes_memory(
+    fact: str,
+    *,
+    company_id: int | None = None,
+    company_name: str = "",
+) -> bool:
+    """把一条**事实**（模型主动要记住的东西）写入 Hermes MEMORY.md。
+
+    与 `retain_to_hermes_memory`（存对话摘要）的区别：
+      - 摘要存的是「Q/A 对话片段」；事实存的是「值得长期记住的结论」；
+      - 事实**必须带公司标签**，由本函数从 company_id 查出公司名后**代码写入** ——
+        模型不参与标签，标签也就不会漏（漏标签 = 跨公司串户）。
+
+    为什么不直接用 Hermes 的 `memory` 工具：它写进同一个 MEMORY.md，但**不带任何
+    公司标签**，而 Hermes 把整个文件原样注入 system prompt（零过滤）——
+    模型写的无标签条目会在别家公司的对话里浮现。这里用 Trade 侧的写入器，
+    company_id 由调用方（插件）从 thread-local 取，模型无法传错。
+
+    Args:
+        fact: 事实正文（自包含的完整句子，含具体数值）。
+        company_id: 公司 ID；给了就自动查名并打标签（推荐）。
+        company_name: 公司名（company_id 查不到时的兜底）。
+
+    Returns:
+        True=写入成功；False=失败或参数不合法（调用方应如实告知模型）。
+    """
+    import datetime as _dt
+
+    if not fact or not fact.strip():
+        return False
+
+    # 公司名优先从 company_id 查（权威），查不到才用传入的名字
+    name = company_name
+    if company_id:
+        try:
+            from trade import company as _company
+
+            co = _company.get(company_id)
+            if co:
+                name = co.get("name", "") or name
+        except Exception:
+            pass
+    if not name:
+        # 没有公司名就无法打标签 → 宁可不写（无标签条目必然串户）
+        return False
+
+    now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    entry = (
+        f"[{now}] [公司: {name}]\n"
+        f"  FACT: {fact.strip()}\n"
+        "\n"
+    )
+
+    try:
+        from pathlib import Path as _Path
+
+        _hermes_env = os.environ.get("HERMES_HOME", "")
+        if _hermes_env:
+            _hermes_root = _Path(_hermes_env)
+        elif os.name == "nt":
+            _local = os.environ.get("LOCALAPPDATA", str(_Path.home() / "AppData" / "Local"))
+            _hermes_root = _Path(_local) / "hermes"
+        else:
+            _hermes_root = _Path.home() / ".hermes"
+        memory_file = _hermes_root / "memories" / "MEMORY.md"
+        lock_file = _hermes_root / "memories" / "MEMORY.md.lock"
+        lock_dir = _hermes_root / "memories"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        if lock_file.is_symlink():
+            return False
+
+        import time as _time
+
+        if os.name != "nt":
+            import fcntl as _fcntl_module
+
+        lock_fd = open(str(lock_file), "w")
+        for _attempt in range(5):
+            try:
+                if os.name == "nt":
+                    import msvcrt as _msvcrt
+
+                    _msvcrt.locking(lock_fd.fileno(), _msvcrt.LK_NBLCK, 1)
+                else:
+                    _fcntl_module.flock(lock_fd.fileno(), _fcntl_module.LOCK_EX | _fcntl_module.LOCK_NB)
+                break
+            except OSError:
+                _time.sleep(0.1)
+        else:
+            lock_fd.close()
+            return False
+
+        try:
+            existing = memory_file.read_text(encoding="utf-8") if memory_file.is_file() else ""
+            if "## Foreign Trade Assistant" in existing:
+                # 插到 Trade 段的开头（新事实比旧摘要更该被看到）
+                marker = "## Foreign Trade Assistant"
+                idx = existing.index(marker)
+                rest = existing[idx:]
+                # 跳过标题行与其后第一个空行，插在标题块之后
+                lines = rest.split("\n")
+                insert_at = 1
+                while insert_at < len(lines) and not lines[insert_at].strip():
+                    insert_at += 1
+                head = "\n".join(lines[:insert_at])
+                tail = "\n".join(lines[insert_at:])
+                content = f"{head}\n{entry}\n{tail}"
+            else:
+                content = existing.rstrip("\n") + "\n\n" + entry
+            memory_file.write_text(content, encoding="utf-8")
+        finally:
+            if os.name == "nt":
+                import msvcrt as _msvcrt
+
+                lock_fd.seek(0)
+                _msvcrt.locking(lock_fd.fileno(), _msvcrt.LK_UNLCK, 1)
+            else:
+                _fcntl_module.flock(lock_fd.fileno(), _fcntl_module.LOCK_UN)
+            lock_fd.close()
+            try:
+                lock_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return True
+    except Exception:
+        return False
