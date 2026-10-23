@@ -9,11 +9,14 @@
 from __future__ import annotations
 
 import json
+import time
+
+import pytest
 
 from trade.copilot import context as ctx_mod
 from trade.copilot import draft as draft_mod
 from trade.copilot import extract as extract_mod
-from trade.copilot.types import CustomerContext
+from trade.copilot.types import CONFIDENCE_THRESHOLD, CustomerContext, SourceRef
 
 # ── extract：JSON 解析与错误分类 ────────────────────────────────────────────
 
@@ -109,6 +112,13 @@ class TestErrorClassification:
         kind, reason = extract_mod._classify_error(RuntimeError("连接超时"))
         assert kind == "other"
         assert "连接超时" in reason
+
+    def test_404_with_vision_path_is_protocol_not_no_vision(self):
+        """端点 404 的文案里常带 v1/vision 字样 —— 不许误判成"模型不支持看图"。"""
+        kind, _ = extract_mod._classify_error(
+            RuntimeError("404 not found: /v1/vision")
+        )
+        assert kind == "protocol"
 
 
 # ── context：匹配阈值与宁缺毋滥 ───────────────────────────────────────────
@@ -305,3 +315,269 @@ class TestBuildPrompt:
         prompt = draft_mod.build_prompt("hi", ctx)
         assert "Acme" in prompt
         assert "报价单.pdf" in prompt
+
+
+# ── 复审回归：数字识别覆盖（P0）────────────────────────────────────────────
+
+
+class TestNumberCoverage:
+    """复审 P0：11 种漏网形态每一种都必须被识别并替换掉。"""
+
+    @pytest.mark.parametrize("form", [
+        "USD 3.50", "3.50 USD", "30 days", "10%", "10 percent",
+        "500 pieces", "50 dollars", "100 sets", "500", "三天", "五百个",
+    ])
+    def test_unbacked_form_is_stripped(self, form):
+        ctx = CustomerContext(matched=False, new_contact=True)
+        cleaned, changed = draft_mod.strip_unbacked_numbers(
+            f"Our offer: {form}.", ctx
+        )
+        assert changed is True, f"漏掉了数字形态：{form!r}"
+        assert "（待确认）" in cleaned
+
+    def test_p0_whole_sentence_with_empty_library(self):
+        """空产品库时，这整句必须被清理 —— 之前原样放行（changed=False）。"""
+        ctx = CustomerContext(matched=False, new_contact=True)
+        raw = "Delivery in 30 days, price USD 3.50, 10% discount, qty 500 pieces."
+        cleaned, changed = draft_mod.strip_unbacked_numbers(raw, ctx)
+        assert changed is True
+        for token in ("30 days", "USD 3.50", "10%", "500 pieces"):
+            assert token not in cleaned
+
+    def test_library_and_draft_spellings_are_equivalent(self):
+        """库里写 USD 3.50 / 30 days，草稿写 $3.50 / 30 天，必须算同一个数字。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{
+                "label": "价格表.md",
+                "excerpt": "USD 3.50, 500 pcs, 30 days",
+            }],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers(
+            "Price is $3.50, MOQ 500, delivery 30 天.", ctx
+        )
+        assert changed is False, cleaned
+        assert "$3.50" in cleaned and "30 天" in cleaned
+
+    def test_unknown_currency_word_is_money_not_bare(self):
+        """50 dollars 与 $50 归一后必须相同（金额类）。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "q", "price": "$50"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers(
+            "It costs 50 dollars.", ctx
+        )
+        assert changed is False
+        assert "50 dollars" in cleaned
+
+
+# ── 复审回归：产品库检索真的进文件（P1-1）────────────────────────────────
+
+
+class TestLoadProductEntries:
+    def _patch_libraries(self, monkeypatch, libs):
+        import trade.library as library_module
+        monkeypatch.setattr(library_module, "list_by_company", lambda cid: libs)
+
+    def test_scans_files_and_extracts_facts(self, tmp_path, monkeypatch):
+        (tmp_path / "valve-price.md").write_text(
+            "# Valve\nMOQ: 500 pcs\nPrice: USD 3.50\nDelivery: 30 days\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "unrelated.txt").write_text("nothing here", encoding="utf-8")
+        self._patch_libraries(monkeypatch, [
+            {"id": 1, "name": "产品库", "root_path": str(tmp_path)},
+        ])
+
+        entries, facts = ctx_mod.load_product_entries("valve MOQ", company_id=1)
+        assert len(entries) == 1
+        assert "valve-price.md" in entries[0]["label"]
+        values = " ".join(fact.value for fact in facts)
+        assert "500" in values and "3.50" in values
+
+        # 抽出来的 facts 必须能让草稿侧认可同样的数字
+        ctx = CustomerContext(product_entries=entries, facts=facts)
+        cleaned, changed = draft_mod.strip_unbacked_numbers(
+            "Price USD 3.50, MOQ 500 pcs.", ctx
+        )
+        assert changed is False, cleaned
+
+    def test_ignores_missing_root(self, monkeypatch):
+        self._patch_libraries(monkeypatch, [
+            {"id": 1, "name": "坏库", "root_path": "/definitely/not/here"},
+        ])
+        assert ctx_mod.load_product_entries("valve", company_id=1) == ([], [])
+
+    def test_no_keywords_returns_empty(self, monkeypatch):
+        self._patch_libraries(monkeypatch, [
+            {"id": 1, "name": "产品库", "root_path": "/tmp"},
+        ])
+        assert ctx_mod.load_product_entries("   ", company_id=1) == ([], [])
+
+
+# ── 复审回归：历史串户 / 关键词降级 / 同名多候选（P1-2、P1-3、P2）──────────
+
+
+class TestHistoryAndMatchingHardening:
+    def test_customer_id_substring_does_not_pull_other_history(self, monkeypatch):
+        ctx = CustomerContext(matched=True, customer_id=1, customer_name="Acme")
+
+        class _CM:
+            @staticmethod
+            def search_history(company_id, time_range="all", limit=20, **kw):
+                return [
+                    {"query": "1 号方案报价", "response": "x"},
+                    {"query": "Acme 询价", "response": "y"},
+                ]
+
+        import trade.chat_memory as real_cm
+        monkeypatch.setattr(real_cm, "search_history", _CM.search_history)
+
+        assert ctx_mod.load_history(ctx, company_id=1) == ["Acme 询价"]
+
+    def test_short_customer_name_gets_no_history(self, monkeypatch):
+        ctx = CustomerContext(matched=True, customer_id=1, customer_name="A")
+
+        class _CM:
+            @staticmethod
+            def search_history(company_id, time_range="all", limit=20, **kw):
+                return [{"query": "A 公司报价", "response": ""}]
+
+        import trade.chat_memory as real_cm
+        monkeypatch.setattr(real_cm, "search_history", _CM.search_history)
+
+        assert ctx_mod.load_history(ctx, company_id=1) == []
+
+    def test_keyword_hit_without_name_overlap_is_new(self, monkeypatch):
+        monkeypatch.setattr(
+            ctx_mod, "_list_company_customers",
+            lambda cid: [{"id": 1, "name": "Other Co"}],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_fuzzy_search",
+            lambda q, cid: [
+                {"customer_id": 1, "score": 1.0, "match_type": "keyword"},
+            ],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_get_customer",
+            lambda cid, company: {"id": cid, "name": "Other Co"},
+        )
+        result = ctx_mod.match_customer("Acme", company_id=1)
+        assert result.matched is False
+        assert result.new_contact is True
+
+    def test_keyword_hit_with_name_overlap_matches(self, monkeypatch):
+        monkeypatch.setattr(
+            ctx_mod, "_list_company_customers",
+            lambda cid: [{"id": 1, "name": "Acme Ltd"}],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_fuzzy_search",
+            lambda q, cid: [
+                {"customer_id": 1, "score": 1.0, "match_type": "keyword"},
+            ],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_get_customer",
+            lambda cid, company: {"id": cid, "name": "Acme Ltd"},
+        )
+        result = ctx_mod.match_customer("Acme", company_id=1)
+        assert result.matched is True
+        assert result.customer_id == 1
+
+    def test_same_name_duplicates_are_ambiguous(self, monkeypatch):
+        monkeypatch.setattr(
+            ctx_mod, "_list_company_customers",
+            lambda cid: [{"id": 1, "name": "Acme"}, {"id": 2, "name": "acme"}],
+        )
+        # 同名多候选必须在调模糊检索之前就按新客户处理（不许猜一个）
+        monkeypatch.setattr(
+            ctx_mod, "_fuzzy_search",
+            lambda q, cid: (_ for _ in ()).throw(AssertionError("不该走模糊检索")),
+        )
+        result = ctx_mod.match_customer("Acme", company_id=1)
+        assert result.matched is False
+        assert result.new_contact is True
+
+
+# ── 复审回归：草稿生成契约（P1-4、P1-5、P2）──────────────────────────────
+
+
+class TestDraftRobustness:
+    def test_agent_exception_becomes_error(self, monkeypatch):
+        def boom(prompt, *, company_id):
+            raise RuntimeError("boom")
+
+        # 打 _run_once 而不是 _run_via_existing_chat：后者会先 import
+        # trade.api.chat（重模块），在很短的测试超时里会先超时。
+        monkeypatch.setattr(draft_mod, "_run_once", boom)
+        result = draft_mod.generate_draft(
+            "hi", CustomerContext(new_contact=True), company_id=1, timeout=0.5
+        )
+        assert not result.ok
+        assert "boom" in result.error
+
+    def test_system_exit_is_contained(self, monkeypatch):
+        """Hermes 的 RelaunchExit 继承 SystemExit —— 不许穿透出 generate_draft。"""
+        def relaunch(prompt, *, company_id):
+            raise SystemExit(3)
+
+        monkeypatch.setattr(draft_mod, "_run_once", relaunch)
+        result = draft_mod.generate_draft(
+            "hi", CustomerContext(new_contact=True), company_id=1, timeout=0.5
+        )
+        assert not result.ok
+        assert "SystemExit" in result.error
+
+    def test_timeout_is_really_enforced(self, monkeypatch):
+        started = []
+
+        def hang(prompt, *, company_id):
+            started.append(True)
+            time.sleep(5)
+            return "late"
+
+        monkeypatch.setattr(draft_mod, "_run_once", hang)
+        result = draft_mod.generate_draft(
+            "hi", CustomerContext(new_contact=True), company_id=1, timeout=0.2
+        )
+        assert started, "后台调用应该已经启动"
+        assert not result.ok
+        assert "超时" in result.error
+
+    def test_placeholder_literal_in_customer_message_is_not_expanded(self):
+        ctx = CustomerContext(matched=False, new_contact=True)
+        prompt = draft_mod.build_prompt("please keep {history} literally", ctx)
+        assert "please keep {history} literally" in prompt
+
+    def test_sources_dropped_when_their_number_is_stripped(self):
+        kept = draft_mod._reconcile_sources(
+            [SourceRef(label="报价单", value="$99.99"), SourceRef(label="客户档案", value="Acme")],
+            "Price （待确认）.",
+        )
+        assert kept == [SourceRef(label="客户档案", value="Acme")]
+
+
+class TestExtractionContract:
+    def test_raw_is_preserved_on_parse_failure(self):
+        result = extract_mod.parse_extraction("完全不是 JSON")
+        assert result.raw == "完全不是 JSON"
+        assert result.error_kind == "parse"
+
+    def test_raw_is_preserved_on_success(self):
+        raw = json.dumps({"contact": "A", "messages": [], "confidence": 0.9})
+        assert extract_mod.parse_extraction(raw).raw == raw
+
+    def test_low_confidence_flag(self):
+        low = json.dumps({
+            "contact": "A", "messages": [],
+            "confidence": CONFIDENCE_THRESHOLD - 0.1,
+        })
+        high = json.dumps({"contact": "A", "messages": [], "confidence": 1.0})
+        assert extract_mod.parse_extraction(low).low_confidence is True
+        assert extract_mod.parse_extraction(high).low_confidence is False
+
+    def test_error_result_is_not_low_confidence(self):
+        assert extract_mod.parse_extraction("nope").low_confidence is False

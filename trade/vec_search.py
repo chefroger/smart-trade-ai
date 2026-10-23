@@ -496,7 +496,12 @@ def keyword_search_customers(
                ORDER BY id DESC LIMIT ?""",
             (company_id, like, like, like, like, like, top_k),
         )
-        return [{"customer_id": r[0], "score": 1.0} for r in cur.fetchall()]
+        # score 恒为 1.0（LIKE 没有距离概念），match_type 让调用方能分辨
+        # "向量真命中" 与 "关键词降级命中" —— 后者还需要调用方做名字校验。
+        return [
+            {"customer_id": r[0], "score": 1.0, "match_type": "keyword"}
+            for r in cur.fetchall()
+        ]
     except Exception as e:
         logger.warning("关键词检索失败: %s", e)
         return []

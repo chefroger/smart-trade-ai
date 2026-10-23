@@ -33,7 +33,12 @@ import logging
 import re
 from typing import Any
 
-from trade.copilot.types import CapturedWindow, DialogMessage, ExtractedDialog
+from trade.copilot.types import (
+    DEFAULT_TIMEOUT,
+    CapturedWindow,
+    DialogMessage,
+    ExtractedDialog,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -57,6 +62,8 @@ _EXTRACT_PROMPT = """\
 """
 
 # 判定"模型不支持视觉"的服务商错误特征（与 Hermes 的 _IMAGE_ERROR_RULES 同源思路）
+# 注意：不要放裸 "vision" / "invalid_request" —— 它们会把 "404 at /vision"、
+# 参数拼写错误之类的协议问题误判成"模型不支持看图"（复审 P2）。
 _NO_VISION_HINTS = (
     "does not support",
     "not support image",
@@ -65,8 +72,6 @@ _NO_VISION_HINTS = (
     "image input",
     "content_policy",
     "multimodal",
-    "vision",
-    "invalid_request",
 )
 # 判定"协议不兼容"的特征
 _PROTOCOL_HINTS = (
@@ -76,21 +81,26 @@ _PROTOCOL_HINTS = (
     "unsupported api",
     "no route",
     "404 page not found",
+    "404 not found",
 )
 
 
 def _classify_error(exc: Exception) -> tuple[str, str]:
-    """把异常分成两类：("protocol"|"no_vision"|"other", 人类可读原因)。"""
+    """把异常分成两类：("protocol"|"no_vision"|"other", 人类可读原因)。
+
+    先判协议：路由/端点类的 404 文案里常带 "vision" 字样，顺序反了会误报成
+    "模型不支持看图"，把用户引到错误的修复方向。
+    """
     text = f"{type(exc).__name__}: {exc}".lower()
-    if any(h in text for h in _NO_VISION_HINTS):
-        return "no_vision", (
-            "当前模型不支持看图，或服务端不接受图片输入。"
-            "请在副驾设置里为抽取指定一个支持视觉的模型。"
-        )
     if any(h in text for h in _PROTOCOL_HINTS):
         return "protocol", (
             "当前服务商与副驾的识别方式不兼容（需要 OpenAI 兼容的视觉端点）。"
             "请在副驾设置里为抽取指定一个兼容的视觉模型。"
+        )
+    if any(h in text for h in _NO_VISION_HINTS):
+        return "no_vision", (
+            "当前模型不支持看图，或服务端不接受图片输入。"
+            "请在副驾设置里为抽取指定一个支持视觉的模型。"
         )
     return "other", f"抽取调用失败：{type(exc).__name__}: {exc}"
 
@@ -152,7 +162,9 @@ def parse_extraction(raw: str) -> ExtractedDialog:
     """
     obj = _parse_json_object(raw)
     if obj is None:
+        # raw 必须带回去 —— 错误文案承诺"原文已保留"，UI 要真的能展示它。
         return ExtractedDialog(
+            raw=raw or "",
             error="识别结果不是有效 JSON，无法结构化（原文已保留，请人工核对）",
             error_kind="parse",
         )
@@ -170,6 +182,7 @@ def parse_extraction(raw: str) -> ExtractedDialog:
         language=str(obj.get("language") or ""),
         messages=_coerce_messages(obj.get("messages")),
         confidence=confidence,
+        raw=raw or "",
     )
 
 
@@ -178,7 +191,7 @@ async def extract_dialog(
     *,
     provider: str | None = None,
     model: str | None = None,
-    timeout: float = 60.0,
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> ExtractedDialog:
     """把一次窗口读取转成结构化对话。
 
@@ -206,7 +219,7 @@ async def extract_dialog(
 
 async def extract_dialog_from_text(
     text: str, *, provider: str | None = None, model: str | None = None,
-    timeout: float = 60.0,
+    timeout: float = DEFAULT_TIMEOUT,
 ) -> ExtractedDialog:
     """纯文本抽取（剪贴板通道）。同样只转录、不回答。"""
     if not text.strip():

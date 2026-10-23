@@ -16,6 +16,13 @@ Who = Literal["customer", "me", "unknown"]
 # 读取通道
 Channel = Literal["clipboard", "screenshot"]
 
+# 单步操作的默认截止时间（秒）。任务书 §2 要求抽取/草稿都在 15s 内给出结果，
+# 超时宁可明确报错让用户重试，也不要让悬浮窗一直转圈。
+DEFAULT_TIMEOUT = 15.0
+
+# 抽取置信度阈值：低于它 UI 必须提示"识别结果可能不准，请核对"。
+CONFIDENCE_THRESHOLD = 0.6
+
 
 @dataclass
 class CapturedWindow:
@@ -60,14 +67,23 @@ class ExtractedDialog:
     language: str = ""
     messages: list[DialogMessage] = field(default_factory=list)
     confidence: float = 0.0
+    # 模型返回的原始文本 —— 解析失败时 UI 要"照样展示原文"（复审 P1-5：
+    # 之前错误信息声称原文已保留，但对象里根本没有这个字段）。
+    raw: str = ""
     # 抽取失败时的原因（给 UI 展示；成功时为空）
     error: str = ""
-    # 错误分类：""（无错）/ "protocol"（服务商与直调不兼容）/ "no_vision"（模型不支持看图）
+    # 错误分类：""（无错）/ "parse"（模型输出不是有效 JSON）/ "empty"（没有可抽取
+    # 的文本）/ "protocol"（服务商不兼容）/ "no_vision"（模型不支持看图）/ "other"
     error_kind: str = ""
 
     @property
     def ok(self) -> bool:
         return not self.error
+
+    @property
+    def low_confidence(self) -> bool:
+        """成功但置信度低于阈值 —— UI 据此提示"可能不准，请核对"。"""
+        return self.ok and self.confidence < CONFIDENCE_THRESHOLD
 
     def latest_from_customer(self) -> DialogMessage | None:
         """客户侧最后一条消息（草稿的输入）。"""

@@ -42,8 +42,19 @@ FORBIDDEN = [
     (r"\bmouse\.Controller\b", "pynput mouse.Controller（模拟点击）"),
     (r"\bCGEventPost\b", "macOS CGEventPost（合成事件）"),
     (r"\bCGEventCreateKeyboardEvent\b", "macOS 合成键盘事件"),
+    (r"\bCGEventCreateMouseEvent\b", "macOS 合成鼠标事件"),
     (r"\bSendMessage\b\s*\(\s*[^,]+,\s*WM_CHAR", "窗口消息注入文本"),
     (r"\bPostMessage\b\s*\(\s*[^,]+,\s*WM_CHAR", "窗口消息注入文本"),
+    # 外部工具 / 别名导入 / 字符串形式的符号（getattr 绕过）
+    (r"\bosascript\b", "AppleScript 驱动其他 App（可注入按键）"),
+    (r"\bxdotool\b", "xdotool（X11 注入工具）"),
+    (r"\bydotool\b", "ydotool（Wayland 注入工具）"),
+    (r"from\s+pynput[^\n]*\bimport\b[^\n]*\bController\b", "pynput Controller 别名导入"),
+    (
+        r"[\"'](?:SendInput|keybd_event|mouse_event|CGEventPost|"
+        r"CGEventCreateKeyboardEvent|CGEventCreateMouseEvent)[\"']",
+        "字符串形式的注入符号（getattr 绕过）",
+    ),
 ]
 
 # 聊天软件域名 + 发送语义（直调聊天软件 API）
@@ -130,8 +141,8 @@ class TestNoBackgroundPolling:
     def test_no_while_true_sleep_loop(self):
         offenders = []
         for path, text in _copilot_sources():
-            # 常驻抓取的典型形态：while True + sleep 的循环
-            if re.search(r"while\s+True\s*:[\s\S]{0,400}?time\.sleep", text):
+            # 常驻抓取的典型形态：while True +（time|asyncio）.sleep 的循环
+            if re.search(r"while\s+True\s*:[\s\S]{0,400}?(?:time|asyncio)\.sleep", text):
                 offenders.append(f"{path.relative_to(REPO)}: while True + sleep（疑似常驻轮询）")
         assert not offenders, "副驾出现常驻轮询循环：\n  " + "\n  ".join(offenders)
 
@@ -139,6 +150,9 @@ class TestNoBackgroundPolling:
         """铁律 6：截图只在内存中处理，不许落盘。"""
         offenders = []
         for path, text in _copilot_sources():
-            if re.search(r"\.write_bytes\(|imwrite\(|savefig\(|open\([^)]*['\"]wb", text):
+            if re.search(
+                r"\.write_bytes\(|imwrite\(|savefig\(|\.save\s*\(|open\([^)]*['\"]wb",
+                text,
+            ):
                 offenders.append(f"{path.relative_to(REPO)}: 疑似把数据写文件")
         assert not offenders, "副驾不应把数据落盘：\n  " + "\n  ".join(offenders)
