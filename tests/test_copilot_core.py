@@ -864,3 +864,44 @@ class TestChineseUnits:
         )
         cleaned, changed = draft_mod.strip_unbacked_numbers("起订 500 个", ctx)
         assert changed is False, cleaned
+
+
+class TestVolumeUnits:
+    """体积单位也曾坍缩成裸数字：5 L 与 5 pcs 互相背书。"""
+
+    @pytest.mark.parametrize("text,key", [
+        ("5 L", "5l"), ("5L", "5l"), ("5 l", "5l"), ("5 升", "5l"),
+        ("500 ml", "500ml"), ("500ml", "500ml"), ("500 毫升", "500ml"),
+        ("1 liter", "1l"), ("1 litre", "1l"),
+    ])
+    def test_volume_units_have_identity(self, text, key):
+        assert extract_mod_numbers(text) == {key}
+
+    @pytest.mark.parametrize("library,draft", [
+        ("5 pcs", "5 L"), ("5 L", "5 pcs"),
+        ("5 pcs", "5 升"), ("500 ml", "500 pcs"),
+    ])
+    def test_volume_does_not_back_count(self, library, draft):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "库", "excerpt": library}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
+        assert changed is True, f"库 {library!r} 误背书 {draft!r}"
+
+    @pytest.mark.parametrize("library,draft", [
+        ("5 L", "5 升"), ("500 ml", "500 毫升"),
+        ("1 liter", "1 L"), ("500 毫升", "500 ml"),
+    ])
+    def test_cn_and_english_volume_match(self, library, draft):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "库", "excerpt": library}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
+        assert changed is False, cleaned
+
+    def test_no_space_form_is_visible_and_stripped(self):
+        assert draft_mod.strip_unbacked_numbers(
+            "Volume 5L", CustomerContext(new_contact=True)
+        ) == ("Volume （待确认）", True)

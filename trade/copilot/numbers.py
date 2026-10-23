@@ -58,6 +58,8 @@ _ASCII_RIGHT = r"(?![A-Za-z0-9])"
 _UNIT_WORDS = (
     r"(?:pcs|pieces?|sets?|units?|cartons?|boxes?|containers?"
     r"|tons?|tonnes?|kgs?|grams?|lbs?|lb|mm|cm|km|meters?|metres?"
+    # 体积单位：毫升必须排在升前面，否则 "500ml" 会被截成 "500m"
+    r"|milliliters?|millilitres?|ml|liters?|litres?|l"
     # 单字母单位强制小写（(?-i:…) 抵消外层的 IGNORECASE）：
     # 品牌 "3M"、制式 "5G" 不能被当成 3 米 / 5 克
     r"|kW|MW|kWh|kV|V|mA|Hz|(?-i:m)|(?-i:g)|(?-i:t))"
@@ -66,7 +68,7 @@ _UNIT_WORDS = (
 # 中文单位词表：长词在前（公斤 先于 斤；千克 先于 克），否则会被短词截断。
 # 计量单位必须与英文走同一个 key（公斤 = kg），否则中文草稿会和英文库脱钩，
 # 同时又会和计数事实（40 pcs）撞成同一个裸数字（复审 P1）。
-_CN_MEASURE_WORDS = r"(?:公斤|千克|克|吨|斤|毫米|厘米|米)"
+_CN_MEASURE_WORDS = r"(?:公斤|千克|克|吨|斤|毫米|厘米|毫升|米|升)"
 _CN_COUNT_WORDS = r"(?:个|件|套|台|箱)"
 _CN_TIME_WORDS = r"(?:个工作日|工作日|天|日|周|个月|年)"
 
@@ -124,6 +126,10 @@ _MEASURE_UNITS = {
     "meter": "m", "meters": "m", "metre": "m", "metres": "m",
     "w": "w", "kw": "kw", "mw": "mw", "kwh": "kwh",
     "v": "v", "kv": "kv", "ma": "ma", "hz": "hz", "lm": "lm",
+    # 体积：升 / 毫升
+    "l": "l", "liter": "l", "liters": "l", "litre": "l", "litres": "l",
+    "ml": "ml", "milliliter": "ml", "milliliters": "ml",
+    "millilitre": "ml", "millilitres": "ml",
     # 色温：3000K 与 3000 不是同一个规格
     "k": "k",
 }
@@ -143,6 +149,8 @@ _CN_MEASURE_UNITS: dict[str, tuple[str, Decimal]] = {
     "毫米": ("mm", Decimal("1")),
     "厘米": ("cm", Decimal("1")),
     "米": ("m", Decimal("1")),
+    "毫升": ("ml", Decimal("1")),
+    "升": ("l", Decimal("1")),
 }
 # 计数单位：归回裸数字（"MOQ 500" 与 "500 pcs" 是同一件事）
 _COUNT_UNITS = frozenset({
@@ -236,7 +244,7 @@ def _trailing_unit(text: str) -> tuple[str | None, str]:
 def _trailing_cn_unit(text: str) -> str | None:
     """取匹配串末尾的中文计量单位（长词优先，公斤 先于 斤）。"""
     match = re.search(
-        r"(公斤|千克|克|吨|斤|毫米|厘米|米)\s*$", text
+        r"(公斤|千克|克|吨|斤|毫米|厘米|毫升|米|升)\s*$", text
     )
     return match.group(1) if match else None
 
