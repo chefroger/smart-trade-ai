@@ -16,6 +16,7 @@ import pytest
 from trade.copilot import context as ctx_mod
 from trade.copilot import draft as draft_mod
 from trade.copilot import extract as extract_mod
+from trade.copilot.numbers import extract_numbers as extract_mod_numbers
 from trade.copilot.types import CONFIDENCE_THRESHOLD, CustomerContext, SourceRef
 
 # ── extract：JSON 解析与错误分类 ────────────────────────────────────────────
@@ -581,3 +582,112 @@ class TestExtractionContract:
 
     def test_error_result_is_not_low_confidence(self):
         assert extract_mod.parse_extraction("nope").low_confidence is False
+
+
+# ── 复审 2：粘连规格 / 幻影价格 / 时间换算 ────────────────────────────────
+
+_GLUED_SPECS = ["40W", "24W", "0.5W", "3000K", "2700K", "IP65", "100lm", "DC24V"]
+
+
+class TestGluedSpecNumbers:
+    @pytest.mark.parametrize("form", _GLUED_SPECS)
+    def test_unbacked_glued_spec_is_stripped(self, form):
+        """无出处时整段剔除，不许残留 ".5W" / "DC（待确认）" 这类碎屑。"""
+        ctx = CustomerContext(matched=False, new_contact=True)
+        cleaned, changed = draft_mod.strip_unbacked_numbers(f"Spec {form}.", ctx)
+        assert changed is True, form
+        assert form not in cleaned
+        assert cleaned == "Spec （待确认）."
+
+    @pytest.mark.parametrize("form", _GLUED_SPECS)
+    def test_backed_glued_spec_is_kept(self, form):
+        """facts 里有同写法时保留（有出处就能写）。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "规格书.pdf", "excerpt": f"Spec {form}"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers(f"Spec {form}.", ctx)
+        assert changed is False, cleaned
+        assert form in cleaned
+
+    def test_chinese_neighbour_does_not_block_glued_spec(self):
+        """汉字紧邻英文单位（"40W的灯"）也必须识别。"""
+        ctx = CustomerContext(new_contact=True)
+        cleaned, changed = draft_mod.strip_unbacked_numbers("40W的灯", ctx)
+        assert changed is True
+        assert cleaned == "（待确认）的灯"
+
+    def test_spec_unit_keeps_its_identity(self):
+        """40W 与 40 pcs 不是同一个数字，不能互相背书。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "p", "excerpt": "Power 40W"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("Qty 40 pcs", ctx)
+        assert changed is True
+        assert "40 pcs" not in cleaned
+
+
+class TestPhantomPriceRegression:
+    def test_e27_model_does_not_create_phantom_price(self):
+        text = "Bulb E27 USD 1.25 MOQ 1000 pcs"
+        assert extract_mod_numbers(text) == {"$1.25", "1000"}
+
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "price.xlsx", "excerpt": text}],
+        )
+        # 真价必须有出处、保留
+        kept, changed = draft_mod.strip_unbacked_numbers("Price $1.25", ctx)
+        assert changed is False, kept
+        # 幻影价必须被剔除
+        cleaned, changed = draft_mod.strip_unbacked_numbers("Price $27", ctx)
+        assert changed is True
+        assert "$27" not in cleaned
+
+
+class TestTimeUnitNormalization:
+    def test_weeks_and_days_are_not_interchangeable(self):
+        from trade.copilot.numbers import extract_numbers
+        assert extract_numbers("2 weeks") == {"14d"}
+        assert extract_numbers("2 days") == {"2d"}
+        assert extract_numbers("两周") == {"14d"}
+
+    def test_two_weeks_does_not_back_two_days(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "q", "excerpt": "Delivery 2 weeks"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("Delivery in 2 days", ctx)
+        assert changed is True
+        assert "2 days" not in cleaned
+
+    def test_two_weeks_backs_fourteen_days(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "q", "excerpt": "Delivery 2 weeks"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("Delivery in 14 days", ctx)
+        assert changed is False, cleaned
+
+
+class TestChineseQuantities:
+    def test_arabic_digits_with_chinese_measure_word(self):
+        from trade.copilot.numbers import extract_numbers
+        assert extract_numbers("共500件") == {"500"}
+        assert extract_numbers("500个") == {"500"}
+
+    def test_chinese_numeral_matches_arabic_library_value(self):
+        from trade.copilot.numbers import extract_numbers
+        assert extract_numbers("五百个") == {"500"}
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "p", "excerpt": "MOQ 500"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("起订五百个", ctx)
+        assert changed is False, cleaned
+
+
+def test_search_terms_split_chinese_punctuation():
+    assert ctx_mod._search_terms("LED，灯带") == ["led", "灯带"]
+    assert ctx_mod._search_terms("阀门、法兰") == ["阀门", "法兰"]

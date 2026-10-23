@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -348,8 +349,10 @@ def _search_terms(keywords: str) -> list[str]:
     if not raw:
         return []
     terms: list[str] = []
-    for part in raw.replace("，", ",").replace("、", ",").split():
-        part = part.strip(" ,;；/|")
+    # 中文用户常用顿号/全角逗号分隔（"LED，灯带"）—— 只按空白切会把整串
+    # 当成一个词，导致明明有货也查不到（复审 P2）。
+    for part in re.split(r"[\s,，、;；/|]+", raw):
+        part = part.strip()
         if len(part) < 2 or part in terms:
             continue
         terms.append(part)
