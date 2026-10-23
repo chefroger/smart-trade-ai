@@ -238,8 +238,13 @@ def load_history(ctx: CustomerContext, *, company_id: int, limit: int = 10) -> l
     try:
         from trade import chat_memory
 
+        # 按 customer_id 过滤（新数据）；老数据没有 customer_id，
+        # 下面仍保留客户名粗筛作为第二道防线。
         rows = chat_memory.search_history(
-            company_id=company_id, time_range="all", limit=limit
+            company_id=company_id,
+            customer_id=ctx.customer_id,
+            time_range="all",
+            limit=limit,
         )
     except Exception as exc:
         _log.warning("副驾读取客户历史失败：%s", exc)

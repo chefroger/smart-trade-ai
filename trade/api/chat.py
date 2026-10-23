@@ -259,6 +259,7 @@ async def trade_chat(
     conv = chat_memory.save_with_context(
         company_id=cid, library_id=payload.library_id, query=query,
         response=response, library_name=lib_name,
+        customer_id=payload.customer_id,
         files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
                     if gate_result else None),
         context=payload.context or "",
@@ -427,6 +428,7 @@ async def trade_chat_stream(
                         company_id=cid, library_id=payload.library_id,
                         query=query, response=result or "",
                         library_name=lib_name,
+                        customer_id=payload.customer_id,
                         files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
                                     if gate_result else None),
                         context=payload.context or "",

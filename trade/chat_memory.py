@@ -58,10 +58,12 @@ def save(
     files_read: list[dict] | None = None,
     context: str = "",
     skill: str = "",
+    customer_id: int | None = None,
 ) -> dict:
     """保存一条对话记录，作用域限定到指定公司。返回新插入的行，以字典形式呈现。
 
     skill 参数记录本次查询匹配到的技能名（存入 extra3），供质量统计按技能聚合评分。
+    customer_id 记录这条对话属于哪个客户（None = 未关联客户），历史注入按它过滤。
     """
     if company_id is None:
         raise ValueError("company_id is required for conversation isolation")
@@ -70,10 +72,12 @@ def save(
         # extra3 记录匹配到的 skill（空则不写，保持旧行为兼容）
         extra3 = json.dumps({"skill": skill}, ensure_ascii=False) if skill else "{}"
         cur = conn.execute(
-            "INSERT INTO conversations (company_id, library_id, query, response, files_read, context, extra3) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO conversations "
+            "(company_id, customer_id, library_id, query, response, files_read, context, extra3) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 company_id,
+                customer_id,
                 library_id,
                 query,
                 response,
@@ -91,7 +95,7 @@ def save(
             return _row_to_dict(row)
         # 极端兜底：返回最小可用字典（字段类型与 _row_to_dict 输出一致）
         return {
-            "id": new_id, "company_id": company_id,
+            "id": new_id, "company_id": company_id, "customer_id": customer_id,
             "library_id": library_id, "query": query, "response": response,
             "files_read": files_read or [], "created_at": None, "context": context,
             "extra1": {}, "extra2": {}, "extra3": {},
@@ -314,6 +318,7 @@ def save_with_context(
     *,
     library_name: str = "",
     customer_name: str = "",
+    customer_id: int | None = None,
     retain_to_memory: bool = True,
     context: str = "",
     skill: str = "",
@@ -322,8 +327,12 @@ def save_with_context(
 
     这是 B2B 对话日志记录推荐使用的入口函数。
     skill 记录本次匹配到的技能名，供质量统计（get_quality_stats）按技能聚合评分。
+    customer_id 供后续按客户过滤历史。
     """
-    result = save(company_id, query, response, library_id, files_read, context=context, skill=skill)
+    result = save(
+        company_id, query, response, library_id, files_read,
+        context=context, skill=skill, customer_id=customer_id,
+    )
 
     if retain_to_memory:
         # 只有当调用方要求保留到记忆时才执行，避免不必要的 I/O
@@ -405,19 +414,30 @@ def recall_context(query: str, *, bank_id: str = "trade") -> str:
 # ── 辅助函数 ──────────────────────────────────────────────────────────
 
 
-def get_recent(company_id: int, limit: int = 20) -> list[dict]:
+def get_recent(
+    company_id: int, limit: int = 20, customer_id: int | None = None
+) -> list[dict]:
     """获取最近的 N 条对话记录，用于上下文注入。
 
-    返回字典列表，包含键：id, query, response, created_at。
-    数据库查询按最新在前排序，返回时反转以确保上下文按时间正序排列。
+    customer_id 给定时只取该客户的对话（2026-10-23 审计 P0：此前按公司注入，
+    给 A 客户的回答会看到 B 客户的价格/承诺）。
+    返回时反转以确保上下文按时间正序排列。
     """
+    clauses = ["company_id = ?", "query IS NOT NULL"]
+    params: list = [company_id]
+    if customer_id is not None:
+        clauses.append("customer_id = ?")
+        params.append(customer_id)
+    params.append(limit)
+
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, company_id, library_id, query, response, files_read, created_at "
-            "FROM conversations WHERE company_id = ? AND query IS NOT NULL "
+            "SELECT id, company_id, customer_id, library_id, query, response, "
+            "files_read, created_at "
+            f"FROM conversations WHERE {' AND '.join(clauses)} "
             "ORDER BY id DESC LIMIT ?",
-            (company_id, limit),
+            params,
         ).fetchall()
         # 反转排序，使得最早的在最前，适合作为对话上下文输入给 LLM
         return [_row_to_dict(r) for r in reversed(rows)]
@@ -523,6 +543,7 @@ def search_history(
     *,
     recent_days: int | None = None,
     recent_months: int | None = None,
+    customer_id: int | None = None,
 ) -> list[dict]:
     """按时间范围查询历史对话记录（供 LLM 工具调用使用）。
 
@@ -577,16 +598,26 @@ def search_history(
 
         if start is None and end is None:
             # DESC + LIMIT 才是"最近 N 条"；ASC 会返回公司最早的 N 条（审计 P1）。
+            clauses = ["company_id = ?"]
+            params = [company_id]
+            if customer_id is not None:
+                clauses.append("customer_id = ?")
+                params.append(customer_id)
+            params.append(limit)
             rows = conn.execute(
-                "SELECT id, company_id, library_id, query, response, files_read, created_at "
-                "FROM conversations WHERE company_id = ? "
+                "SELECT id, company_id, customer_id, library_id, query, response, "
+                "files_read, created_at "
+                f"FROM conversations WHERE {' AND '.join(clauses)} "
                 "ORDER BY id DESC LIMIT ?",
-                (company_id, limit),
+                params,
             ).fetchall()
         else:
             # start / end 都不空 → start <= created_at < end；任一为空 → 该侧不限制
             clauses = ["company_id = ?"]
             params: list = [company_id]
+            if customer_id is not None:
+                clauses.append("customer_id = ?")
+                params.append(customer_id)
             if start is not None:
                 clauses.append("created_at >= ?")
                 params.append(start.strftime("%Y-%m-%d %H:%M:%S"))
@@ -595,7 +626,8 @@ def search_history(
                 params.append(end.strftime("%Y-%m-%d %H:%M:%S"))
             params.append(limit)
             rows = conn.execute(
-                f"SELECT id, company_id, library_id, query, response, files_read, created_at "
+                f"SELECT id, company_id, customer_id, library_id, query, response, "
+                f"files_read, created_at "
                 f"FROM conversations WHERE {' AND '.join(clauses)} "
                 f"ORDER BY id DESC LIMIT ?",
                 params,
@@ -612,6 +644,7 @@ def _row_to_dict(row) -> dict:
     result = {
         "id": row["id"],
         "company_id": row["company_id"],
+        "customer_id": row["customer_id"] if "customer_id" in row.keys() else None,
         "library_id": row["library_id"],
         "query": row["query"],
         "response": row["response"],

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _fresh_db(tmp_path: Path) -> Path:
-    """建一个已是最新 schema 的库（spare 列/context 列齐全）。"""
+    """建一个已是最新 schema 的库（spare / context / customer_id 列齐全）。"""
     db = tmp_path / "trade.db"
     conn = sqlite3.connect(db)
     for table in ("companies", "trade_companies", "libraries", "customers",
@@ -28,6 +28,7 @@ def _fresh_db(tmp_path: Path) -> Path:
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
     conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")
+    conn.execute("ALTER TABLE conversations ADD COLUMN customer_id INTEGER")
     conn.commit()
     conn.close()
     return db
@@ -81,6 +82,26 @@ class TestNeedsSchemaWork:
         conn = sqlite3.connect(db)
         conn.executescript("""
             CREATE TABLE conversations_new (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT);
+            DROP TABLE conversations;
+            ALTER TABLE conversations_new RENAME TO conversations;
+        """)
+        conn.commit()
+        try:
+            assert _needs_schema_work(conn) is True
+        finally:
+            conn.close()
+
+    def test_missing_customer_id_needs_work(self, tmp_path):
+        """新列缺失必须触发迁移（否则历史永远按公司注入）。"""
+        from trade.database import _needs_schema_work
+
+        db = _fresh_db(tmp_path)
+        conn = sqlite3.connect(db)
+        conn.executescript("""
+            CREATE TABLE conversations_new (
+                id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT,
+                context TEXT DEFAULT ''
+            );
             DROP TABLE conversations;
             ALTER TABLE conversations_new RENAME TO conversations;
         """)

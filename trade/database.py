@@ -124,6 +124,9 @@ CREATE TABLE IF NOT EXISTS customer_libraries (
 CREATE TABLE IF NOT EXISTS conversations (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id  INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    -- 会话归属客户（老数据为 NULL）。历史上下文按客户过滤，避免 A 客户
+    -- 的报价/承诺被注入到给 B 客户的回答里（2026-10-23 审计 P0）。
+    customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
     library_id  INTEGER REFERENCES libraries(id) ON DELETE SET NULL,
     query       TEXT    NOT NULL,
     response    TEXT    DEFAULT '',
@@ -229,7 +232,7 @@ def _add_spare_columns(conn: sqlite3.Connection) -> None:
 
 
 def _add_context_column(conn: sqlite3.Connection) -> None:
-    """为 conversations 表添加 context 列（如果缺少的话）。
+    """为 conversations 表添加 context / customer_id 列（如果缺少的话）。
 
     幂等操作 — 先检查列是否存在，避免重复 ALTER TABLE 报错。
     新增安装和升级都会执行，兼容已有数据库。
@@ -243,7 +246,12 @@ def _add_context_column(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()}
     if "context" not in cols:
         conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")
-        conn.commit()
+    if "customer_id" not in cols:
+        conn.execute(
+            "ALTER TABLE conversations ADD COLUMN customer_id INTEGER "
+            "REFERENCES customers(id) ON DELETE SET NULL"
+        )
+    conn.commit()
 
 
 # v0→v1 需要补 company_id 的三张业务表
@@ -383,10 +391,10 @@ def _needs_schema_work(conn: sqlite3.Connection) -> bool:
             cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
             if not {"extra1", "extra2", "extra3"} <= cols:
                 return True
-        # conversations.context 缺失 → ALTER TABLE
+        # conversations 的 context / customer_id 缺失 → ALTER TABLE
         if "conversations" in existing:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-            if "context" not in cols:
+            if "context" not in cols or "customer_id" not in cols:
                 return True
     except sqlite3.Error:
         # 读不出来（损坏/权限）→ 保守起见当作需要处理，让它照旧备份并报错

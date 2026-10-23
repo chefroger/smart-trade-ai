@@ -381,11 +381,16 @@ def _estimate_tokens(text: str) -> int:
     return int(cjk_chars / 1.5 + other_chars / 4.0)
 
 
-def _get_history_block(company_id: int | None, total_prompt_chars: int) -> tuple[str, int]:
+def _get_history_block(
+    company_id: int | None,
+    total_prompt_chars: int,
+    customer_id: int | None = None,
+) -> tuple[str, int]:
     """根据 prompt 总大小构造历史对话注入块。
 
     上下文越长，注入的历史条数越少，防止超出 token 预算。
-    返回 (history_block, history_token_count)。
+    `customer_id` 给定时只注入该客户的对话 —— 之前只按公司过滤，给 A 客户的
+    回答会看到 B 客户的报价/承诺（2026-10-23 审计 P0）。
     当 company_id 为 None 或 0 时 history_block 为空字符串。
     """
     if not company_id:  # None, 0, 空 — company_id 从 1 开始自增，0 不可能有效
@@ -411,7 +416,7 @@ def _get_history_block(company_id: int | None, total_prompt_chars: int) -> tuple
             "如需查询更早内容，请调用 chat_memory_list 工具（参数同 50k 档提示）。"
         )
 
-    rows = _cm.get_recent(company_id, limit=limit)
+    rows = _cm.get_recent(company_id, limit=limit, customer_id=customer_id)
     if not rows:
         # 数据库中无历史记录
         return "", 0
@@ -685,7 +690,7 @@ def build_query(
     # 3. Order context — 按 3 层优先级搜索订单并注入
     order_context = ""
     if company_id:
-        order_text = search_orders(company_id, query)
+        order_text = search_orders(company_id, query, customer_id=customer_id)
         if order_text:
             order_context = order_text
 
@@ -787,7 +792,9 @@ def build_query(
             len(system_prompt) + len(customer_context) + len(doc_context) +
             len(augmented_query) + 200
         )
-        history_block, _ = _get_history_block(company_id, pre_history_chars)
+        history_block, _ = _get_history_block(
+            company_id, pre_history_chars, customer_id=customer_id
+        )
 
     # 8. Assemble final user message：system → 客户 → 订单 → 文档库 → 历史 → 查询
     final_prompt = system_prompt + customer_context + order_context + doc_context

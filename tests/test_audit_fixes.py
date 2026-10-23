@@ -204,3 +204,139 @@ class TestDraftRunsWithoutTools:
         assert captured["agent_kwargs"]["enabled_toolsets"] == []
         assert captured["agent_kwargs"]["ephemeral_system_prompt"] == "SYS"
         assert "hi" in captured["prompt"]
+
+
+class TestConversationCustomerScope:
+    """P0：历史注入必须按 customer_id 过滤。"""
+
+    def _seed(self, db_path):
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("INSERT INTO companies (id, name, slug) VALUES (1, 'Co', 'co')")
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name) VALUES (10, 1, 'A')"
+        )
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name) VALUES (11, 1, 'B')"
+        )
+        rows = [
+            (10, "qA1", "rA1"),
+            (10, "qA2", "rA2"),
+            (11, "qB1", "rB1"),
+            (None, "qNull", "rNull"),
+        ]
+        for customer_id, query, response in rows:
+            conn.execute(
+                "INSERT INTO conversations (company_id, customer_id, query, response) "
+                "VALUES (1, ?, ?, ?)",
+                (customer_id, query, response),
+            )
+        conn.commit()
+        conn.close()
+
+    def test_get_recent_filters_by_customer(self, test_db):
+        from trade import chat_memory
+
+        self._seed(test_db)
+        rows = chat_memory.get_recent(1, limit=20, customer_id=10)
+        assert [row["query"] for row in rows] == ["qA1", "qA2"]
+
+    def test_search_history_filters_by_customer(self, test_db):
+        from trade import chat_memory
+
+        self._seed(test_db)
+        rows = chat_memory.search_history(1, limit=20, customer_id=10)
+        assert [row["query"] for row in rows] == ["qA1", "qA2"]
+
+    def test_without_filter_still_returns_company_history(self, test_db):
+        from trade import chat_memory
+
+        self._seed(test_db)
+        rows = chat_memory.get_recent(1, limit=20)
+        assert len(rows) == 4
+
+    def test_save_records_customer_id(self, test_db):
+        from trade import chat_memory
+
+        conn = sqlite3.connect(str(test_db))
+        conn.execute("INSERT INTO companies (id, name, slug) VALUES (1, 'Co', 'co')")
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name) VALUES (10, 1, 'A')"
+        )
+        conn.commit()
+        conn.close()
+
+        saved = chat_memory.save_with_context(
+            company_id=1, query="hello", response="hi",
+            customer_id=10, retain_to_memory=False,
+        )
+        assert saved["customer_id"] == 10
+
+    def test_history_block_uses_customer_scope(self, test_db):
+        from trade import helpers
+
+        self._seed(test_db)
+        block, _ = helpers._get_history_block(1, 0, customer_id=10)
+        assert "qA1" in block
+        assert "qB1" not in block
+        assert "qNull" not in block
+
+
+class TestOrderInjectionScope:
+    """P0：订单只在有意图时注入，且指定客户时绝不回退公司级。"""
+
+    def _seed(self, db_path):
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("INSERT INTO companies (id, name, slug) VALUES (1, 'Co', 'co')")
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name, contact) "
+            "VALUES (10, 1, 'A Corp', 'Alice')"
+        )
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name, contact) "
+            "VALUES (11, 1, 'B Corp', 'Bob')"
+        )
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name, contact) "
+            "VALUES (12, 1, 'C Corp', 'Carol')"
+        )
+        conn.execute(
+            "INSERT INTO orders (company_id, customer_id, product_name, unit_price, "
+            "currency, status) VALUES (1, 10, 'WidgetA', 3.5, 'USD', '已下单')"
+        )
+        conn.execute(
+            "INSERT INTO orders (company_id, customer_id, product_name, unit_price, "
+            "currency, status) VALUES (1, 11, 'WidgetB', 9.9, 'USD', '已下单')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_no_intent_means_no_order_context(self, test_db):
+        from trade.order import search_orders
+
+        self._seed(test_db)
+        assert search_orders(1, "你好，今天忙吗") is None
+
+    def test_contact_query_can_match_that_customer(self, test_db):
+        from trade.order import search_orders
+
+        self._seed(test_db)
+        text = search_orders(1, "Alice 的订单")
+        assert text and "WidgetA" in text
+        assert "WidgetB" not in text
+
+    def test_customer_id_only_returns_own_orders(self, test_db):
+        from trade.order import search_orders
+
+        self._seed(test_db)
+        text = search_orders(1, "报价多少", customer_id=10)
+        assert text and "WidgetA" in text
+        assert "WidgetB" not in text
+
+    def test_customer_id_never_falls_back_to_company(self, test_db):
+        from trade.order import search_orders
+
+        self._seed(test_db)
+        # Carol 没有订单：宁可空，也不能把 A/B 的订单塞进来
+        assert search_orders(1, "报价多少", customer_id=12) is None

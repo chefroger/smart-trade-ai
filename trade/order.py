@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import re
+
 from trade.database import get_connection
 
 
@@ -254,24 +256,54 @@ def get_libraries(order_id: int, company_id: int) -> list[dict]:
 # ── 上下文搜索 ────────────────────────────────────────────────────────────────
 
 
-def search_orders(company_id: int, query: str) -> str | None:
+# 只有问句里出现"订单/报价/交期"这类意图时才注入订单。
+# 以前 Layer 3 无条件注入最近 20 笔 —— 写开发信、OSINT、闲聊都会带上
+# 别家客户的价格（2026-10-23 审计 P0）。
+_ORDER_INTENT_RE = re.compile(
+    r"订单|报价|交期|发货|下单|采购|价格|单价|金额|那批|这批|上次|po\b|"
+    r"order|quote|quotation|delivery|price",
+    re.IGNORECASE,
+)
+
+
+def search_orders(
+    company_id: int, query: str, customer_id: int | None = None
+) -> str | None:
     """搜索与用户 query 相关的订单，返回注入上下文的文本块。
 
     3 层优先级：
       1. 联系人 + 品名精确匹配
       2. 联系人聚合
-      3. 公司聚合
+      3. 公司聚合（仅无指定客户时）
+
+    给了 customer_id 时**绝不回退公司级**：宁可没有订单上下文，也不把
+    别家客户的成交价带进当前客户的回答。
 
     Returns:
-        订单上下文字符串，或 None（无匹配订单时）。
+        订单上下文字符串，或 None（无匹配/无订单意图时）。
     """
     from trade import customer as _cust
+
+    if not _ORDER_INTENT_RE.search(query or ""):
+        return None
 
     # 从 query 提取可能的产品名关键词（取 2-5 字的连续片段作为候选）
     words = query.replace("的", " ").replace("订单", " ").replace("报价", " ").split()
     candidates = [w for w in words if len(w) >= 2]
 
-    # Layer 1: 尝试按联系人 + 品名精确匹配
+    # 指定客户：只查这个客户的订单
+    if customer_id is not None:
+        cust = _cust.get(customer_id, company_id=company_id)
+        if not cust:
+            return None
+        for kw in candidates:
+            rows = _search_by_customer_and_product(customer_id, kw, limit=5)
+            if rows:
+                return _format_order_context(rows, cust, kw)
+        rows = _search_by_customer(customer_id, limit=5)
+        return _format_order_context(rows, cust) if rows else None
+
+    # 未指定客户：保留联系人匹配，再退公司级（限制条数）
     all_customers = _cust.list_by_company(company_id)
     for cust in all_customers:
         contact = cust.get("contact", "")
@@ -289,8 +321,8 @@ def search_orders(company_id: int, query: str) -> str | None:
             if rows:
                 return _format_order_context(rows, cust)
 
-    # Layer 3: 公司级聚合
-    rows = _search_by_company(company_id, limit=20)
+    # Layer 3: 公司级聚合（有订单意图时才走到这里；限制 3 笔）
+    rows = _search_by_company(company_id, limit=3)
     if rows:
         return _format_order_context(rows)
 
