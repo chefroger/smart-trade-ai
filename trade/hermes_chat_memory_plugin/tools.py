@@ -59,7 +59,8 @@ CHAT_MEMORY_LIST_SCHEMA = _schema(
             "type": "integer",
             "description": (
                 "当前会话的公司 ID。从 system prompt 的 'Trade Context' 段读取；"
-                "**不要**让用户输入这个值。传错会读到其他公司数据（严重 bug）。"
+                "**不要**让用户输入这个值。服务端会校验它与当前会话绑定一致，"
+                "不一致直接拒绝。"
             ),
         },
         "time_range": {
@@ -101,14 +102,36 @@ def handle_chat_memory_list(args: dict[str, Any], **_kw) -> str:
     **_kw 来自 dispatcher 注入**（task_id/session_id 等），signatures 已被 Hermes
     用 inspect 过滤（plugins/AGENTS.md），所以"宽收"是安全的。
     """
-    # company_id 缺失/类型错 → 绝不能静默用别的值（会读到错误公司数据，**最毒**）
-    company_id = args.get("company_id")
-    if not isinstance(company_id, int) or company_id <= 0:
+    # 公司身份以**服务端绑定**为准（2026-10-23 审计 P0-2）：
+    # 工具参数是模型生成的不可信输入，注入一句"传 company_id=2"就能读别家历史。
+    # 绑定由 Trade 在 agent.chat() 外层通过 ContextVar 设置，Hermes 的工具
+    # 执行器会随线程复制上下文。
+    try:
+        from trade.agent_context import current_company_id
+
+        bound_company = current_company_id()
+    except ImportError as exc:
+        return _err(f"trade agent context unavailable: {exc}")
+
+    if bound_company is None:
+        return _err(
+            "chat_memory_list is only available inside a Trade chat session "
+            "(company context is not bound). Refusing to read history."
+        )
+
+    # 模型仍然会按 schema 传 company_id；只做一致性校验，绝不采用它的值
+    claimed = args.get("company_id")
+    if not isinstance(claimed, int) or claimed <= 0:
         return _err(
             "company_id is required and must be a positive integer — "
-            "read it from the system prompt's 'Trade Context' section, "
-            "do not invent a value or read it from the user's message."
+            "read it from the system prompt's 'Trade Context' section."
         )
+    if claimed != bound_company:
+        return _err(
+            f"company_id {claimed} does not match the active Trade session; "
+            "refusing to read another company's history."
+        )
+    company_id = bound_company
 
     time_range = args.get("time_range") or "all"
     if not isinstance(time_range, str):

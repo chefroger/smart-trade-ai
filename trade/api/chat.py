@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from trade import chat_memory
 from trade import library as library_module
+from trade.agent_context import bind_company
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
 from trade.document_task import (
@@ -187,10 +188,13 @@ async def trade_chat(
                     tool_start_callback=evidence.on_start if evidence else None,
                     tool_complete_callback=evidence.on_complete if evidence else None,
                 )
-                if document_task and request_task_id:
-                    result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
-                else:
-                    result = agent.chat(full_query)
+                # 绑定公司身份：chat-memory 等插件工具只认服务端绑定，
+                # 不再信任模型自填的 company_id（审计 P0-2）。
+                with bind_company(cid):
+                    if document_task and request_task_id:
+                        result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
+                    else:
+                        result = agent.chat(full_query)
                 if result:
                     return result, True
                 if attempt < _MAX_AGENT_RETRIES:
@@ -382,10 +386,12 @@ async def trade_chat_stream(
                     skill_name=current_skill,
                 )
                 start = time.time()
-                if document_task and request_task_id:
-                    result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
-                else:
-                    result = agent.chat(full_query)
+                # 同同步端点：把公司身份绑进本次 agent 调用的上下文。
+                with bind_company(cid):
+                    if document_task and request_task_id:
+                        result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
+                    else:
+                        result = agent.chat(full_query)
                 elapsed = time.time() - start
 
                 if not result and attempt < _MAX_AGENT_RETRIES:

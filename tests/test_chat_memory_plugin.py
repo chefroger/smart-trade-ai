@@ -443,6 +443,14 @@ class TestSyncChatMemoryPlugin:
 
 class TestChatMemoryPluginE2E:
 
+    @pytest.fixture(autouse=True)
+    def _bind_agent_company(self):
+        """P0-2 之后工具只认服务端绑定；E2E 用例统一绑定公司 1。"""
+        from trade.agent_context import bind_company
+
+        with bind_company(1):
+            yield
+
     def _load_plugin(self):
         """直接 import 插件模块（不通过 trade.bootstrap）。
 
