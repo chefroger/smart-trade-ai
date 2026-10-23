@@ -15,9 +15,14 @@
     - `extract`   截图 → 结构化对话（视觉模型）
     - `context`   客户匹配 + 上下文组装
     - `draft`     草稿生成
+    - `capture`   读取级联的调度层（判定 / 新鲜度 / 降级）
 
-平台相关（§11 第 2、3 段实现，本次不做）：
-    - `capture`   剪贴板 / 截图读取
+平台相关（隔离在独立模块，lazy import）：
+    - `platform_win32`   PrintWindow → mss 回退
+    - `platform_darwin`  Quartz 按窗口截图 + 屏幕录制权限链路
+    - `platform_base`    两边共用的返回值契约
+
+尚未实现（§11 第 3 段）：
     - `hotkey`    全局热键
     - `ui`        悬浮窗
     - `service`   托盘与总开关

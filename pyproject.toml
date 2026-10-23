@@ -59,6 +59,12 @@ dependencies = [
   "psutil>=5.9.0,<8.0",
   # DNS resolution — MX record queries in OSINT email verification
   "dnspython>=2.6.0,<3.0",
+  # 聊天副驾 capture（2026-10-23 §10 批准清单）。全部懒加载：缺失时副驾
+  # 显示"不可用（缺依赖）"，trade 主功能照常运行。
+  "mss>=9.0,<11",
+  "pyperclip>=1.8,<2",
+  # macOS 窗口截图（Quartz / ImageIO）。只装 darwin，避免拉进 Windows/Linux。
+  "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
   # Email-registration checks (OSINT Layer 1: 122 platforms) — REQUIRED.
   # Missing → the layer is silently skipped (the report discloses it, but one
   # evidence source is gone). Pure Python, installs on all three platforms;

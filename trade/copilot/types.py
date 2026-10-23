@@ -41,9 +41,23 @@ class CapturedWindow:
     text: str | None = None
     # 读取耗时（毫秒），用于 UI 与日志元数据
     elapsed_ms: int = 0
+    # 读取失败时的原因与分类（给 UI 展示；成功时为空）
+    error: str = ""
+    # "permission"（macOS 屏幕录制未授权）/ "missing_dependency" / "unsupported_platform"
+    # / "capture_failed" / "no_window" / "minimized"
+    error_kind: str = ""
 
     def has_image(self) -> bool:
         return bool(self.image_data_url)
+
+    @property
+    def ok(self) -> bool:
+        """读到了内容（图像或文本）且没有报错。"""
+        return not self.error and (self.has_image() or bool(self.text))
+
+    @property
+    def has_text(self) -> bool:
+        return bool(self.text and self.text.strip())
 
 
 @dataclass
