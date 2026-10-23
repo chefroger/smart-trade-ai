@@ -15,6 +15,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import subprocess
 import sys
 
 from trade.copilot.platform_base import WindowCapture
@@ -33,6 +34,10 @@ _SYSTEM_OWNERS = frozenset({
 })
 
 _quartz_module = None
+
+# 一次性引导状态（进程内）：系统弹窗与设置页各最多拉一次，避免反复骚扰
+_permission_requested = False
+_settings_opened = False
 
 
 def _quartz():
@@ -90,6 +95,54 @@ def request_screen_recording_permission() -> bool:
     except Exception as exc:
         _log.warning("请求屏幕录制权限失败：%s", exc)
         return False
+
+
+def open_screen_recording_settings() -> bool:
+    """直接打开系统设置 → 隐私与安全性 → 屏幕录制。
+
+    用 `open` 打开系统自己的设置面板（不是脚本注入，不涉及任何聊天软件）。
+    """
+    try:
+        subprocess.Popen(
+            ["open", _SCREEN_RECORDING_SETTINGS_URL],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        return True
+    except Exception as exc:
+        _log.warning("打开屏幕录制设置失败：%s", exc)
+        return False
+
+
+def ensure_screen_recording_permission(*, open_settings: bool = True) -> bool:
+    """运行时权限引导：先走系统弹窗，仍没有权限就自动拉起设置页。
+
+    进程内只做一次（`_permission_requested` / `_settings_opened`）：
+    任务书 §3 要求"引导只出一次，不许反复弹窗骚扰"。
+    macOS 授予屏幕录制后通常需要重启应用才生效，调用方应提示用户。
+    """
+    global _permission_requested, _settings_opened
+    if screen_recording_granted():
+        return True
+
+    if not _permission_requested:
+        _permission_requested = True
+        # 系统弹窗（用户已拒绝过时不会再次弹出）
+        if request_screen_recording_permission() and screen_recording_granted():
+            return True
+
+    if open_settings and not _settings_opened:
+        _settings_opened = True
+        open_screen_recording_settings()
+    return False
+
+
+def reset_permission_prompts() -> None:
+    """重置"只引导一次"的状态（测试与"用户手动重新授权"时用）。"""
+    global _permission_requested, _settings_opened
+    _permission_requested = False
+    _settings_opened = False
 
 
 def permission_guide() -> dict:

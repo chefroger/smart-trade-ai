@@ -178,6 +178,20 @@ def request_screen_recording_permission() -> bool:
     return bool(request()) if callable(request) else False
 
 
+def ensure_screen_permission() -> bool:
+    """运行时权限引导：没有权限就弹系统对话框 / 自动拉起设置页（进程内只做一次）。
+
+    Windows 不需要该权限 → True；macOS 由 platform_darwin 实现一次性引导。
+    """
+    module = load_platform()
+    if module is None:
+        return False
+    ensure = getattr(module, "ensure_screen_recording_permission", None)
+    if callable(ensure):
+        return bool(ensure())
+    return True
+
+
 def capture_conversation(
     *,
     platform=None,
@@ -218,6 +232,10 @@ def capture_conversation(
 
     window: WindowCapture = module.capture_active_window()
     if not window.ok:
+        # 权限缺失时在**运行时**拉起引导（系统弹窗 + 设置页），而不是要求用户
+        # 提前配置；进程内只做一次，避免反复骚扰（任务书 §3）。
+        if window.error_kind == "permission":
+            _trigger_permission_guide(module)
         return _failure(
             window.error or "读取当前窗口失败。",
             window.error_kind or "capture_failed",
@@ -233,6 +251,17 @@ def capture_conversation(
         image_data_url=_png_data_url(window.image_png),
         elapsed_ms=_elapsed_ms(started),
     )
+
+
+def _trigger_permission_guide(module) -> None:
+    """尽量拉起平台的一次性权限引导；失败不影响错误返回。"""
+    ensure = getattr(module, "ensure_screen_recording_permission", None)
+    if not callable(ensure):
+        return
+    try:
+        ensure()
+    except Exception as exc:  # 引导失败不能盖住"没有权限"这个主错误
+        _log.warning("拉起权限引导失败：%s", exc)
 
 
 def _png_data_url(image_png: bytes) -> str:

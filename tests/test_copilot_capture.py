@@ -273,3 +273,84 @@ def test_permission_wrappers_without_platform(monkeypatch):
     monkeypatch.setattr(capture_mod, "load_platform", lambda: None)
     assert capture_mod.permission_guide() == {}
     assert capture_mod.request_screen_recording_permission() is False
+
+
+# ── 运行时权限引导（自动拉起设置，进程内只做一次）──────────────────────────
+
+
+def test_permission_failure_triggers_runtime_guide(monkeypatch):
+    monkeypatch.setattr(capture_mod, "read_clipboard", lambda: "")
+    calls: list[bool] = []
+
+    class Platform(FakePlatform):
+        def ensure_screen_recording_permission(self):
+            calls.append(True)
+            return False
+
+    platform = Platform(window=WindowCapture(
+        error="没有屏幕录制权限", error_kind="permission",
+    ))
+    result = capture_mod.capture_conversation(platform=platform)
+
+    assert result.error_kind == "permission"
+    assert calls == [True], "权限失败时必须在运行时拉起一次引导"
+
+
+def test_ensure_screen_permission_passthrough(monkeypatch):
+    fake = SimpleNamespace(ensure_screen_recording_permission=lambda: True)
+    monkeypatch.setattr(capture_mod, "load_platform", lambda: fake)
+    assert capture_mod.ensure_screen_permission() is True
+
+    # 平台不需要权限（Windows）→ 视为已具备
+    monkeypatch.setattr(capture_mod, "load_platform", lambda: SimpleNamespace())
+    assert capture_mod.ensure_screen_permission() is True
+
+    monkeypatch.setattr(capture_mod, "load_platform", lambda: None)
+    assert capture_mod.ensure_screen_permission() is False
+
+
+def test_ensure_permission_prompts_only_once(monkeypatch):
+    platform_darwin = pytest.importorskip("trade.copilot.platform_darwin")
+    calls = {"request": 0, "open": 0}
+
+    monkeypatch.setattr(platform_darwin, "screen_recording_granted", lambda: False)
+    monkeypatch.setattr(
+        platform_darwin, "request_screen_recording_permission",
+        lambda: calls.__setitem__("request", calls["request"] + 1) or False,
+    )
+    monkeypatch.setattr(
+        platform_darwin, "open_screen_recording_settings",
+        lambda: calls.__setitem__("open", calls["open"] + 1) or True,
+    )
+    platform_darwin.reset_permission_prompts()
+
+    assert platform_darwin.ensure_screen_recording_permission() is False
+    assert platform_darwin.ensure_screen_recording_permission() is False
+    assert calls == {"request": 1, "open": 1}
+
+
+def test_ensure_permission_stops_when_granted(monkeypatch):
+    platform_darwin = pytest.importorskip("trade.copilot.platform_darwin")
+    state = {"granted": False}
+    calls = {"request": 0, "open": 0}
+
+    monkeypatch.setattr(
+        platform_darwin, "screen_recording_granted", lambda: state["granted"]
+    )
+
+    def _request():
+        calls["request"] += 1
+        state["granted"] = True
+        return True
+
+    monkeypatch.setattr(
+        platform_darwin, "request_screen_recording_permission", _request
+    )
+    monkeypatch.setattr(
+        platform_darwin, "open_screen_recording_settings",
+        lambda: calls.__setitem__("open", calls["open"] + 1) or True,
+    )
+    platform_darwin.reset_permission_prompts()
+
+    assert platform_darwin.ensure_screen_recording_permission() is True
+    assert calls == {"request": 1, "open": 0}
