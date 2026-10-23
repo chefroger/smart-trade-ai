@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import os
+import ntpath
 import sys
 from ctypes import wintypes
 
@@ -42,14 +42,106 @@ class _BITMAPINFOHEADER(ctypes.Structure):
     ]
 
 
+_dll_cache: tuple | None = None
+
+
+def _dlls():
+    """加载 (user32, gdi32, kernel32) 并设置 64 位句柄签名（结果缓存在模块内）。
+
+    **必须显式设置 restype**：ctypes 默认把返回值当 `c_int`（32 位），而
+    HWND / HDC / HBITMAP / HANDLE 在 64 位 Windows 上是指针宽度 —— 句柄值
+    一旦超过 2^31 就会被截断成负数，后续 PrintWindow/GetDIBits 全部拿到坏句柄。
+    """
+    global _dll_cache
+    if _dll_cache is not None:
+        return _dll_cache
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    kernel32 = ctypes.windll.kernel32
+    _configure_win32(user32, gdi32, kernel32)
+    _dll_cache = (user32, gdi32, kernel32)
+    return _dll_cache
+
+
+def _configure_win32(user32, gdi32, kernel32) -> None:
+    """给所有涉及句柄的函数标注类型；单项失败只记日志，不影响其余调用。"""
+    signatures = {
+        # (dll, 函数名): (restype, argtypes)
+        (user32, "GetForegroundWindow"): (wintypes.HWND, []),
+        (user32, "IsWindowVisible"): (wintypes.BOOL, [wintypes.HWND]),
+        (user32, "IsIconic"): (wintypes.BOOL, [wintypes.HWND]),
+        (user32, "GetWindowTextLengthW"): (
+            ctypes.c_int, [wintypes.HWND],
+        ),
+        (user32, "GetWindowTextW"): (
+            ctypes.c_int, [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int],
+        ),
+        (user32, "GetWindowRect"): (
+            wintypes.BOOL, [wintypes.HWND, ctypes.POINTER(wintypes.RECT)],
+        ),
+        (user32, "GetWindowThreadProcessId"): (
+            wintypes.DWORD, [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)],
+        ),
+        (user32, "GetWindowDC"): (wintypes.HDC, [wintypes.HWND]),
+        (user32, "ReleaseDC"): (
+            ctypes.c_int, [wintypes.HWND, wintypes.HDC],
+        ),
+        (user32, "PrintWindow"): (
+            wintypes.BOOL, [wintypes.HWND, wintypes.HDC, wintypes.UINT],
+        ),
+        (gdi32, "CreateCompatibleDC"): (wintypes.HDC, [wintypes.HDC]),
+        (gdi32, "CreateCompatibleBitmap"): (
+            wintypes.HBITMAP, [wintypes.HDC, ctypes.c_int, ctypes.c_int],
+        ),
+        (gdi32, "SelectObject"): (
+            wintypes.HGDIOBJ, [wintypes.HDC, wintypes.HGDIOBJ],
+        ),
+        (gdi32, "DeleteObject"): (wintypes.BOOL, [wintypes.HGDIOBJ]),
+        (gdi32, "DeleteDC"): (wintypes.BOOL, [wintypes.HDC]),
+        (gdi32, "GetDIBits"): (
+            ctypes.c_int,
+            [
+                wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+                ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT,
+            ],
+        ),
+        (kernel32, "OpenProcess"): (
+            wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD],
+        ),
+        (kernel32, "QueryFullProcessImageNameW"): (
+            wintypes.BOOL,
+            [
+                wintypes.HANDLE, wintypes.DWORD,
+                wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+            ],
+        ),
+        (kernel32, "CloseHandle"): (wintypes.BOOL, [wintypes.HANDLE]),
+    }
+    for (dll, name), (restype, argtypes) in signatures.items():
+        try:
+            function = getattr(dll, name)
+            function.restype = restype
+            function.argtypes = argtypes
+        except Exception as exc:
+            _log.debug("设置 %s 签名失败：%s", name, exc)
+
+
 def available() -> tuple[bool, str]:
-    """Windows 上 Win32 API 随系统可用；mss 只在回退时需要（缺失不影响 PrintWindow）。"""
+    """Windows 上 Win32 API 随系统可用。
+
+    注意：截图**整体**依赖 mss —— PrintWindow 抓到的位图由 mss.tools 编码成
+    PNG，回退路径也用它抓屏。缺 mss 时截图不可用（副驾降级，不影响主功能）。
+    """
     if sys.platform != "win32":
         return False, "Windows 截图模块只能在 Windows 上使用。"
     try:
-        ctypes.windll.user32  # noqa: B018 —— 仅探测 DLL 可用性
+        _dlls()
     except Exception as exc:
         return False, f"Win32 API 不可用：{exc}"
+    try:
+        import mss  # noqa: F401 —— 仅探测依赖可用性
+    except Exception:
+        return False, "缺少依赖 mss，副驾截图不可用。"
     return True, ""
 
 
@@ -60,15 +152,15 @@ def permission_guide() -> dict:
 
 def capture_active_window() -> WindowCapture:
     """截取当前前台窗口（内存 PNG + 应用名 + 标题）。"""
-    user32 = ctypes.windll.user32
+    user32, gdi32, kernel32 = _dlls()
     _apply_per_monitor_dpi_awareness(user32)
 
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
         return WindowCapture(error="没有找到前台窗口。", error_kind="no_window")
 
-    title = _window_title(hwnd)
-    app_name = _process_name(hwnd)
+    title = _window_title(user32, hwnd)
+    app_name = _process_name(user32, kernel32, hwnd)
 
     if not user32.IsWindowVisible(hwnd):
         return WindowCapture(
@@ -96,7 +188,7 @@ def capture_active_window() -> WindowCapture:
             error="窗口尺寸无效。", error_kind="capture_failed",
         )
 
-    image_png = _print_window_png(user32, hwnd, width, height)
+    image_png = _print_window_png(user32, gdi32, hwnd, width, height)
     if not image_png:
         # PrintWindow 对部分应用（GPU 渲染/受保护窗口）返回黑图 → 回退抓屏
         image_png = _grab_region_png(rect)
@@ -124,18 +216,15 @@ def _apply_per_monitor_dpi_awareness(user32) -> None:
         pass
 
 
-def _window_title(hwnd) -> str:
-    user32 = ctypes.windll.user32
+def _window_title(user32, hwnd) -> str:
     length = int(user32.GetWindowTextLengthW(hwnd))
     buffer = ctypes.create_unicode_buffer(length + 1)
     user32.GetWindowTextW(hwnd, buffer, length + 1)
     return buffer.value
 
 
-def _process_name(hwnd) -> str:
+def _process_name(user32, kernel32, hwnd) -> str:
     """取窗口所属进程的可执行文件名（拿不到就返回空串）。"""
-    user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     if not pid.value:
@@ -151,7 +240,9 @@ def _process_name(hwnd) -> str:
         if kernel32.QueryFullProcessImageNameW(
             handle, 0, buffer, ctypes.byref(size)
         ):
-            return os.path.basename(buffer.value)
+            # 显式用 ntpath：Windows 路径的反斜杠在 POSIX 上 os.path 不认，
+            # 这样 mock 测试在任何平台上结果一致。
+            return ntpath.basename(buffer.value)
     except Exception:
         pass
     finally:
@@ -159,9 +250,8 @@ def _process_name(hwnd) -> str:
     return ""
 
 
-def _print_window_png(user32, hwnd, width: int, height: int) -> bytes:
+def _print_window_png(user32, gdi32, hwnd, width: int, height: int) -> bytes:
     """PrintWindow → 32bpp DIB → PNG；失败返回空字节。"""
-    gdi32 = ctypes.windll.gdi32
     hdc_window = user32.GetWindowDC(hwnd)
     if not hdc_window:
         return b""

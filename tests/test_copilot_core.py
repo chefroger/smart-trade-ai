@@ -691,3 +691,120 @@ class TestChineseQuantities:
 def test_search_terms_split_chinese_punctuation():
     assert ctx_mod._search_terms("LED，灯带") == ["led", "灯带"]
     assert ctx_mod._search_terms("阀门、法兰") == ["阀门", "法兰"]
+
+
+# ── 审计批：简写金额 / 单位身份 / 牌号 / 小数残文 ─────────────────────────
+
+
+class TestMagnitudeMoney:
+    @pytest.mark.parametrize("text,key", [
+        ("USD 2K", "$2000"),
+        ("2K USD", "$2000"),
+        ("3M USD", "$3000000"),
+        ("price 2.5K USD", "$2500"),
+        ("$2K", "$2000"),
+        ("500 USD", "$500"),
+    ])
+    def test_shorthand_money_is_scaled(self, text, key):
+        assert extract_mod_numbers(text) == {key}
+
+    def test_shorthand_backs_the_full_amount_not_the_prefix(self):
+        """库里的 USD 2K 必须给 $2000 背书，不能给 $2 背书（也不能反过来）。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "报价.md", "excerpt": "Unit price USD 2K"}],
+        )
+        kept, changed = draft_mod.strip_unbacked_numbers("Total $2000", ctx)
+        assert changed is False, kept
+        stripped, changed = draft_mod.strip_unbacked_numbers("Total $2", ctx)
+        assert changed is True
+        assert "$2" not in stripped
+
+    def test_brand_3m_is_not_money_nor_meters(self):
+        """品牌 3M、网络制式 5G 不能被当成数字剔除，也不能被当成 3 米 / 5 克。"""
+        ctx = CustomerContext(new_contact=True)
+        for text in ("Use 3M tape", "supports 5G"):
+            cleaned, changed = draft_mod.strip_unbacked_numbers(text, ctx)
+            assert changed is False, cleaned
+
+
+class TestUnitIdentity:
+    def test_measure_units_do_not_back_each_other(self):
+        """库里 40 kg 不能给 40 pcs / 40 mm / 40 sets 背书（审计 P1-3）。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "规格书", "excerpt": "Weight 40 kg"}],
+        )
+        for draft in ("MOQ 40 pcs", "length 40 mm", "40 sets", "40 tons"):
+            cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
+            assert changed is True, f"{draft!r} 被误判为有出处"
+            assert "40" not in cleaned, cleaned
+
+    def test_same_unit_still_backed(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "规格书", "excerpt": "Weight 40 kg"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("weight 40 kg", ctx)
+        assert changed is False, cleaned
+
+    @pytest.mark.parametrize("library,draft", [
+        ("MOQ 500", "500 pcs"),
+        ("MOQ 500 pcs", "MOQ 500"),
+        ("500 pieces", "500 sets"),
+    ])
+    def test_count_units_are_interchangeable(self, library, draft):
+        """计数单位归还为裸数字：MOQ 500 与 500 pcs 是同一件事。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "报价", "excerpt": library}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
+        assert changed is False, cleaned
+
+    def test_color_temperature_distinct_from_bare_number(self):
+        assert extract_mod_numbers("3000K") == {"3000k"}
+        assert extract_mod_numbers("3000") == {"3000"}
+
+
+class TestGradeCodes:
+    @pytest.mark.parametrize("code,key", [
+        ("S304", "s304"), ("Q235", "q235"),
+        ("DN50", "dn50"), ("PN16", "pn16"),
+    ])
+    def test_grade_codes_are_visible(self, code, key):
+        assert extract_mod_numbers(code) == {key}
+
+    def test_grade_does_not_back_plain_number(self):
+        ctx = CustomerContext(new_contact=True)
+        cleaned, changed = draft_mod.strip_unbacked_numbers("Material S304", ctx)
+        assert changed is True
+        assert "S304" not in cleaned
+
+    @pytest.mark.parametrize("text", ["we do B2B", "Q3 报告", "USB3 接口"])
+    def test_common_tokens_are_not_numbers(self, text):
+        """B2B / Q3 / USB3 这类普通词不能被当成数字剔除。"""
+        assert extract_mod_numbers(text) == set()
+
+    def test_dn50_does_not_back_50_pcs(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "图纸", "excerpt": "flange DN50"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("MOQ 50 pcs", ctx)
+        assert changed is True, cleaned
+
+
+class TestDecimalLeftover:
+    def test_unknown_unit_leaves_no_partial_replacement(self):
+        """旧行为把 0.5N 剔成 "（待确认）.5N" —— 宁可整段不动，也不留半截。"""
+        ctx = CustomerContext(new_contact=True)
+        for text in ("weight 0.5N", "size 3.5X"):
+            cleaned, _ = draft_mod.strip_unbacked_numbers(text, ctx)
+            assert cleaned == text, cleaned
+
+    def test_magnitude_money_is_fully_removed(self):
+        ctx = CustomerContext(new_contact=True)
+        cleaned, changed = draft_mod.strip_unbacked_numbers("About 1.5M USD", ctx)
+        assert changed is True
+        assert ".5M" not in cleaned

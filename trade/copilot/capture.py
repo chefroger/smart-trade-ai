@@ -84,7 +84,9 @@ def clipboard_fingerprint(text: str) -> str:
 def claim_fresh_clipboard(text: str) -> bool:
     """内容自上次采用以来变过 → True 并记住；否则 False（视为陈旧）。
 
-    首次调用没有基线，按"新鲜"处理（Lau 2026-10-23 拍板的 A 方案）。
+    口径（任务书 §3 修订版）：基线只在**采用**时更新；首次触发没有基线，
+    按新鲜处理 —— 否则第一次就把用户推去撞 macOS 权限墙，第一体验直接毁掉。
+    残余风险由对话特征判定 + 草稿人工确认兜住。
     """
     global _last_clipboard_fingerprint
     fingerprint = clipboard_fingerprint(text)

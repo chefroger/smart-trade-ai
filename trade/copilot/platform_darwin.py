@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 
 from trade.copilot.platform_base import WindowCapture
 
@@ -36,6 +37,7 @@ _SYSTEM_OWNERS = frozenset({
 _quartz_module = None
 
 # 一次性引导状态（进程内）：系统弹窗与设置页各最多拉一次，避免反复骚扰
+_prompt_lock = threading.Lock()
 _permission_requested = False
 _settings_opened = False
 
@@ -121,19 +123,25 @@ def ensure_screen_recording_permission(*, open_settings: bool = True) -> bool:
     进程内只做一次（`_permission_requested` / `_settings_opened`）：
     任务书 §3 要求"引导只出一次，不许反复弹窗骚扰"。
     macOS 授予屏幕录制后通常需要重启应用才生效，调用方应提示用户。
+
+    加锁是为了避免 UI 与 capture 同时触发时各弹一次（复审 P3-①）。
     """
     global _permission_requested, _settings_opened
     if screen_recording_granted():
         return True
 
-    if not _permission_requested:
+    with _prompt_lock:
+        request_now = not _permission_requested
         _permission_requested = True
+        settings_now = open_settings and not _settings_opened
+        _settings_opened = _settings_opened or settings_now
+
+    if request_now:
         # 系统弹窗（用户已拒绝过时不会再次弹出）
         if request_screen_recording_permission() and screen_recording_granted():
             return True
 
-    if open_settings and not _settings_opened:
-        _settings_opened = True
+    if settings_now:
         open_screen_recording_settings()
     return False
 
@@ -141,8 +149,9 @@ def ensure_screen_recording_permission(*, open_settings: bool = True) -> bool:
 def reset_permission_prompts() -> None:
     """重置"只引导一次"的状态（测试与"用户手动重新授权"时用）。"""
     global _permission_requested, _settings_opened
-    _permission_requested = False
-    _settings_opened = False
+    with _prompt_lock:
+        _permission_requested = False
+        _settings_opened = False
 
 
 def permission_guide() -> dict:

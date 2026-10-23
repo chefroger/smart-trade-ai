@@ -320,14 +320,12 @@ def _call_with_deadline(fn, timeout: float):
 
 
 def _run_once(prompt: str, *, company_id: int) -> str:
-    """跑一次草稿请求：优先 chat.py 的专用入口，没有就走既有会话路径。"""
-    try:
-        from trade.api.chat import run_draft_session  # type: ignore
-    except ImportError:
-        run_draft_session = None
+    """跑一次草稿请求（既有会话路径）。
 
-    if run_draft_session is not None:
-        return run_draft_session(prompt, company_id=company_id)
+    曾经预留过 `trade.api.chat.run_draft_session` 分支，但该函数从来没存在过：
+    每次调用都要 import 一次 2 秒级的 `trade.api.chat`，然后必然走 ImportError。
+    删掉分支后省下这次 import，语义不变。
+    """
     return _run_via_existing_chat(prompt, company_id=company_id)
 
 

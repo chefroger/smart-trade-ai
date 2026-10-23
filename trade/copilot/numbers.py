@@ -6,17 +6,22 @@
 
 归一后的 key 分五类（比对只看 key，不看原始写法）：
 
-    "$3.5"    金额 —— USD 3.50 / 3.50 USD / $3.50 / 50 dollars
-    "10%"     百分比 —— 10% / 10 percent
-    "30d"     时间 —— 30 days / 30 天 / 两周 / 2 weeks（**统一换算成天**）
-    "24v"     电气/照明规格 —— DC24V / 33kV / 40W / 3000K / 100lm
-    "ip65"    IP 防护等级 —— IP65 / IP 65
-    "500"     数量、裸数字 —— 500 pcs / MOQ 500 / 500个 / 五百
+    "$3.5"     金额 —— USD 3.50 / 3.50 USD / $3.50 / 50 dollars
+    "$2000"    简写金额 —— USD 2K / 2K USD / 2.5K USD（K=千 M=百万 B=十亿）
+    "10%"      百分比 —— 10% / 10 percent
+    "30d"      时间 —— 30 days / 30 天 / 两周 / 2 weeks（**统一换算成天**）
+    "40kg"     计量单位 —— 40 kg / 40mm / 24V / 33kV（单位属于数字身份）
+    "40"       计数 / 裸数字 —— 500 pcs / MOQ 500 / 500个 / 五百
+    "ip65"     IP 等级；"s304" / "q235" / "dn50" / "pn16" 牌号
 
-时间必须换算：只比 "2d" 会让库里的 "2 weeks" 给草稿的 "2 days" 背书 ——
-交期被悄悄改短还带着出处。
+## 为什么计量单位必须留在 key 里
 
-## 正则里三处容易踩的坑（都实测过）
+早先 "40 kg" 和 "40 pcs" 都是 key "40" —— 库里写 `Weight 40 kg`，草稿写
+`MOQ 40 pcs` 会被判成"有出处"。单位是数字身份的一部分：质量、长度、电压、
+功率之间绝不互相背书。计数单位（pcs/pieces/sets/…）归回裸数字，因为
+"MOQ 500" 与 "500 pcs" 在报价里指的是同一件事。
+
+## 正则里四处容易踩的坑（都实测过）
 
 1. **中文量词后面不能加 `\\b`**：Python 的 `\\w` 包含汉字，"30 天交期" 的
    天/交 之间没有词边界，加了 `\\b` 整条分支永远匹配不上。
@@ -25,6 +30,8 @@
    这样 "40W的灯" 也能命中（汉字不算英文字母）。
 3. **货币后缀必须有左边界**：否则 "E27 USD 1.25" 会从 E27 的 "27" 开始匹配成
    幻影价格 "$27"，真价 1.25 反而降格成裸数字、对不上草稿里的 "$1.25"。
+4. **数字后不能接 `.数字`**：`1.5M` 若回溯成 `1`，替换后留下残文 `.5M`。
+   裸数字分支加 `(?!\\.\\d)`，宁可整段不识别，也不留半截数字。
 """
 
 from __future__ import annotations
@@ -37,40 +44,56 @@ _CURRENCY_CODES = r"(?:USD|EUR|GBP|CNY|RMB|JPY|AUD|CAD|HKD|CHF)"
 _NUM = r"\d[\d,]*(?:\.\d+)?"
 _CN_NUMERALS = "一二两三四五六七八九十百千万零〇"
 
+# 金额简写后缀：2K = 2000，3M = 3000000，1B = 1000000000
+_MAGNITUDE = r"[KMB]"
+_MAGNITUDES = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+
 # 左/右边界只针对 ASCII 字母数字：汉字与数字相邻（"共500件"、"40W的灯"）
 # 必须算边界，否则中文场景整片漏识别。
 _ASCII_LEFT = r"(?<![A-Za-z0-9])"
 _ASCII_RIGHT = r"(?![A-Za-z0-9])"
 
+# 单位词表只写一份：MOQ 分支与单位分支共用，避免"MOQ 40 pcs"只吃掉 "MOQ 40"
+# 而把 " pcs" 留在草稿里。顺序要紧：长词在前（mm 先于 m），否则会被短词截断。
+_UNIT_WORDS = (
+    r"(?:pcs|pieces?|sets?|units?|cartons?|boxes?|containers?"
+    r"|tons?|tonnes?|kgs?|grams?|lbs?|lb|mm|cm|km|meters?|metres?"
+    # 单字母单位强制小写（(?-i:…) 抵消外层的 IGNORECASE）：
+    # 品牌 "3M"、制式 "5G" 不能被当成 3 米 / 5 克
+    r"|kW|MW|kWh|kV|V|mA|Hz|(?-i:m)|(?-i:g)|(?-i:t))"
+)
+
 # 单条正则覆盖所有"带语义的数字"形态；顺序要紧 —— 带单位/货币的分支必须排在
 # 裸数字前面，否则 "30 天" 里的 30 会先被裸数字吃掉、丢掉"天"这个语义。
 NUMBER_RE = re.compile(
-    # MOQ 500 / MOQ: 500
-    rf"(?:{_ASCII_LEFT}MOQ\s*[:：]?\s*{_NUM})"
-    # 货币前缀：USD 3.50 / $3.50 / ¥500
-    rf"|(?:{_ASCII_LEFT}{_CURRENCY_CODES}\s?{_NUM})"
-    rf"|(?:[$€£¥￥]\s?{_NUM})"
-    # 货币后缀：3.50 USD / 50 dollars / 500 元
+    # MOQ 500 / MOQ: 500 / MOQ 500 pcs（带单位时整段吃掉，不留 " pcs" 尾巴）
+    rf"(?:{_ASCII_LEFT}MOQ\s*[:：]?\s*{_NUM}(?:\s?{_UNIT_WORDS}{_ASCII_RIGHT})?)"
+    # 货币前缀：USD 3.50 / USD 2K / $3.50 / ¥500
+    rf"|(?:{_ASCII_LEFT}{_CURRENCY_CODES}\s?{_NUM}(?:\s?{_MAGNITUDE}{_ASCII_RIGHT})?)"
+    rf"|(?:[$€£¥￥]\s?{_NUM}(?:\s?{_MAGNITUDE}{_ASCII_RIGHT})?)"
+    # 货币后缀：3.50 USD / 2K USD / 50 dollars / 500 元
     # 左边界防止从型号中间开始（E27 USD → 幻影 $27）
-    rf"|(?:{_ASCII_LEFT}{_NUM}\s?"
+    rf"|(?:{_ASCII_LEFT}{_NUM}(?:\s?{_MAGNITUDE}{_ASCII_RIGHT})?\s?"
     rf"(?:{_CURRENCY_CODES}|dollars?|yuan|元|块))"
     # 百分比：10% / 10 %
     rf"|(?:{_NUM}\s?%)"
     rf"|(?:{_NUM}\s?(?:percent|per\s?cent))"
-    # 电气/照明规格（字母与数字粘连）：DC24V / 40W / 3000K / IP65 / 100lm
+    # 电气/照明规格（字母与数字粘连）：DC24V / 40W / 3000K / 100lm
     rf"|(?:{_ASCII_LEFT}(?:DC|AC)\s?{_NUM}\s?V{_ASCII_RIGHT})"
     rf"|(?:{_ASCII_LEFT}IP\s?{_NUM}{_ASCII_RIGHT})"
     rf"|(?:{_ASCII_LEFT}{_NUM}\s?W{_ASCII_RIGHT})"
     rf"|(?:{_ASCII_LEFT}{_NUM}\s?K{_ASCII_RIGHT})"
     rf"|(?:{_ASCII_LEFT}{_NUM}\s?lm{_ASCII_RIGHT})"
+    # 材质/管件牌号：S304 / Q235 / DN50 / PN16（字母前缀 + 数字后缀）
+    # 数字位数收窄：Q3 是季度、不是牌号，不能被当成数字剔除。
+    rf"|(?:{_ASCII_LEFT}(?:DN|PN)\s?\d{{1,4}}{_ASCII_RIGHT})"
+    rf"|(?:{_ASCII_LEFT}[SQ]\d{{3,4}}{_ASCII_RIGHT})"
     # 中文时间单位（不能加 \b，见模块 docstring）
     rf"|(?:{_NUM}\s?(?:个工作日|工作日|天|日|周|个月|年))"
     # 英文时间单位
     rf"|(?:{_NUM}\s?(?:days?|weeks?|months?|years?){_ASCII_RIGHT})"
-    # 数量 / 规格单位
-    rf"|(?:{_NUM}\s?(?:pcs|pieces?|sets?|units?|cartons?|boxes?|containers?"
-    rf"|tons?|tonnes?|kgs?|grams?|lbs?|mm|cm|km|meters?|metres?"
-    rf"|kW|MW|kWh|kV|V|mA|Hz){_ASCII_RIGHT})"
+    # 计量 / 计数单位
+    rf"|(?:{_NUM}\s?{_UNIT_WORDS}{_ASCII_RIGHT})"
     # 温度
     rf"|(?:{_NUM}\s?(?:°C|℃))"
     # 阿拉伯数字 + 中文量词：500个 / 200箱（时间量词已在上面处理）
@@ -79,12 +102,32 @@ NUMBER_RE = re.compile(
     rf"|(?:[{_CN_NUMERALS}]+\s?"
     rf"(?:个工作日|工作日|天|日|周|个月|年|个|件|套|台|箱|吨|公斤|元|块))"
     # 裸数字兜底：500 / 3.50 / 共500件
-    rf"|(?:{_ASCII_LEFT}{_NUM}{_ASCII_RIGHT})",
+    # (?!\.\d)：不许把 1.5M 回溯成 1 而留下 ".5M" 残文
+    rf"|(?:{_ASCII_LEFT}{_NUM}(?!\.\d){_ASCII_RIGHT})",
     re.IGNORECASE,
 )
 
-# 规格单位的 key 后缀（必须与正则里的粘连分支保持一致）
-_SPEC_UNITS = frozenset({"kwh", "kw", "kv", "mw", "ma", "hz", "v", "w", "lm", "k"})
+# 计量单位 → 归一写法（保留在 key 里，防止跨维度背书）
+_MEASURE_UNITS = {
+    "kg": "kg", "kgs": "kg", "g": "g", "gram": "g", "grams": "g",
+    "t": "t", "ton": "t", "tons": "t", "tonne": "t", "tonnes": "t",
+    "lb": "lb", "lbs": "lb",
+    "mm": "mm", "cm": "cm", "m": "m", "km": "km",
+    "meter": "m", "meters": "m", "metre": "m", "metres": "m",
+    "w": "w", "kw": "kw", "mw": "mw", "kwh": "kwh",
+    "v": "v", "kv": "kv", "ma": "ma", "hz": "hz", "lm": "lm",
+    # 色温：3000K 与 3000 不是同一个规格
+    "k": "k",
+}
+
+# 单字母单位要求**小写**（正则里用 (?-i:…) 已保证，这里再兜一层，
+# 防止将来有人改动正则时把大小写规则改回去）。
+_CASE_SENSITIVE_UNITS = frozenset({"m", "g", "t"})
+# 计数单位：归回裸数字（"MOQ 500" 与 "500 pcs" 是同一件事）
+_COUNT_UNITS = frozenset({
+    "pcs", "piece", "pieces", "set", "sets", "unit", "units",
+    "carton", "cartons", "box", "boxes", "container", "containers",
+})
 
 _CN_DIGITS = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
@@ -129,8 +172,8 @@ def normalize_digits(digits: str) -> str:
     return text or "0"
 
 
-def _scale_days(num: str, factor: int) -> str:
-    """把数量换算成天（2 weeks → 14；1.5 months → 45）。"""
+def _scale_value(num: str, factor: int) -> str:
+    """数字乘以倍数（2 × 1000 → 2000；1.5 × 1000000 → 1500000）。"""
     if factor == 1:
         return num
     try:
@@ -160,17 +203,16 @@ def _time_factor(text: str, lowered: str) -> int | None:
     return None
 
 
-def _trailing_unit(text: str) -> str | None:
-    """取匹配串末尾的规格单位（40W → w，DC24V → v，33kV → kv）。"""
+def _trailing_unit(text: str) -> tuple[str | None, str]:
+    """取匹配串末尾的单位词，返回 (小写单位, 原始写法)。"""
     match = re.search(r"([A-Za-z]+)\s*$", text)
     if match is None:
-        return None
-    unit = match.group(1).lower()
-    return unit if unit in _SPEC_UNITS else None
+        return None, ""
+    return match.group(1).lower(), match.group(1)
 
 
 def number_key(raw: str) -> str | None:
-    """把一处数字写法归成可比较的 key（$3.5 / 10% / 30d / 24v / 500）。
+    """把一处数字写法归成可比较的 key（$3.5 / $2000 / 30d / 40kg / 500）。
 
     认不出数字（例如纯符号）→ None，调用方据此忽略该匹配。
     """
@@ -204,20 +246,40 @@ def number_key(raw: str) -> str | None:
         )
         or re.search(r"dollars?|yuan|元|块", lowered)
     ):
-        return f"${num}"
+        # 简写金额换算：USD 2K → $2000（只在货币上下文里换算，
+        # 避免把品牌 "3M" 或色温 "3000K" 当成数字）
+        magnitude = re.search(
+            rf"\d[\d,]*(?:\.\d+)?\s?({_MAGNITUDE}){_ASCII_RIGHT}", text, re.IGNORECASE
+        )
+        factor = _MAGNITUDES[magnitude.group(1).lower()] if magnitude else 1
+        return f"${_scale_value(num, factor)}"
     # 时间：统一换算成天
     factor = _time_factor(text, lowered)
     if factor is not None:
-        return f"{_scale_days(num, factor)}d"
+        return f"{_scale_value(num, factor)}d"
     # IP 防护等级单独成 key（IP65 不能给草稿里的 65 pcs 背书）
     ip = re.search(rf"{_ASCII_LEFT}IP\s?(\d[\d,]*)", text, re.IGNORECASE)
     if ip is not None:
         return "ip" + normalize_digits(ip.group(1))
-    # 电气/照明规格：保留单位，避免 40W 与 40 pcs 互认
-    unit = _trailing_unit(text)
+    # 材质/管件牌号：保留前缀，DN50 不能给 "50 pcs" 背书
+    grade = re.search(
+        rf"{_ASCII_LEFT}(DN|PN|S|Q)\s?{_NUM}{_ASCII_RIGHT}", text, re.IGNORECASE
+    )
+    if grade is not None:
+        prefix = re.sub(r"\s+", "", grade.group(1)).lower()
+        return f"{prefix}{num}"
+    # 单位：计量单位保留身份，计数单位归回裸数字
+    unit, raw_unit = _trailing_unit(text)
     if unit is not None:
-        return f"{num}{unit}"
-    # 其余（数量/裸数字）
+        # "3M"/"5G" 大写的单字母是品牌/制式，不是米/克
+        if unit in _CASE_SENSITIVE_UNITS and raw_unit.isupper():
+            return num
+        if unit in _COUNT_UNITS:
+            return num
+        normalized = _MEASURE_UNITS.get(unit)
+        if normalized is not None:
+            return f"{num}{normalized}"
+    # 其余（计数/裸数字）
     return num
 
 
