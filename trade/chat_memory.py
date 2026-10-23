@@ -576,10 +576,11 @@ def search_history(
         end = end_computer(_dt.datetime.now()) if end_computer else None
 
         if start is None and end is None:
+            # DESC + LIMIT 才是"最近 N 条"；ASC 会返回公司最早的 N 条（审计 P1）。
             rows = conn.execute(
                 "SELECT id, company_id, library_id, query, response, files_read, created_at "
                 "FROM conversations WHERE company_id = ? "
-                "ORDER BY id ASC LIMIT ?",
+                "ORDER BY id DESC LIMIT ?",
                 (company_id, limit),
             ).fetchall()
         else:
@@ -596,11 +597,12 @@ def search_history(
             rows = conn.execute(
                 f"SELECT id, company_id, library_id, query, response, files_read, created_at "
                 f"FROM conversations WHERE {' AND '.join(clauses)} "
-                f"ORDER BY id ASC LIMIT ?",
+                f"ORDER BY id DESC LIMIT ?",
                 params,
             ).fetchall()
 
-        return [_row_to_dict(r) for r in rows]
+        # 对外仍按时间正序返回（调用方逐个拼进上下文），但取的是最近 N 条
+        return [_row_to_dict(r) for r in reversed(rows)]
     finally:
         conn.close()
 

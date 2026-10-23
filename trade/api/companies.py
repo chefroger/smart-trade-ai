@@ -196,4 +196,12 @@ def update_company_agent_identity(
     )
     if not result:
         raise HTTPException(status_code=404, detail="Company not found")
+
+    # 同步写公司 identity 文件 —— 运行时解析是"文件优先"（prompts.py），
+    # 只写 DB 会让 UI 里的修改永远不生效（审计 P0-3）。onboarding 也是双写。
+    slug = company_module.slug_from_id(company_id)
+    if slug:
+        from trade.prompts import write_agent_identity
+
+        write_agent_identity(slug, payload.agent_identity_md or "")
     return result

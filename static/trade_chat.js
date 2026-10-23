@@ -2832,9 +2832,10 @@ async function deleteOrder(oid) {
     const gone = await api('DELETE', `/api/trade/orders/${oid}`);
     // 失败时 api() 已 toast 原因；订单还在列表里，不能弹"已删除"
     if (!gone) return;
+    // 先读表单值再关弹窗 —— _closeOrderModal() 会移除整个 backdrop，
+    // 之后 $('order-cust-id') 必为 null（审计：每次删除都抛 TypeError）
+    const custId = $('order-cust-id')?.value;
     _closeOrderModal();
-    // 刷新当前打开的客户详情
-    const custId = $('order-cust-id').value;
     if (custId) loadOrdersForCustomer(custId);
     toast(t('order.deleted'));
 }
