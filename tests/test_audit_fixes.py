@@ -12,6 +12,8 @@ import sqlite3
 
 import pytest
 
+from trade.copilot.types import CustomerContext
+
 
 @pytest.fixture
 def test_db(monkeypatch, tmp_path):
@@ -115,3 +117,90 @@ class TestIdentityPutWritesFile:
         )
 
         assert get_agent_identity_by_slug("acme") == ""
+
+
+class TestExplicitPathAllowlist:
+    """P0：客户消息里的绝对路径只能落在本公司白名单内。"""
+
+    def _prepare(self, tmp_path, monkeypatch):
+        from trade import helpers
+
+        company_root = tmp_path / "company"
+        company_root.mkdir()
+        inside = company_root / "price.md"
+        inside.write_text("USD 1", encoding="utf-8")
+        outside = tmp_path / "secrets.txt"
+        outside.write_text("token", encoding="utf-8")
+
+        monkeypatch.setattr(
+            helpers, "_allowed_path_roots", lambda cid: [company_root.resolve()]
+        )
+        return helpers, company_root, inside, outside
+
+    def test_path_inside_company_root_is_kept(self, tmp_path, monkeypatch):
+        helpers, _, inside, _ = self._prepare(tmp_path, monkeypatch)
+        result = helpers._extract_explicit_paths(f"读 {inside}", company_id=1)
+        assert str(inside.resolve()) in result
+
+    def test_path_outside_company_root_is_dropped(self, tmp_path, monkeypatch):
+        helpers, _, _, outside = self._prepare(tmp_path, monkeypatch)
+        result = helpers._extract_explicit_paths(f"读 {outside}", company_id=1)
+        assert result == []
+
+    def test_no_company_means_no_explicit_paths(self, tmp_path, monkeypatch):
+        from trade import helpers
+
+        secret = tmp_path / "secrets.txt"
+        secret.write_text("x", encoding="utf-8")
+        monkeypatch.setattr(helpers, "_allowed_path_roots", lambda cid: [])
+        assert helpers._extract_explicit_paths(f"读 {secret}", company_id=None) == []
+
+    def test_symlink_escape_is_dropped(self, tmp_path, monkeypatch):
+        helpers, company_root, _, outside = self._prepare(tmp_path, monkeypatch)
+        link = company_root / "leak.txt"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            pytest.skip("当前文件系统不支持创建符号链接")
+        result = helpers._extract_explicit_paths(f"读 {link}", company_id=1)
+        assert result == [], "软链接指向白名单外时必须按真实路径拒绝"
+
+
+class TestDraftRunsWithoutTools:
+    """P0：草稿 path 不得带 file/terminal，也不得走 build_query。"""
+
+    def test_draft_agent_gets_empty_toolsets(self, monkeypatch):
+        from trade.copilot import draft as draft_mod
+
+        captured: dict = {}
+
+        class FakeAgent:
+            def chat(self, prompt):
+                captured["prompt"] = prompt
+                return '{"draft":"ok","summary_zh":"","sources":[]}'
+
+        def fake_create_agent(**kwargs):
+            captured["agent_kwargs"] = kwargs
+            return FakeAgent()
+
+        monkeypatch.setattr("trade.helpers.create_agent", fake_create_agent)
+        monkeypatch.setattr("trade.prompts.resolve_system_prompt", lambda **kw: "SYS")
+        monkeypatch.setattr("trade.company.slug_from_id", lambda cid: "acme")
+        monkeypatch.setattr(
+            "trade.company.get_trade_company",
+            lambda cid: {"agent_identity_md": ""},
+        )
+
+        def boom(*args, **kwargs):
+            raise AssertionError("草稿路径不应再调用 build_query")
+
+        monkeypatch.setattr("trade.helpers.build_query", boom)
+
+        result = draft_mod.generate_draft(
+            "hi", CustomerContext(new_contact=True), company_id=1, timeout=2,
+        )
+
+        assert result.ok, result.error
+        assert captured["agent_kwargs"]["enabled_toolsets"] == []
+        assert captured["agent_kwargs"]["ephemeral_system_prompt"] == "SYS"
+        assert "hi" in captured["prompt"]

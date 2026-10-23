@@ -274,6 +274,7 @@ def create_agent(
     cwd: str | None = None,
     connection_callback=None,
     side_agent: bool | None = None,
+    enabled_toolsets: list[str] | None = None,
 ):
     """创建 Hermes AIAgent 实例的统一入口。
 
@@ -308,8 +309,13 @@ def create_agent(
     # 一致性温度：按 skill 类型 + provider 白名单决定是否注入（None = 不传，用 provider 默认）
     request_overrides = _consistency_request_overrides(skill_name, kwargs["provider"])
 
-    # toolset 组合由 resolve_enabled_toolsets() 决定（环境变量可整体覆盖默认值）
-    enabled_toolsets = resolve_enabled_toolsets()
+    # toolset 组合由 resolve_enabled_toolsets() 决定（环境变量可整体覆盖默认值）；
+    # 调用方可显式传空列表 —— 副驾草稿走这条，避免客户消息里的内容触发
+    # file/terminal 工具（2026-10-23 审计 P0）。
+    resolved_toolsets = (
+        enabled_toolsets if enabled_toolsets is not None
+        else resolve_enabled_toolsets()
+    )
 
     agent_kwargs = {
         "quiet_mode": True,
@@ -320,7 +326,7 @@ def create_agent(
         "api_key": kwargs["api_key"] or None,
         "tool_start_callback": tool_start_callback,
         "tool_complete_callback": tool_complete_callback,
-        "enabled_toolsets": enabled_toolsets,
+        "enabled_toolsets": resolved_toolsets,
         "ephemeral_system_prompt": ephemeral_system_prompt,
         "request_overrides": request_overrides,
     }
@@ -436,14 +442,85 @@ _OSINT_SKILL_NAMES = frozenset({"b2b-osint", "b2b-email-intel"})
 from trade.read_evidence import EXPLICIT_PATH_RE as _EXPLICIT_PATH_RE  # noqa: E402
 
 
-def _extract_explicit_paths(query: str) -> list[str]:
-    """从用户问题中提取明确提到的文件路径或目录路径。
+def _allowed_path_roots(company_id: int | None) -> list[Path]:
+    """当前公司允许 agent 读取的根目录（显式路径白名单）。
 
-    提取后验证路径是否真实存在，只返回磁盘上确实存在的路径。
-    去重并排序：目录优先、绝对路径优先。
+    来源：公司 data_dir、桌面工作目录、本公司文档库根目录。
+    任何来源拿不到 → 空列表（显式路径一个都不放行，安全侧）。
+    """
+    if not company_id or company_id <= 0:
+        return []
+
+    roots: list[Path] = []
+
+    # 1. data_dir + 工作目录（工作目录存在 trade_companies.extra1 JSON 里）
+    try:
+        from trade.database import get_connection
+
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT data_dir, extra1 FROM trade_companies WHERE company_id = ?",
+                (company_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            if row["data_dir"]:
+                roots.append(Path(row["data_dir"]))
+            try:
+                meta = json.loads(row["extra1"] or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            if meta.get("work_dir"):
+                roots.append(Path(meta["work_dir"]))
+    except Exception:  # 任何读取失败都按"没有白名单"处理
+        pass
+
+    # 2. 本公司文档库根目录
+    try:
+        for lib in _lib.list_by_company(company_id) or []:
+            if lib.get("root_path"):
+                roots.append(Path(lib["root_path"]))
+    except Exception:
+        pass
+
+    resolved: list[Path] = []
+    for root in roots:
+        try:
+            resolved.append(root.expanduser().resolve())
+        except (OSError, ValueError):
+            continue
+    return resolved
+
+
+def _path_within(path: Path, roots: list[Path]) -> bool:
+    """path 是否落在任一白名单根目录之内（含根本身）。"""
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _extract_explicit_paths(
+    query: str, company_id: int | None = None
+) -> list[str]:
+    """从用户问题中提取明确提到的文件/目录路径。
+
+    安全边界（2026-10-23 审计 P0）：只接受落在**当前公司**白名单根目录内的
+    路径。之前只校验 `exists()` —— 客户在消息里写 `~/.trade/data/trade.db`
+    就能让 agent 读任意本机文件。
     """
     candidates = _EXPLICIT_PATH_RE.findall(query)
     if not candidates:
+        return []
+
+    roots = _allowed_path_roots(company_id)
+    if not roots:
+        # 没有可用白名单时不放行任何显式路径（fail-closed）
         return []
 
     verified: list[str] = []
@@ -456,6 +533,8 @@ def _extract_explicit_paths(query: str) -> list[str]:
         cleaned = re.sub(r'^(?:文件|目录|路径|path|file|dir)\s*[：:]\s*', '', raw, flags=re.IGNORECASE)
         try:
             p = Path(cleaned).expanduser().resolve()
+            if not _path_within(p, roots):
+                continue
             if p.exists() and str(p) not in seen:
                 verified.append(str(p))
                 seen.add(str(p))
@@ -518,7 +597,7 @@ def build_query(
     has_history = bool(company_id and _cm.get_recent(company_id, limit=1))
 
     # 问题里点名的文件/目录（文档类任务判定要用，后面 doc_context 复用同一份）
-    explicit_paths = _extract_explicit_paths(query)
+    explicit_paths = _extract_explicit_paths(query, company_id)
 
     if matched_name in _OSINT_SKILL_NAMES:
         # OSINT 背调场景：精简档，去掉文档生成/Cognee 等无关段落

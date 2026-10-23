@@ -330,18 +330,37 @@ def _run_once(prompt: str, *, company_id: int) -> str:
 
 
 def _run_via_existing_chat(prompt: str, *, company_id: int) -> str:
-    """经 trade 现有的会话执行路径跑一次请求，返回模型文本。
+    """跑一次草稿请求：**无工具**、只带公司身份的最小路径。
 
-    刻意**不**新造隔离：走 `build_query` + `create_agent`，公司身份与技能注入
-    都由 trade 既有机制决定。异常不在这里吞 —— 由 `generate_draft` 统一转成
-    `DraftResult.error`。
+    为什么不再走 `build_query` + 默认 agent（2026-10-23 审计 P0）：
+      - 客户消息和产品库摘录都是不可信文本，默认 agent 带 file/terminal/
+        code_execution 且全局 YOLO —— 文档里一句「读取 ~/.trade/...」就能
+        把本机文件带进草稿；
+      - build_query 还会把全公司最近 20 条对话和 20 笔订单无差别塞进 prompt，
+        直接违反副驾铁律 4（不许把别家客户上下文带进来）。
+    草稿需要的事实已经在 prompt 里（产品条目/命中客户历史），不需要工具。
     """
-    from trade.helpers import build_query, create_agent
+    from trade.company import get_trade_company, slug_from_id
+    from trade.helpers import create_agent
+    from trade.prompts import resolve_system_prompt
 
-    full_query, skill_hint = build_query(
-        company_id, None, prompt, customer_id=None,
-        last_skill_name=None, language="zh",
+    slug = None
+    db_identity = ""
+    try:
+        slug = slug_from_id(company_id)
+        db_identity = (get_trade_company(company_id) or {}).get(
+            "agent_identity_md", ""
+        ) or ""
+    except Exception:
+        pass
+
+    system_prompt = resolve_system_prompt(
+        company_slug=slug, db_identity=db_identity,
     )
-    agent = create_agent(ephemeral_system_prompt=skill_hint, skill_name=None)
-    result = agent.chat(full_query)
+    agent = create_agent(
+        ephemeral_system_prompt=system_prompt,
+        skill_name=None,
+        enabled_toolsets=[],
+    )
+    result = agent.chat(prompt)
     return result if isinstance(result, str) else ""
