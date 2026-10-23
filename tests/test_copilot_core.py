@@ -808,3 +808,59 @@ class TestDecimalLeftover:
         cleaned, changed = draft_mod.strip_unbacked_numbers("About 1.5M USD", ctx)
         assert changed is True
         assert ".5M" not in cleaned
+
+
+# ── 复审 3：中文计量单位身份 + 斤换算 ─────────────────────────────────────
+
+
+class TestChineseUnits:
+    @pytest.mark.parametrize("text,key", [
+        ("40 公斤", "40kg"), ("40公斤", "40kg"), ("40 千克", "40kg"),
+        ("40 克", "40g"), ("40 吨", "40t"),
+        ("40 毫米", "40mm"), ("40 厘米", "40cm"), ("40 米", "40m"),
+        ("四十公斤", "40kg"),
+    ])
+    def test_cn_measure_maps_to_english_key(self, text, key):
+        assert extract_mod_numbers(text) == {key}
+
+    @pytest.mark.parametrize("text,key", [("40 斤", "20kg"), ("八十斤", "40kg")])
+    def test_jin_is_half_a_kilogram(self, text, key):
+        assert extract_mod_numbers(text) == {key}
+
+    def test_cn_units_block_cross_dimension_backing(self):
+        """库里的 40 pcs 不能给中文草稿的 公斤/毫米/克 背书。"""
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "报价", "excerpt": "每箱 40 pcs"}],
+        )
+        for draft in ("箱重 40 公斤", "长度 40 毫米", "含 40 克"):
+            cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
+            assert changed is True, f"{draft!r} 被误判为有出处"
+
+    def test_bare_number_does_not_back_cn_unit(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "报价", "excerpt": "40"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("含 40 克", ctx)
+        assert changed is True, cleaned
+
+    @pytest.mark.parametrize("library,draft", [
+        ("40 kg", "40 公斤"), ("500 g", "500 克"), ("40 mm", "40 毫米"),
+        ("40 kg", "40 千克"), ("40 kg", "80 斤"), ("80 斤", "40 kg"),
+    ])
+    def test_cn_and_english_units_match_each_other(self, library, draft):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "规格书", "excerpt": library}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
+        assert changed is False, cleaned
+
+    def test_cn_count_units_stay_bare(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "报价", "excerpt": "MOQ 500 pcs"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("起订 500 个", ctx)
+        assert changed is False, cleaned

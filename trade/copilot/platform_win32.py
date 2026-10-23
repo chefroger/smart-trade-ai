@@ -4,7 +4,9 @@
 失败或得到全黑位图时回退 `mss` 抓取窗口所在屏幕区域。
 
 只读：不注入按键、不发消息、不落盘（守卫测试见 tests/test_copilot_guard.py）。
-所有 Win32 调用都用 ctypes，`pywin32` 不是必需依赖；`mss` 只在回退时懒加载。
+所有 Win32 调用都用 ctypes，`pywin32` 不是必需依赖。
+注意：`mss` 是截图路径的必需依赖 —— PrintWindow 抓到的位图也由 `mss.tools`
+编码成 PNG，回退路径同样用它抓屏；缺 mss 时截图整体不可用（副驾降级）。
 """
 
 from __future__ import annotations

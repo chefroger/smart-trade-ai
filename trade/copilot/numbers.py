@@ -63,6 +63,13 @@ _UNIT_WORDS = (
     r"|kW|MW|kWh|kV|V|mA|Hz|(?-i:m)|(?-i:g)|(?-i:t))"
 )
 
+# 中文单位词表：长词在前（公斤 先于 斤；千克 先于 克），否则会被短词截断。
+# 计量单位必须与英文走同一个 key（公斤 = kg），否则中文草稿会和英文库脱钩，
+# 同时又会和计数事实（40 pcs）撞成同一个裸数字（复审 P1）。
+_CN_MEASURE_WORDS = r"(?:公斤|千克|克|吨|斤|毫米|厘米|米)"
+_CN_COUNT_WORDS = r"(?:个|件|套|台|箱)"
+_CN_TIME_WORDS = r"(?:个工作日|工作日|天|日|周|个月|年)"
+
 # 单条正则覆盖所有"带语义的数字"形态；顺序要紧 —— 带单位/货币的分支必须排在
 # 裸数字前面，否则 "30 天" 里的 30 会先被裸数字吃掉、丢掉"天"这个语义。
 NUMBER_RE = re.compile(
@@ -89,18 +96,19 @@ NUMBER_RE = re.compile(
     rf"|(?:{_ASCII_LEFT}(?:DN|PN)\s?\d{{1,4}}{_ASCII_RIGHT})"
     rf"|(?:{_ASCII_LEFT}[SQ]\d{{3,4}}{_ASCII_RIGHT})"
     # 中文时间单位（不能加 \b，见模块 docstring）
-    rf"|(?:{_NUM}\s?(?:个工作日|工作日|天|日|周|个月|年))"
+    rf"|(?:{_NUM}\s?{_CN_TIME_WORDS})"
     # 英文时间单位
     rf"|(?:{_NUM}\s?(?:days?|weeks?|months?|years?){_ASCII_RIGHT})"
     # 计量 / 计数单位
     rf"|(?:{_NUM}\s?{_UNIT_WORDS}{_ASCII_RIGHT})"
     # 温度
     rf"|(?:{_NUM}\s?(?:°C|℃))"
-    # 阿拉伯数字 + 中文量词：500个 / 200箱（时间量词已在上面处理）
-    rf"|(?:{_NUM}\s?(?:个|件|套|台|箱|吨|公斤))"
-    # 中文数词 + 量词：三天 / 五百个 / 两周
+    # 阿拉伯数字 + 中文计量/计数单位：40 公斤 / 200 箱（时间量词已在上面处理）
+    rf"|(?:{_NUM}\s?{_CN_MEASURE_WORDS})"
+    rf"|(?:{_NUM}\s?{_CN_COUNT_WORDS})"
+    # 中文数词 + 量词：三天 / 五百个 / 四十公斤
     rf"|(?:[{_CN_NUMERALS}]+\s?"
-    rf"(?:个工作日|工作日|天|日|周|个月|年|个|件|套|台|箱|吨|公斤|元|块))"
+    rf"(?:{_CN_TIME_WORDS}|{_CN_MEASURE_WORDS}|{_CN_COUNT_WORDS}|元|块))"
     # 裸数字兜底：500 / 3.50 / 共500件
     # (?!\.\d)：不许把 1.5M 回溯成 1 而留下 ".5M" 残文
     rf"|(?:{_ASCII_LEFT}{_NUM}(?!\.\d){_ASCII_RIGHT})",
@@ -123,6 +131,19 @@ _MEASURE_UNITS = {
 # 单字母单位要求**小写**（正则里用 (?-i:…) 已保证，这里再兜一层，
 # 防止将来有人改动正则时把大小写规则改回去）。
 _CASE_SENSITIVE_UNITS = frozenset({"m", "g", "t"})
+
+# 中文计量单位 → (英文单位, 换算倍数)。斤按 0.5 kg 换算：
+# 库写 "40 kg" 必须能给草稿 "80 斤" 背书，反之亦然。
+_CN_MEASURE_UNITS: dict[str, tuple[str, Decimal]] = {
+    "公斤": ("kg", Decimal("1")),
+    "千克": ("kg", Decimal("1")),
+    "克": ("g", Decimal("1")),
+    "吨": ("t", Decimal("1")),
+    "斤": ("kg", Decimal("0.5")),
+    "毫米": ("mm", Decimal("1")),
+    "厘米": ("cm", Decimal("1")),
+    "米": ("m", Decimal("1")),
+}
 # 计数单位：归回裸数字（"MOQ 500" 与 "500 pcs" 是同一件事）
 _COUNT_UNITS = frozenset({
     "pcs", "piece", "pieces", "set", "sets", "unit", "units",
@@ -172,12 +193,13 @@ def normalize_digits(digits: str) -> str:
     return text or "0"
 
 
-def _scale_value(num: str, factor: int) -> str:
-    """数字乘以倍数（2 × 1000 → 2000；1.5 × 1000000 → 1500000）。"""
-    if factor == 1:
+def _scale_value(num: str, factor: int | Decimal) -> str:
+    """数字乘以倍数（2 × 1000 → 2000；80 斤 × 0.5 → 40）。"""
+    factor_value = Decimal(str(factor))
+    if factor_value == 1:
         return num
     try:
-        value = Decimal(num) * factor
+        value = Decimal(num) * factor_value
     except (InvalidOperation, ValueError):
         return num
     if value == value.to_integral_value():
@@ -204,11 +226,19 @@ def _time_factor(text: str, lowered: str) -> int | None:
 
 
 def _trailing_unit(text: str) -> tuple[str | None, str]:
-    """取匹配串末尾的单位词，返回 (小写单位, 原始写法)。"""
+    """取匹配串末尾的英文单位词，返回 (小写单位, 原始写法)。"""
     match = re.search(r"([A-Za-z]+)\s*$", text)
     if match is None:
         return None, ""
     return match.group(1).lower(), match.group(1)
+
+
+def _trailing_cn_unit(text: str) -> str | None:
+    """取匹配串末尾的中文计量单位（长词优先，公斤 先于 斤）。"""
+    match = re.search(
+        r"(公斤|千克|克|吨|斤|毫米|厘米|米)\s*$", text
+    )
+    return match.group(1) if match else None
 
 
 def number_key(raw: str) -> str | None:
@@ -268,6 +298,11 @@ def number_key(raw: str) -> str | None:
     if grade is not None:
         prefix = re.sub(r"\s+", "", grade.group(1)).lower()
         return f"{prefix}{num}"
+    # 中文计量单位：与英文同 key（公斤 = kg；斤 × 0.5 换算成 kg）
+    cn_unit = _trailing_cn_unit(text)
+    if cn_unit is not None:
+        normalized, factor = _CN_MEASURE_UNITS[cn_unit]
+        return f"{_scale_value(num, factor)}{normalized}"
     # 单位：计量单位保留身份，计数单位归回裸数字
     unit, raw_unit = _trailing_unit(text)
     if unit is not None:

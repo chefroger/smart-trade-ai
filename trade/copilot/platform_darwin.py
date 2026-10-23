@@ -1,8 +1,9 @@
 """macOS 平台适配：当前活动窗口 + 按窗口 ID 截图 + 屏幕录制权限链路。
 
 权限（任务书 §3，macOS 头等公民）：
-    - 截图需要"屏幕录制"权限；用 `CGPreflightScreenCaptureAccess()` 只查询、
-      不弹窗；`CGRequestScreenCaptureAccess()` 由 UI 的引导按钮显式调用一次。
+    - 截图需要"屏幕录制"权限；`CGPreflightScreenCaptureAccess()` 只查询、不弹窗；
+      `CGRequestScreenCaptureAccess()` 由 `ensure_screen_recording_permission()`
+      在运行时自动调用一次，仍无权限则自动打开系统设置对应页。
     - 权限缺失时返回结构化错误（error_kind="permission"），由 service 降级为
       剪贴板通道或"点按钮触发"，**不影响 trade 主功能**。
     - `permission_guide()` 提供系统设置直达链接与原因文案（引导只出一次由 UI 控制）。
