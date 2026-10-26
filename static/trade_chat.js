@@ -1178,6 +1178,17 @@ async function _confirmTradeUpdate() {
     return confirm(msg);
 }
 
+/**
+ * 更新完成后露出「重启」按钮（更新不再自动重启）。
+ *
+ * 为什么不自动重启：新代码起不来时旧服务还在，用户可以先看到更新结果、
+ * 再决定何时重启；这是 audit P1-10 明确允许的替代方案。
+ */
+function _showRestartPrompt() {
+    const rb = $('system-restart-btn');
+    if (rb) rb.hidden = false;
+}
+
 async function doTradeUpdate(e) {
     // 用 currentTarget 或回退到事件对象，再不行直接查 DOM
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-update-btn');
@@ -1214,8 +1225,14 @@ async function doTradeUpdate(e) {
         toast(t('sys.update_network'));
         updateFailed = true;
     }
-    if (updateFailed || !restartScheduled) {
+    if (updateFailed) {
         _setBtnBusy(btn, false);
+        return;
+    }
+    if (!restartScheduled) {
+        // 后端只更新不重启（audit P1-10）：露出重启按钮，让用户自己点
+        _setBtnBusy(btn, false);
+        _showRestartPrompt();
         return;
     }
     // 存入标记，页面 reload 后检测并显示 toast
@@ -1738,8 +1755,9 @@ async function doUpdateSystem() {
         restartScheduled = true;
     }
     if (!restartScheduled) {
-        // 升级未触发重启（可能已是最新版本或更新失败），立即重新检查版本状态
+        // 只更新不重启：露出重启按钮，由用户自己点
         if (btn) { btn.remove(); }
+        _showRestartPrompt();
         checkVersion();
         return;
     }

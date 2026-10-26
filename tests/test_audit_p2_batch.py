@@ -68,6 +68,12 @@ class TestUpdateNeedsConfirmHeader:
         assert "X-Confirm-Update" in src
         assert 'request.headers.get("X-Confirm-Update"' in src
 
+    def test_update_does_not_auto_restart(self):
+        """更新只拉取+装依赖，不自动重启（P1-10 的安全替代方案）。"""
+        src = _read_source("trade/app.py")
+        assert "background_tasks.add_task(_perform_restart)" not in src
+        assert 'result["restart_scheduled"] = False' in src
+
 
 class TestConversationSaveScope:
     def test_foreign_library_is_rejected(self):

@@ -64,6 +64,15 @@ test('今日用量在侧栏展示，且只提示不拦截', () => {
   assert.match(SRC, /if \(!r\.ok\) \{ el\.hidden = true; return; \}/);
 });
 
+test('更新不自动重启，完成后露出重启按钮', () => {
+  assert.match(SRC, /function _showRestartPrompt\(\)/);
+  assert.match(SRC, /rb\.hidden = false/);
+  assert.ok(
+    SRC.includes('_showRestartPrompt();'),
+    '更新完成（restart_scheduled=false）时必须露出重启按钮',
+  );
+});
+
 test('两个更新入口都先确认再 POST', () => {
   for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
     const start = SRC.indexOf(fn);

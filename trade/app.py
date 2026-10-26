@@ -356,7 +356,7 @@ def _perform_restart() -> None:
     核心策略：不杀自己（不可靠——uvicorn graceful shutdown 可能卡住）。
     而是通过独立 shell 子进程去等待、杀旧、启新。
 
-    供 /system/restart 和 /system/update (via BackgroundTasks) 调用。
+    只由 /system/restart 调用；/system/update 不再自动重启（用户手动确认）。
     """
     import sys as _sys
 
@@ -589,18 +589,20 @@ def _check_system_rate_limit(
 
 def _create_system_router() -> APIRouter:
     """创建系统管理路由（更新/备份/重启），需要 session token 认证。"""
-    from fastapi import BackgroundTasks, Request
+    from fastapi import Request
 
     from trade.api.deps import require_session
 
     router = APIRouter(tags=["system"], dependencies=[Depends(require_session)])
 
     @router.post("/system/update")
-    def api_update_trade(background_tasks: BackgroundTasks, request: Request):
-        """一键更新 Trade 系统。
+    def api_update_trade(request: Request):
+        """一键更新 Trade 系统（只拉取 + 装依赖，不自动重启）。
 
-        升级成功后通过 BackgroundTasks 调度全量重启。
-        返回 {"ok": bool, "version": str, "errors": list, "restart_scheduled": bool}
+        **不自动重启**：audit P1-10 的安全替代方案 —— 拉取完成即返回，由用户
+        看到结果后自己点「重启」。这样新代码起不来时旧服务还在，不会把整台
+        机器留在「升级后服务直接下线」的状态。
+        返回 {"ok": bool, "version": str, "errors": list, "restart_scheduled": false}
         """
         _tk = request.headers.get("X-Hermes-Session-Token", "")
         if _tk and not _check_system_rate_limit(_tk[:16]):
@@ -620,9 +622,9 @@ def _create_system_router() -> APIRouter:
         from trade.post_install import update_trade as _do_update
         result = _do_update()  # 现在返回结构化 dict，不再依赖 _capture_output
 
-        if result["ok"]:
-            background_tasks.add_task(_perform_restart)
-            result["restart_scheduled"] = True
+        # 只更新不重启：让用户在确认结果后自己点「重启」，避免新代码起不来
+        # 时连旧服务也没了（audit P1-10 允许的替代方案）。
+        result["restart_scheduled"] = False
         return result
 
     @router.post("/system/backup")
