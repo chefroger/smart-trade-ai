@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from trade import chat_memory
 from trade import library as library_module
+from trade import usage as usage_module
 from trade.agent_context import bind_company
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
@@ -42,6 +43,17 @@ _STREAM_DEADLINE_SECONDS = 1800.0
 
 # 同步聊天的 Agent 兜底超时（秒）。提为模块常量以便测试缩短。
 _SYNC_TIMEOUT_SECONDS = 600.0
+
+
+def _check_daily_token_budget(cid: int) -> tuple[bool, str]:
+    """当日 token 额度检查；上限 0 = 不限（见 trade.usage.daily_token_limit）。"""
+    used, limit = usage_module.daily_budget_state(cid)
+    if limit and used >= limit:
+        return False, (
+            f"今日 token 用量已达上限（{used:,}/{limit:,}）。"
+            "请明天再试；如需调整，可设置环境变量 TRADE_DAILY_TOKEN_LIMIT（0 = 不限）。"
+        )
+    return True, ""
 
 
 def _abort_running_agent(agent) -> None:
@@ -201,6 +213,9 @@ async def trade_chat(
 
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
+    budget_ok, budget_msg = _check_daily_token_budget(cid)
+    if not budget_ok:
+        raise HTTPException(status_code=429, detail=budget_msg)
 
     _validate_scope(payload, cid)
 
@@ -257,11 +272,18 @@ async def trade_chat(
                     return "", False
                 # 绑定公司身份：chat-memory 等插件工具只认服务端绑定，
                 # 不再信任模型自填的 company_id（审计 P0-2）。
-                with bind_company(cid, payload.customer_id):
-                    if document_task and request_task_id:
-                        result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
-                    else:
-                        result = agent.chat(full_query)
+                try:
+                    with bind_company(cid, payload.customer_id):
+                        if document_task and request_task_id:
+                            result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
+                        else:
+                            result = agent.chat(full_query)
+                finally:
+                    # 不论成功/失败（含被中断）都把这次尝试的 token 记账：
+                    # 失败的重试同样烧钱，漏记会让额度形同虚设（审计 P1-16）。
+                    usage_module.record_agent_usage(
+                        agent, company_id=cid, skill=current_skill or "",
+                    )
                 if cancelled.is_set():
                     # 超时后迟到的结果：用户已收到中止提示，不能再当成功回复
                     return "", False
@@ -381,6 +403,9 @@ async def trade_chat_stream(
 
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
+    budget_ok, budget_msg = _check_daily_token_budget(cid)
+    if not budget_ok:
+        raise HTTPException(status_code=429, detail=budget_msg)
 
     _validate_scope(payload, cid)
 
@@ -473,11 +498,17 @@ async def trade_chat_stream(
                     return None
                 start = time.time()
                 # 同同步端点：把公司身份绑进本次 agent 调用的上下文。
-                with bind_company(cid, payload.customer_id):
-                    if document_task and request_task_id:
-                        result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
-                    else:
-                        result = agent.chat(full_query)
+                try:
+                    with bind_company(cid, payload.customer_id):
+                        if document_task and request_task_id:
+                            result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
+                        else:
+                            result = agent.chat(full_query)
+                finally:
+                    # 断连/失败同样记账：本次尝试的 token 已经花掉了（审计 P1-16）
+                    usage_module.record_agent_usage(
+                        agent, company_id=cid, skill=current_skill or "",
+                    )
                 elapsed = time.time() - start
 
                 if not result and attempt < _MAX_AGENT_RETRIES:

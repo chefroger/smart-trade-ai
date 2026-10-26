@@ -24,6 +24,11 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# 每公司每日 token 上限（输入+输出合计）。默认 200 万，约合 1000-2000 次普通
+# 问答；被刷时一天最多烧几块钱。环境变量 TRADE_DAILY_TOKEN_LIMIT 覆盖，
+# 设为 0（或负数）表示不限。
+DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000
+
 # ── 示例费率（美元 / 1M tokens）：(输入, 输出) ─────────────────────────────
 #  ⚠️ 请按实际账单定期校准；未知模型默认按 (0, 0) 计（只记 token 不记费用）。
 PRICE_PER_1MUSD: dict[str, tuple[float, float]] = {
@@ -110,6 +115,100 @@ def record_usage(
         return cost
     except Exception as e:
         logger.warning("用量记录失败: %s", e)
+        return 0.0
+
+
+def _day_start_ts() -> float:
+    """本地时区今天 00:00 的时间戳（limits 按用户看到的一天算，不按 UTC）。"""
+    from datetime import datetime
+
+    return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def daily_token_limit() -> int:
+    """当前生效的每日 token 上限；0 = 不限。
+
+    环境变量非法时退回默认值（而不是当成"不限"）—— 配置写错不能把防护关掉。
+    """
+    raw = os.environ.get("TRADE_DAILY_TOKEN_LIMIT", "").strip()
+    if not raw:
+        return DEFAULT_DAILY_TOKEN_LIMIT
+    try:
+        return max(0, int(float(raw)))
+    except ValueError:
+        logger.warning(
+            "TRADE_DAILY_TOKEN_LIMIT=%r 不是数字，改用默认值 %d",
+            raw, DEFAULT_DAILY_TOKEN_LIMIT,
+        )
+        return DEFAULT_DAILY_TOKEN_LIMIT
+
+
+def tokens_today(conn: sqlite3.Connection, company_id: int) -> int:
+    """某公司今天已用的 token 总数（输入+输出）。"""
+    ensure_usage_schema(conn)
+    row = conn.execute(
+        """SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0)
+           FROM usage_ledger WHERE company_id = ? AND ts >= ?""",
+        (int(company_id), _day_start_ts()),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def daily_budget_state(company_id: int) -> tuple[int, int]:
+    """返回 (今日已用, 上限)；上限 0 表示不限。
+
+    读库失败按"不限额"处理：额度是防滥用，不该因为一次读失败把正常业务挡在门外。
+    """
+    limit = daily_token_limit()
+    if limit <= 0:
+        return 0, 0
+    try:
+        from trade.database import get_connection
+
+        conn = get_connection()
+        try:
+            return tokens_today(conn, company_id), limit
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("读取今日用量失败（本次按不限额处理）: %s", e)
+        return 0, 0
+
+
+def record_agent_usage(agent, *, company_id: int = 0, skill: str = "") -> float:
+    """把一次 agent 调用的 token 用量记入台账，返回费用（美元）。
+
+    Hermes 的 ``session_*`` 计数是该 agent 实例的累计值；Trade 每个请求新建
+    agent，所以它天然等于本次请求的用量（重试各自新建 agent，各记一笔）。
+    字段缺失（旧版 Hermes / 测试桩）时记 0 —— 记账是旁路，绝不能影响聊天。
+    """
+    prompt = int(getattr(agent, "session_prompt_tokens", 0) or 0)
+    completion = int(getattr(agent, "session_completion_tokens", 0) or 0)
+    # 部分 provider 只填 input/output 两列
+    if not prompt:
+        prompt = int(getattr(agent, "session_input_tokens", 0) or 0)
+    if not completion:
+        completion = int(getattr(agent, "session_output_tokens", 0) or 0)
+    if prompt <= 0 and completion <= 0:
+        return 0.0
+    try:
+        from trade.database import get_connection
+
+        conn = get_connection()
+        try:
+            return record_usage(
+                conn,
+                skill=skill,
+                provider=str(getattr(agent, "provider", "") or ""),
+                model=str(getattr(agent, "model", "") or ""),
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                company_id=company_id,
+            )
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("用量记录失败（不影响聊天）: %s", e)
         return 0.0
 
 
