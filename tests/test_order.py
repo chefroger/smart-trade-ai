@@ -124,3 +124,146 @@ class TestOrderLibraryIsolation:
         o = order.create(co1["id"], cust1["id"], "Widget")
         # 用 co2 的身份解绑 co1 的订单 → 订单不归属 co2，应返回 False
         assert order.unlink_library(o["id"], lib1["id"], company_id=co2["id"]) is False
+
+
+class TestReconcileAmounts:
+    """P1-15：数量×单价 与 总金额 必须一致（总金额为空时自动算出）。"""
+
+    def test_blank_total_is_computed(self):
+        from trade import order
+        qty, price, total = order.reconcile_amounts(10, 3.5, 0)
+        assert (qty, price, total) == (10.0, 3.5, 35.0)
+
+    def test_none_total_is_computed(self):
+        from trade import order
+        assert order.reconcile_amounts(3, 2, None)[2] == 6.0
+
+    def test_consistent_triplet_passes(self):
+        from trade import order
+        assert order.reconcile_amounts(10, 3.5, 35.0) == (10.0, 3.5, 35.0)
+
+    def test_cent_rounding_noise_tolerated(self):
+        from trade import order
+        # 0.01 以内视为舍入噪声，不拦
+        assert order.reconcile_amounts(3, 3.333, 9.999)[2] == 9.999
+
+    def test_contradiction_raises(self):
+        from trade import order
+        with pytest.raises(ValueError, match="不一致"):
+            order.reconcile_amounts(10, 3.5, 999)
+
+    def test_missing_price_keeps_total(self):
+        from trade import order
+        # 单价缺失时无法校验（例如只录了报价总额），原样放行
+        assert order.reconcile_amounts(10, 0, 500)[2] == 500
+
+
+class TestOrderStatusMachine:
+    """P1-15：只允许 报价中→已下单→已出货→已完成；取消仅发货前；终态不可再变。"""
+
+    def test_forward_chain_allowed(self):
+        from trade import order
+        assert order.can_transition_status("报价中", "已下单")
+        assert order.can_transition_status("已下单", "已出货")
+        assert order.can_transition_status("已出货", "已完成")
+
+    def test_same_status_allowed(self):
+        from trade import order
+        for status in order.ORDER_STATUSES:
+            assert order.can_transition_status(status, status)
+
+    def test_backward_transitions_blocked(self):
+        from trade import order
+        assert not order.can_transition_status("已完成", "报价中")
+        assert not order.can_transition_status("已出货", "已下单")
+        assert not order.can_transition_status("已下单", "报价中")
+
+    def test_cancel_only_before_shipping(self):
+        from trade import order
+        assert order.can_transition_status("报价中", "已取消")
+        assert order.can_transition_status("已下单", "已取消")
+        assert not order.can_transition_status("已出货", "已取消")
+
+    def test_terminal_states_frozen(self):
+        from trade import order
+        for target in order.ORDER_STATUSES:
+            if target == "已完成":
+                continue
+            assert not order.can_transition_status("已完成", target)
+        assert not order.can_transition_status("已取消", "已出货")
+
+    def test_unknown_legacy_status_is_not_trapped(self):
+        from trade import order
+        # 历史脏数据（空 / 未知值）不拦，否则用户无法修正旧记录
+        assert order.can_transition_status("", "已下单")
+        assert order.can_transition_status("已确认", "已出货")
+
+
+class TestOrderApiValidation:
+    """P1-15 端到端：API 层拦截矛盾金额与非法状态迁移。"""
+
+    def _mk(self, db):
+        co = _mk_company("Co", "co")
+        cust = _mk_customer(co["id"], "Cust")
+        return co, cust
+
+    def _create(self, cid, cust_id, **kwargs):
+        from trade.api.models import OrderCreate
+        from trade.api.orders import create_order
+        payload = OrderCreate(
+            customer_id=cust_id, product_name="Widget", **kwargs,
+        )
+        return create_order(payload, cid=cid)
+
+    def test_create_rejects_contradictory_total(self, db):
+        from fastapi import HTTPException
+        co, cust = self._mk(db)
+        with pytest.raises(HTTPException) as exc:
+            self._create(co["id"], cust["id"], quantity=10, unit_price=3.5, total_amount=999)
+        assert exc.value.status_code == 400
+        assert "不一致" in exc.value.detail
+
+    def test_create_computes_blank_total(self, db):
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], quantity=10, unit_price=3.5)
+        assert o["total_amount"] == 35.0
+
+    def test_update_rejects_contradictory_amounts(self, db):
+        from fastapi import HTTPException
+
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], quantity=10, unit_price=3.5)
+        with pytest.raises(HTTPException) as exc:
+            update_order(o["id"], OrderUpdate(quantity=20), cid=co["id"])
+        assert exc.value.status_code == 400
+        assert "不一致" in exc.value.detail
+
+    def test_update_blocks_invalid_transition(self, db):
+        from fastapi import HTTPException
+
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], status="已完成")
+        with pytest.raises(HTTPException) as exc:
+            update_order(o["id"], OrderUpdate(status="报价中"), cid=co["id"])
+        assert exc.value.status_code == 400
+        assert "已完成" in exc.value.detail
+
+    def test_update_allows_forward_transition(self, db):
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"])
+        updated = update_order(o["id"], OrderUpdate(status="已下单"), cid=co["id"])
+        assert updated["status"] == "已下单"
+
+    def test_notes_edit_on_completed_order_still_works(self, db):
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], status="已完成")
+        updated = update_order(o["id"], OrderUpdate(notes="归档备注"), cid=co["id"])
+        assert updated["notes"] == "归档备注"

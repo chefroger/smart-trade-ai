@@ -13,6 +13,58 @@ import re
 
 from trade.database import get_connection
 
+ORDER_STATUSES = ("报价中", "已下单", "已出货", "已完成", "已取消")
+
+# 状态机：只允许沿业务链前进；取消只能在发货前；已完成 / 已取消为终态。
+# 目的：防止「已取消 → 已出货」把订单重新塞回跟进流，或「已完成 → 报价中」造成重复报价。
+_ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "报价中": {"已下单", "已取消"},
+    "已下单": {"已出货", "已取消"},
+    "已出货": {"已完成"},
+    "已完成": set(),
+    "已取消": set(),
+}
+
+# 金额一致性容差：金额按分（0.01）比较，只吸收浮点噪声，不放宽到百分比。
+_AMOUNT_TOLERANCE = 0.01
+
+
+def can_transition_status(old: str, new: str) -> bool:
+    """订单状态能否从 old 变到 new（同一状态视为无变化，允许）。
+
+    当前状态为空或不在五值之内（历史脏数据）时不拦，避免用户无法修正旧记录。
+    """
+    if old == new:
+        return True
+    allowed = _ALLOWED_STATUS_TRANSITIONS.get(old or "")
+    if allowed is None:
+        return True
+    return new in allowed
+
+
+def reconcile_amounts(
+    quantity, unit_price, total_amount,
+) -> tuple[float, float, float]:
+    """校验「数量 × 单价」与总金额一致，返回三元组 (quantity, unit_price, total)。
+
+    - 总金额为空（0 / None）而数量与单价都有值时，自动算出总金额（保留 2 位）；
+    - 三者都有值时做一致性校验，矛盾则抛 ValueError（文案直接展示给用户）。
+
+    数量或单价缺任一项时无法校验（例如只录了报价总额），原样放行。
+    """
+    qty = float(quantity or 0)
+    price = float(unit_price or 0)
+    total = float(total_amount or 0)
+
+    expected = qty * price
+    if expected > 0 and total <= 0:
+        return qty, price, round(expected, 2)
+    if expected > 0 and total > 0 and abs(expected - total) > _AMOUNT_TOLERANCE:
+        raise ValueError(
+            f"总金额 {total:g} 与 数量×单价（{qty:g}×{price:g}={expected:g}）不一致，请核对后重填。"
+        )
+    return qty, price, total
+
 
 def _customer_in_company(conn, customer_id: int, company_id: int) -> bool:
     """校验客户是否属于指定公司。"""
