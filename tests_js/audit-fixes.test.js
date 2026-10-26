@@ -64,6 +64,17 @@ test('今日用量在侧栏展示，且只提示不拦截', () => {
   assert.match(SRC, /if \(!r\.ok\) \{ el\.hidden = true; return; \}/);
 });
 
+test('markdown / DOMPurify 本地打包，离线可用', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.html'), 'utf8');
+  assert.match(html, /\/static\/vendor\/marked\.umd\.js/);
+  assert.match(html, /\/static\/vendor\/purify\.min\.js/);
+  assert.ok(!/https:\/\/cdn/.test(html), '不得再从 CDN 加载前端依赖');
+  assert.ok(fs.existsSync(path.join(__dirname, '..', 'static', 'vendor', 'marked.umd.js')));
+  assert.ok(fs.existsSync(path.join(__dirname, '..', 'static', 'vendor', 'purify.min.js')));
+});
+
 test('更新不自动重启，完成后露出重启按钮', () => {
   assert.match(SRC, /function _showRestartPrompt\(\)/);
   assert.match(SRC, /rb\.hidden = false/);
