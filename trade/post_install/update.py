@@ -2,7 +2,8 @@
 Trade AI Assistant — 一键系统更新。
 
 update_trade() 按序执行 7 个步骤：
-  1. git pull（在运行目录拉取最新代码）
+  1. git pull（在运行目录拉取最新代码；拉取前钉选远端 main 的 SHA，
+     拉取后回读 HEAD 必须与之一致，否则中止并回退）
   2. install_skills()（安装新增的 b2b-* skill 目录 + 模板）
   3. update_skills()（从 GitHub 同步每个 SKILL.md 内容）
   4. pip install -e .（更新包及依赖）
@@ -20,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 from trade.post_install.skills import (
@@ -308,6 +310,99 @@ def _git_head(trade_dir: Path) -> str | None:
     return sha if r.returncode == 0 and len(sha) >= 7 else None
 
 
+def _remote_main_sha(trade_dir: Path) -> str | None:
+    """解析远端 main 当前的提交 SHA，用于把本次更新钉死在这个提交上。
+
+    为什么先查远端：`git pull origin main` 拉的是"命令执行那一刻"的分支头，
+    若拉取过程中远端被推了新提交，装进来的就未必是用户点更新时那个版本。
+    先记下 SHA、拉取后再回读 HEAD 比对，不一致就中止 —— 宁可让用户重试，
+    也不要把一个未经确认的提交装进本机。
+
+    禁止交互提示（GIT_TERMINAL_PROMPT=0）：私有仓库/凭证过期时会让 `git` 在
+    后台服务里等账号密码，界面永远停在"更新中"。
+    """
+    try:
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        r = subprocess.run(
+            ["git", "ls-remote", "origin", "refs/heads/main"],
+            cwd=str(trade_dir), capture_output=True, text=True, timeout=60,
+            env=env,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    parts = r.stdout.split()
+    sha = parts[0].strip().lower() if parts else ""
+    if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+        return None
+    return sha
+
+
+def _verify_pinned_head(
+    trade_dir: Path, target_sha: str, emit, errors: list[str],
+) -> bool:
+    """回读 HEAD，确认它正是本次钉选的提交；不一致记错误并返回 False。"""
+    got = _git_head(trade_dir)
+    if got == target_sha:
+        emit(f"  ✓ 已停在钉选提交 {target_sha[:8]}")
+        return True
+    got_short = (got or "unknown")[:8]
+    emit(f"  ❌ HEAD 与钉选提交不一致：期望 {target_sha[:8]}，实际 {got_short}")
+    errors.append(f"pinned head mismatch: expected {target_sha[:8]}, got {got_short}")
+    return False
+
+
+def _restore_db_after_failed_migration(
+    backup_path: Path, db_path: Path, emit, warnings: list[str],
+) -> bool:
+    """数据库迁移失败后，把库恢复到升级前的快照。
+
+    为什么不能只回滚代码：Step 7 的迁移可能已经改了表结构（ALTER TABLE 不可逆），
+    旧代码面对半迁移的库仍可能起不来。升级前那份备份本来就是为了这一刻。
+
+    恢复前先把"迁移失败后的库"另存一份（`*-failed-migration.db`）—— 它可能已经是
+    半迁移状态，但仍是排查迁移 bug 的唯一现场，不能直接覆盖掉。
+    """
+    import sqlite3
+
+    if backup_path is None or not backup_path.is_file():
+        warnings.append("no pre-upgrade db backup to restore")
+        return False
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    failed_copy = backup_path.parent / f"trade-{stamp}-failed-migration.db"
+    try:
+        from trade.post_install.backup import snapshot_db
+
+        snapshot_db(db_path, failed_copy)
+        emit(f"  ℹ️ 迁移失败的库已另存：{failed_copy.name}")
+    except Exception as e:
+        # 现场拷贝失败不阻断恢复：备份本身还在
+        warnings.append(f"failed-migration snapshot skipped: {e}")
+
+    try:
+        # 用 SQLite 在线备份 API 写回，而不是 shutil.copy2：服务仍在运行，
+        # 直接覆盖文件会与 WAL / 活跃连接打架。
+        src = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+        try:
+            dst = sqlite3.connect(str(db_path), timeout=30)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+    except Exception as e:
+        emit(f"  ❌ 恢复数据库备份失败：{e}")
+        emit(f"  💡 请手动用备份覆盖数据库：{backup_path}")
+        warnings.append(f"db restore after failed migration failed: {e}")
+        return False
+
+    emit(f"  ↩ 数据库已恢复到升级前备份（{backup_path.name}）")
+    return True
+
+
 def _rollback_checkout(
     trade_dir: Path, target_sha: str, emit, warnings: list[str],
 ) -> bool:
@@ -377,13 +472,15 @@ def update_trade() -> dict:
       6. auto-start check
       7. database migration
     """
-    trade_dir = _get_trade_home() / "foreign-trade-assistant"
+    trade_home = _get_trade_home()
+    trade_dir = trade_home / "foreign-trade-assistant"
     # errors = 致命失败（git / pip / 数据库），必须阻止重启
     # warnings = 非致命失败（skills / 模板 / 开机自启），记录并上报但继续重启
     errors: list[str] = []
     warnings: list[str] = []
     messages: list[str] = []
     new_version = ""
+    pre_update_db_backup: Path | None = None
 
     def _emit(msg: str) -> None:
         """同时 print 和记录到 messages（保持 CLI 和 API 兼容）。"""
@@ -423,13 +520,12 @@ def update_trade() -> dict:
     try:
         from trade.post_install.backup import backup_db_before_upgrade
 
-        _trade_home = _get_trade_home()
-        backup_path = backup_db_before_upgrade(
-            _trade_home / "data" / "trade.db",
-            _trade_home / "backups",
+        pre_update_db_backup = backup_db_before_upgrade(
+            trade_home / "data" / "trade.db",
+            trade_home / "backups",
         )
-        if backup_path:
-            _emit(f"  ✓ 升级前数据库备份：{backup_path.name}")
+        if pre_update_db_backup:
+            _emit(f"  ✓ 升级前数据库备份：{pre_update_db_backup.name}")
         else:
             _emit("  ℹ️ 尚无数据库（首次安装），跳过备份")
     except Exception as e:
@@ -452,6 +548,8 @@ def update_trade() -> dict:
             warnings.append(f"checkout rolled back after {reason}")
 
     # ── Step 1: git pull / clone ───────────────────────────────────────────
+    # 本次更新钉选的提交（clone 场景没有旧版本可比，不做钉选）
+    target_sha: str | None = None
     if not trade_dir.is_dir():
         _emit("→ Step 1/7: git clone (install directory not found) ...")
         _emit(f"  Target: {trade_dir}")
@@ -474,6 +572,17 @@ def update_trade() -> dict:
         _emit(f"  ✓ Repository cloned to {trade_dir}")
     else:
         _emit("→ Step 1/7: git pull ...")
+        # 先把"用户点更新这一刻远端 main 指向的提交"钉下来，拉取后核对
+        target_sha = _remote_main_sha(trade_dir)
+        if not target_sha:
+            _emit("  ❌ 无法解析远端 main 的最新提交（网络/代理或仓库不可达），已中止升级。")
+            errors.append("cannot resolve remote main commit")
+            return {
+                "ok": False, "version": "",
+                "error": "无法解析远端 main 的最新提交，请检查网络或代理后重试。",
+                "errors": errors, "warnings": warnings, "messages": messages,
+            }
+        _emit(f"  ℹ️ 本次更新钉选提交：{target_sha[:8]}")
         try:
             result = subprocess.run(
                 ["git", "pull", "--ff-only", "origin", "main"],
@@ -526,6 +635,16 @@ def update_trade() -> dict:
         else:
             last_line = result.stdout.strip().split("\n")[-1] if result.stdout.strip() else "Already up-to-date."
             _emit(f"  ✓ {last_line}")
+
+        # 回读 HEAD：只认钉选的那个提交。不一致说明拉取过程中远端被推进
+        # （或工作区有异常），此时装进来的不是用户确认过的版本 —— 回退并中止。
+        if not _verify_pinned_head(trade_dir, target_sha, _emit, errors):
+            _rollback_if_possible("remote main moved during update")
+            return {
+                "ok": False, "version": "",
+                "error": f"更新期间远端 main 发生变化（期望 {target_sha[:8]}），请重试。",
+                "errors": errors, "warnings": warnings, "messages": messages,
+            }
 
     # ── 读取更新后的版本号并写入 version.txt ─────────────────────────────
     try:
@@ -630,6 +749,14 @@ def update_trade() -> dict:
     except Exception as e:
         _emit(f"  ❌ Database check failed: {e}")
         errors.append(f"Database check failed: {e}")
+        # 迁移失败可能已经改了表结构（ALTER TABLE 不可逆）：光回滚代码不够，
+        # 把库也恢复到升级前的快照（Step 0c 的备份就是为这一刻留的）。
+        if pre_update_db_backup is not None:
+            if not _restore_db_after_failed_migration(
+                pre_update_db_backup, trade_home / "data" / "trade.db",
+                _emit, warnings,
+            ):
+                _emit(f"  ⚠ 数据库未能自动恢复，备份仍在：{pre_update_db_backup}")
         # DB 迁移失败同样回退源码：新代码 + 未迁移完的库，重启只会更糟
         _rollback_if_possible("database check failed")
         return {"ok": False, "version": "", "error": str(e), "errors": errors, "warnings": warnings, "messages": messages}

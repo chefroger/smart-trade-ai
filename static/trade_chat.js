@@ -193,6 +193,8 @@ const I18N = {
         'sys.update_done':'✅ 更新完成。请点击"🔄 重启"以应用新版本。',
         'sys.update_fail':'❌ 更新失败: ','sys.update_unknown':'⚠️ 更新结果未知，请检查网络后重试',
         'sys.update_network':'⚠️ 更新请求失败，请检查网络连接后重试',
+        'sys.update_confirm':'将从 GitHub 拉取最新代码、安装依赖并重启服务。\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
+        'sys.update_confirm_version':'将从 GitHub 拉取最新代码、安装依赖并重启服务。\n目标版本：{version}（当前 {current}）\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
         'sys.restart_toast':'🔄 正在重启 Trade 服务...',
         'sys.restart_ok':'✅ 重启命令已发送，页面将在几秒后刷新',
         'sys.restart_fail':'❌ 重启失败: ',
@@ -363,6 +365,8 @@ const I18N = {
         'sys.update_done':'✅ Update complete. Click "🔄 Restart" to apply.',
         'sys.update_fail':'❌ Update failed: ','sys.update_unknown':'⚠️ Update result unknown, check network',
         'sys.update_network':'⚠️ Update request failed, check network',
+        'sys.update_confirm':'This will pull the latest code from GitHub, install dependencies and restart the service.\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
+        'sys.update_confirm_version':'This will pull the latest code from GitHub, install dependencies and restart the service.\nTarget version: {version} (current {current})\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
         'sys.restart_toast':'🔄 Restarting Trade...',
         'sys.restart_ok':'✅ Restart command sent, page will refresh soon',
         'sys.restart_fail':'❌ Restart failed: ',
@@ -1106,10 +1110,33 @@ function _setBtnBusy(btn, busy) {
 }
 
 // ── 系统更新 ──
+/**
+ * 更新前二次确认：带上当前/最新版本号。
+ *
+ * 审计 P1-10：更新 = 拉代码 + 装依赖 + 重启，一次点击即生效，必须让用户
+ * 知道将要发生什么。拿不到版本号时退回通用文案 —— 确认本身不能因网络失败被跳过。
+ */
+async function _confirmTradeUpdate() {
+    let latest = '', current = '';
+    try {
+        const r = await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' });
+        if (r.ok) {
+            const d = await r.json();
+            latest = d.latest_version || '';
+            current = d.version || '';
+        }
+    } catch(_) { /* 版本信息拿不到不影响确认 */ }
+    const msg = (latest && current)
+        ? t('sys.update_confirm_version').replace('{version}', latest).replace('{current}', current)
+        : t('sys.update_confirm');
+    return confirm(msg);
+}
+
 async function doTradeUpdate(e) {
     // 用 currentTarget 或回退到事件对象，再不行直接查 DOM
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-update-btn');
     if (!btn) return;
+    if (!(await _confirmTradeUpdate())) return;
     _setBtnBusy(btn, true);
     toast(t('sys.restart_toast').replace('Restarting','Updating'));
     var updateFailed = false;
@@ -1643,6 +1670,7 @@ function stopVersionCheck() {
 
 async function doUpdateSystem() {
     const btn = document.getElementById('update-banner');
+    if (!(await _confirmTradeUpdate())) return;
     if (btn) btn.textContent = '更新中...';
     var restartScheduled = false;
     try {

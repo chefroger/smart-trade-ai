@@ -30,6 +30,29 @@ def _bypass_interpreter_guard(monkeypatch):
     monkeypatch.setattr(upd, "_refuse_reason_for_interpreter", lambda: None)
 
 
+# 钉选测试用的稳定提交：默认让「远端 main」与「本地 HEAD」一致，
+# 需要模拟漂移的用例自行覆盖 `_remote_main_sha` / `_git_head`。
+PIN_SHA = "a" * 40
+
+# 在 autouse fixture 替换之前留住真实实现，供解析函数自身的行为测试使用
+from trade.post_install import update as _update_mod  # noqa: E402
+
+_REAL_REMOTE_MAIN_SHA = _update_mod._remote_main_sha
+
+
+@pytest.fixture(autouse=True)
+def _pin_git_commit(monkeypatch):
+    """默认固定钉选提交，避免每个用例都要为 ls-remote / rev-parse 造返回。
+
+    钉选本身的解析与不一致处理由 TestUpdatePinning 覆盖；这里只是让其余
+    「测某一步」的用例不必关心 git 交互。
+    """
+    from trade.post_install import update as upd
+
+    monkeypatch.setattr(upd, "_remote_main_sha", lambda *a, **k: PIN_SHA)
+    monkeypatch.setattr(upd, "_git_head", lambda *a, **k: PIN_SHA)
+
+
 # ── _capture_output 测试 ──────────────────────────────────────────────────
 
 
@@ -888,6 +911,7 @@ class TestUpdateRollback:
     def _run(
         self, tmp_path, monkeypatch, *, pip_fail: str | None = None,
         db_fail: bool = False, reset_rc: int = 0,
+        db_mutate: Path | None = None,
     ):
         """跑一次 update_trade，按需让某一步失败；返回 (结果, 调用记录)。"""
         from trade.post_install import update as update_module
@@ -933,6 +957,16 @@ class TestUpdateRollback:
         import trade.database as db_module
         if db_fail:
             def boom():
+                # 模拟"迁移改了一半才失败"：先真的写入一个表，再抛错
+                if db_mutate is not None:
+                    import sqlite3
+
+                    conn = sqlite3.connect(str(db_mutate))
+                    try:
+                        conn.execute("CREATE TABLE failed_migration(x)")
+                        conn.commit()
+                    finally:
+                        conn.close()
                 raise sqlite3_error_ref()
             monkeypatch.setattr(db_module, "init_db", boom)
         else:
@@ -974,6 +1008,127 @@ class TestUpdateRollback:
         assert result["ok"] is True
         assert not [c for c in calls if c[:2] == ["git", "reset"]], (
             "升级成功时不该回退"
+        )
+
+    def test_database_failure_restores_pre_upgrade_snapshot(self, tmp_path, monkeypatch):
+        """迁移失败时不仅回滚代码，还要把库恢复到升级前的备份。
+
+        审计 P1-10：ALTER TABLE 不可逆 —— 只回滚代码，旧版本面对的仍是
+        半迁移的库，重启照样起不来。升级前那份备份就是为这一刻留的。
+        """
+        import sqlite3
+
+        db_path = tmp_path / "data" / "trade.db"
+        db_path.parent.mkdir(parents=True)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("CREATE TABLE keep(x)")
+            conn.execute("INSERT INTO keep VALUES (1)")
+            conn.commit()
+        finally:
+            conn.close()
+
+        result, _calls = self._run(
+            tmp_path, monkeypatch, db_fail=True, db_mutate=db_path,
+        )
+
+        assert result["ok"] is False
+        conn = sqlite3.connect(str(db_path))
+        try:
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            assert "failed_migration" not in tables, (
+                "迁移失败写入的表必须被备份覆盖掉"
+            )
+            assert conn.execute("SELECT COUNT(*) FROM keep").fetchone()[0] == 1
+        finally:
+            conn.close()
+        assert any("恢复到升级前备份" in m for m in result["messages"]), result["messages"]
+
+
+class TestUpdatePinning:
+    """P1-10：更新钉选远端 main 的提交；拉取后 HEAD 不一致就中止并回退。"""
+
+    def test_remote_main_sha_parses_ls_remote_output(self, monkeypatch):
+        from trade.post_install import update as upd
+
+        class _R:
+            returncode = 0
+            stdout = PIN_SHA + "\trefs/heads/main\n"
+            stderr = ""
+
+        monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _R())
+        assert _REAL_REMOTE_MAIN_SHA(Path("/tmp")) == PIN_SHA
+
+    def test_remote_main_sha_rejects_unparseable_output(self, monkeypatch):
+        from trade.post_install import update as upd
+
+        class _R:
+            returncode = 0
+            stdout = "fatal: not a git repository\n"
+            stderr = ""
+
+        monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _R())
+        assert _REAL_REMOTE_MAIN_SHA(Path("/tmp")) is None
+
+    def test_unresolvable_remote_aborts_before_touching_worktree(self, tmp_path, monkeypatch):
+        from trade.post_install import update as upd
+
+        trade_dir = tmp_path / "foreign-trade-assistant"
+        trade_dir.mkdir()
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(list(cmd))
+            cp = MagicMock()
+            cp.returncode = 0
+            cp.stdout = cp.stderr = ""
+            return cp
+
+        monkeypatch.setattr(upd.subprocess, "run", fake_run)
+        monkeypatch.setattr(upd, "_remote_main_sha", lambda *a, **k: None)
+
+        result = upd.update_trade()
+
+        assert result["ok"] is False
+        assert any("cannot resolve remote main" in e for e in result["errors"])
+        assert not [c for c in calls if c[:2] == ["git", "pull"]], (
+            "解析不到钉选提交时不能拉取（否则装进来的是未经确认的版本）"
+        )
+
+    def test_head_drift_aborts_and_rolls_back(self, tmp_path, monkeypatch):
+        from trade.post_install import update as upd
+
+        trade_dir = tmp_path / "foreign-trade-assistant"
+        trade_dir.mkdir()
+        (trade_dir / ".trade-template").mkdir()
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(list(cmd))
+            cp = MagicMock()
+            cp.returncode = 0
+            cp.stdout = ""
+            cp.stderr = ""
+            return cp
+
+        monkeypatch.setattr(upd.subprocess, "run", fake_run)
+        monkeypatch.setattr(upd, "install_skills", lambda: None)
+        monkeypatch.setattr(upd, "update_skills", lambda: None)
+        monkeypatch.setattr(upd, "_remote_main_sha", lambda *a, **k: "b" * 40)
+        monkeypatch.setattr(upd, "_git_head", lambda *a, **k: "c" * 40)
+
+        result = upd.update_trade()
+
+        assert result["ok"] is False
+        assert any("pinned head mismatch" in e for e in result["errors"]), result["errors"]
+        assert [c for c in calls if c[:2] == ["git", "reset"]], (
+            "HEAD 与钉选提交不一致时必须回退到升级前的提交"
         )
 
 

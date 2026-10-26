@@ -33,3 +33,22 @@ test('api() 支持额外 header', () => {
   assert.match(SRC, /async function api\(method, path, body, extraHeaders\)/);
   assert.match(SRC, /Object\.assign\(opts\.headers, extraHeaders\)/);
 });
+
+// 审计 P1-10：更新 = 拉代码 + 装依赖 + 重启，必须二次确认，不能一键静默装。
+test('更新前有二次确认，且带目标版本提示', () => {
+  assert.match(SRC, /async function _confirmTradeUpdate\(\)/);
+  assert.match(SRC, /return confirm\(msg\)/);
+  assert.match(SRC, /'sys\.update_confirm_version'/);
+  assert.match(SRC, /'sys\.update_confirm'/);
+});
+
+test('两个更新入口都先确认再 POST', () => {
+  for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
+    const start = SRC.indexOf(fn);
+    assert.ok(start > 0, `找不到 ${fn}`);
+    const body = SRC.slice(start, SRC.indexOf('\n}', start));
+    const confirmAt = body.indexOf('_confirmTradeUpdate');
+    const postAt = body.indexOf("api('POST', '/api/trade/system/update')");
+    assert.ok(confirmAt > 0 && confirmAt < postAt, `${fn} 必须先确认再发更新请求`);
+  }
+});
