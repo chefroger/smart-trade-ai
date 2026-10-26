@@ -25,7 +25,7 @@ def _fresh_db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(db)
     for table in ("companies", "trade_companies", "libraries", "customers",
                   "customer_libraries", "conversations", "orders", "usage_ledger",
-                  "cron_job_companies"):
+                  "cron_job_companies", "trial_events"):
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
     conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")

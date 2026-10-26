@@ -89,7 +89,10 @@ const I18N = {
         // common
         'btn.close':'关闭','btn.cancel':'取消','btn.save':'保存','btn.ok':'确定',
         // license
-        'license.expired':'已到期','license.expiring':'即将到期','license.trial':'试用',
+        'license.expired':'已到期',
+        'license.expired_soft':'历史与资料仍在，起草已暂停；激活后立即恢复',
+        'license.trial_summary':'试用以来：起草 {drafts} 次 · 处理询盘 {inquiries} 次 · 调用产品库 {lookups} 次',
+        'license.expiring':'即将到期','license.trial':'试用',
         'license.active':'已激活','license.req_code':'申请码',
         'license.activate_btn':'🔑 输入激活码','license.days_left':'剩余 {n} 天',
         // toast
@@ -279,7 +282,10 @@ const I18N = {
         'modal.skills.title':'📖 All 39 Skills Reference',
         'modal.skills.desc':'Type keywords in chat — Trade auto-matches the right skill. Click copy icon for quick prompts.',
         'btn.close':'Close','btn.cancel':'Cancel','btn.save':'Save','btn.ok':'OK',
-        'license.expired':'Expired','license.expiring':'Expiring Soon','license.trial':'Trial',
+        'license.expired':'Expired',
+        'license.expired_soft':'Your history and data are still here; drafting is paused until activation',
+        'license.trial_summary':'Since trial start: {drafts} drafts · {inquiries} inquiries handled · {lookups} product-library lookups',
+        'license.expiring':'Expiring Soon','license.trial':'Trial',
         'license.active':'Active','license.req_code':'Request Code',
         'license.activate_btn':'🔑 Enter Activation Code','license.days_left':'{n} days left',
         'toast.copied':'Copied','toast.saved':'Saved','toast.deleted':'Deleted',
@@ -920,7 +926,9 @@ async function loadLicenseStatus() {
 
         if (data.status === 'expired') {
             bar.style.display = 'block'; bar.style.background = '#FEF2F2'; bar.style.color = '#991B1B';
-            bar.innerHTML = '⚠️ ' + t('license.expired') + ' · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
+            // 软着陆：说明数据还在、只是起草暂停，并保留激活入口
+            bar.innerHTML = '⚠️ ' + t('license.expired') + ' · ' + t('license.expired_soft')
+                + ' · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
         } else if (data.status === 'active' && data.days_remaining <= 7) {
             bar.style.display = 'block';
             bar.style.background = data.days_remaining === 0 ? '#FEF2F2' : '#FFFBEB';
@@ -934,6 +942,16 @@ async function loadLicenseStatus() {
             bar.style.background = data.days_remaining <= 7 ? '#FFFBEB' : '#EFF6FF';
             bar.style.color = data.days_remaining <= 7 ? '#92400E' : '#1E40AF';
             bar.innerHTML = '⏳ ' + t('license.trial') + ' ' + t('license.days_left', {n: data.days_remaining}) + ' · <a href="#" onclick="showActivateModal()" style="color:' + (data.days_remaining <= 7 ? '#D97706' : '#2563EB') + ';text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
+            // 第 20 天起显示价值小结（只报真实事件数，不估算）
+            if (data.trial_summary) {
+                var _ts = data.trial_summary;
+                bar.innerHTML += '<div style="margin-top:4px;font-size:11px;opacity:.9;">📊 '
+                    + esc(t('license.trial_summary')
+                        .replace('{drafts}', String(_ts.drafts || 0))
+                        .replace('{inquiries}', String(_ts.inquiries || 0))
+                        .replace('{lookups}', String(_ts.product_lookups || 0)))
+                    + '</div>';
+            }
         } else if (data.status === 'tampered') {
             bar.style.display = 'block'; bar.style.background = '#FEF2F2'; bar.style.color = '#991B1B';
             bar.innerHTML = '⚠️ License Error · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;font-weight:600;">Reactivate</a>' + reqCodeHtml;

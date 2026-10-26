@@ -333,6 +333,13 @@ def save_with_context(
         company_id, query, response, library_id, files_read,
         context=context, skill=skill, customer_id=customer_id,
     )
+    # 试用期价值小结：每保存一轮对话记一次「处理询盘」（旁路统计，失败不影响保存）
+    try:
+        from trade.trial_usage import KIND_INQUIRY, record_event
+
+        record_event(KIND_INQUIRY, company_id)
+    except Exception:
+        pass
 
     if retain_to_memory:
         # 只有当调用方要求保留到记忆时才执行，避免不必要的 I/O

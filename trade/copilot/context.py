@@ -352,6 +352,15 @@ def load_product_entries(
         if len(facts) >= _MAX_FACTS:
             break
 
+    if entries:
+        # 试用期价值小结：真的检索到产品库条目才算一次调用（旁路统计）
+        try:
+            from trade.trial_usage import KIND_PRODUCT_LOOKUP, record_event
+
+            record_event(KIND_PRODUCT_LOOKUP, company_id)
+        except Exception:
+            pass
+
     return entries, facts
 
 

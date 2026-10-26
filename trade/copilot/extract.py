@@ -201,6 +201,19 @@ def parse_extraction(raw: str) -> ExtractedDialog:
     )
 
 
+def _license_block_reason() -> str:
+    """到期软着陆：抽取本身也是付费 LLM 调用，到期后不再跑（返回阻断原因）。"""
+    try:
+        from trade.license import check_license
+
+        ok, msg = check_license()
+    except Exception:
+        return ""  # 许可证模块异常不阻断
+    if ok:
+        return ""
+    return msg or "试用/许可证已到期"
+
+
 async def extract_dialog(
     captured: CapturedWindow,
     *,
@@ -219,6 +232,9 @@ async def extract_dialog(
     Returns:
         ExtractedDialog。失败时 error/error_kind 有值，**不返回空草稿式结果**。
     """
+    blocked = _license_block_reason()
+    if blocked:
+        return ExtractedDialog(error=blocked, error_kind="license")
     if not captured.has_image():
         # 剪贴板通道没有图像 —— 走纯文本抽取
         return await extract_dialog_from_text(captured.text or "", timeout=timeout)
@@ -237,6 +253,9 @@ async def extract_dialog_from_text(
     timeout: float = DEFAULT_TIMEOUT,
 ) -> ExtractedDialog:
     """纯文本抽取（剪贴板通道）。同样只转录、不回答。"""
+    blocked = _license_block_reason()
+    if blocked:
+        return ExtractedDialog(error=blocked, error_kind="license")
     if not text.strip():
         return ExtractedDialog(error="没有可抽取的文本", error_kind="empty")
     messages = [

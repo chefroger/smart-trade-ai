@@ -17,7 +17,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # ── Database initialization ──────────────────────────────────────────────────
@@ -833,6 +833,38 @@ def create_app() -> FastAPI:
     # 挂载 Trade API 路由
     from trade.api import router as trade_router
     app.include_router(trade_router, prefix="/api/trade")
+
+    # ── 到期软着陆：只读浏览保留，业务写入被挡 ─────────────────────────────
+    # 允许的写入：激活/许可证状态、系统维护（更新/重启/备份/skills）、切公司。
+    # GET 一律放行 —— 历史、产品库、已生成草稿仍然可看。
+    _READ_ONLY_EXEMPT_PREFIXES = (
+        "/api/trade/license/",
+        "/api/trade/system/",
+    )
+
+    def _write_allowed_when_read_only(path: str) -> bool:
+        if path.startswith(_READ_ONLY_EXEMPT_PREFIXES):
+            return True
+        if path.endswith("/switch"):  # 切公司是 POST，但只影响浏览
+            return True
+        if path == "/api/trade/skills/update":  # 维护动作，不产生业务价值
+            return True
+        return False
+
+    @app.middleware("http")
+    async def _license_read_only_guard(request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            path = request.url.path
+            if path.startswith("/api/trade/") and not _write_allowed_when_read_only(path):
+                from trade.license import license_state
+
+                state, message = license_state()
+                if state in ("expired", "tampered"):
+                    return JSONResponse(
+                        status_code=402,
+                        content={"detail": message},
+                    )
+        return await call_next(request)
 
     # Health check
     @app.get("/api/status", include_in_schema=False)

@@ -187,6 +187,16 @@ CREATE TABLE IF NOT EXISTS cron_job_companies (
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
+-- 试用期价值小结的轻量事件（审计：不新造估算口径，只记真实发生的事件）。
+-- kind: draft / inquiry / product_lookup
+CREATE TABLE IF NOT EXISTS trial_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL    NOT NULL,
+    company_id  INTEGER NOT NULL DEFAULT 0,
+    kind        TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trial_events_company ON trial_events(company_id, ts);
+
 CREATE INDEX IF NOT EXISTS idx_libraries_company   ON libraries(company_id);
 CREATE INDEX IF NOT EXISTS idx_customers_company    ON customers(company_id);
 CREATE INDEX IF NOT EXISTS idx_orders_company      ON orders(company_id);
@@ -369,7 +379,7 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
 _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
     "customer_libraries", "conversations", "orders", "usage_ledger",
-    "cron_job_companies",
+    "cron_job_companies", "trial_events",
 })
 
 

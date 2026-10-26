@@ -203,18 +203,55 @@ def _save_license_data(data: dict, company_id: int | None = None) -> None:
 # ── 许可证检查 ────────────────────────────────────────────────────────────────
 
 
-def check_license(company_id: int | None = None) -> tuple[bool, str]:
-    """检查许可证状态。
+_SOFT_EXPIRED_TRIAL = (
+    "试用已到期。你的历史记录和产品资料都在，只是暂时不能起草；激活后立即恢复。"
+)
+_SOFT_EXPIRED_LICENSE = (
+    "许可证已到期。历史记录和产品资料仍可查看，起草已暂停；续期后立即恢复。"
+)
 
-    Args:
-        company_id: 要检查的公司 ID。None 时检查第一个激活的公司。
 
-    Returns:
-        (is_valid, message): is_valid=True 表示可以继续使用。
-        到期时 is_valid=False，message 包含提示信息。
+def license_state(company_id: int | None = None) -> tuple[str, str]:
+    """返回 (state, message)，state ∈ {"active","trial","expired","tampered"}。
+
+    只读判断，不会写 first_launch_at —— 供中间件/副驾门控频繁调用。
+    到期是**软着陆**：数据仍可查看，只停起草；message 是给用户看的口径。
     """
     data = _get_license_data(company_id)
+    now = datetime.now(UTC)
 
+    if data.get("activated") and data.get("expires_at"):
+        if not _verify_license(data):
+            return "tampered", (
+                "许可证数据异常，请使用激活码重新激活。"
+                "历史记录和产品资料仍可查看，起草已暂停。"
+            )
+        try:
+            expires = datetime.fromisoformat(data["expires_at"]).replace(tzinfo=UTC)
+        except (TypeError, ValueError):
+            return "tampered", "许可证到期日格式异常，请重新激活。"
+        if now.date() <= expires.date():
+            return "active", ""
+        return "expired", _SOFT_EXPIRED_LICENSE
+
+    first_raw = data.get("first_launch_at")
+    if not first_raw:
+        return "trial", ""
+    try:
+        first = datetime.fromisoformat(first_raw).replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return "expired", _SOFT_EXPIRED_TRIAL
+    if (now - first).days < _TRIAL_DAYS:
+        return "trial", ""
+    return "expired", _SOFT_EXPIRED_TRIAL
+
+
+def check_license(company_id: int | None = None) -> tuple[bool, str]:
+    """检查是否允许**起草/新查询**（到期后返回 False + 软着陆文案）。
+
+    只读浏览不受这里约束：历史/资料/已生成草稿的 GET 接口不经过此函数。
+    """
+    data = _get_license_data(company_id)
     now = datetime.now(UTC)
 
     # 首次使用：记录时间
@@ -227,33 +264,25 @@ def check_license(company_id: int | None = None) -> tuple[bool, str]:
             return False, "License 状态持久化失败，请检查 ~/.trade/ 目录权限"
         return True, ""
 
-    first = datetime.fromisoformat(data["first_launch_at"]).replace(tzinfo=UTC)
-    days_used = (now - first).days
-
-    # 已激活：验签 + 检查是否在有效期内
-    if data.get("activated") and data.get("expires_at"):
-        if not _verify_license(data):
-            # 签名无效 → 尝试从原始激活码自恢复（升级后签名格式可能不匹配）
-            if data.get("code") and _recover_signature_from_code(data):
-                # 自恢复成功，重新加载数据
-                data = _get_license_data(company_id)
-            else:
-                return False, "许可证数据异常，请使用激活码重新激活。"
-        expires = datetime.fromisoformat(data["expires_at"]).replace(tzinfo=UTC)
-        # 使用日期比较（非时间比较）：激活码在到期日当天仍然有效，
-        # datetime.fromisoformat("2026-07-17") 解析为当天 00:00:00，
-        # 而 now 是当天 HH:MM:SS，直接用 < 比较会导致当天判为过期
-        if now.date() <= expires.date():
-            return True, ""
-        else:
-            return False, "激活码已到期，请联系作者续期：lauroge@gmail.com"
-
-    # 试用期内
-    if days_used < _TRIAL_DAYS:
+    state, message = license_state(company_id)
+    if state in ("active", "trial"):
         return True, ""
 
-    # 试用到期
-    return False, f"试用期（{_TRIAL_DAYS}天）已到期。请联系 lauroge@gmail.com 获取激活码。"
+    # 激活数据签名异常时，尝试从原始激活码自恢复（升级后签名格式可能不匹配）
+    if state == "tampered" and data.get("code"):
+        try:
+            if _recover_signature_from_code(data):
+                if license_state(company_id)[0] in ("active", "trial"):
+                    return True, ""
+        except Exception:
+            pass
+
+    return False, message
+
+
+def is_read_only(company_id: int | None = None) -> bool:
+    """到期/篡改时进入只读模式（浏览可用，写入被中间件挡住）。"""
+    return license_state(company_id)[0] in ("expired", "tampered")
 
 
 def days_remaining(company_id: int | None = None) -> int:
@@ -287,6 +316,7 @@ def status(company_id: int | None = None) -> dict:
     """返回许可证状态，供前端展示。到期时自动包含 request_code。"""
     data = _get_license_data(company_id)
     now = datetime.now(UTC)
+    state, _message = license_state(company_id)
 
     result: dict = {
         "days_remaining": days_remaining(company_id),
@@ -295,31 +325,37 @@ def status(company_id: int | None = None) -> dict:
         "trial_used": 0,
         "trial_total": _TRIAL_DAYS,
         "request_code": "",
+        "read_only": state in ("expired", "tampered"),
+        "status": state,
     }
 
     if "first_launch_at" in data:
-        first = datetime.fromisoformat(data["first_launch_at"]).replace(tzinfo=UTC)
-        result["trial_used"] = min((now - first).days, _TRIAL_DAYS)
+        try:
+            first = datetime.fromisoformat(data["first_launch_at"]).replace(tzinfo=UTC)
+            result["trial_used"] = min((now - first).days, _TRIAL_DAYS)
+        except (TypeError, ValueError):
+            pass
 
     # 未激活时始终返回申请码，方便用户在试用期内提前申请激活
     if not result["activated"]:
         result["request_code"] = _make_request_code()
+    elif state in ("tampered", "expired"):
+        # 已激活但到期/签名异常：同样给出申请码，方便续期
+        result["request_code"] = _make_request_code()
+    elif state == "active" and result["days_remaining"] <= 7:
+        # 距离到期 7 天内提前提醒续期
+        result["request_code"] = _make_request_code()
 
-    if not result["activated"] and result["days_remaining"] <= 0:
-        result["status"] = "expired"
-    elif result["activated"]:
-        # 验签：activated=True 不意味着签名有效（旧代码有 bug，签名从未正确验证过）
-        if not _verify_license(data):
-            result["status"] = "tampered"
-            # 签名验证失败时返回申请码，方便用户重新激活
-            result["request_code"] = _make_request_code()
-        else:
-            result["status"] = "active"
-            # 距离到期 7 天内时同样返回申请码，提醒用户提前续期
-            if result["days_remaining"] <= 7:
-                result["request_code"] = _make_request_code()
-    else:
-        result["status"] = "trial"
+    # 试用第 20 天起展示价值小结（剩余约 10 天）：只报真实事件，不估算
+    if state == "trial" and result["trial_used"] >= 20 and result["days_remaining"] <= 10:
+        try:
+            from trade.trial_usage import summary as _trial_summary
+
+            summary = _trial_summary(company_id, data.get("first_launch_at"))
+            if summary:
+                result["trial_summary"] = summary
+        except Exception:
+            pass
 
     return result
 

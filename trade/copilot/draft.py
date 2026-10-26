@@ -220,6 +220,19 @@ def generate_draft(
     `SystemExit` 的 `RelaunchExit`，只捕 `Exception` 会一路穿出去把调用方带崩。
     超时是**真**的截止时间（后台线程 + 事件等待），不是摆设。
     """
+    # 到期软着陆：试用/许可证结束后不能再出**新**草稿（已生成的草稿仍可查看）。
+    # 许可证是整机一份，company_id 仅用于兼容签名。
+    try:
+        from trade.license import check_license
+
+        lic_ok, lic_msg = check_license(company_id)
+    except Exception:
+        lic_ok, lic_msg = True, ""  # 许可证模块异常不阻断（缺省可用，与主聊天一致）
+    if not lic_ok:
+        return DraftResult(
+            error=f"许可证已到期，暂时不能生成新草稿。{lic_msg}".strip()
+        )
+
     prompt = build_prompt(customer_message, ctx)
 
     try:
@@ -246,6 +259,14 @@ def generate_draft(
         # 否则 UI 会展示"出处：报价单 $3.50"，而草稿里那个 $3.50 已变成占位符。
         result.sources = _reconcile_sources(result.sources, cleaned)
         _log.info("副驾草稿剔除了没有出处的数字（剩余出处 %d 条）", len(result.sources))
+
+    # 试用期价值小结：只有真正产出一版草稿才计数
+    try:
+        from trade.trial_usage import KIND_DRAFT, record_event
+
+        record_event(KIND_DRAFT, company_id)
+    except Exception:
+        pass
     return result
 
 
