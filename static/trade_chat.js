@@ -2614,9 +2614,22 @@ async function showCustomerDetail(cid) {
     backdrop.id = 'customer-detail-panel';
     backdrop.onclick = function(e) { if (e.target === backdrop) closeCustomerDetail(); };
     var scoreLabels = {1:currentLang==='en'?'Low':'低',3:currentLang==='en'?'Med':'中',5:currentLang==='en'?'High':'高'};
-    var buyerTypes = currentLang==='en'
-        ? ['Brand','Distributor','Agent','Installer','Maintenance','Competitor','Other']
-        : ['品牌商','分销商','代理商','安装商','维保商','同行','其他'];
+    // value 固定中文（与新建客户弹窗、后端既有数据一致），英文界面只翻译显示文本。
+    // 旧版英文界面曾把 "Brand" 这类英文值写进 extra1，这里兼容读回（审计 P2-19）。
+    var buyerTypeOptions = [
+        ['品牌商', currentLang==='en'?'Brand':'品牌商'],
+        ['分销商', currentLang==='en'?'Distributor':'分销商'],
+        ['代理商', currentLang==='en'?'Agent':'代理商'],
+        ['安装商', currentLang==='en'?'Installer':'安装商'],
+        ['维保商', currentLang==='en'?'Maintenance':'维保商'],
+        ['同行', currentLang==='en'?'Competitor':'同行'],
+        ['其他', currentLang==='en'?'Other':'其他'],
+    ];
+    var _legacyBuyerType = {
+        'Brand':'品牌商','Distributor':'分销商','Agent':'代理商','Installer':'安装商',
+        'Maintenance':'维保商','Competitor':'同行','Other':'其他',
+    };
+    var buyerValue = _legacyBuyerType[buyerType] || buyerType;
     backdrop.innerHTML = `
     <div class="slide-panel">
         <div class="slide-panel-header">
@@ -2637,8 +2650,8 @@ async function showCustomerDetail(cid) {
                     <option value="C" ${tier==='C'?'selected':''}>C</option>
                 </select></div>
                 <div class="panel-field"><label for="detail-buyer-type">${t('cust.field.buyer')}</label><select id="detail-buyer-type">
-                    <option value="" ${!buyerType?'selected':''}>${t('cust.field.buyer_none')}</option>
-                    ${buyerTypes.map(t => '<option value="'+t+'" '+(buyerType===t?'selected':'')+'>'+t+'</option>').join('')}
+                    <option value="" ${!buyerValue?'selected':''}>${t('cust.field.buyer_none')}</option>
+                    ${buyerTypeOptions.map(function(o){return '<option value="'+o[0]+'" '+(buyerValue===o[0]?'selected':'')+'>'+o[1]+'</option>';}).join('')}
                 </select></div>
                 <div class="panel-field"><label for="detail-country">${t('cust.field.country')}</label><input type="text" value="${esc(country)}" id="detail-country"></div>
             </div>

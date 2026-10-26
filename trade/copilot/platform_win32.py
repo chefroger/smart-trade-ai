@@ -72,6 +72,11 @@ def _configure_win32(user32, gdi32, kernel32) -> None:
     signatures = {
         # (dll, 函数名): (restype, argtypes)
         (user32, "GetForegroundWindow"): (wintypes.HWND, []),
+        # DPI 上下文是指针宽度：不标 argtypes 时传入 -4 会被塞进 32 位 int，
+        # 高 DPI 屏幕上抓到的区域与实际窗口错位（审计 P2-15）。
+        (user32, "SetThreadDpiAwarenessContext"): (
+            ctypes.c_void_p, [ctypes.c_void_p],
+        ),
         (user32, "GetTopWindow"): (wintypes.HWND, [wintypes.HWND]),
         (user32, "GetWindow"): (
             wintypes.HWND, [wintypes.HWND, wintypes.UINT],

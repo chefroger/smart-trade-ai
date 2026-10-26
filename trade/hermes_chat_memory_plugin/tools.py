@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
-import traceback
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 
 def _str(description: str) -> dict[str, Any]:
@@ -179,10 +181,12 @@ def handle_chat_memory_list(args: dict[str, Any], **_kw) -> str:
             customer_id=bound_customer,
             unattributed_only=bound_customer is None,
         )
-    except Exception:
-        # 异常不外抛（plugins/AGENTS.md: handler 失败返回 tool_error）—— 给 LLM 可读的错误
-        # 而不是 Python traceback（traceback 里有 trade 内部路径，泄漏内部）
-        return _err(f"search_history failed: {traceback.format_exc(limit=2)}")
+    except Exception as exc:
+        # 异常不外抛（plugins/AGENTS.md: handler 失败返回 tool_error）。
+        # traceback 只进本机日志：返回给 LLM 等于把 trade 内部路径/帧信息写进
+        # 提示词（审计 P2-1）。
+        _log.exception("search_history failed")
+        return _err(f"search_history failed: {type(exc).__name__}")
 
     return _json({
         "company_id": company_id,

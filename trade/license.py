@@ -569,7 +569,9 @@ def _decode_activation_code(code: str) -> dict:
         req_hash = decoded[8:16].decode()
         sig = decoded[16:80]
     else:
-        raise ValueError(f"Invalid code: expected 80 or 88 bytes, got {len(decoded)}")
+        raise ValueError(
+            f"Invalid code: expected 80, 88 or 136 bytes, got {len(decoded)}"
+        )
 
     # 验证 Ed25519 签名
     payload = date_part.encode() + req_hash.encode()

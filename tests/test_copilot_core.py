@@ -114,6 +114,18 @@ class TestErrorClassification:
         assert kind == "other"
         assert "连接超时" in reason
 
+    def test_no_route_is_network_not_protocol(self):
+        """网络不可达不该被报成"服务商协议不兼容"（审计 P2-11）。"""
+        kind, reason = extract_mod._classify_error(
+            RuntimeError("[Errno 65] No route to host")
+        )
+        assert kind == "network"
+        assert "网络" in reason
+
+    def test_connection_timeout_is_network(self):
+        kind, _ = extract_mod._classify_error(RuntimeError("Connection timed out"))
+        assert kind == "network"
+
     def test_404_with_vision_path_is_protocol_not_no_vision(self):
         """端点 404 的文案里常带 v1/vision 字样 —— 不许误判成"模型不支持看图"。"""
         kind, _ = extract_mod._classify_error(

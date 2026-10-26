@@ -29,7 +29,12 @@ def list_conversations(
     limit: int = 50,
     x_company_id: int = Depends(require_company),
 ):
-    """列出当前公司的最近对话，可按文档库或上下文过滤。"""
+    """列出当前公司的最近对话，可按文档库或上下文过滤。
+
+    limit 强制夹在 1～200：SQLite 的 `LIMIT -1` 等于不限，负值/超大值都会
+    变成"一次拖出全公司对话"的口子（审计 P2-26）。
+    """
+    limit = max(1, min(int(limit), 200))
     if context:
         return chat_memory.list_by_context(x_company_id, context, limit)
     if library_id is not None:

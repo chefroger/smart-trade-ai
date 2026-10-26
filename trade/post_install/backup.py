@@ -230,11 +230,11 @@ def restore_trade(backup_file: str = "") -> str:
             # filter="data" 有两个作用：Python 3.14 起这是默认行为（不加会
             # DeprecationWarning 且将来行为改变），且它拒绝路径穿越条目 ——
             # 备份文件是可以从别处拿到的，解压不可信归档时必须有这层防护。
-            # 3.11.4 之前的 Python 没有该参数，退回旧行为。
-            try:
-                tar.extractall(path=tmp_dir, filter="data")
-            except TypeError:
-                tar.extractall(path=tmp_dir)
+            #
+            # **不回退到裸 extractall**：3.11.4 之前的 Python 没有该参数，
+            # 但那时回退等于允许 `../` 逃逸写任意路径（审计 P2-2）。Trade 的
+            # 运行环境是 3.14；旧解释器上宁可报错让用户换环境，也不静默降级。
+            tar.extractall(path=tmp_dir, filter="data")
     except Exception as e:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return f"✗ 解压失败: {e}"

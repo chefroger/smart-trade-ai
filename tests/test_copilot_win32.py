@@ -38,6 +38,7 @@ class FakeDLL:
 def _user32(**overrides):
     functions = {
         "GetForegroundWindow": FakeFunction(value=1234),
+        "SetThreadDpiAwarenessContext": FakeFunction(value=1),
         # 默认 z 序：目标窗口就在最前（未被遮挡）
         "GetTopWindow": FakeFunction(value=1234),
         "GetWindow": FakeFunction(value=0),
@@ -226,6 +227,8 @@ def test_configure_sets_pointer_sized_restypes(monkeypatch):
     assert gdi32.SelectObject.restype is wintypes.HGDIOBJ
     assert kernel32.OpenProcess.restype is wintypes.HANDLE
     assert wintypes.HWND is ctypes.c_void_p
+    # DPI 上下文也是指针宽度：不声明会把 -4 塞进 32 位 int（审计 P2-15）
+    assert user32.SetThreadDpiAwarenessContext.argtypes == [ctypes.c_void_p]
 
 
 def test_configure_tolerates_missing_functions():

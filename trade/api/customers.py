@@ -140,6 +140,10 @@ async def bulk_import_customers(
         raise HTTPException(status_code=413, detail="CSV 文件过大（上限 10MB）")
 
     content = await file.read()
+    # 分块上传时 `file.size` 可能为 None，预检会被绕过 —— 读完后必须再量一次
+    # 实际字节数（审计 P2-26）。
+    if len(content) > _MAX_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="CSV 文件过大（上限 10MB）")
     try:
         text = content.decode("utf-8-sig")  # utf-8-sig 兼容 BOM 头
     except UnicodeDecodeError:

@@ -79,9 +79,19 @@ _PROTOCOL_HINTS = (
     "not an openai",
     "invalid base_url",
     "unsupported api",
-    "no route",
     "404 page not found",
     "404 not found",
+)
+# 网络不可达：与"服务商协议不兼容"是两回事，混在一起会把用户引去改模型配置
+_NETWORK_HINTS = (
+    "no route to host",
+    "network is unreachable",
+    "connection refused",
+    "connection reset",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "timed out",
+    "timeout",
 )
 
 
@@ -96,6 +106,11 @@ def _classify_error(exc: Exception) -> tuple[str, str]:
         return "protocol", (
             "当前服务商与副驾的识别方式不兼容（需要 OpenAI 兼容的视觉端点）。"
             "请在副驾设置里为抽取指定一个兼容的视觉模型。"
+        )
+    if any(h in text for h in _NETWORK_HINTS):
+        return "network", (
+            "无法连接到模型服务（网络不可达或超时）。请检查网络/代理后重试；"
+            "如果其它功能都正常，再检查副驾的视觉模型配置。"
         )
     if any(h in text for h in _NO_VISION_HINTS):
         return "no_vision", (

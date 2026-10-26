@@ -645,7 +645,8 @@ def _create_system_router() -> APIRouter:
     def api_restart_trade(request: Request):
         """重启 Trade 服务（跨平台）。
 
-        委托给 _perform_restart()——含三层 PID 安全校验和 Gateway 协同重启。
+        委托给 _perform_restart()：只签发重启脚本、不直接杀进程；脚本等旧进程
+        释放端口后再起新进程，并与 Gateway 协同重启。
         """
         _tk = request.headers.get("X-Hermes-Session-Token", "")
         if _tk and not _check_system_rate_limit(_tk[:16]):
@@ -985,7 +986,8 @@ def main() -> None:
 
     url = f"http://{args.host}:{args.port}/trade"
     print(f"\n  Foreign Trade Assistant → {url}")
-    print(f"  Session token: {_SESSION_TOKEN[:8]}...（完整 token 已注入 API 页面）")
+    # 只说明"已生成"，不打印任何片段：日志会被转发/截图，凭据片段不该出现在里面
+    print("  Session token 已生成（已注入 API 页面）")
     print()
 
     if not args.no_browser:

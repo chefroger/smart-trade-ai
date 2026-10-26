@@ -262,8 +262,8 @@ def load_history(ctx: CustomerContext, *, company_id: int, limit: int = 10) -> l
         query = str(row.get("query") or "").strip()
         if not query:
             continue
-        # search_history 不按客户过滤（conversations 表没有 customer_id 列），
-        # 所以这里只做粗筛：归一后的客户名出现在这段对话里才算数。
+        # search_history 已按 customer_id 过滤（2026-10-25 加了该列）；
+        # 这一步只是第二道粗筛：归一后的客户名出现在这段对话里才算数。
         blob_key = _normalize_name(f"{query} {row.get('response') or ''}")
         if name_key in blob_key:
             out.append(query[:200])

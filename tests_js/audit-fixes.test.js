@@ -42,6 +42,14 @@ test('更新前有二次确认，且带目标版本提示', () => {
   assert.match(SRC, /'sys\.update_confirm'/);
 });
 
+test('买家类型 option 的 value 固定中文（英文界面只翻译显示文本）', () => {
+  assert.match(SRC, /var buyerTypeOptions = \[/);
+  assert.match(SRC, /<option value="'\+o\[0\]\+'"/);
+  assert.ok(!SRC.includes('buyerTypes.map'), '旧的“文本即 value”渲染必须删掉');
+  // 兼容旧数据里已写入的英文值
+  assert.match(SRC, /_legacyBuyerType/);
+});
+
 test('今日用量在侧栏展示，且只提示不拦截', () => {
   const fs = require('node:fs');
   const path = require('node:path');
