@@ -10,11 +10,13 @@ Hermes Agent 从 ~/.hermes/skills/ 自动发现 skill 定义并注入到 AI 提�
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 
@@ -90,6 +92,45 @@ def _get_package_skills_dir() -> Path | None:
     return None
 
 
+def _write_skill_manifest(dst_base: Path, names: list[str] | None = None) -> None:
+    """记录同步后的 SKILL.md SHA-256 清单，供事后审计（审计 P2-3）。
+
+    远端没有签名，客户端无法证明来源；但至少留下「这次装了什么哈希」的台账，
+    后续发现内容异常时能定位是哪次同步引入的。
+    """
+    try:
+        from trade.skill_registry import _BLOCKED_SKILLS
+
+        if names is None:
+            names = [
+                d.name for d in dst_base.iterdir()
+                if d.is_dir() and (
+                    d.name.startswith("b2b-") or d.name.startswith("auto-")
+                    or d.name == "chat-memory"
+                )
+            ]
+        files: dict[str, str] = {}
+        for name in names:
+            if name in _BLOCKED_SKILLS:
+                continue
+            skill_md = dst_base / name / "SKILL.md"
+            if skill_md.is_file():
+                files[f"{name}/SKILL.md"] = hashlib.sha256(
+                    skill_md.read_bytes()
+                ).hexdigest()
+        manifest = dst_base / ".sync-manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {"updated_at": datetime.now().isoformat(timespec="seconds"),
+                 "files": files},
+                ensure_ascii=False, indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"  ⚠ skill manifest 写入失败（不影响同步）：{e}", file=sys.stderr)
+
+
 def _purge_blocked_skills(dst_base: Path) -> None:
     """无条件删除 Hermes 运行时里的停用 skill 目录。
 
@@ -154,6 +195,7 @@ def _copy_skills(src: Path, dst_base: Path, progress_callback=None) -> list[str]
         if progress_callback:
             progress_callback(f"  ✓ {skill_dir.name}")
 
+    _write_skill_manifest(dst_base, installed)
     return installed
 
 
@@ -448,6 +490,7 @@ def update_skills() -> None:
                 )
                 failed += 1
 
+    _write_skill_manifest(hermes_skills_dir)
     print(
         f"\n[update_skills] Done. {updated} updated, {skipped} skipped, {failed} failed."
     )

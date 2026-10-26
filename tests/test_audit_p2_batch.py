@@ -114,6 +114,26 @@ class TestBlockedSkillPurge:
         assert "import smtplib" not in skill, "停用 skill 不应保留可执行发信代码"
 
 
+class TestSkillSyncManifest:
+    def test_manifest_records_hashes_and_skips_blocked(self, tmp_path):
+        """P2-3：同步后至少留下哈希台账，且不记录停用 skill。"""
+        import json
+
+        from trade.post_install.skills import _write_skill_manifest
+
+        (tmp_path / "b2b-demo").mkdir()
+        (tmp_path / "b2b-demo" / "SKILL.md").write_text("demo", encoding="utf-8")
+        (tmp_path / "auto-smtp-email").mkdir()
+        (tmp_path / "auto-smtp-email" / "SKILL.md").write_text("bad", encoding="utf-8")
+
+        _write_skill_manifest(tmp_path)
+
+        data = json.loads((tmp_path / ".sync-manifest.json").read_text(encoding="utf-8"))
+        assert "b2b-demo/SKILL.md" in data["files"]
+        assert "auto-smtp-email/SKILL.md" not in data["files"]
+        assert len(data["files"]["b2b-demo/SKILL.md"]) == 64
+
+
 class TestLicenseRoutesRequireSession:
     def test_router_has_session_dependency(self):
         src = _read_source("trade/api/license.py")
