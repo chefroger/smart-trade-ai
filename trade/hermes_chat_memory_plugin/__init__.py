@@ -15,6 +15,7 @@ import logging
 # 用绝对路径而非相对导入 —— 相对导入 `from .tools` 在 importlib.util 直接加载时
 # 会报 `No module named 'chat_memory_plugin'`，因为单文件 spec 没有父包。
 # 绝对路径要求 trade 是 installed package（pip install -e . 满足）。
+from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call
 from trade.hermes_chat_memory_plugin.tools import CHAT_MEMORY_LIST_SCHEMA, handle_chat_memory_list
 
 logger = logging.getLogger(__name__)
@@ -40,5 +41,16 @@ def register(ctx) -> None:
             check_fn=None,
             emoji=emoji,
         )
-    logger.debug("chat-memory plugin registered tool: chat_memory_list")
+    # 工具层守卫（审计 P1-3/P1-20）：文件路径白名单、terminal 命令白名单、
+    # 拒绝 execute_code。Hermes 的 pre_tool_call 钩子支持返回 block 指令，
+    # 且 YOLO 模式不会跳过它。旧版宿主没有 register_hook 时降级（记 warning），
+    # 不能让整个插件加载失败 —— chat-memory 工具本身仍要能用。
+    _register_hook = getattr(ctx, "register_hook", None)
+    if callable(_register_hook):
+        _register_hook("pre_tool_call", on_pre_tool_call)
+        logger.debug("chat-memory plugin registered tool + pre_tool_call guard")
+    else:
+        logger.warning(
+            "Hermes plugin host has no register_hook; tool guard is disabled"
+        )
 

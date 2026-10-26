@@ -39,14 +39,20 @@ class TestDefaultEnabledToolsets:
 
     @pytest.mark.parametrize(
         "toolset",
-        ["web", "search", "file", "terminal", "code_execution",
+        ["web", "search", "file", "terminal",
          "browser", "skills", "memory", "cronjob", "todo"],
     )
     def test_core_toolsets_retained(self, toolset):
-        """原有的核心 toolset 一个都不能丢（这条改动只应做加法）。"""
+        """核心 toolset 一个都不能丢。"""
         from trade.helpers import DEFAULT_ENABLED_TOOLSETS
 
         assert toolset in DEFAULT_ENABLED_TOOLSETS
+
+    def test_code_execution_is_not_enabled_by_default(self):
+        """任意 Python 等于无沙箱；P1-3 起不再默认启用（插件钩子还会拒绝）。"""
+        from trade.helpers import DEFAULT_ENABLED_TOOLSETS
+
+        assert "code_execution" not in DEFAULT_ENABLED_TOOLSETS
 
     def test_no_duplicates(self):
         """列表不应有重复项（重复会让 Hermes 侧的解析做无谓功）。"""

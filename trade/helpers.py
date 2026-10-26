@@ -236,7 +236,9 @@ def get_agent_kwargs() -> dict:
 # tools/vision_tools.py 的 check_vision_requirements() —— 那是工具的能力门控
 # (check_fn)，只在工具已被 toolset 启用后才会评估，不代表工具在场。
 DEFAULT_ENABLED_TOOLSETS = (
-    "web", "search", "file", "terminal", "code_execution",
+    "web", "search", "file", "terminal",
+    # 不启用 code_execution：任意 Python 等于无沙箱，且没有技能依赖它。
+    # 插件钩子也会拒绝 execute_code（TRADE_TOOL_GUARD），这里是第二道防线。
     "browser", "skills", "memory", "cronjob", "todo",
     "vision",
     # chat-memory 是 trade 自带的 Hermes 插件提供的工具集（见
