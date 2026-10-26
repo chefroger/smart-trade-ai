@@ -15,6 +15,8 @@ import logging
 # 用绝对路径而非相对导入 —— 相对导入 `from .tools` 在 importlib.util 直接加载时
 # 会报 `No module named 'chat_memory_plugin'`，因为单文件 spec 没有父包。
 # 绝对路径要求 trade 是 installed package（pip install -e . 满足）。
+from trade.cron_binding import on_post_tool_call as on_cron_post_tool_call
+from trade.cron_binding import on_pre_tool_call as on_cron_pre_tool_call
 from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call
 from trade.hermes_chat_memory_plugin.tools import CHAT_MEMORY_LIST_SCHEMA, handle_chat_memory_list
 
@@ -48,7 +50,10 @@ def register(ctx) -> None:
     _register_hook = getattr(ctx, "register_hook", None)
     if callable(_register_hook):
         _register_hook("pre_tool_call", on_pre_tool_call)
-        logger.debug("chat-memory plugin registered tool + pre_tool_call guard")
+        # cron job 公司归属：拦截跨公司操作 + 创建后记录 job_id→公司（P1-17）
+        _register_hook("pre_tool_call", on_cron_pre_tool_call)
+        _register_hook("post_tool_call", on_cron_post_tool_call)
+        logger.debug("chat-memory plugin registered tool + pre/post tool hooks")
     else:
         logger.warning(
             "Hermes plugin host has no register_hook; tool guard is disabled"

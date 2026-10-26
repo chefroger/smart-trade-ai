@@ -33,23 +33,22 @@ _JOBS_FILE = _HERMES_HOME / "cron" / "jobs.json"
 
 
 @router.get("/cron/today")
-def get_today_cron(_cid: int = Depends(require_company)):
+def get_today_cron(cid: int = Depends(require_company)):
     """返回今日 cron 任务清单（已执行 + 待执行）。
 
     任务来源: jobs.json 中已激活的定时任务。如果 jobs.json 不存在或为空，
     回退到内置标准任务列表。
 
-    **机器级资源（无公司维度）**：数据来自 Hermes 的 ~/.hermes/cron/，
-    任务名与输出文件都不带公司标识，因此无法按公司过滤 ——
-    这里保留公司上下文校验与其它业务端点保持一致，但**故意不使用 cid**。
-    若将来要按公司隔离，需先在 Hermes 侧给 cron job 打公司标签。
+    公司隔离（审计 P1-17）：jobs.json 本身没有公司字段，Trade 用
+    `trade.cron_binding` 里维护的 job_id→公司映射过滤；未绑定的历史任务在
+    多公司机器上不展示（避免把 A 的任务名/输出给 B）。
     """
     today = date.today().isoformat()
     now = datetime.now()
     current_time = now.strftime("%H:%M")
 
     # 从 jobs.json 读取实际激活的任务
-    active_jobs = _load_active_jobs()
+    active_jobs = _load_active_jobs(cid)
     if active_jobs:
         tasks = active_jobs
     else:
@@ -76,7 +75,7 @@ def get_today_cron(_cid: int = Depends(require_company)):
         parts = task["time"].split("-", 1)
         task_time = parts[0]
         task_window_end = parts[1] if len(parts) > 1 else parts[0]
-        output = _find_cron_output(task_name, today)
+        output = _find_cron_output(task_name, today, job_id=task.get("job_id", ""))
 
         if output:
             completed.append({
@@ -112,8 +111,25 @@ def get_today_cron(_cid: int = Depends(require_company)):
     return {"today": today, "current_time": current_time, "completed": completed, "pending": pending}
 
 
-def _load_active_jobs():
-    """从 jobs.json 读取已激活的定时任务，提取 name 和 time。"""
+def _company_count() -> int:
+    """当前激活公司数（决定未绑定历史 job 是否可展示）。"""
+    try:
+        from trade.database import get_connection
+
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM companies WHERE is_active = 1"
+            ).fetchone()
+            return int(row[0] or 0) if row else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def _load_active_jobs(company_id: int | None = None):
+    """从 jobs.json 读取已激活的定时任务，按公司过滤后提取 name/time/job_id。"""
     if not _JOBS_FILE.is_file():
         return []
     try:
@@ -129,18 +145,19 @@ def _load_active_jobs():
             if not isinstance(job, dict):
                 continue
             name = job.get("name", job.get("task_name", ""))
+            job_id = str(job.get("id", "") or "")
             # 从 cron 或调度信息中提取人类可读的时间
             schedule_display = _extract_time_display(job)
-            if name:
-                tasks.append({"name": name, "time": schedule_display, "job_id": job.get("id", "")})
+            if name and _job_visible(job_id, company_id):
+                tasks.append({"name": name, "time": schedule_display, "job_id": job_id})
     elif isinstance(job_list, dict):
         for job_id, job in job_list.items():
             if not isinstance(job, dict):
                 continue
             name = job.get("task_name", job.get("name", ""))
             schedule_display = _extract_time_display(job)
-            if name:
-                tasks.append({"name": name, "time": schedule_display, "job_id": job_id})
+            if name and _job_visible(str(job_id), company_id):
+                tasks.append({"name": name, "time": schedule_display, "job_id": str(job_id)})
     return tasks
 
 
@@ -191,13 +208,10 @@ def _cron_to_time(expr: str) -> str:
 
 
 @router.get("/cron/jobs")
-def get_active_jobs(_cid: int = Depends(require_company)):
-    """返回 Hermes cron 中已激活的定时任务列表。
+def get_active_jobs(cid: int = Depends(require_company)):
+    """返回当前公司可见的 Hermes cron 定时任务（审计 P1-17）。
 
-    从 ~/.hermes/cron/jobs.json 读取，返回任务名称、调度时间、下次执行时间。
-
-    **机器级资源（无公司维度）**：与 get_today_cron 同理，jobs.json 里没有公司标识，
-    因此**故意不使用 cid**，仅保留公司上下文校验与其它业务端点保持一致。
+    映射由 trade.cron_binding 维护；未绑定的历史任务只在单公司机器上展示。
     """
     if not _JOBS_FILE.is_file():
         return []
@@ -215,8 +229,11 @@ def get_active_jobs(_cid: int = Depends(require_company)):
         for job in job_list:
             if not isinstance(job, dict):
                 continue
+            job_id = str(job.get("id", "") or "")
+            if not _job_visible(job_id, cid):
+                continue
             jobs.append({
-                "id": job.get("id", ""),
+                "id": job_id,
                 "name": job.get("name", job.get("task_name", "")),
                 "schedule": job.get("schedule", {}).get("display", job.get("schedule_display", "")),
                 "next_run": job.get("next_run_at", ""),
@@ -227,6 +244,8 @@ def get_active_jobs(_cid: int = Depends(require_company)):
         # 兼容旧格式: {job_id: job_dict, ...}
         for job_id, job in job_list.items() if isinstance(job_list, dict) else []:
             if not isinstance(job, dict):
+                continue
+            if not _job_visible(str(job_id), cid):
                 continue
             jobs.append({
                 "id": job_id,
@@ -320,8 +339,36 @@ def get_customer_health_audit(cid: int = Depends(require_company)):
     return customer_module.health_audit(cid)
 
 
-def _find_cron_output(task_name: str, today: str) -> str | None:
+def _job_visible(job_id: str, company_id: int | None) -> bool:
+    """按公司过滤 job；无约定公司上下文时不过滤（internal 调用兼容）。"""
+    if not company_id:
+        return True
+    try:
+        from trade.cron_binding import visible_for_company
+
+        return visible_for_company(job_id, company_id, company_count=_company_count())
+    except Exception:
+        return False
+
+
+def _find_cron_output(task_name: str, today: str, job_id: str = "") -> str | None:
+    """按 job_id 精确读取今天的输出；无 job_id（内置任务）才回退到按名称扫描。
+
+    旧实现按"任务名出现在文件内容里"匹配 —— 别家任务的输出提到这个名字就会
+    串回来（审计 P1-17）。
+    """
     if not _CRON_OUTPUT.is_dir():
+        return None
+    if job_id:
+        job_dir = _CRON_OUTPUT / job_id
+        if not job_dir.is_dir():
+            return None
+        for output_file in sorted(job_dir.glob("*.md"), reverse=True):
+            if today in output_file.stem[:10]:
+                try:
+                    return output_file.read_text(encoding="utf-8")
+                except Exception:
+                    continue
         return None
     for job_dir in sorted(_CRON_OUTPUT.iterdir(), reverse=True):
         if not job_dir.is_dir():

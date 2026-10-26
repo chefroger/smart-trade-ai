@@ -6,3 +6,4 @@ provides_tools:
   - chat_memory_list
 provides_hooks:
   - pre_tool_call
+  - post_tool_call

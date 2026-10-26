@@ -179,6 +179,14 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     extra3            TEXT    NOT NULL DEFAULT ''
 );
 
+-- Hermes cron job 的公司归属映射（job_id 由 Hermes 生成）。由 Trade 插件钩子
+-- 在创建成功后写入；Trade 的 cron UI 据此按公司过滤（审计 P1-17）。
+CREATE TABLE IF NOT EXISTS cron_job_companies (
+    job_id      TEXT PRIMARY KEY,
+    company_id  INTEGER NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_libraries_company   ON libraries(company_id);
 CREATE INDEX IF NOT EXISTS idx_customers_company    ON customers(company_id);
 CREATE INDEX IF NOT EXISTS idx_orders_company      ON orders(company_id);
@@ -361,6 +369,7 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
 _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
     "customer_libraries", "conversations", "orders", "usage_ledger",
+    "cron_job_companies",
 })
 
 

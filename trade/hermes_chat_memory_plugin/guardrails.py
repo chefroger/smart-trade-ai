@@ -14,9 +14,9 @@
   需要的命令）；含 shell 元字符（; & | < > ` $() 换行）的一律拒绝。
 - `execute_code`：永久拒绝（技能不依赖，任意 Python 等于无沙箱）。
 
-残留（未覆盖，如实记录）：`browser` 工具可能导航本地/下载文件；cron 等
-未绑定公司的运行没有公司上下文，会被 fail-closed 挡住（需要文件能力的
-定时任务会明确失败，而不是静默越权）。
+残留（未覆盖，如实记录）：`browser` 工具可能导航本地/下载文件；
+未绑定公司的运行（如 Gateway 里的 cron）没有公司上下文，文件访问退化为
+「所有活跃公司白名单目录的并集」—— 仍挡住系统路径，但无法区分公司。
 """
 
 from __future__ import annotations
@@ -57,14 +57,33 @@ def _current_company_id() -> int | None:
 
 
 def _allowed_roots(company_id: int | None) -> list[Path]:
-    if not company_id:
-        return []
-    try:
-        from trade.helpers import _allowed_path_roots
+    from trade.helpers import _allowed_path_roots
 
+    if company_id:
         return _allowed_path_roots(company_id)
+
+    # 未绑定公司（典型是 Gateway 里的 cron 任务）：允许**所有活跃公司**的白名单
+    # 目录并集 —— 仍挡住 ~/.ssh、/etc 等任意路径，但不至于让定时文档任务全部失效。
+    try:
+        from trade.database import get_connection
+
+        conn = get_connection()
+        try:
+            ids = [
+                int(r[0]) for r in conn.execute(
+                    "SELECT id FROM companies WHERE is_active = 1"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
     except Exception:
         return []
+    roots: list[Path] = []
+    for cid in ids:
+        for root in _allowed_path_roots(cid):
+            if root not in roots:
+                roots.append(root)
+    return roots
 
 
 def _path_within(path: Path, roots: list[Path]) -> bool:

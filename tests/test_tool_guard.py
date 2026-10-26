@@ -134,18 +134,22 @@ class TestOtherToolsAndEscapes:
 
 
 class TestPluginRegistration:
-    def test_registers_pre_tool_call_hook(self):
+    def test_registers_guard_and_cron_hooks(self):
+        from trade.cron_binding import on_post_tool_call as cron_post
+        from trade.cron_binding import on_pre_tool_call as cron_pre
         from trade.hermes_chat_memory_plugin import register
 
-        registered = {}
+        hooks: dict[str, list] = {}
 
         class _Ctx:
             def register_tool(self, **kwargs):
                 pass
 
             def register_hook(self, name, callback):
-                registered[name] = callback
+                hooks.setdefault(name, []).append(callback)
 
         register(_Ctx())
 
-        assert registered.get("pre_tool_call") is g.on_pre_tool_call
+        assert g.on_pre_tool_call in hooks.get("pre_tool_call", [])
+        assert cron_pre in hooks.get("pre_tool_call", [])
+        assert cron_post in hooks.get("post_tool_call", [])
