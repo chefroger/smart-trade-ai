@@ -83,6 +83,40 @@ class TestUpdateNeedsConfirmHeader:
         assert 'result["restart_scheduled"] = False' in src
 
 
+class TestBlockedSkillPurge:
+    def test_stale_blocked_skill_dir_is_removed(self, tmp_path):
+        """源目录里已经没有该 skill 时，Hermes 侧的残留也必须清掉（P1-13）。"""
+        from trade.post_install.skills import _purge_blocked_skills
+
+        skills_dir = tmp_path / "skills"
+        stale = skills_dir / "auto-smtp-email"
+        stale.mkdir(parents=True)
+        (stale / "SKILL.md").write_text("x", encoding="utf-8")
+
+        _purge_blocked_skills(skills_dir)
+
+        assert not stale.exists()
+
+    def test_skill_prompt_is_disabled(self):
+        skill = (ROOT / "skills" / "auto-smtp-email" / "SKILL.md").read_text(
+            encoding="utf-8",
+        )
+        assert "已被 Trade 停用" in skill
+        assert "import smtplib" not in skill, "停用 skill 不应保留可执行发信代码"
+
+
+class TestLicenseRoutesRequireSession:
+    def test_router_has_session_dependency(self):
+        src = _read_source("trade/api/license.py")
+        assert "dependencies=[Depends(require_session)]" in src
+        assert "不需要 session token" not in src
+
+    def test_frontend_sends_token(self):
+        js = _read_source("static/trade_chat.js")
+        assert js.count("'/api/trade/license/status', _buildApiOpts('GET', null, TOKEN, currentCompanyId)") >= 2
+        assert "_buildApiOpts('POST', {code}, TOKEN, currentCompanyId)" in js
+
+
 class TestConversationSaveScope:
     def test_foreign_library_is_rejected(self):
         """与 /chat 的 _validate_scope 对齐：库里没有这个库就不能按它存行。"""

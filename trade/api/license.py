@@ -1,12 +1,18 @@
-"""许可证 API 路由（不需要 session token，但需要 company_id 做多租户隔离）。"""
+"""许可证 API 路由（需要 session token）。
+
+许可证是**整机一份**（见 trade/license.py），company_id 只是兼容字段、
+实际被忽略；不要把它当多租户隔离。路由加 session 依赖，避免 `--host 0.0.0.0`
+时向局域网暴露 expires_at / request_code（审计 P2-32）。
+"""
 
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel
 
+from trade.api.deps import require_session
 from trade.license import activate as _activate
 from trade.license import status as _status
 
-router = APIRouter(tags=["license"])
+router = APIRouter(tags=["license"], dependencies=[Depends(require_session)])
 
 
 class ActivateRequest(BaseModel):
@@ -26,7 +32,7 @@ def _parse_company_id(x_company_id: str | None = Header(None, alias="X-Company-I
 
 @router.get("/license/status")
 def license_status(cid: int | None = Depends(_parse_company_id)):
-    """返回指定公司的许可证状态。未传 company_id 时返回首个激活公司的状态。"""
+    """返回本机许可证状态（company_id 仅为兼容签名，实际忽略）。"""
     return _status(company_id=cid)
 
 

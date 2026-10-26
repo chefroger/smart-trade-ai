@@ -906,7 +906,7 @@ async function api(method, path, body, extraHeaders) {
 
 async function loadLicenseStatus() {
     try {
-        const r = await fetch('/api/trade/license/status');
+        const r = await fetch('/api/trade/license/status', _buildApiOpts('GET', null, TOKEN, currentCompanyId));
         const data = await r.json();
         const bar = document.getElementById('license-bar');
         if (!bar) return;
@@ -960,7 +960,7 @@ async function showActivateModal() {
     _removeDynamicModals();
     var reqCode = '';
     try {
-        var s = await fetch('/api/trade/license/status');
+        var s = await fetch('/api/trade/license/status', _buildApiOpts('GET', null, TOKEN, currentCompanyId));
         var sd = await s.json();
         reqCode = sd.request_code || '';
     } catch(e) {}
@@ -985,10 +985,8 @@ async function doActivate() {
     const code = input.value.trim();
     if (!code) { msg.textContent = currentLang === 'en' ? 'Please enter the activation code' : '请输入激活码'; msg.style.color = 'var(--accent-red)'; return; }
     try {
-        const r = await fetch('/api/trade/license/activate', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({code})
-        });
+        const r = await fetch('/api/trade/license/activate',
+            _buildApiOpts('POST', {code}, TOKEN, currentCompanyId));
         const data = await r.json();
         if (data.ok) {
             msg.textContent = data.message;

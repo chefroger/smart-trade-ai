@@ -823,7 +823,7 @@ def create_app() -> FastAPI:
     from trade.api.deps import set_session_token
     set_session_token(_SESSION_TOKEN)
 
-    # 挂载 license 路由（无需 session token）
+    # 挂载 license 路由（路由自带 session 依赖：状态里含 expires_at/request_code）
     from trade.api.license import router as license_router
     app.include_router(license_router, prefix="/api/trade")
 

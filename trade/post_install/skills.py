@@ -90,6 +90,20 @@ def _get_package_skills_dir() -> Path | None:
     return None
 
 
+def _purge_blocked_skills(dst_base: Path) -> None:
+    """无条件删除 Hermes 运行时里的停用 skill 目录。
+
+    只靠迭代源目录时命中 blocked 名来清理会漏：包内源目录日后被删掉后，
+    用户机器上残留的旧目录就再也不会被清（审计 P1-13 残留）。
+    """
+    from trade.skill_registry import _BLOCKED_SKILLS
+
+    for name in _BLOCKED_SKILLS:
+        stale = dst_base / name
+        if stale.exists():
+            shutil.rmtree(stale, ignore_errors=True)
+
+
 def _copy_skills(src: Path, dst_base: Path, progress_callback=None) -> list[str]:
     """将 src 下的所有 skill 目录复制到 dst_base 对应的 skill 目录。
 
@@ -103,6 +117,7 @@ def _copy_skills(src: Path, dst_base: Path, progress_callback=None) -> list[str]
         已安装的 skill 目录名列表（如 ["b2b-document", "b2b-osint", ...]）；
         `_BLOCKED_SKILLS` 内的 skill 不会被复制
     """
+    _purge_blocked_skills(dst_base)
     installed = []
     for skill_dir in sorted(src.iterdir()):
         if not skill_dir.is_dir():
@@ -285,6 +300,8 @@ def update_skills() -> None:
     """
     hermes_home = _get_hermes_home()
     hermes_skills_dir = hermes_home / "skills"
+    # 停用 skill 即使用户机器上有残留，也在更新开始时清掉
+    _purge_blocked_skills(hermes_skills_dir)
 
     # 本地包中的 skills 目录（用于列出需要更新哪些 skill）
     package_skills = _get_package_skills_dir()

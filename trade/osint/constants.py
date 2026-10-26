@@ -7,6 +7,7 @@ HTTP 工具函数等各子模块共享的数据。
 
 from __future__ import annotations
 
+import http.client
 import logging
 import urllib.request
 
@@ -150,7 +151,57 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_SAFE_OPENER = urllib.request.build_opener(_SafeRedirectHandler())
+class _PeerVerifiedMixin:
+    """TCP 建连后校验对端 IP，堵住 DNS 重绑定（TOCTOU，审计 P1-4）。
+
+    检查主机名时解析一次，`create_connection` 建连时又解析一次 —— 攻击者可以让
+    第一次解析返回公网 IP、第二次返回内网 IP（DNS rebinding）。这里不接管解析
+    （否则要自己处理 SNI/证书），而是在拿到 socket 后看 `getpeername()`：
+    对端若是内网/保留地址，在发出任何 HTTP 请求前断开。
+    """
+
+    def _verify_peer(self) -> None:
+        sock = getattr(self, "sock", None)
+        if sock is None:
+            return
+        try:
+            peer = sock.getpeername()[0]
+        except OSError:
+            return
+        if peer and _is_blocked_address(peer):
+            try:
+                sock.close()
+            finally:
+                self.sock = None
+            raise OSError(f"SSRF blocked: connected to private address {peer}")
+
+
+class _PinnedHTTPConnection(_PeerVerifiedMixin, http.client.HTTPConnection):
+    def connect(self) -> None:
+        super().connect()
+        self._verify_peer()
+
+
+class _PinnedHTTPSConnection(_PeerVerifiedMixin, http.client.HTTPSConnection):
+    def connect(self) -> None:
+        # TLS 握手可能已发生，但业务请求尚未发出；证书校验针对原域名
+        super().connect()
+        self._verify_peer()
+
+
+class _SafeHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _SafeHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
+
+
+_SAFE_OPENER = urllib.request.build_opener(
+    _SafeRedirectHandler(), _SafeHTTPHandler(), _SafeHTTPSHandler(),
+)
 
 
 def http_get(url: str, timeout: int = 30) -> str | None:
