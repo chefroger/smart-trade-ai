@@ -56,7 +56,8 @@ test('今日用量在侧栏展示，且只提示不拦截', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.html'), 'utf8');
   assert.match(html, /id="usage-today"/);
   assert.match(SRC, /async function loadUsageToday\(\)/);
-  assert.match(SRC, /'\/api\/trade\/usage\/today'/);
+  assert.match(SRC, /'\/api\/trade\/usage\/today\?_=' \+ Date\.now\(\)/);
+  assert.match(SRC, /opts\.cache = 'no-store'/);
   assert.match(SRC, /classList\.toggle\('over'/);
   assert.match(SRC, /classList\.toggle\('warn'/);
   // 失败时静默隐藏，不能用 api() 在每轮聊天后弹 toast

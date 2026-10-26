@@ -182,21 +182,28 @@ class TestChatBudgetIsAdvisoryOnly:
         assert result["response"] == "好的，这是回复。"
 
     def test_usage_today_endpoint_reports_exceeded(self, company):
+        from fastapi import Response
+
         import trade.api.chat as chat
 
         _insert_usage(company["id"], 20_100_000, 0)
-        data = chat.usage_today(company["id"])
+        response = Response()
+        data = chat.usage_today(response, company["id"])
 
         assert data["used"] == 20_100_000
         assert data["limit"] == 20_000_000
         assert data["exceeded"] is True
+        # 额度会随升级变化，不能被浏览器缓存
+        assert response.headers["cache-control"] == "no-store"
 
     def test_usage_today_endpoint_shows_used_when_unlimited(self, company, monkeypatch):
+        from fastapi import Response
+
         import trade.api.chat as chat
 
         monkeypatch.setenv("TRADE_DAILY_TOKEN_LIMIT", "0")
         _insert_usage(company["id"], 1234, 66)
-        data = chat.usage_today(company["id"])
+        data = chat.usage_today(Response(), company["id"])
 
         assert data["used"] == 1300
         assert data["limit"] == 0

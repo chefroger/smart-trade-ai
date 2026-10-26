@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
 from trade import chat_memory
@@ -184,12 +184,16 @@ def _document_gate(document_task, request_task_id: str, collector):
 
 
 @router.get("/usage/today")
-def usage_today(cid: int = Depends(require_company)):
+def usage_today(response: Response, cid: int = Depends(require_company)):
     """今日 token 用量（仅提示，不拦截聊天）。
 
     上限只影响界面配色与文案（超过后标红），聊天照常执行 —— 用户 2026-10-26
     明确要求「提示但不拦」。
+
+    必须是 no-store：额度每天在变、后台代码升级后阈值也会变，浏览器拿旧响应
+    会一直显示旧值（实测升级后仍显示 2,000,000）。
     """
+    response.headers["Cache-Control"] = "no-store"
     used, limit = usage_module.daily_budget_state(cid)
     return {
         "used": used,

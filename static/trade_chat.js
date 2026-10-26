@@ -189,6 +189,7 @@ const I18N = {
         'onb.start_btn':'🚀 开发第一个客户','onb.skip_btn':'跳过引导，直接开始',
         // upgrade/restart button states
         'sys.updating':'⏳ 更新中...','sys.restarting':'⏳ 重启中...',
+        'sys.updating_now':'⏳ 正在拉取最新代码并安装依赖，请稍候（约 1 分钟）…',
         'sys.update_done_restart':'✅ 系统更新完成！正在重启...',
         'sys.update_done':'✅ 更新完成。请点击"🔄 重启"以应用新版本。',
         'sys.update_fail':'❌ 更新失败: ','sys.update_unknown':'⚠️ 更新结果未知，请检查网络后重试',
@@ -364,6 +365,7 @@ const I18N = {
         'onb.feat3':'24/7 auto lead gen · Scheduled tasks',
         'onb.start_btn':'🚀 Find First Customer','onb.skip_btn':'Skip, start directly',
         'sys.updating':'⏳ Updating...','sys.restarting':'⏳ Restarting...',
+        'sys.updating_now':'⏳ Pulling latest code and installing dependencies, please wait (~1 min)…',
         'sys.update_done_restart':'✅ Update complete! Restarting...',
         'sys.update_done':'✅ Update complete. Click "🔄 Restart" to apply.',
         'sys.update_fail':'❌ Update failed: ','sys.update_unknown':'⚠️ Update result unknown, check network',
@@ -1129,8 +1131,10 @@ async function loadUsageToday() {
     if (!el) return;
     if (!currentCompanyId) { el.hidden = true; return; }
     try {
-        const r = await fetch('/api/trade/usage/today',
-            _buildApiOpts('GET', null, TOKEN, currentCompanyId));
+        // 加时间戳 + no-store：额度会变，浏览器缓存旧响应会让升级后仍显示旧阈值
+        const opts = _buildApiOpts('GET', null, TOKEN, currentCompanyId);
+        opts.cache = 'no-store';
+        const r = await fetch('/api/trade/usage/today?_=' + Date.now(), opts);
         if (!r.ok) { el.hidden = true; return; }
         const d = await r.json();
         const used = Number(d.used) || 0;
@@ -1180,7 +1184,7 @@ async function doTradeUpdate(e) {
     if (!btn) return;
     if (!(await _confirmTradeUpdate())) return;
     _setBtnBusy(btn, true);
-    toast(t('sys.restart_toast').replace('Restarting','Updating'));
+    toast(t('sys.updating_now'));
     var updateFailed = false;
     var restartScheduled = false;
     try {
