@@ -61,6 +61,15 @@ class TestConversationLimitClamp:
         assert seen == [expected]
 
 
+class TestUploadLimits:
+    def test_file_count_and_total_size_limits(self):
+        """P2-26 剩余：上传要有文件数/总量上限，不只单文件 100MB。"""
+        src = _read_source("trade/api/libraries.py")
+        assert "_MAX_FILES_PER_UPLOAD" in src
+        assert "_MAX_TOTAL_BYTES" in src
+        assert "total_uploaded_bytes" in src
+
+
 class TestPromptUsesRealToolNames:
     def test_no_list_files_in_prompts(self):
         """Hermes 没有 list_files 工具；旧提示词让模型调一个不存在的工具。"""

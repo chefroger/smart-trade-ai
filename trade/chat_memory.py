@@ -69,6 +69,31 @@ def save(
         raise ValueError("company_id is required for conversation isolation")
     conn = get_connection()
     try:
+        # 归属校验（防御纵深，审计 P1-19）：API 层已校验，但任何直接调用方
+        # 都不该把「公司 A + 公司 B 的客户/库」写成错标行。
+        if customer_id is not None:
+            ok = conn.execute(
+                "SELECT 1 FROM customers WHERE id = ? AND company_id = ?",
+                (customer_id, company_id),
+            ).fetchone()
+            if not ok:
+                logger.warning(
+                    "conversation save: customer %s not in company %s; dropping link",
+                    customer_id, company_id,
+                )
+                customer_id = None
+        if library_id is not None:
+            ok = conn.execute(
+                "SELECT 1 FROM libraries WHERE id = ? AND company_id = ?",
+                (library_id, company_id),
+            ).fetchone()
+            if not ok:
+                logger.warning(
+                    "conversation save: library %s not in company %s; dropping link",
+                    library_id, company_id,
+                )
+                library_id = None
+
         # extra3 记录匹配到的 skill（空则不写，保持旧行为兼容）
         extra3 = json.dumps({"skill": skill}, ensure_ascii=False) if skill else "{}"
         cur = conn.execute(

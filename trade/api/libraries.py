@@ -84,8 +84,17 @@ async def upload_to_work_dir(
     # 3. 路径穿越检测 + 文件大小限制
     _path_traversal_pattern = re.compile(r"\.\.|^[/\\]|[<>:\"|?*]")
     _MAX_FILE_BYTES = 100 * 1024 * 1024  # 单文件 100MB 上限
+    _MAX_FILES_PER_UPLOAD = 200
+    _MAX_TOTAL_BYTES = 300 * 1024 * 1024  # 单次上传总量 300MB
+
+    if len(files) > _MAX_FILES_PER_UPLOAD:
+        raise HTTPException(
+            status_code=413,
+            detail=f"单次最多上传 {_MAX_FILES_PER_UPLOAD} 个文件（收到 {len(files)} 个）",
+        )
 
     uploaded = []
+    total_uploaded_bytes = 0
     for f in files:
         rel = getattr(f, "filename", "") or ""
         if not rel:
@@ -132,6 +141,12 @@ async def upload_to_work_dir(
         content = b"".join(chunks)
         if not content:
             raise HTTPException(status_code=400, detail=f"空文件: {rel}")
+        total_uploaded_bytes += len(content)
+        if total_uploaded_bytes > _MAX_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"单次上传总量超过 {_MAX_TOTAL_BYTES // (1024 * 1024)}MB",
+            )
         dest.write_bytes(content)
         uploaded.append(str(dest.relative_to(work_dir)))
 

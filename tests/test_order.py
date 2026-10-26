@@ -152,6 +152,33 @@ class TestCompanyScopeRequired:
         assert library.delete(lib["id"]) is False
 
 
+class TestConversationSaveScope:
+    """P1-19 防御纵深：保存层也不能把别家客户/库写进本公司对话。"""
+
+    def test_foreign_customer_and_library_are_dropped(self, db, tmp_path):
+        from trade import chat_memory
+        co1 = _mk_company("Co1", "co1")
+        co2 = _mk_company("Co2", "co2")
+        cust1 = _mk_customer(co1["id"], "Cust1")
+        cust2 = _mk_customer(co2["id"], "Cust2")
+        lib2 = _mk_library(co2["id"], "Lib2", str(tmp_path / "lib2"))
+
+        row = chat_memory.save_with_context(
+            company_id=co1["id"], query="hello", response="world",
+            customer_id=cust2["id"], library_id=lib2["id"],
+            retain_to_memory=False,
+        )
+
+        assert row["customer_id"] is None
+        assert row["library_id"] is None
+        # 合规的关联仍然保留
+        ok = chat_memory.save_with_context(
+            company_id=co1["id"], query="hello", response="world",
+            customer_id=cust1["id"], retain_to_memory=False,
+        )
+        assert ok["customer_id"] == cust1["id"]
+
+
 class TestReconcileAmounts:
     """P1-15：数量×单价 与 总金额 必须一致（总金额为空时自动算出）。"""
 
