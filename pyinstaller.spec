@@ -15,10 +15,25 @@ _block_cipher = None
 # project root
 ROOT = Path(SPECPATH)  # SPECPATH = directory where this .spec file lives
 
-# files to bundle with the app
-_static_files = [
-    (str(ROOT / "static" / "trade_chat.html"), "static"),
-]
+# files to bundle with the app — 整个 static/ 目录（html + js + css + 图标）。
+# 以前只捆了 trade_chat.html，HTML 里引用的 /static/trade_chat.js 必然 404，
+# 打出来的包界面是空的（2026-10-25 审计 P1-11）。
+_static_files = []
+_static_dir = ROOT / "static"
+if _static_dir.is_dir():
+    for _f in _static_dir.rglob("*"):
+        if _f.is_file():
+            _static_files.append((str(_f), str(_f.parent.relative_to(ROOT))))
+
+# 版本号从 pyproject.toml 读，避免与主工程漂移
+_app_version = "0.0.0"
+try:
+    import tomllib
+
+    with open(ROOT / "pyproject.toml", "rb") as _pf:
+        _app_version = tomllib.load(_pf)["project"]["version"]
+except Exception:
+    pass
 _skill_files = []
 _skills_dir = ROOT / "skills"
 if _skills_dir.is_dir():
@@ -118,7 +133,7 @@ app = BUNDLE(
     bundle_identifier="com.foreign-trade.assistant",
     info_plist={
         "NSHighResolutionCapable": True,
-        "CFBundleShortVersionString": "0.3.0",
+        "CFBundleShortVersionString": _app_version,
         "CFBundleName": "Foreign Trade Assistant",
         "LSBackgroundOnly": False,
         "NSSupportsAutomaticGraphicsSwitching": True,

@@ -34,14 +34,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 class TestTechStackFailureNotEnterprise:
     def test_fetch_failure_is_not_enterprise(self, monkeypatch):
         """抓取失败时不得保留 is_enterprise=True。"""
-        import urllib.request
-
+        import trade.osint.constants as consts
         import trade.osint.tech_stack as ts
 
-        def _boom(*_a, **_k):
-            raise OSError("connection timed out")
+        class _BoomOpener:
+            @staticmethod
+            def open(*_a, **_k):
+                raise OSError("connection timed out")
 
-        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        # 生产路径走带 SSRF 复查的 _SAFE_OPENER，不再是裸 urlopen
+        monkeypatch.setattr(consts, "_SAFE_OPENER", _BoomOpener())
 
         result = ts.detect_tech_stack("example.com")
 

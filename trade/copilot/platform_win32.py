@@ -24,6 +24,8 @@ _log = logging.getLogger(__name__)
 _PW_RENDERFULLCONTENT = 0x00000002
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+_GW_HWNDNEXT = 2
+_MAX_ZORDER_WALK = 2000
 
 
 class _BITMAPINFOHEADER(ctypes.Structure):
@@ -70,6 +72,10 @@ def _configure_win32(user32, gdi32, kernel32) -> None:
     signatures = {
         # (dll, 函数名): (restype, argtypes)
         (user32, "GetForegroundWindow"): (wintypes.HWND, []),
+        (user32, "GetTopWindow"): (wintypes.HWND, [wintypes.HWND]),
+        (user32, "GetWindow"): (
+            wintypes.HWND, [wintypes.HWND, wintypes.UINT],
+        ),
         (user32, "IsWindowVisible"): (wintypes.BOOL, [wintypes.HWND]),
         (user32, "IsIconic"): (wintypes.BOOL, [wintypes.HWND]),
         (user32, "GetWindowTextLengthW"): (
@@ -192,6 +198,15 @@ def capture_active_window() -> WindowCapture:
 
     image_png = _print_window_png(user32, gdi32, hwnd, width, height)
     if not image_png:
+        # 回退抓的是屏幕区域：窗口被别的窗口盖住时，会把遮挡物（密码管理器、
+        # 邮件、别家客户窗口）一起送进视觉模型（审计 P1-6）。被遮挡就拒绝，
+        # 不拿隐私换可用性。
+        if _window_is_covered(user32, hwnd, rect):
+            return WindowCapture(
+                app_name=app_name, window_title=title,
+                error="窗口被其他窗口遮挡，无法安全抓屏。请先把聊天窗口切到最前。",
+                error_kind="capture_failed",
+            )
         # PrintWindow 对部分应用（GPU 渲染/受保护窗口）返回黑图 → 回退抓屏
         image_png = _grab_region_png(rect)
     if not image_png:
@@ -216,6 +231,33 @@ def _apply_per_monitor_dpi_awareness(user32) -> None:
         )
     except Exception:
         pass
+
+
+def _rects_overlap(a, b) -> bool:
+    return (a.left < b.right and b.left < a.right
+            and a.top < b.bottom and b.top < a.bottom)
+
+
+def _window_is_covered(user32, hwnd, rect) -> bool:
+    """目标窗口上方（z 序更前）是否有可见窗口与它重叠。
+
+    判断不了时按"被遮挡"处理（隐私优先，宁可让用户把窗口切到最前）。
+    """
+    try:
+        current = user32.GetTopWindow(None)
+        steps = 0
+        while current and steps < _MAX_ZORDER_WALK:
+            steps += 1
+            if current == hwnd:
+                return False
+            if user32.IsWindowVisible(current):
+                other = wintypes.RECT()
+                if user32.GetWindowRect(current, ctypes.byref(other)) and _rects_overlap(other, rect):
+                    return True
+            current = user32.GetWindow(current, _GW_HWNDNEXT)
+    except Exception:
+        return True
+    return False
 
 
 def _window_title(user32, hwnd) -> str:

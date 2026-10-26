@@ -72,41 +72,95 @@ SANCTIONS_SOURCES: list[dict] = [
 # HTTP 工具函数（共享给 sanctions / tech_stack / linkedin）
 # ─────────────────────────────────────────────────────────────────────────────
 
+import ipaddress
+import socket
+import urllib.parse
+
+# 内网 / 保留 / 云元数据网段（IPv4 + IPv6）。
+# 100.64.0.0/10 是运营商级 NAT，阿里云元数据 100.100.100.200 就在这里。
+_BLOCKED_NETS = [
+    ipaddress.ip_network(n) for n in (
+        # IPv4
+        "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+        "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16",
+        # 注意：不要加 198.18.0.0/15 —— 部分代理/基准测试环境用它解析公网域名，
+        # 加进来会把全部正常站点误杀（本机实测：所有域名都解析到 198.18.x.x）。
+        "224.0.0.0/4", "240.0.0.0/4",
+        # IPv6
+        "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8",
+    )
+]
+
+# 单次响应最多读 2MB，防止恶意站点用超大 body 撑爆内存
+_MAX_BODY_BYTES = 2_000_000
+
+
+def _resolve_addresses(hostname: str) -> set[str]:
+    """解析主机名的全部 A/AAAA 地址（不只第一个 IPv4）。"""
+    try:
+        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+    except (socket.gaierror, OSError):
+        return set()
+    return {info[4][0] for info in infos if info[4]}
+
+
+def _is_blocked_address(address: str) -> bool:
+    """单个 IP 是否落在内网/保留网段（IPv4-mapped IPv6 先还原）。"""
+    ip = ipaddress.ip_address(address)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in net for net in _BLOCKED_NETS)
+
+
 def _is_private_host(hostname: str) -> bool:
     """检查主机名是否解析到内网/保留 IP 地址（防 SSRF）。
 
-    供 http_get() 和 tech_stack 等直接使用 urlopen 的模块共享。
+    - IP 字面量直接判；
+    - 域名查 getaddrinfo 的**全部** A/AAAA（旧实现只看 gethostbyname 的
+      第一个 IPv4，仅 AAAA 的域名会直接放行）；
+    - 解析失败返回 False：连都连不上，构不成 SSRF。残余的 DNS rebinding
+      （检查与连接两次解析结果不同）由重定向复查 + 失败即断缓解。
     """
-    import ipaddress
-    import socket
-
-    _BLOCKED_NETS = [
-        ipaddress.ip_network(n) for n in (
-            "10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16",
-            "172.16.0.0/12", "192.168.0.0/16", "0.0.0.0/8",
-            "224.0.0.0/4", "240.0.0.0/4",
-        )
-    ]
+    hostname = (hostname or "").strip().strip("[]").rstrip(".")
+    if not hostname:
+        return True
     try:
-        try:
-            addr = ipaddress.ip_address(hostname)
-        except ValueError:
-            addr = ipaddress.ip_address(socket.gethostbyname(hostname))
-    except (ValueError, socket.gaierror, OSError):
-        return False  # 无法解析时放行（让 urlopen 自己报错）
-    return any(addr in net for net in _BLOCKED_NETS)
+        return _is_blocked_address(hostname)
+    except ValueError:
+        pass
+    addresses = _resolve_addresses(hostname)
+    if not addresses:
+        return False
+    return any(_is_blocked_address(addr) for addr in addresses)
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """跟随重定向前逐跳复查目标，防止公网域名 302 到内网。"""
+
+    max_redirections = 3
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlparse(newurl)
+        if parsed.scheme not in ("http", "https"):
+            logger.warning("Blocked redirect to unsupported scheme: %s", newurl)
+            return None
+        if _is_private_host(parsed.hostname or ""):
+            logger.warning("SSRF blocked on redirect: %s -> %s", req.full_url, newurl)
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_SAFE_OPENER = urllib.request.build_opener(_SafeRedirectHandler())
 
 
 def http_get(url: str, timeout: int = 30) -> str | None:
     """通过 urllib 发送 HTTP GET 请求，返回响应正文。
 
     所有子模块统一使用此函数，失败时返回 None 而非抛异常。
-    内置 SSRF 防护：通过 _is_private_host() 拒绝内网/保留 IP。
+    SSRF 防护：初始 URL + 每次重定向都检查内网/保留 IP。
     """
-    from urllib.parse import urlparse
-
-    _host = urlparse(url).hostname or ""
-    if _is_private_host(_host):
+    host = urllib.parse.urlparse(url).hostname or ""
+    if _is_private_host(host):
         logger.warning("SSRF blocked: %s", url)
         return None
 
@@ -118,9 +172,9 @@ def http_get(url: str, timeout: int = 30) -> str | None:
                 "Accept": "*/*",
             },
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _SAFE_OPENER.open(req, timeout=timeout) as resp:
             charset = resp.headers.get_content_charset() or "utf-8"
-            return resp.read().decode(charset, errors="replace")
+            return resp.read(_MAX_BODY_BYTES).decode(charset, errors="replace")
     except Exception as e:
         logger.debug("HTTP GET 失败 [%s]: %s", url, e)
         return None

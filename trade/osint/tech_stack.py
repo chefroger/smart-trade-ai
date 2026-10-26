@@ -62,16 +62,16 @@ def detect_tech_stack(url: str, *, opener=None) -> dict:
             result["error"] = f"Blocked: {hostname} resolves to a private/reserved IP"
             return result
 
-        # 防御性 socket 超时（urlopen timeout=15 已覆盖大部分场景）
-        import socket
-        socket.setdefaulttimeout(15)
-
+        # 不要在进程级改 socket 默认超时（会影响同进程的 Hermes/其它网络调用）；
+        # 每个请求单独传 timeout。
         req = urllib.request.Request(
             url,
             headers={"User-Agent": "Mozilla/5.0 (compatible; Trade-AI/1.0)"},
         )
-        # 测试可注入 opener（见签名）；生产用 urllib 默认实现
-        _open = opener or urllib.request.urlopen
+        # 测试可注入 opener（见签名）；生产用带重定向复查的 safe opener
+        from trade.osint.constants import _MAX_BODY_BYTES, _SAFE_OPENER
+
+        _open = opener or _SAFE_OPENER.open
         with _open(req, timeout=15) as resp:
             result["ssl_valid"] = True
             # 从响应头提取服务器信息
@@ -80,7 +80,12 @@ def detect_tech_stack(url: str, *, opener=None) -> dict:
                 # HTTP 响应头中包含 Server 字段，记录服务器类型
                 result["server"] = server_header
 
-            html_content = resp.read().decode("utf-8", errors="replace")
+            try:
+                body = resp.read(_MAX_BODY_BYTES)
+            except TypeError:
+                # 测试桩的 read() 不接受 size 参数
+                body = resp.read()
+            html_content = body.decode("utf-8", errors="replace")
 
         # 从 HTML 中检测技术栈特征
         technologies = _detect_technologies(html_content)

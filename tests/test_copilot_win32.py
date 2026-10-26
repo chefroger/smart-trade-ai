@@ -38,6 +38,9 @@ class FakeDLL:
 def _user32(**overrides):
     functions = {
         "GetForegroundWindow": FakeFunction(value=1234),
+        # 默认 z 序：目标窗口就在最前（未被遮挡）
+        "GetTopWindow": FakeFunction(value=1234),
+        "GetWindow": FakeFunction(value=0),
         "GetWindowTextLengthW": FakeFunction(value=6),
         "GetWindowTextW": FakeFunction(
             impl=lambda hwnd, buffer, size: _write_text(buffer, "WeChat")
@@ -236,3 +239,57 @@ def test_available_off_windows(monkeypatch, platform):
     ok, reason = pw.available()
     assert ok is False
     assert "Windows" in reason
+
+
+class TestCoveredWindowPrivacy:
+    """P1-6：PrintWindow 失败时若窗口被遮挡，不能抓屏幕（会把遮挡物发给视觉模型）。"""
+
+    def _user_with_zorder(self, blocker_rect):
+        def rect_for(hwnd, rect_ref):
+            rect = rect_ref._obj
+            if hwnd == 999:
+                rect.left, rect.top, rect.right, rect.bottom = blocker_rect
+            else:
+                rect.left, rect.top, rect.right, rect.bottom = 0, 0, 100, 60
+            return 1
+
+        def next_window(hwnd, flag):
+            return 1234 if hwnd == 999 else 0
+
+        return _user32(
+            GetTopWindow=FakeFunction(value=999),
+            GetWindow=FakeFunction(impl=next_window),
+            IsWindowVisible=FakeFunction(value=1),
+            GetWindowRect=FakeFunction(impl=rect_for),
+        )
+
+    def test_covered_window_refuses_screen_grab(self, monkeypatch):
+        grabs: list = []
+        monkeypatch.setattr(
+            pw, "_grab_region_png",
+            lambda rect: grabs.append(rect) or b"PNG-SHOULD-NOT-HAPPEN",
+        )
+        monkeypatch.setattr(pw, "_print_window_png", lambda *a: b"")
+        _patch_dlls(monkeypatch, user32=self._user_with_zorder((10, 10, 110, 70)))
+
+        result = pw.capture_active_window()
+
+        assert not result.ok
+        assert result.error_kind == "capture_failed"
+        assert "遮挡" in result.error
+        assert grabs == [], "被遮挡时绝不能抓屏幕"
+
+    def test_uncovered_window_falls_back(self, monkeypatch):
+        grabs: list = []
+        monkeypatch.setattr(
+            pw, "_grab_region_png",
+            lambda rect: grabs.append(rect) or b"PNG-GRAB",
+        )
+        monkeypatch.setattr(pw, "_print_window_png", lambda *a: b"")
+        _patch_dlls(monkeypatch, user32=self._user_with_zorder((200, 200, 300, 300)))
+
+        result = pw.capture_active_window()
+
+        assert result.ok
+        assert result.image_png == b"PNG-GRAB"
+        assert len(grabs) == 1
