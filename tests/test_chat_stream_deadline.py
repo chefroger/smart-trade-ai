@@ -103,6 +103,35 @@ class TestDeadlineEmitsError:
         assert "event: done" in body
 
 
+class TestSaveFailureIsVisible:
+    """保存失败不能静默：回答能显示但 conversation_id 为空，必须提示（P2-33）。"""
+
+    async def test_warning_event_emitted(self, company):
+        import trade.api.chat as chat
+        from trade.api.models import ChatRequest
+
+        with patch.object(chat, "_STREAM_DEADLINE_SECONDS", 30.0), \
+             patch.object(chat, "create_agent", return_value=_SlowAgent()), \
+             patch.object(chat, "build_query", return_value=("Q", "H")), \
+             patch.object(
+                 chat.chat_memory, "save_with_context",
+                 side_effect=RuntimeError("db is locked"),
+             ), \
+             patch("trade.license.check_license", return_value=(True, "")):
+            resp = await chat.trade_chat_stream(
+                ChatRequest(query="你好"), company["id"]
+            )
+            chunks = []
+            async for chunk in resp.body_iterator:
+                chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", "replace"))
+
+        body = "".join(chunks)
+        assert "event: warning" in body
+        assert "保存到历史失败" in body
+        # 回答本身仍要送达
+        assert "本应永远到不了的回复" in body
+
+
 class _LateAgent:
     """超时之后才返回的 agent（hard_interrupt 不配合）—— 复现迟到答案。"""
 

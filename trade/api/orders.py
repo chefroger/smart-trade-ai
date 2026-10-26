@@ -8,6 +8,29 @@ from trade.api.models import OrderCreate, OrderUpdate
 
 router = APIRouter(tags=["orders"])
 
+_NUMERIC_LABELS = {
+    "quantity": "数量",
+    "unit_price": "单价",
+    "total_amount": "总金额",
+}
+
+
+def _reject_negatives(values: dict) -> None:
+    """负数直接 400，不再静默归零（审计 P2-25）。
+
+    静默归零会把用户输入的负值悄悄改成 0 —— 订单金额被改掉而用户毫无察觉。
+    """
+    bad = [
+        _NUMERIC_LABELS[key]
+        for key in _NUMERIC_LABELS
+        if isinstance(values.get(key), (int, float)) and values[key] < 0
+    ]
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{'、'.join(bad)}不能为负数，请修正后重试。",
+        )
+
 
 @router.get("/orders")
 def list_orders(cid: int = Depends(require_company)):
@@ -32,6 +55,11 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
     c = cust_module.get(payload.customer_id, company_id=cid)
     if not c:
         raise HTTPException(status_code=404, detail="Customer not found")
+    _reject_negatives({
+        "quantity": payload.quantity,
+        "unit_price": payload.unit_price,
+        "total_amount": payload.total_amount,
+    })
     try:
         quantity, unit_price, total_amount = order_module.reconcile_amounts(
             payload.quantity, payload.unit_price, payload.total_amount,
@@ -66,11 +94,21 @@ def get_order(order_id: int, cid: int = Depends(require_company)):
 
 @router.put("/orders/{order_id}")
 def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require_company)):
-    """更新订单。校验状态迁移与金额一致性（都以库里的当前值为基准）。"""
-    changes = payload.model_dump(exclude_none=True)
+    """更新订单。校验状态迁移与金额一致性（都以库里的当前值为基准）。
+
+    `exclude_unset` 而非 `exclude_none`：显式传 null 表示「清空该字段」
+    （只对可清空字段生效），不能和不传混为一谈（审计 P2-28）。
+    """
+    changes = payload.model_dump(exclude_unset=True)
     existing = order_module.get(order_id, company_id=cid)
     if not existing:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    # 非可清空字段传 null = 未提供，直接丢掉（避免把 quantity/product_name 写成 NULL）
+    for key in list(changes):
+        if changes[key] is None and key not in order_module.CLEARABLE_FIELDS:
+            changes.pop(key)
+    _reject_negatives(changes)
 
     new_status = changes.get("status")
     if new_status and not order_module.can_transition_status(existing.get("status") or "", new_status):

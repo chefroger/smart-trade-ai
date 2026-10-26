@@ -1140,6 +1140,61 @@ class TestUpdatePinning:
             "检出钉选提交失败时必须删掉不完整目录"
         )
 
+    def test_update_does_not_reenable_disabled_autostart(self, tmp_path, monkeypatch):
+        """用户手动关掉自启后，更新不能又打开它（审计 P2-20）。"""
+        from trade.post_install import update as upd
+
+        trade_dir = tmp_path / "foreign-trade-assistant"
+        trade_dir.mkdir()
+        (trade_dir / ".trade-template").mkdir()
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        monkeypatch.setattr(upd, "_auto_start_present", lambda: False)
+        ensure = MagicMock()
+        monkeypatch.setattr(upd, "_ensure_auto_start", ensure)
+
+        class _CP:
+            returncode = 0
+            stdout = stderr = ""
+
+        monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _CP())
+        monkeypatch.setattr(upd, "install_skills", lambda: None)
+        monkeypatch.setattr(upd, "update_skills", lambda: None)
+        monkeypatch.setattr(upd, "_sync_trade_template", lambda *a, **k: None)
+
+        import trade.database as db_module
+        monkeypatch.setattr(db_module, "init_db", lambda: tmp_path / "trade.db")
+
+        result = upd.update_trade()
+
+        assert result["ok"] is True, result
+        ensure.assert_not_called()
+        assert any("不会重新打开" in m for m in result["messages"]), result["messages"]
+
+    def test_fresh_install_still_registers_autostart(self, tmp_path, monkeypatch):
+        from trade.post_install import update as upd
+
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        monkeypatch.setattr(upd, "_auto_start_present", lambda: False)
+        ensure = MagicMock()
+        monkeypatch.setattr(upd, "_ensure_auto_start", ensure)
+
+        class _CP:
+            returncode = 0
+            stdout = stderr = ""
+
+        monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _CP())
+        monkeypatch.setattr(upd, "install_skills", lambda: None)
+        monkeypatch.setattr(upd, "update_skills", lambda: None)
+        monkeypatch.setattr(upd, "_sync_trade_template", lambda *a, **k: None)
+
+        import trade.database as db_module
+        monkeypatch.setattr(db_module, "init_db", lambda: tmp_path / "trade.db")
+
+        result = upd.update_trade()
+
+        assert result["ok"] is True, result
+        ensure.assert_called_once()
+
     def test_head_drift_aborts_and_rolls_back(self, tmp_path, monkeypatch):
         from trade.post_install import update as upd
 

@@ -126,6 +126,32 @@ class TestOrderLibraryIsolation:
         assert order.unlink_library(o["id"], lib1["id"], company_id=co2["id"]) is False
 
 
+class TestCompanyScopeRequired:
+    """P2-30：不传公司时不能裸 id 查/改/删（fail-closed）。"""
+
+    def test_order_operations_fail_closed(self, db):
+        from trade import order
+        co = _mk_company("Co", "co")
+        cust = _mk_customer(co["id"], "Cust")
+        o = order.create(co["id"], cust["id"], "Widget")
+
+        assert order.get(o["id"]) is None
+        assert order.update(o["id"], notes="x") is None
+        assert order.delete(o["id"]) is False
+        assert order.list_by_customer(cust["id"]) == []
+        assert order.link_library(o["id"], 1) is False
+        assert order.unlink_library(o["id"], 1) is False
+
+    def test_library_operations_fail_closed(self, db):
+        from trade import library
+        co = _mk_company("Co", "co")
+        lib = library.create("Lib", "/tmp/lib-failclosed", company_id=co["id"])
+
+        assert library.get(lib["id"]) is None
+        assert library.update(lib["id"], name="X") is None
+        assert library.delete(lib["id"]) is False
+
+
 class TestReconcileAmounts:
     """P1-15：数量×单价 与 总金额 必须一致（总金额为空时自动算出）。"""
 
@@ -259,6 +285,52 @@ class TestOrderApiValidation:
         o = self._create(co["id"], cust["id"])
         updated = update_order(o["id"], OrderUpdate(status="已下单"), cid=co["id"])
         assert updated["status"] == "已下单"
+
+    def test_update_can_clear_optional_fields(self, db):
+        """显式传 null 表示清空；不传表示保持不变（审计 P2-28）。"""
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], order_no="PO-1", notes="旧备注")
+
+        cleared = update_order(
+            o["id"], OrderUpdate(order_no=None, notes=None), cid=co["id"],
+        )
+
+        assert cleared["order_no"] is None
+        assert cleared["notes"] is None
+
+    def test_update_null_required_field_is_ignored(self, db):
+        """非可清空字段（品名/数量）传 null 不能把数据写坏。"""
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], quantity=10, unit_price=3.5)
+
+        updated = update_order(
+            o["id"], OrderUpdate(quantity=None, product_name=None), cid=co["id"],
+        )
+
+        assert updated["quantity"] == 10
+        assert updated["product_name"] == "Widget"
+
+    def test_negative_amount_returns_400(self, db):
+        """负数不再静默归零，直接 400（审计 P2-25）。"""
+        from fastapi import HTTPException
+
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        with pytest.raises(HTTPException) as exc:
+            self._create(co["id"], cust["id"], quantity=-5)
+        assert exc.value.status_code == 400
+        assert "数量" in exc.value.detail
+
+        o = self._create(co["id"], cust["id"], quantity=1)
+        with pytest.raises(HTTPException) as exc2:
+            update_order(o["id"], OrderUpdate(unit_price=-1), cid=co["id"])
+        assert exc2.value.status_code == 400
+        assert "单价" in exc2.value.detail
 
     def test_notes_edit_on_completed_order_still_works(self, db):
         from trade.api.models import OrderUpdate

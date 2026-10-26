@@ -6,6 +6,7 @@ Trade AI Assistant — FastAPI application factory.
 
 import os
 import secrets
+import shlex
 import shutil
 import subprocess as _sp
 import sys
@@ -194,11 +195,18 @@ def _ensure_gateway_running() -> None:
         else:
             kwargs["start_new_session"] = True
 
-        _sp.Popen(
+        _gateway_proc = _sp.Popen(
             [hermes_bin, "gateway", "run"],
             env={**os.environ},
             **kwargs,
         )
+        # 记下 PID：重启时只杀我们启动的这个 gateway，不做命令行模式匹配
+        try:
+            _pid_file = _get_trade_data_dir() / "gateway.pid"
+            _pid_file.parent.mkdir(parents=True, exist_ok=True)
+            _pid_file.write_text(str(_gateway_proc.pid), encoding="utf-8")
+        except OSError:
+            pass
         print("  Hermes Gateway → started (cron scheduler active)")
     except Exception as e:
         print(f"  ⚠️  Hermes Gateway 启动失败: {e}")
@@ -320,34 +328,33 @@ def _resolve_reported_version() -> str:
 
 
 def _kill_gateway() -> None:
-    """终止当前 Hermes Gateway 进程（升级/重启时调用，新进程会重启它）。
+    """终止 **Trade 自己启动的** Hermes Gateway（重启/升级时调用）。
 
-    跨平台：Unix 用 pgrep+SIGTERM，Windows 用 taskkill 按命令行匹配。
-    失败静默——Gateway 是独立进程，杀不掉也不影响主服务重启。
+    只认启动时记录的 PID（`~/.trade/data/gateway.pid`），不再用
+    `pkill -f hermes.*gateway` —— 后者会误杀用户为其它用途独立跑的 gateway
+    （审计 P2-31）。没有 PID 文件（gateway 不是我们启动的）就跳过，
+    交给用户/新进程自行管理。失败静默：gateway 是独立进程，杀不掉不影响重启。
     """
+    pid_file = _get_trade_data_dir() / "gateway.pid"
     try:
-        if os.name == "nt":
-            # Windows: taskkill 不直接支持命令行匹配，回退到通过端口找进程
-            # （需 psutil；没有就跳过——下次启动时新 Trade 会用 Hermes 探测器重新判断并按需启动）
-            try:
-                import psutil
-                for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-                    try:
-                        cmdline = " ".join(proc.info.get("cmdline") or [])
-                        if "hermes" in cmdline.lower() and "gateway" in cmdline.lower():
-                            proc.terminate()
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-            except ImportError:
-                pass
-        else:
-            _sp.run(
-                ["pkill", "-TERM", "-f", "hermes.*gateway"],
-                capture_output=True, timeout=5,
-            )
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        cmdline = " ".join(proc.cmdline()).lower()
+        if "hermes" not in cmdline or "gateway" not in cmdline:
+            return  # PID 已被别的进程复用：绝不按 PID 盲杀
+        proc.terminate()
     except Exception:
-        # 杀 Gateway 失败不阻塞主流程
         pass
+    finally:
+        try:
+            pid_file.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _perform_restart() -> None:
@@ -399,8 +406,8 @@ def _perform_restart() -> None:
 
     # 记录启动命令，交给 shell 子进程执行
     _restart_cmd = [_restart_python] + _sys.argv
-    # POSIX 走 sh，repr() 产生的单引号是合法引法
-    _cmd_str = " ".join(repr(a) for a in _restart_cmd)
+    # POSIX 走 sh：用 shlex.quote（repr 对含单引号的参数会生成 sh 无法解析的引法）
+    _cmd_str = " ".join(shlex.quote(a) for a in _restart_cmd)
     # Windows 走 cmd，cmd 不认单引号：必须用 list2cmdline 生成双引号命令，
     # 否则旧进程已被 taskkill、新进程却起不来，服务彻底下线
     _cmd_str_win = _sp.list2cmdline(_restart_cmd)
@@ -419,7 +426,7 @@ def _perform_restart() -> None:
     else:
         _script = (
             f"sleep 2; "
-            f"pkill -TERM -f 'hermes.*gateway' 2>/dev/null; "
+            # gateway 已在 _kill_gateway() 里按记录的 PID 处理，这里不再做命令行模式匹配
             f"kill -TERM {old_pid} 2>/dev/null; "
             f"sleep 1; "
             f"kill -KILL {old_pid} 2>/dev/null; "

@@ -564,8 +564,14 @@ async def trade_chat_stream(
                     )
                     if conv:
                         conv_id = conv.get("id")
-                except Exception:
+                except Exception as exc:
                     _log.exception("save_with_context failed in stream")
+                    # 不能静默：回答能显示但 conversation_id 为空，评分/引用链路
+                    # 会断，用户却不知道（审计 P2-33）。发一条警告事件让前端提示。
+                    _emit_threadsafe("warning", {
+                        "message": f"对话已回复，但保存到历史失败（{type(exc).__name__}），"
+                                   "本轮无法评分或后续引用。",
+                    })
 
                 _emit_threadsafe("response", {
                     "text": result or "Agent 返回了空响应。",

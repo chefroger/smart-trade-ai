@@ -99,18 +99,19 @@ def list_by_company(company_id: int | None = None) -> list[dict]:
 
 
 def get(library_id: int, company_id: int | None = None) -> dict | None:
-    """根据 id 获取单个文档库，可选地按公司范围限定。"""
+    """根据 id 获取单个文档库（必须限定公司）。
+
+    company_id 缺失时 fail-closed 返回 None：裸 id 查询会让任何漏传的调用方
+    越过租户隔离（审计 P2-30）。
+    """
+    if company_id is None:
+        return None
     conn = get_connection()
     try:
-        if company_id is not None:
-            # 指定了公司，需同时校验公司 ID 以隔离多租户数据
-            row = conn.execute(
-                "SELECT * FROM libraries WHERE id = ? AND company_id = ?",
-                (library_id, company_id),
-            ).fetchone()
-        else:
-            # 未指定公司，仅按 id 查询
-            row = conn.execute("SELECT * FROM libraries WHERE id = ?", (library_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM libraries WHERE id = ? AND company_id = ?",
+            (library_id, company_id),
+        ).fetchone()
         return _row_to_dict(row) if row else None
     finally:
         conn.close()
@@ -121,7 +122,12 @@ def update(
     company_id: int | None = None,
     **kwargs,
 ) -> dict | None:
-    """更新文档库字段（name, root_path, description）。"""
+    """更新文档库字段（name, root_path, description）。
+
+    company_id 缺失时 fail-closed 返回 None（审计 P2-30）。
+    """
+    if company_id is None:
+        return None
     allowed = {"name", "root_path", "description"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     # 路径穿越防护：校验 ..  / 绝对路径 / 禁止目录
@@ -136,20 +142,12 @@ def update(
 
     conn = get_connection()
     try:
-        if company_id is not None:
-            # 指定了公司，需同时校验公司 ID 以隔离多租户数据
-            n = conn.execute(
-                f"UPDATE libraries SET {set_clause}, updated_at = datetime('now','localtime') "
-                "WHERE id = ? AND company_id = ?",
-                values + [company_id],
-            ).rowcount
-        else:
-            # 未指定公司，仅按 id 更新
-            n = conn.execute(
-                f"UPDATE libraries SET {set_clause}, updated_at = datetime('now','localtime') "
-                "WHERE id = ?",
-                values,
-            ).rowcount
+        # 指定了公司，需同时校验公司 ID 以隔离多租户数据
+        n = conn.execute(
+            f"UPDATE libraries SET {set_clause}, updated_at = datetime('now','localtime') "
+            "WHERE id = ? AND company_id = ?",
+            values + [company_id],
+        ).rowcount
         conn.commit()
         if n == 0:
             # 没有行被更新，说明指定的 id 不存在或不属于该公司
@@ -160,18 +158,18 @@ def update(
 
 
 def delete(library_id: int, company_id: int | None = None) -> bool:
-    """删除归属于指定公司的文档库。如果确实删除了某行则返回 True。"""
+    """删除归属于指定公司的文档库。如果确实删除了某行则返回 True。
+
+    company_id 缺失时 fail-closed 返回 False（审计 P2-30）。
+    """
+    if company_id is None:
+        return False
     conn = get_connection()
     try:
-        if company_id is not None:
-            # 指定了公司，需同时校验公司 ID 以确保只能删除本公司文档库
-            cur = conn.execute(
-                "DELETE FROM libraries WHERE id = ? AND company_id = ?",
-                (library_id, company_id),
-            )
-        else:
-            # 未指定公司，仅按 id 删除
-            cur = conn.execute("DELETE FROM libraries WHERE id = ?", (library_id,))
+        cur = conn.execute(
+            "DELETE FROM libraries WHERE id = ? AND company_id = ?",
+            (library_id, company_id),
+        )
         conn.commit()
         return cur.rowcount > 0
     finally:

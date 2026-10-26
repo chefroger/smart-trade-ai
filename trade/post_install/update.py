@@ -113,6 +113,32 @@ def _sync_trade_template(template_src: Path, trade_home: Path) -> None:
 
 # ── 开机自启动 ────────────────────────────────────────────────────────────
 
+def _auto_start_present() -> bool:
+    """当前机器上是否已有 Trade 的开机自启项（用于更新时尊重用户的关闭决定）。
+
+    近似的存在性检查即可：更新只决定「要不要重新注册」，不需要精确状态。
+    任何异常都按"不存在"处理（宁可不碰自启配置）。
+    """
+    try:
+        if os.name == "nt":
+            from trade.post_install.win_setup import TASK_NAME
+
+            r = subprocess.run(
+                ["schtasks", "/query", "/tn", TASK_NAME],
+                capture_output=True, timeout=15,
+            )
+            return r.returncode == 0
+        if sys.platform == "darwin":
+            return (
+                Path.home() / "Library" / "LaunchAgents" / "com.trade.assistant.plist"
+            ).is_file()
+        if sys.platform == "linux":
+            return (Path.home() / ".config" / "systemd" / "user" / "trade.service").is_file()
+    except Exception:
+        pass
+    return False
+
+
 def _ensure_auto_start(trade_dir: Path) -> None:
     """确保 Trade 在操作系统启动时自动运行（幂等操作：已存在则跳过）。
 
@@ -785,10 +811,15 @@ def update_trade() -> dict:
         warnings.append(f"template sync failed: {e}")
 
     # ── Step 6: auto-start ────────────────────────────────────────────────
+    # 尊重用户的关闭决定：已有自启项才重新注册；用户手动关掉的，更新不能
+    # 又替他打开（审计 P2-20）。首次安装（clone，pre_update_sha=None）照常注册。
     _emit("→ Step 6/7: auto-start check ...")
     try:
-        _ensure_auto_start(trade_dir)
-        _emit("  ✓ Auto-start OK")
+        if pre_update_sha is None or _auto_start_present():
+            _ensure_auto_start(trade_dir)
+            _emit("  ✓ Auto-start OK")
+        else:
+            _emit("  ℹ️ 开机自启已被你关闭，更新不会重新打开（如需启用请手动设置）")
     except Exception as e:
         _emit(f"  ⚠ Auto-start setup failed: {e}")
         warnings.append(f"auto-start setup failed: {e}")

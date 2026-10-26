@@ -130,46 +130,30 @@ class OrderCreate(BaseModel):
     customer_id: int = Field(..., description="客户 ID")
     product_name: str = Field(..., description="品名")
     order_no: str | None = Field(None, description="订单号")
-    quantity: float | None = Field(None, ge=0, description="数量（≥0）")
+    quantity: float | None = Field(None, description="数量（禁止负数，由端点校验）")
     unit: str | None = Field(None, description="单位")
-    unit_price: float | None = Field(None, ge=0, description="单价（≥0）")
+    unit_price: float | None = Field(None, description="单价（禁止负数，由端点校验）")
     currency: str | None = Field(None, description="币种")
-    total_amount: float | None = Field(None, ge=0, description="总金额（≥0）")
+    total_amount: float | None = Field(None, description="总金额（禁止负数，由端点校验）")
     status: Literal["报价中", "已下单", "已出货", "已完成", "已取消"] | None = Field(None, description="状态")
     delivery_date: str | None = Field(None, description="交期")
     payment_terms: str | None = Field(None, description="付款方式")
     notes: str | None = Field(None, description="备注")
-
-    @field_validator("quantity", "unit_price", "total_amount", mode="before")
-    @classmethod
-    def _negative_to_zero(cls, v):
-        """前端可能传负数（无 min 约束），负值转 0 避免 ge=0 校验 422。"""
-        if isinstance(v, (int, float)) and v < 0:
-            return 0
-        return v
 
 
 class OrderUpdate(BaseModel):
     customer_id: int | None = Field(None, description="客户 ID")
     product_name: str | None = Field(None, description="品名")
     order_no: str | None = Field(None, description="订单号")
-    quantity: float | None = Field(None, ge=0, description="数量（≥0）")
+    quantity: float | None = Field(None, description="数量（禁止负数，由端点校验）")
     unit: str | None = Field(None, description="单位")
-    unit_price: float | None = Field(None, ge=0, description="单价（≥0）")
+    unit_price: float | None = Field(None, description="单价（禁止负数，由端点校验）")
     currency: str | None = Field(None, description="币种")
-    total_amount: float | None = Field(None, ge=0, description="总金额（≥0）")
+    total_amount: float | None = Field(None, description="总金额（禁止负数，由端点校验）")
     status: Literal["报价中", "已下单", "已出货", "已完成", "已取消"] | None = Field(None, description="状态")
     delivery_date: str | None = Field(None, description="交期")
     payment_terms: str | None = Field(None, description="付款方式")
     notes: str | None = Field(None, description="备注")
-
-    @field_validator("quantity", "unit_price", "total_amount", mode="before")
-    @classmethod
-    def _negative_to_zero(cls, v):
-        """前端可能传负数（无 min 约束），负值转 0 避免 ge=0 校验 422。"""
-        if isinstance(v, (int, float)) and v < 0:
-            return 0
-        return v
 
 
 # ── Conversation ───────────────────────────────────────────────────────────────
