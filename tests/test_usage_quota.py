@@ -4,7 +4,7 @@
 这里锁定：
 
 1. 每次 agent 调用（含失败/中断的那次尝试）都把 token 记进 usage_ledger；
-2. 每公司每日默认 200 万 token 额度，只用于界面提示，超限**不拦聊天**；
+2. 每公司每日默认 2000 万 token 额度，只用于界面提示，超限**不拦聊天**；
 3. `TRADE_DAILY_TOKEN_LIMIT=0` 表示不限；
 4. 额度状态由 `/usage/today` 暴露给前端（used / limit / exceeded）。
 """
@@ -82,11 +82,11 @@ class _CountingAgent:
 
 
 class TestDailyLimitConfig:
-    def test_default_is_two_million(self, monkeypatch):
+    def test_default_is_twenty_million(self, monkeypatch):
         monkeypatch.delenv("TRADE_DAILY_TOKEN_LIMIT", raising=False)
         import trade.usage as usage
 
-        assert usage.daily_token_limit() == 2_000_000
+        assert usage.daily_token_limit() == 20_000_000
 
     def test_env_override_and_disable(self, monkeypatch):
         import trade.usage as usage
@@ -101,7 +101,7 @@ class TestDailyLimitConfig:
         import trade.usage as usage
 
         monkeypatch.setenv("TRADE_DAILY_TOKEN_LIMIT", "abc")
-        assert usage.daily_token_limit() == 2_000_000
+        assert usage.daily_token_limit() == 20_000_000
 
 
 class TestTokensToday:
@@ -171,7 +171,7 @@ class TestChatBudgetIsAdvisoryOnly:
         import trade.api.chat as chat
         from trade.api.models import ChatRequest
 
-        _insert_usage(company["id"], 2_000_000, 1)
+        _insert_usage(company["id"], 20_000_000, 1)
 
         with patch.object(chat, "create_agent", return_value=_CountingAgent()), \
              patch.object(chat, "build_query", return_value=("Q", "H")), \
@@ -184,11 +184,11 @@ class TestChatBudgetIsAdvisoryOnly:
     def test_usage_today_endpoint_reports_exceeded(self, company):
         import trade.api.chat as chat
 
-        _insert_usage(company["id"], 2_100_000, 0)
+        _insert_usage(company["id"], 20_100_000, 0)
         data = chat.usage_today(company["id"])
 
-        assert data["used"] == 2_100_000
-        assert data["limit"] == 2_000_000
+        assert data["used"] == 20_100_000
+        assert data["limit"] == 20_000_000
         assert data["exceeded"] is True
 
     def test_usage_today_endpoint_shows_used_when_unlimited(self, company, monkeypatch):

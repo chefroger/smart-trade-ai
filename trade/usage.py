@@ -24,10 +24,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# 每公司每日 token 上限（输入+输出合计）。默认 200 万，约合 1000-2000 次普通
-# 问答；被刷时一天最多烧几块钱。环境变量 TRADE_DAILY_TOKEN_LIMIT 覆盖，
-# 设为 0（或负数）表示不限。
-DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000
+# 每公司每日 token 额度（输入+输出合计），只用于侧栏提示，不拦截聊天。
+# 默认 2000 万：实测一次网站诊断约 340 万，200 万会一句就标红（2026-10-26）。
+# 环境变量 TRADE_DAILY_TOKEN_LIMIT 覆盖，设为 0（或负数）表示不限。
+DEFAULT_DAILY_TOKEN_LIMIT = 20_000_000
 
 # ── 示例费率（美元 / 1M tokens）：(输入, 输出) ─────────────────────────────
 #  ⚠️ 请按实际账单定期校准；未知模型默认按 (0, 0) 计（只记 token 不记费用）。
