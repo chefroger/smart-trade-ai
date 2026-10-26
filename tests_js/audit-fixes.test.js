@@ -35,10 +35,10 @@ test('api() 支持额外 header', () => {
 });
 
 // 审计 P1-10：更新 = 拉代码 + 装依赖 + 重启，必须二次确认，不能一键静默装。
-test('更新前有二次确认，且带目标版本提示', () => {
+test('更新前有二次确认（只展示当前版本，不展示 release 目标版本）', () => {
   assert.match(SRC, /async function _confirmTradeUpdate\(\)/);
   assert.match(SRC, /return confirm\(msg\)/);
-  assert.match(SRC, /'sys\.update_confirm_version'/);
+  assert.match(SRC, /'sys\.update_confirm_current'/);
   assert.match(SRC, /'sys\.update_confirm'/);
 });
 

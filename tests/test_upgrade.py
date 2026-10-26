@@ -430,47 +430,28 @@ class TestUpdateStepSeverity:
 # ── 版本缓存测试 ─────────────────────────────────────────────────────────
 
 
-class TestVersionCache:
-    """测试 GitHub 版本缓存机制。"""
+class TestNoReleaseVersionBaseline:
+    """升级不再以 GitHub release tag 为基准（2026-10-26 用户决定）。
 
-    def test_cache_structure(self):
-        """缓存应为 dict 含 value 和 ts 键。"""
-        from trade.app import _LATEST_VERSION_TTL, _latest_version_cache
+    release 版本号会落后于 main（修完不立刻发版），拿它比较会让用户错过
+    main 上的修复；升级只认「拉取 main 最新内容」。
+    """
 
-        assert "value" in _latest_version_cache
-        assert "ts" in _latest_version_cache
-        assert _LATEST_VERSION_TTL == 600
+    def test_status_does_not_query_github_releases(self):
+        root = Path(__file__).resolve().parent.parent
+        src = (root / "trade" / "app.py").read_text(encoding="utf-8")
 
-    def test_cache_invalidation(self):
-        """设置 ts=0 应使缓存失效。"""
-        from trade.app import _latest_version_cache
+        assert "releases/latest" not in src
+        assert "latest_version" not in src
+        assert "_latest_version_cache" not in src
 
-        _latest_version_cache["value"] = "0.6.2"
-        _latest_version_cache["ts"] = 100.0
+    def test_confirm_dialog_does_not_show_release_target(self):
+        root = Path(__file__).resolve().parent.parent
+        src = (root / "static" / "trade_chat.js").read_text(encoding="utf-8")
 
-        # 失效
-        _latest_version_cache["ts"] = 0.0
-
-        # 缓存应被视为过期（_now - 0.0 > TTL）
-        import time
-        assert time.monotonic() - _latest_version_cache["ts"] > 0
-
-    def test_fetch_latest_version_github_api(self):
-        """_fetch_latest_version 应从 GitHub API 返回版本号。"""
-        # 此测试 mock GitHub API 响应
-        mock_response = MagicMock()
-        mock_response.read.return_value = b'{"tag_name": "v0.6.3"}'
-        mock_response.__enter__ = MagicMock(return_value=mock_response)
-        mock_response.__exit__ = MagicMock(return_value=False)
-
-        with patch("urllib.request.urlopen", return_value=mock_response):
-            with patch("urllib.request.Request"):
-                # 需要在 create_app 的 status 闭包外独立测试
-                # 直接测试版本解析逻辑
-                import json
-                data = json.loads(mock_response.read())
-                version = data.get("tag_name", "").lstrip("v")
-                assert version == "0.6.3"
+        assert "sys.update_confirm_version" not in src
+        assert "d.latest_version" not in src
+        assert "/api/trade/system/update" in src
 
 
 # ── 失败标记检测测试 ──────────────────────────────────────────────────────

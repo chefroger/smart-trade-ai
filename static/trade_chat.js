@@ -193,8 +193,8 @@ const I18N = {
         'sys.update_done':'✅ 更新完成。请点击"🔄 重启"以应用新版本。',
         'sys.update_fail':'❌ 更新失败: ','sys.update_unknown':'⚠️ 更新结果未知，请检查网络后重试',
         'sys.update_network':'⚠️ 更新请求失败，请检查网络连接后重试',
-        'sys.update_confirm':'将从 GitHub 拉取最新代码、安装依赖并重启服务。\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
-        'sys.update_confirm_version':'将从 GitHub 拉取最新代码、安装依赖并重启服务。\n目标版本：{version}（当前 {current}）\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
+        'sys.update_confirm':'将从 GitHub 拉取 main 分支最新代码、安装依赖并重启服务。\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
+        'sys.update_confirm_current':'当前版本 {current}。\n将从 GitHub 拉取 main 分支最新代码、安装依赖并重启服务。\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
         'usage.today':'今日已用 {used} / {limit} tokens',
         'usage.unlimited':'今日已用 {used} tokens',
         'usage.over':'今日已用 {used} / {limit} tokens · 已超额度（不拦截）',
@@ -368,8 +368,8 @@ const I18N = {
         'sys.update_done':'✅ Update complete. Click "🔄 Restart" to apply.',
         'sys.update_fail':'❌ Update failed: ','sys.update_unknown':'⚠️ Update result unknown, check network',
         'sys.update_network':'⚠️ Update request failed, check network',
-        'sys.update_confirm':'This will pull the latest code from GitHub, install dependencies and restart the service.\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
-        'sys.update_confirm_version':'This will pull the latest code from GitHub, install dependencies and restart the service.\nTarget version: {version} (current {current})\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
+        'sys.update_confirm':'This will pull the latest code from the GitHub main branch, install dependencies and restart the service.\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
+        'sys.update_confirm_current':'Current version {current}.\nThis will pull the latest code from the GitHub main branch, install dependencies and restart the service.\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
         'usage.today':'Today {used} / {limit} tokens',
         'usage.unlimited':'Today {used} tokens',
         'usage.over':'Today {used} / {limit} tokens · over quota (not blocked)',
@@ -1153,23 +1153,23 @@ async function loadUsageToday() {
 
 // ── 系统更新 ──
 /**
- * 更新前二次确认：带上当前/最新版本号。
+ * 更新前二次确认：只展示当前运行版本。
  *
- * 审计 P1-10：更新 = 拉代码 + 装依赖 + 重启，一次点击即生效，必须让用户
- * 知道将要发生什么。拿不到版本号时退回通用文案 —— 确认本身不能因网络失败被跳过。
+ * 升级目标是 GitHub main 的最新内容，不再拿 release tag 当"最新版本"基准
+ * （2026-10-26 用户决定：release 会落后 main，修完不立刻发版）。
+ * 拿不到版本号时退回通用文案 —— 确认本身不能因网络失败被跳过。
  */
 async function _confirmTradeUpdate() {
-    let latest = '', current = '';
+    let current = '';
     try {
         const r = await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' });
         if (r.ok) {
             const d = await r.json();
-            latest = d.latest_version || '';
             current = d.version || '';
         }
     } catch(_) { /* 版本信息拿不到不影响确认 */ }
-    const msg = (latest && current)
-        ? t('sys.update_confirm_version').replace('{version}', latest).replace('{current}', current)
+    const msg = current
+        ? t('sys.update_confirm_current').replace('{current}', current)
         : t('sys.update_confirm');
     return confirm(msg);
 }
@@ -1696,7 +1696,7 @@ async function checkVersion() {
         const r = await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' });
         if (!r.ok) return;
         const data = await r.json();
-        console.log('Version check: current=' + data.version + ' latest=' + (data.latest_version || ''));
+        console.log('Version check: current=' + data.version);
     } catch(e) { /* 静默 */ }
 }
 

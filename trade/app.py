@@ -39,22 +39,9 @@ def _check_license():
 _SESSION_TOKEN = secrets.token_urlsafe(32)
 _STARTED_AT = time.time()  # 进程启动时间戳，供前端重启检测
 
-# ── GitHub latest-version 缓存（TTL 10 分钟）──────────────────────────────
-# 避免 /api/status 每次请求都调 GitHub API，在 _waitForRestartAndReload
-# 轮询期间（最多 90 次 × 2s = 3min）触发 API 限流（60 次/小时）。
-_latest_version_cache: dict = {"value": None, "ts": 0.0}
-_LATEST_VERSION_TTL = 600  # 10 分钟
-
-
-def _ver_tuple(s: str) -> tuple:
-    """把 '0.6.8' / 'v0.6.8' / '0.6.8-rc1' 解析为可比较的整数元组。"""
-    parts = []
-    for p in s.lstrip("vV").replace("-", ".").split("."):
-        try:
-            parts.append(int(p))
-        except ValueError:
-            break
-    return tuple(parts)
+# 版本显示只认「正在运行的代码」—— 不再拿 GitHub release tag 做基准。
+# 2026-10-26 用户决定：升级就是拉取 GitHub main 最新内容，release 版本号
+# 会落后于 main（修完不立刻发版），拿它比较只会误导用户「已是最新」。
 
 
 def _install_cors(app: FastAPI, port: int) -> None:
@@ -624,7 +611,6 @@ def _create_system_router() -> APIRouter:
         result = _do_update()  # 现在返回结构化 dict，不再依赖 _capture_output
 
         if result["ok"]:
-            _latest_version_cache["ts"] = 0.0  # 强制重新拉取 GitHub latest
             background_tasks.add_task(_perform_restart)
             result["restart_scheduled"] = True
         return result
@@ -653,8 +639,6 @@ def _create_system_router() -> APIRouter:
             from fastapi import HTTPException
             raise HTTPException(status_code=429, detail="系统端点请求过于频繁，请稍后重试。")
 
-        # 清缓存：用户可能手动 git pull 后只 restart，避免重启后 latest_version 显示旧值
-        _latest_version_cache["ts"] = 0.0
         _perform_restart()
         return {"ok": True, "message": "重启指令已发送"}
 
@@ -839,38 +823,8 @@ def create_app() -> FastAPI:
         # 「pull 成功但没重启」时 UI 显示新版本，把卡在旧版伪装成升级成功。
         version = _resolve_reported_version()
 
-        # 用缓存降低 GitHub API 调用频率，防止限流导致版本检测失效
-        _now = time.monotonic()
-        if (_latest_version_cache["value"] is not None
-                and _now - _latest_version_cache["ts"] < _LATEST_VERSION_TTL):
-            latest = _latest_version_cache["value"]
-        else:
-            import asyncio as _asyncio
-
-            def _fetch_latest_version() -> str:
-                import urllib.request as _ur
-                try:
-                    _req = _ur.Request(
-                        "https://api.github.com/repos/chefroger/smart-trade-ai/releases/latest",
-                        headers={"Accept": "application/vnd.github+json", "User-Agent": "Trade-Status/1.0"},
-                    )
-                    with _ur.urlopen(_req, timeout=5) as _resp:
-                        import json as _json
-                        _data = _json.loads(_resp.read().decode())
-                        return _data.get("tag_name", "").lstrip("v")
-                except Exception:
-                    return ""
-
-            latest = await _asyncio.get_event_loop().run_in_executor(None, _fetch_latest_version)
-            # 仅在 GitHub API 调用成功时更新缓存（失败时 keep 旧值，宁可短暂不一致）
-            if latest:
-                _latest_version_cache["value"] = latest
-                _latest_version_cache["ts"] = time.monotonic()
-
-            # 本地版本已领先于 GitHub release 时不显示"有新版"
-            if latest and _ver_tuple(latest) <= _ver_tuple(version):
-                latest = None
-
+        # 不再请求 GitHub release：升级走 main 最新内容，release tag 只代表
+        # 最近一次发版，拿它当"最新版本"会让用户错过 main 上的修复。
         # 上次自检结果（首次启动后台跑，结果落盘）。只读，不影响状态码 ——
         # 自检失败时 Trade 仍在运行，界面据此提示用户去修而不是把服务判死。
         try:
@@ -884,7 +838,6 @@ def create_app() -> FastAPI:
             "status": "ok",
             "app": "Foreign Trade Assistant",
             "version": version,
-            "latest_version": latest or None,
             "started_at": _STARTED_AT,
             "doctor": doctor_result,
         }
