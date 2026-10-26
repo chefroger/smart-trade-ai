@@ -48,6 +48,16 @@ _CN_NUMERALS = "一二两三四五六七八九十百千万零〇"
 _MAGNITUDE = r"[KMB]"
 _MAGNITUDES = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
 
+# 中文量级（跟在阿拉伯数字后面）：5千 = 5000、10万 = 100000、5千元 = $5000
+_CN_MAG_WORDS = r"(?:千万|百万|十万|千|万)"
+_CN_MAGNITUDES = {
+    "千": 1_000,
+    "万": 10_000,
+    "十万": 100_000,
+    "百万": 1_000_000,
+    "千万": 10_000_000,
+}
+
 # 左/右边界只针对 ASCII 字母数字：汉字与数字相邻（"共500件"、"40W的灯"）
 # 必须算边界，否则中文场景整片漏识别。
 _ASCII_LEFT = r"(?<![A-Za-z0-9])"
@@ -68,7 +78,8 @@ _UNIT_WORDS = (
 # 中文单位词表：长词在前（公斤 先于 斤；千克 先于 克），否则会被短词截断。
 # 计量单位必须与英文走同一个 key（公斤 = kg），否则中文草稿会和英文库脱钩，
 # 同时又会和计数事实（40 pcs）撞成同一个裸数字（复审 P1）。
-_CN_MEASURE_WORDS = r"(?:公斤|千克|克|吨|斤|毫米|厘米|毫升|米|升)"
+# 长词在前：千米/千瓦 必须先于 千（量级）与 米（长度）匹配。
+_CN_MEASURE_WORDS = r"(?:公斤|千克|千米|千瓦|克|吨|斤|毫米|厘米|毫升|米|升)"
 _CN_COUNT_WORDS = r"(?:个|件|套|台|箱)"
 _CN_TIME_WORDS = r"(?:个工作日|工作日|天|日|周|个月|年)"
 
@@ -108,6 +119,9 @@ NUMBER_RE = re.compile(
     # 阿拉伯数字 + 中文计量/计数单位：40 公斤 / 200 箱（时间量词已在上面处理）
     rf"|(?:{_NUM}\s?{_CN_MEASURE_WORDS})"
     rf"|(?:{_NUM}\s?{_CN_COUNT_WORDS})"
+    # 阿拉伯数字 + 中文量级：5千 / 10万 / 5千元（必须排在中文数词分支前，
+    # 否则 "千元" 会被当成中文数词 1000）
+    rf"|(?:{_NUM}\s?{_CN_MAG_WORDS}(?:\s?(?:元|块|美元|美金))?)"
     # 中文数词 + 量词：三天 / 五百个 / 四十公斤
     rf"|(?:[{_CN_NUMERALS}]+\s?"
     rf"(?:{_CN_TIME_WORDS}|{_CN_MEASURE_WORDS}|{_CN_COUNT_WORDS}|元|块))"
@@ -149,6 +163,8 @@ _CN_MEASURE_UNITS: dict[str, tuple[str, Decimal]] = {
     "毫米": ("mm", Decimal("1")),
     "厘米": ("cm", Decimal("1")),
     "米": ("m", Decimal("1")),
+    "千米": ("km", Decimal("1")),
+    "千瓦": ("kw", Decimal("1")),
     "毫升": ("ml", Decimal("1")),
     "升": ("l", Decimal("1")),
 }
@@ -176,8 +192,12 @@ def chinese_to_int(text: str) -> int | None:
     total = 0
     section = 0
     number = 0
+    saw_wan = False
+    zero_after_wan = False
     for char in text:
         if char in _CN_DIGITS:
+            if char in ("零", "〇") and saw_wan:
+                zero_after_wan = True
             number = _CN_DIGITS[char]
         elif char in _CN_UNITS:
             # "十二" 的十前面没有数字 → 按 1 算
@@ -188,8 +208,12 @@ def chinese_to_int(text: str) -> int | None:
             total += section * 10000
             section = 0
             number = 0
+            saw_wan = True
         else:
             return None
+    # 口语简写："一万五" = 15000（万后单个数字默认带千位），"一万零五" = 10005
+    if saw_wan and number and not zero_after_wan and section == 0:
+        return total + number * 1000
     return total + section + number
 
 
@@ -217,6 +241,11 @@ def _scale_value(num: str, factor: int | Decimal) -> str:
 
 def _time_factor(text: str, lowered: str) -> int | None:
     """判断时间单位并给出换算成天的倍数；不是时间 → None。"""
+    # 年份不是时长："2025年交货" 里的 2025 不能被换算成 73 万天。
+    # 只拦 1900–2099 的四位数字 + 年，避免误伤 "30年质保"。
+    year = re.fullmatch(r"(\d{4})\s*年", text.strip())
+    if year is not None and 1900 <= int(year.group(1)) <= 2099:
+        return None
     # 顺序：长单位在前，避免 "个工作日" 被裸 "日" 抢先（两者倍数都是 1，
     # 但 weeks/months/years 必须先于 days 判断）
     if re.search(rf"weeks?{_ASCII_RIGHT}", lowered) or "周" in text:
@@ -233,6 +262,12 @@ def _time_factor(text: str, lowered: str) -> int | None:
     return None
 
 
+def _cn_magnitude_factor(text: str) -> int:
+    """中文量级倍数（5千 → 1000，10万 → 10000）；没有量级 → 1。"""
+    match = re.search(rf"({_CN_MAG_WORDS})", text)
+    return _CN_MAGNITUDES.get(match.group(1), 1) if match else 1
+
+
 def _trailing_unit(text: str) -> tuple[str | None, str]:
     """取匹配串末尾的英文单位词，返回 (小写单位, 原始写法)。"""
     match = re.search(r"([A-Za-z]+)\s*$", text)
@@ -244,7 +279,7 @@ def _trailing_unit(text: str) -> tuple[str | None, str]:
 def _trailing_cn_unit(text: str) -> str | None:
     """取匹配串末尾的中文计量单位（长词优先，公斤 先于 斤）。"""
     match = re.search(
-        r"(公斤|千克|克|吨|斤|毫米|厘米|毫升|米|升)\s*$", text
+        r"(公斤|千克|千米|千瓦|克|吨|斤|毫米|厘米|毫升|米|升)\s*$", text
     )
     return match.group(1) if match else None
 
@@ -260,6 +295,7 @@ def number_key(raw: str) -> str | None:
     lowered = text.lower()
 
     digits = re.search(r"\d[\d,]*(?:\.\d+)?", text)
+    has_arabic = digits is not None
     if digits is not None:
         num = normalize_digits(digits.group(0))
     else:
@@ -282,14 +318,19 @@ def number_key(raw: str) -> str | None:
             rf"{_ASCII_LEFT}{_CURRENCY_CODES}(?![A-Za-z])",
             text, re.IGNORECASE,
         )
-        or re.search(r"dollars?|yuan|元|块", lowered)
+        or re.search(r"dollars?|yuan|美元|美金|元|块", lowered)
     ):
         # 简写金额换算：USD 2K → $2000（只在货币上下文里换算，
         # 避免把品牌 "3M" 或色温 "3000K" 当成数字）
         magnitude = re.search(
             rf"\d[\d,]*(?:\.\d+)?\s?({_MAGNITUDE}){_ASCII_RIGHT}", text, re.IGNORECASE
         )
-        factor = _MAGNITUDES[magnitude.group(1).lower()] if magnitude else 1
+        if magnitude:
+            factor = _MAGNITUDES[magnitude.group(1).lower()]
+        else:
+            # 中文量级只对阿拉伯数字生效：一万五 已经由 chinese_to_int
+            # 算成 15000，再乘一次 10000 会变成 1.5 亿
+            factor = _cn_magnitude_factor(text) if has_arabic else 1
         return f"${_scale_value(num, factor)}"
     # 时间：统一换算成天
     factor = _time_factor(text, lowered)
@@ -322,8 +363,9 @@ def number_key(raw: str) -> str | None:
         normalized = _MEASURE_UNITS.get(unit)
         if normalized is not None:
             return f"{num}{normalized}"
-    # 其余（计数/裸数字）
-    return num
+    # 其余（计数/裸数字）—— 中文量级只对阿拉伯数字展开：10万 → 100000
+    factor = _cn_magnitude_factor(text) if has_arabic else 1
+    return _scale_value(num, factor)
 
 
 def extract_numbers(text: str) -> set[str]:

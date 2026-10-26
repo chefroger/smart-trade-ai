@@ -81,14 +81,21 @@ def _exact_name_hits(contact: str, customers: list[dict]) -> list[dict]:
 
 
 def _names_overlap(contact: str, candidate: str) -> bool:
-    """两边的归一名字是否有实质重叠（互相包含）。
+    """两边的归一名字是否有实质重叠。
 
     只用于**关键词降级命中**的二次校验：LIKE 会扫 note/email，别家客户备注里
     写了个名字也会命中（复审 P1-3）。名字本身对不上就不许算匹配。
+
+    短查询（归一后 ≤3 字符）只认完全相等 —— 否则 `Li → Lily`、`Al → also`
+    这类包含关系会把对方认成另一个人（2026-10-25 审计 P1-5）。
     """
     left = _normalize_name(contact)
     right = _normalize_name(candidate)
     if not left or not right:
+        return False
+    if left == right:
+        return True
+    if len(left) <= 3 or len(right) <= 3:
         return False
     return left in right or right in left
 

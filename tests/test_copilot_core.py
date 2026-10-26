@@ -905,3 +905,77 @@ class TestVolumeUnits:
         assert draft_mod.strip_unbacked_numbers(
             "Volume 5L", CustomerContext(new_contact=True)
         ) == ("Volume （待确认）", True)
+
+
+# ── 2026-10-25 全面审计：中文量级 / 年份 / 短名匹配 ───────────────────────
+
+
+class TestChineseMagnitudes:
+    @pytest.mark.parametrize("text,key", [
+        ("5千元", "$5000"),
+        ("5千美元", "$5000"),
+        ("5万元", "$50000"),
+        ("10万", "100000"),
+        ("1.5万", "15000"),
+        ("5千万", "50000000"),
+        ("一万五元", "$15000"),
+        ("一万五千元", "$15000"),
+        ("一万零五元", "$10005"),
+        ("5千克", "5kg"),
+        ("5千米", "5km"),
+        ("5千瓦", "5kw"),
+    ])
+    def test_cn_magnitude_is_expanded(self, text, key):
+        assert extract_mod_numbers(text) == {key}
+
+    def test_year_is_not_a_duration(self):
+        assert extract_mod_numbers("2025年交货") == {"2025"}
+        assert extract_mod_numbers("2026年3月交货") == {"2026", "3"}
+        # 质保年限仍然是时长
+        assert extract_mod_numbers("30年质保") == {"10950d"}
+
+    def test_5k_yuan_does_not_back_1000_yuan(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "报价", "excerpt": "单价 5千元"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("报价 1000元", ctx)
+        assert changed is True, cleaned
+        kept, changed = draft_mod.strip_unbacked_numbers("报价 5000元", ctx)
+        assert changed is False, kept
+
+    def test_10_wan_not_backed_by_10_pcs(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[{"label": "报价", "excerpt": "MOQ 10 pcs"}],
+        )
+        cleaned, changed = draft_mod.strip_unbacked_numbers("数量 10万", ctx)
+        assert changed is True, cleaned
+
+
+class TestShortNameOverlap:
+    @pytest.mark.parametrize("contact,candidate,expected", [
+        ("Li", "Lily", False),
+        ("Al", "also", False),
+        ("John", "John Smith", True),
+        ("Acme", "Acme Ltd", True),
+        ("Li", "Li", True),
+    ])
+    def test_names_overlap(self, contact, candidate, expected):
+        assert ctx_mod._names_overlap(contact, candidate) is expected
+
+    def test_short_keyword_hit_is_new_contact(self, monkeypatch):
+        monkeypatch.setattr(
+            ctx_mod, "_list_company_customers",
+            lambda cid: [{"id": 1, "name": "Lily"}],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_fuzzy_search",
+            lambda q, cid: [{"customer_id": 1, "score": 1.0, "match_type": "keyword"}],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_get_customer",
+            lambda cid, company: {"id": cid, "name": "Lily"},
+        )
+        result = ctx_mod.match_customer("Li", company_id=1)
+        assert result.matched is False
