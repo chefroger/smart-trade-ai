@@ -61,6 +61,14 @@ class TestConversationLimitClamp:
         assert seen == [expected]
 
 
+class TestPromptUsesRealToolNames:
+    def test_no_list_files_in_prompts(self):
+        """Hermes 没有 list_files 工具；旧提示词让模型调一个不存在的工具。"""
+        src = _read_source("trade/helpers.py")
+        assert "list_files" not in src
+        assert "search_files" in src
+
+
 class TestUpdateNeedsConfirmHeader:
     def test_backend_rejects_update_without_confirm_header(self):
         """前端 confirm() 只是浏览器层，后端必须再挡一道（审计 P1-10）。"""

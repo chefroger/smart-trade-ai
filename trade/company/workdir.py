@@ -268,7 +268,7 @@ def _register_work_libraries(company_id: int, work_dir: Path) -> list[dict]:
     """将工作目录的每个子目录注册为 Hermes document library。
 
     为 _WORK_DIR_CATEGORIES 中定义的每个分类目录创建一条 library 记录，
-    使 Hermes Agent 能通过 read_file / list_dir 工具访问这些目录。
+    使 Hermes Agent 能通过 read_file / search_files 工具访问这些目录。
 
     Args:
         company_id: 公司数据库 ID

@@ -2247,7 +2247,8 @@ async function loadChatHistory() {
 
 // ═════════════════════ SSE STREAMING ═════════════════════
 const TOOL_NAMES = {
-    read_file:'📄 读取文件',list_files:'📂 列出文件',file_extract:'📋 提取文档',
+    read_file:'📄 读取文件',list_files:'📂 列出文件',search_files:'🔎 搜索文件',
+    file_extract:'📋 提取文档',
     web_search:'🌐 搜索',web_fetch:'📥 抓取',memory_recall:'🧠 回忆',
     memory_retain:'💾 保存',execute_code:'💻 代码',terminal:'🖥️ 终端',
     delegate_task:'🤖 委派',vision:'👁️ 图像',skill_load:'📦 技能',
