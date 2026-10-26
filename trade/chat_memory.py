@@ -419,8 +419,9 @@ def get_recent(
 ) -> list[dict]:
     """获取最近的 N 条对话记录，用于上下文注入。
 
-    customer_id 给定时只取该客户的对话（2026-10-23 审计 P0：此前按公司注入，
-    给 A 客户的回答会看到 B 客户的价格/承诺）。
+    customer_id 给定时只取该客户的对话；**未选客户时只取未归属对话**
+    （`customer_id IS NULL`）—— 否则默认聊天会把全公司最近 20 条塞进 prompt，
+    给 A 客户的回答看到 B 客户的价格/承诺（2026-10-23/25 审计）。
     返回时反转以确保上下文按时间正序排列。
     """
     clauses = ["company_id = ?", "query IS NOT NULL"]
@@ -428,6 +429,8 @@ def get_recent(
     if customer_id is not None:
         clauses.append("customer_id = ?")
         params.append(customer_id)
+    else:
+        clauses.append("customer_id IS NULL")
     params.append(limit)
 
     conn = get_connection()
@@ -544,6 +547,7 @@ def search_history(
     recent_days: int | None = None,
     recent_months: int | None = None,
     customer_id: int | None = None,
+    unattributed_only: bool = False,
 ) -> list[dict]:
     """按时间范围查询历史对话记录（供 LLM 工具调用使用）。
 
@@ -603,6 +607,8 @@ def search_history(
             if customer_id is not None:
                 clauses.append("customer_id = ?")
                 params.append(customer_id)
+            elif unattributed_only:
+                clauses.append("customer_id IS NULL")
             params.append(limit)
             rows = conn.execute(
                 "SELECT id, company_id, customer_id, library_id, query, response, "
@@ -618,6 +624,8 @@ def search_history(
             if customer_id is not None:
                 clauses.append("customer_id = ?")
                 params.append(customer_id)
+            elif unattributed_only:
+                clauses.append("customer_id IS NULL")
             if start is not None:
                 clauses.append("created_at >= ?")
                 params.append(start.strftime("%Y-%m-%d %H:%M:%S"))

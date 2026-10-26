@@ -248,12 +248,20 @@ class TestConversationCustomerScope:
         rows = chat_memory.search_history(1, limit=20, customer_id=10)
         assert [row["query"] for row in rows] == ["qA1", "qA2"]
 
-    def test_without_filter_still_returns_company_history(self, test_db):
+    def test_without_customer_only_returns_unattributed(self, test_db):
+        """未选客户时只注入未归属对话，不能把别家客户的历史带进来。"""
         from trade import chat_memory
 
         self._seed(test_db)
         rows = chat_memory.get_recent(1, limit=20)
-        assert len(rows) == 4
+        assert [row["query"] for row in rows] == ["qNull"]
+
+    def test_search_history_unattributed_only(self, test_db):
+        from trade import chat_memory
+
+        self._seed(test_db)
+        rows = chat_memory.search_history(1, limit=20, unattributed_only=True)
+        assert [row["query"] for row in rows] == ["qNull"]
 
     def test_save_records_customer_id(self, test_db):
         from trade import chat_memory
@@ -340,3 +348,134 @@ class TestOrderInjectionScope:
         self._seed(test_db)
         # Carol 没有订单：宁可空，也不能把 A/B 的订单塞进来
         assert search_orders(1, "报价多少", customer_id=12) is None
+
+    def test_no_customer_no_company_fallback(self, test_db):
+        """未选客户时也不能回退公司级 —— 3 笔别家订单仍是串户。"""
+        from trade.order import search_orders
+
+        self._seed(test_db)
+        assert search_orders(1, "报价多少") is None
+
+    def test_short_contact_does_not_match(self, test_db):
+        """联系人只有一个字时不能命中（"张"会命中"紧张"）。"""
+        from trade.order import search_orders
+
+        conn = sqlite3.connect(str(test_db))
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("INSERT INTO companies (id, name, slug) VALUES (1, 'Co', 'co')")
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name, contact) "
+            "VALUES (10, 1, 'A Corp', '张')"
+        )
+        conn.execute(
+            "INSERT INTO orders (company_id, customer_id, product_name) "
+            "VALUES (1, 10, 'WidgetA')"
+        )
+        conn.commit()
+        conn.close()
+
+        assert search_orders(1, "我很紧张，报价多少") is None
+
+
+class TestIdentityClearsLegacy:
+    def test_empty_write_removes_canonical_and_legacy(self):
+        from trade.prompts import (
+            _company_identity_path,
+            _legacy_identity_path,
+            get_agent_identity_by_slug,
+            write_agent_identity,
+        )
+
+        write_agent_identity("acme", "OLD")
+        legacy = _legacy_identity_path("acme")
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("LEGACY OLD", encoding="utf-8")
+
+        write_agent_identity("acme", "")
+
+        assert not _company_identity_path("acme").exists()
+        assert not legacy.exists()
+        assert get_agent_identity_by_slug("acme") == ""
+
+
+class TestCompanyDeactivateSyncsAuthTable:
+    def _seed(self, db_path):
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("INSERT INTO companies (id, name, slug) VALUES (1, 'Co', 'co')")
+        conn.execute(
+            "INSERT INTO trade_companies (company_id, data_dir, agent_identity_md, is_active) "
+            "VALUES (1, '/tmp/co', '', 1)"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_delete_sets_trade_companies_inactive(self, test_db):
+        from trade import company as company_module
+
+        self._seed(test_db)
+        assert company_module.delete(1) is True
+
+        conn = sqlite3.connect(str(test_db))
+        row = conn.execute(
+            "SELECT is_active FROM trade_companies WHERE company_id = 1"
+        ).fetchone()
+        conn.close()
+        assert row[0] == 0
+
+    def test_update_is_active_sets_trade_companies(self, test_db):
+        from trade import company as company_module
+
+        self._seed(test_db)
+        company_module.update(1, is_active=False)
+
+        conn = sqlite3.connect(str(test_db))
+        row = conn.execute(
+            "SELECT is_active FROM trade_companies WHERE company_id = 1"
+        ).fetchone()
+        conn.close()
+        assert row[0] == 0
+
+
+class TestChatScopeValidation:
+    def test_foreign_customer_is_rejected(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import chat as chat_api
+
+        class Payload:
+            customer_id = 5
+            library_id = None
+
+        monkeypatch.setattr(
+            "trade.customer.get", lambda cid, company_id=None: None
+        )
+        with pytest.raises(HTTPException) as exc:
+            chat_api._validate_scope(Payload(), 1)
+        assert exc.value.status_code == 400
+
+    def test_foreign_library_is_rejected(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import chat as chat_api
+
+        class Payload:
+            customer_id = None
+            library_id = 9
+
+        monkeypatch.setattr(
+            "trade.library.get", lambda lid, company_id=None: None
+        )
+        with pytest.raises(HTTPException) as exc:
+            chat_api._validate_scope(Payload(), 1)
+        assert exc.value.status_code == 400
+
+    def test_valid_scope_passes(self, monkeypatch):
+        from trade.api import chat as chat_api
+
+        class Payload:
+            customer_id = 5
+            library_id = 9
+
+        monkeypatch.setattr("trade.customer.get", lambda cid, company_id=None: {"id": cid})
+        monkeypatch.setattr("trade.library.get", lambda lid, company_id=None: {"id": lid})
+        chat_api._validate_scope(Payload(), 1)

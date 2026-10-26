@@ -35,7 +35,9 @@ class CompanyUpdate(BaseModel):
 
 
 class AgentIdentityUpdate(BaseModel):
-    agent_identity_md: str = Field("", description="Agent 身份配置 (Markdown)")
+    agent_identity_md: str = Field(
+        "", max_length=20000, description="Agent 身份配置 (Markdown)"
+    )
 
 
 class OnboardingFirstCompany(BaseModel):

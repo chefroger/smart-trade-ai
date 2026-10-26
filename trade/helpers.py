@@ -598,8 +598,10 @@ def build_query(
     company_slug = _company.slug_from_id(company_id) if company_id else None
     db_identity = _company.get_agent_identity(company_id) if company_id else None
 
-    # 检查是否有历史对话记录，用于判断是否首轮
-    has_history = bool(company_id and _cm.get_recent(company_id, limit=1))
+    # 检查是否有历史对话记录，用于判断是否首轮（按客户作用域，避免拿别家历史判首轮）
+    has_history = bool(
+        company_id and _cm.get_recent(company_id, limit=1, customer_id=customer_id)
+    )
 
     # 问题里点名的文件/目录（文档类任务判定要用，后面 doc_context 复用同一份）
     explicit_paths = _extract_explicit_paths(query, company_id)

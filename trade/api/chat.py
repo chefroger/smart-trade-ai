@@ -111,6 +111,28 @@ def _extract_and_cache_skill(cid: int, full_query: str, skill_hint: str | None) 
             _last_skill_per_company[cid] = current_skill
     return current_skill
 
+def _validate_scope(payload, cid: int) -> None:
+    """校验 payload 里的 customer_id / library_id 属于当前公司。
+
+    不校验会在切公司后产生"公司 B + 客户 A"的错标行，之后按客户过滤时
+    反而把它当作 A 的历史读出（2026-10-25 审计 P1-19）。
+    """
+    if payload.customer_id is not None:
+        from trade import customer as customer_module
+
+        if not customer_module.get(payload.customer_id, company_id=cid):
+            raise HTTPException(
+                status_code=400,
+                detail="customer_id does not belong to the current company.",
+            )
+    if payload.library_id is not None:
+        if not library_module.get(payload.library_id, company_id=cid):
+            raise HTTPException(
+                status_code=400,
+                detail="library_id does not belong to the current company.",
+            )
+
+
 def _document_gate(document_task, request_task_id: str, collector):
     """取读取证据并判定完成度；两份来源都没有证据时返回 None（降级放行）。
 
@@ -148,6 +170,8 @@ async def trade_chat(
 
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
+
+    _validate_scope(payload, cid)
 
     # 读取上次使用的 skill 名称（用于跳过重复注入）
     with _skill_cache_lock:
@@ -190,7 +214,7 @@ async def trade_chat(
                 )
                 # 绑定公司身份：chat-memory 等插件工具只认服务端绑定，
                 # 不再信任模型自填的 company_id（审计 P0-2）。
-                with bind_company(cid):
+                with bind_company(cid, payload.customer_id):
                     if document_task and request_task_id:
                         result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
                     else:
@@ -304,6 +328,8 @@ async def trade_chat_stream(
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
 
+    _validate_scope(payload, cid)
+
     # 读取上次使用的 skill 名称（用于跳过重复注入）
     with _skill_cache_lock:
         last_skill = _last_skill_per_company.get(cid)
@@ -387,7 +413,7 @@ async def trade_chat_stream(
                 )
                 start = time.time()
                 # 同同步端点：把公司身份绑进本次 agent 调用的上下文。
-                with bind_company(cid):
+                with bind_company(cid, payload.customer_id):
                     if document_task and request_task_id:
                         result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
                     else:

@@ -1013,7 +1013,7 @@ STOP RULE（防止无效搜索）:
             "auto customer development", "end to end lead generation", "auto lead generation",
             "full pipeline outreach", "automated outreach pipeline", "orchestrated lead gen",
         ],
-        "aliases": ["b2b-lead-generation", "b2b-osint", "auto-smtp-email"],
+        "aliases": ["b2b-lead-generation", "b2b-osint"],
         "input_fmt": (
             "产品描述 + 目标市场 + 目标客户类型 + 期望数量（可选）+ "
             "是否启用自动发送（默认否）"

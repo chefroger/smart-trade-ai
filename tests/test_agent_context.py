@@ -37,22 +37,36 @@ class TestChatMemoryToolBinding:
             result = handle_chat_memory_list({"company_id": 2})
         assert "does not match" in result
 
-    def test_bound_company_is_used(self, monkeypatch):
-        calls: list[int] = []
+    def test_bound_company_and_customer_are_used(self, monkeypatch):
+        calls: list[tuple] = []
 
         def fake_search_history(company_id, time_range="all", limit=20, **kw):
-            calls.append(company_id)
+            calls.append((company_id, kw.get("customer_id"), kw.get("unattributed_only")))
             return [{"id": 1, "query": "q", "response": "r"}]
 
         monkeypatch.setattr("trade.chat_memory.search_history", fake_search_history)
 
-        with bind_company(1):
+        with bind_company(1, 7):
             result = handle_chat_memory_list({"company_id": 1, "limit": 5})
 
         payload = json.loads(result)
         assert payload["company_id"] == 1
         assert payload["count"] == 1
-        assert calls == [1]
+        assert calls == [(1, 7, False)]
+
+    def test_no_customer_falls_back_to_unattributed_only(self, monkeypatch):
+        calls: list[tuple] = []
+
+        def fake_search_history(company_id, time_range="all", limit=20, **kw):
+            calls.append((company_id, kw.get("customer_id"), kw.get("unattributed_only")))
+            return []
+
+        monkeypatch.setattr("trade.chat_memory.search_history", fake_search_history)
+
+        with bind_company(1):
+            handle_chat_memory_list({"company_id": 1})
+
+        assert calls == [(1, None, True)]
 
     def test_invalid_claim_still_refused(self):
         with bind_company(1):

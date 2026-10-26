@@ -108,6 +108,15 @@ def _copy_skills(src: Path, dst_base: Path, progress_callback=None) -> list[str]
             continue
         if not (skill_dir.name.startswith("b2b-") or skill_dir.name.startswith("auto-") or skill_dir.name == "chat-memory"):
             continue
+        # 被 trade 停用的 skill 不允许装进 Hermes 运行时（审计 P1-13）：
+        # 路由层不注入只是第一层，装进 ~/.hermes/skills/ 后模型仍能读到。
+        from trade.skill_registry import _BLOCKED_SKILLS
+
+        if skill_dir.name in _BLOCKED_SKILLS:
+            stale = dst_base / skill_dir.name
+            if stale.exists():
+                shutil.rmtree(stale, ignore_errors=True)
+            continue
         skill_file = skill_dir / "SKILL.md"
         if not skill_file.is_file():
             continue
@@ -301,6 +310,15 @@ def update_skills() -> None:
             continue  # 只处理 b2b-、auto-、chat-memory skill 目录
 
         skill_name = skill_dir.name
+
+        # 被停用的 skill 不参与同步，并清掉此前已经装过的目录（审计 P1-13）
+        from trade.skill_registry import _BLOCKED_SKILLS
+
+        if skill_name in _BLOCKED_SKILLS:
+            stale = hermes_skills_dir / skill_name
+            if stale.exists():
+                shutil.rmtree(stale, ignore_errors=True)
+            continue
 
         # 安全校验：skill 目录名只能是 b2b- 前缀 + 小写字母连字符
         if (

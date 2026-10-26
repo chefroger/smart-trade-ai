@@ -104,7 +104,7 @@ def delete_company(
     x_company_id: int = Depends(require_company),
     x_confirm_delete: str | None = Header(None, alias="X-Confirm-Delete"),
 ):
-    """删除公司及级联删除其所有库、客户、对话记录。需要 X-Confirm-Delete header。"""
+    """软删除公司（is_active=0，数据保留 30 天后由 purge 清理）。需要 X-Confirm-Delete header。"""
     if x_company_id != company_id:
         raise HTTPException(status_code=403, detail="Cannot delete another company.")
     if x_confirm_delete != "yes":
@@ -175,10 +175,20 @@ def get_company_agent_identity(
     company_id: int,
     x_company_id: int = Depends(require_company),
 ):
-    """获取公司的 Agent 身份文本（优先文件，其次 DB 缓存）。仅允许查自己的。"""
+    """获取公司的 Agent 身份文本（文件优先，其次 DB 缓存）。仅允许查自己的。"""
     if x_company_id != company_id:
         raise HTTPException(status_code=404, detail="Company not found")
-    identity = company_module.get_agent_identity(company_id)
+
+    # 与运行时（prompts._resolve_custom_prompt）保持同一优先级：
+    # 文件 → DB。此前这里 DB 优先，用户手改文件后 UI 显示旧值、模型用新值。
+    slug = company_module.slug_from_id(company_id)
+    identity = ""
+    if slug:
+        from trade.prompts import get_agent_identity_by_slug
+
+        identity = get_agent_identity_by_slug(slug)
+    if not identity:
+        identity = company_module.get_agent_identity(company_id)
     return {"company_id": company_id, "agent_identity_md": identity}
 
 
@@ -188,20 +198,23 @@ def update_company_agent_identity(
     payload: AgentIdentityUpdate,
     x_company_id: int = Depends(require_company),
 ):
-    """更新公司的 Agent 身份（写入 DB 缓存）。"""
+    """更新公司的 Agent 身份（文件 + DB 双写，文件先行）。"""
     if x_company_id != company_id:
         raise HTTPException(status_code=403, detail="Cannot update another company's identity.")
+
+    slug = company_module.slug_from_id(company_id)
+    if not slug:
+        # 找不到 slug 时静默只写 DB，会让运行时（文件优先）继续用旧身份
+        raise HTTPException(status_code=500, detail="Company slug not found; identity not saved.")
+
+    # 先写文件：文件写失败就不动 DB，避免"DB 已变、运行时还是旧文件"
+    from trade.prompts import write_agent_identity
+
+    write_agent_identity(slug, payload.agent_identity_md or "")
+
     result = company_module.update_trade_company(
         company_id, agent_identity_md=payload.agent_identity_md,
     )
     if not result:
         raise HTTPException(status_code=404, detail="Company not found")
-
-    # 同步写公司 identity 文件 —— 运行时解析是"文件优先"（prompts.py），
-    # 只写 DB 会让 UI 里的修改永远不生效（审计 P0-3）。onboarding 也是双写。
-    slug = company_module.slug_from_id(company_id)
-    if slug:
-        from trade.prompts import write_agent_identity
-
-        write_agent_identity(slug, payload.agent_identity_md or "")
     return result

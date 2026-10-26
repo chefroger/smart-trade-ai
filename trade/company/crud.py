@@ -321,6 +321,13 @@ def update(
             conn.execute(
                 f"UPDATE companies SET {', '.join(fields)} WHERE id = ?", vals
             )
+            # 鉴权层（deps.require_company）查的是 trade_companies.is_active ——
+            # 只改 companies 会让"停用"完全不生效（审计 P1-18）
+            if is_active is not None:
+                conn.execute(
+                    "UPDATE trade_companies SET is_active = ? WHERE company_id = ?",
+                    (1 if is_active else 0, company_id),
+                )
             conn.commit()
 
         return get(company_id)
@@ -342,6 +349,12 @@ def delete(company_id: int) -> bool:
             "WHERE id = ? AND is_active = 1",
             (company_id,),
         ).rowcount
+        # 同步 trade_companies.is_active —— 鉴权层只查这张表（审计 P1-18），
+        # 不写这里的话"软删除"后仍能继续访问全部业务数据。
+        conn.execute(
+            "UPDATE trade_companies SET is_active = 0 WHERE company_id = ?",
+            (company_id,),
+        )
         conn.commit()
         if n > 0:
             # 写入审计日志（用于后续 30 天倒计时清理）

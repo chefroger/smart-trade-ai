@@ -19,6 +19,9 @@ from contextvars import ContextVar
 _current_company_id: ContextVar[int | None] = ContextVar(
     "trade_agent_company_id", default=None
 )
+_current_customer_id: ContextVar[int | None] = ContextVar(
+    "trade_agent_customer_id", default=None
+)
 
 
 def current_company_id() -> int | None:
@@ -26,11 +29,18 @@ def current_company_id() -> int | None:
     return _current_company_id.get()
 
 
+def current_customer_id() -> int | None:
+    """当前 agent 调用绑定的客户 id（未选客户 → None）。"""
+    return _current_customer_id.get()
+
+
 @contextmanager
-def bind_company(company_id: int | None):
-    """把 company_id 绑定到当前上下文，退出时恢复（线程池复用不会串值）。"""
-    token = _current_company_id.set(company_id)
+def bind_company(company_id: int | None, customer_id: int | None = None):
+    """把公司/客户绑定到当前上下文，退出时恢复（线程池复用不会串值）。"""
+    company_token = _current_company_id.set(company_id)
+    customer_token = _current_customer_id.set(customer_id)
     try:
         yield
     finally:
-        _current_company_id.reset(token)
+        _current_customer_id.reset(customer_token)
+        _current_company_id.reset(company_token)

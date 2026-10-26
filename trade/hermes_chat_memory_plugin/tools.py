@@ -107,9 +107,10 @@ def handle_chat_memory_list(args: dict[str, Any], **_kw) -> str:
     # 绑定由 Trade 在 agent.chat() 外层通过 ContextVar 设置，Hermes 的工具
     # 执行器会随线程复制上下文。
     try:
-        from trade.agent_context import current_company_id
+        from trade.agent_context import current_company_id, current_customer_id
 
         bound_company = current_company_id()
+        bound_customer = current_customer_id()
     except ImportError as exc:
         return _err(f"trade agent context unavailable: {exc}")
 
@@ -173,6 +174,10 @@ def handle_chat_memory_list(args: dict[str, Any], **_kw) -> str:
             limit=limit,
             recent_days=recent_days,
             recent_months=recent_months,
+            # 选中客户时只查该客户；未选客户时只返回未归属对话，
+            # 避免工具层绕过 prompt 层的客户隔离（审计 P1-2）
+            customer_id=bound_customer,
+            unattributed_only=bound_customer is None,
         )
     except Exception:
         # 异常不外抛（plugins/AGENTS.md: handler 失败返回 tool_error）—— 给 LLM 可读的错误

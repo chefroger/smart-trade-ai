@@ -170,10 +170,26 @@ def write_agent_identity(company_slug: str, content: str) -> None:
     文件路径：~/.trade/{slug}/companies/{slug}/agent-identity.md
     写入后自动失效 mtime 缓存。
 
+    **清空语义**（2026-10-25 审计 P1-9）：content 为空时删除规范文件与
+    legacy 文件。只把文件截断成空串不够 —— `get_agent_identity_by_slug`
+    在规范文件为空时会回退读 legacy 路径，用户清空后旧身份会"复活"。
+
     注意：此函数只写文件，不写 DB。
           DB 缓存逻辑由调用方负责。
     """
     path = _company_identity_path(company_slug)
+    legacy = _legacy_identity_path(company_slug)
+
+    if not (content or "").strip():
+        for target in (path, legacy):
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
+        for target in (path, legacy):
+            _FILE_CACHE.pop(str(target.resolve()), None)
+        return
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     # 失效缓存 — 确保下次读取时重新从磁盘加载最新内容

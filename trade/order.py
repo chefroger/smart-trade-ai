@@ -271,13 +271,12 @@ def search_orders(
 ) -> str | None:
     """搜索与用户 query 相关的订单，返回注入上下文的文本块。
 
-    3 层优先级：
+    2 层优先级：
       1. 联系人 + 品名精确匹配
       2. 联系人聚合
-      3. 公司聚合（仅无指定客户时）
 
-    给了 customer_id 时**绝不回退公司级**：宁可没有订单上下文，也不把
-    别家客户的成交价带进当前客户的回答。
+    给了 customer_id 时只查该客户；未给时也只按联系人匹配，**绝不回退公司级** ——
+    宁可没有订单上下文，也不把别家客户的成交价带进当前回答。
 
     Returns:
         订单上下文字符串，或 None（无匹配/无订单意图时）。
@@ -303,30 +302,44 @@ def search_orders(
         rows = _search_by_customer(customer_id, limit=5)
         return _format_order_context(rows, cust) if rows else None
 
-    # 未指定客户：保留联系人匹配，再退公司级（限制条数）
+    # 未指定客户：只按联系人匹配。**不再回退公司级** —— 回退等于把别家
+    # 客户的成交价塞进当前回答（2026-10-25 审计 P1-1）。
     all_customers = _cust.list_by_company(company_id)
     for cust in all_customers:
-        contact = cust.get("contact", "")
-        if contact and contact in query:
-            for kw in candidates:
-                rows = _search_by_customer_and_product(cust["id"], kw, limit=5)
-                if rows:
-                    return _format_order_context(rows, cust, kw)
+        if not _contact_mentioned(cust.get("contact", ""), query):
+            continue
+        for kw in candidates:
+            rows = _search_by_customer_and_product(cust["id"], kw, limit=5)
+            if rows:
+                return _format_order_context(rows, cust, kw)
 
     # Layer 2: 按联系人聚合
     for cust in all_customers:
-        contact = cust.get("contact", "")
-        if contact and contact in query:
-            rows = _search_by_customer(cust["id"], limit=10)
-            if rows:
-                return _format_order_context(rows, cust)
-
-    # Layer 3: 公司级聚合（有订单意图时才走到这里；限制 3 笔）
-    rows = _search_by_company(company_id, limit=3)
-    if rows:
-        return _format_order_context(rows)
+        if not _contact_mentioned(cust.get("contact", ""), query):
+            continue
+        rows = _search_by_customer(cust["id"], limit=10)
+        if rows:
+            return _format_order_context(rows, cust)
 
     return None
+
+
+def _contact_mentioned(contact: str, query: str) -> bool:
+    """联系人是否被问句提到。
+
+    长度 <2 的直接忽略（联系人填 "张"/"Li" 会命中几乎所有句子）；
+    拉丁名要求词边界（"Li" 不能命中 "list"）。
+    """
+    contact = (contact or "").strip()
+    if len(contact) < 2:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9 ._\-]+", contact):
+        return re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(contact)}(?![A-Za-z0-9])",
+            query,
+            re.IGNORECASE,
+        ) is not None
+    return contact in query
 
 
 def _search_by_customer_and_product(customer_id: int, product_kw: str, limit: int = 5) -> list[dict]:

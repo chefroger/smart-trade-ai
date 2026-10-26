@@ -841,10 +841,12 @@ async function recoverAuth(method, path, body) {
 // #region api-opts —— 这段被 tests_js/api-opts.test.js 按标记整体抽取测试，勿删标记
 // 构造请求选项：鉴权头 + body 编码。
 // FormData（文件上传）必须原样透传且不设 Content-Type —— 否则会丢掉 multipart 的 boundary。
-function _buildApiOpts(method, body, token, companyId) {
+function _buildApiOpts(method, body, token, companyId, extraHeaders) {
     const opts = { method: method, headers: {} };
     if (token) opts.headers['X-Hermes-Session-Token'] = token;
     if (companyId) opts.headers['X-Company-ID'] = String(companyId);
+    // 需要额外 header 的端点（如删除公司要 X-Confirm-Delete）走这里
+    if (extraHeaders) Object.assign(opts.headers, extraHeaders);
     if (body instanceof FormData) {
         opts.body = body;
     } else if (body) {
@@ -855,8 +857,8 @@ function _buildApiOpts(method, body, token, companyId) {
 }
 // #endregion api-opts
 
-async function api(method, path, body) {
-    const opts = _buildApiOpts(method, body, TOKEN, currentCompanyId);
+async function api(method, path, body, extraHeaders) {
+    const opts = _buildApiOpts(method, body, TOKEN, currentCompanyId, extraHeaders);
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 120000);
     opts.signal = ctrl.signal;
@@ -2736,7 +2738,13 @@ function showOrderEditModal(oid, presetCid) {
     backdrop.className = 'modal-backdrop';
     backdrop.id = 'order-modal-backdrop';
     backdrop.onclick = e => { if (e.target===backdrop) backdrop.remove(); };
-    var stLabels = [t('order.status_quoting'),t('order.status_ordered'),t('order.status_shipped'),t('order.status_done'),t('order.status_cancelled')];
+    // value 必须是后端 Literal 认的中文；翻译只用于显示文本。
+    // 以前 option 文本即 value，英文界面提交 "Quoting" → 422（审计 P1-7）。
+    var stValues = ['报价中','已下单','已出货','已完成','已取消'];
+    var stKeys = ['quoting','ordered','shipped','done','cancelled'];
+    var stOptions = stValues.map(function(v, i) {
+        return '<option value="' + v + '">' + t('order.status_' + stKeys[i]) + '</option>';
+    }).join('');
     backdrop.innerHTML = '<div class="modal" style="max-width:520px;width:95%;" onclick="event.stopPropagation()">' +
         '<h3>' + (isEdit ? t('order.edit_title') : t('order.title')) + '</h3>' +
         '<input type="hidden" id="order-edit-id" value="'+(oid||'')+'">' +
@@ -2758,7 +2766,7 @@ function showOrderEditModal(oid, presetCid) {
         '</div>' +
         '<div class="form-row">' +
             '<div class="form-group"><label for="order-total">'+t('order.amount')+'</label><input type="number" id="order-total" placeholder="3500" step="any" min="0"></div>' +
-            '<div class="form-group"><label for="order-status">'+t('order.status')+'</label><select id="order-status">'+stLabels.map(function(s){return '<option>'+s+'</option>';}).join('')+'</select></div>' +
+            '<div class="form-group"><label for="order-status">'+t('order.status')+'</label><select id="order-status">'+stOptions+'</select></div>' +
         '</div>' +
         '<div class="form-row">' +
             '<div class="form-group"><label for="order-delivery">'+t('order.delivery')+'</label><input type="date" id="order-delivery"></div>' +
@@ -3931,8 +3939,11 @@ async function createCompany() {
 
 async function deleteCompany(id) {
     if (!confirm('确定停用该公司？数据将保留 30 天后自动清理。')) return;
-    const r = await api('DELETE', `/api/trade/companies/${id}`);
-    if (r?.ok) { toast('已删除'); if (currentCompanyId===id) onCompanyChange(''); await loadCompanies(); loadCompanyListUI(); }
+    // 后端要求 X-Confirm-Delete: yes，否则 400（审计 P1-8）
+    const r = await api('DELETE', `/api/trade/companies/${id}`, null, {
+        'X-Confirm-Delete': 'yes',
+    });
+    if (r?.ok) { toast('已停用'); if (currentCompanyId===id) onCompanyChange(''); await loadCompanies(); loadCompanyListUI(); }
     else toast(r?.detail||'删除失败');
 }
 
