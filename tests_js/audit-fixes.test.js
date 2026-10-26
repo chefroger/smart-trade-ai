@@ -70,7 +70,8 @@ test('两个更新入口都先确认再 POST', () => {
     assert.ok(start > 0, `找不到 ${fn}`);
     const body = SRC.slice(start, SRC.indexOf('\n}', start));
     const confirmAt = body.indexOf('_confirmTradeUpdate');
-    const postAt = body.indexOf("api('POST', '/api/trade/system/update')");
+    const postAt = body.indexOf("api('POST', '/api/trade/system/update'");
     assert.ok(confirmAt > 0 && confirmAt < postAt, `${fn} 必须先确认再发更新请求`);
+    assert.match(body, /'X-Confirm-Update': 'yes'/, `${fn} 必须带后端要求的确认头`);
   }
 });

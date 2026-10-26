@@ -1188,7 +1188,7 @@ async function doTradeUpdate(e) {
     var updateFailed = false;
     var restartScheduled = false;
     try {
-        const resp = await api('POST', '/api/trade/system/update');
+        const resp = await api('POST', '/api/trade/system/update', null, {'X-Confirm-Update': 'yes'});
         if (!resp) {
             updateFailed = true;
         } else if (resp.ok) {
@@ -1720,7 +1720,7 @@ async function doUpdateSystem() {
     if (btn) btn.textContent = '更新中...';
     var restartScheduled = false;
     try {
-        const resp = await api('POST', '/api/trade/system/update');
+        const resp = await api('POST', '/api/trade/system/update', null, {'X-Confirm-Update': 'yes'});
         if (resp?.ok) {
             restartScheduled = !!resp.restart_scheduled;
             toast(restartScheduled ? '✅ 系统更新完成！正在重启...' : '✅ 更新完成。请点击"🔄 重启"以应用新版本。');

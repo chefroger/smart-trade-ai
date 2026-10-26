@@ -38,6 +38,7 @@ PIN_SHA = "a" * 40
 from trade.post_install import update as _update_mod  # noqa: E402
 
 _REAL_REMOTE_MAIN_SHA = _update_mod._remote_main_sha
+_REAL_REMOTE_MAIN_SHA_FROM = _update_mod._remote_main_sha_from
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +51,7 @@ def _pin_git_commit(monkeypatch):
     from trade.post_install import update as upd
 
     monkeypatch.setattr(upd, "_remote_main_sha", lambda *a, **k: PIN_SHA)
+    monkeypatch.setattr(upd, "_remote_main_sha_from", lambda *a, **k: PIN_SHA)
     monkeypatch.setattr(upd, "_git_head", lambda *a, **k: PIN_SHA)
 
 
@@ -1042,6 +1044,7 @@ class TestUpdatePinning:
             stderr = ""
 
         monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(upd, "_remote_main_sha_from", _REAL_REMOTE_MAIN_SHA_FROM)
         assert _REAL_REMOTE_MAIN_SHA(Path("/tmp")) == PIN_SHA
 
     def test_remote_main_sha_rejects_unparseable_output(self, monkeypatch):
@@ -1053,6 +1056,7 @@ class TestUpdatePinning:
             stderr = ""
 
         monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(upd, "_remote_main_sha_from", _REAL_REMOTE_MAIN_SHA_FROM)
         assert _REAL_REMOTE_MAIN_SHA(Path("/tmp")) is None
 
     def test_unresolvable_remote_aborts_before_touching_worktree(self, tmp_path, monkeypatch):
@@ -1079,6 +1083,61 @@ class TestUpdatePinning:
         assert any("cannot resolve remote main" in e for e in result["errors"])
         assert not [c for c in calls if c[:2] == ["git", "pull"]], (
             "解析不到钉选提交时不能拉取（否则装进来的是未经确认的版本）"
+        )
+
+    def test_fresh_clone_is_pinned_to_remote_sha(self, tmp_path, monkeypatch):
+        """首次安装也必须 checkout 到钉选提交，不能直接吃 clone 那一刻的分支头。"""
+        from trade.post_install import update as upd
+
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(list(cmd))
+            cp = MagicMock()
+            cp.returncode = 0
+            cp.stdout = cp.stderr = ""
+            return cp
+
+        monkeypatch.setattr(upd.subprocess, "run", fake_run)
+        monkeypatch.setattr(upd, "install_skills", lambda: None)
+        monkeypatch.setattr(upd, "update_skills", lambda: None)
+        monkeypatch.setattr(upd, "_sync_trade_template", lambda *a, **k: None)
+        monkeypatch.setattr(upd, "_ensure_auto_start", lambda *a, **k: None)
+
+        import trade.database as db_module
+        monkeypatch.setattr(db_module, "init_db", lambda: tmp_path / "trade.db")
+
+        result = upd.update_trade()
+
+        assert result["ok"] is True, result
+        clone = next(c for c in calls if c[:2] == ["git", "clone"])
+        assert clone[2].endswith("smart-trade-ai.git")
+        assert any(
+            c[:3] == ["git", "checkout", "-B"] and c[3] == "main" and PIN_SHA in c
+            for c in calls
+        ), calls
+
+    def test_clone_checkout_failure_cleans_up_half_install(self, tmp_path, monkeypatch):
+        from trade.post_install import update as upd
+
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+
+        def fake_run(cmd, *a, **k):
+            cp = MagicMock()
+            cp.stdout = cp.stderr = ""
+            cp.returncode = 1 if cmd[:2] == ["git", "checkout"] else 0
+            return cp
+
+        monkeypatch.setattr(upd.subprocess, "run", fake_run)
+        monkeypatch.setattr(upd, "install_skills", lambda: None)
+        monkeypatch.setattr(upd, "update_skills", lambda: None)
+
+        result = upd.update_trade()
+
+        assert result["ok"] is False
+        assert not (tmp_path / "foreign-trade-assistant").exists(), (
+            "检出钉选提交失败时必须删掉不完整目录"
         )
 
     def test_head_drift_aborts_and_rolls_back(self, tmp_path, monkeypatch):
@@ -1111,6 +1170,31 @@ class TestUpdatePinning:
         assert [c for c in calls if c[:2] == ["git", "reset"]], (
             "HEAD 与钉选提交不一致时必须回退到升级前的提交"
         )
+
+
+class TestPruneFailedMigrationCopies:
+    def test_keeps_latest_three(self, tmp_path):
+        from trade.post_install import update as upd
+
+        for i in range(5):
+            (tmp_path / f"trade-2026010{i}-120000-failed-migration.db").write_text(
+                "x", encoding="utf-8",
+            )
+        (tmp_path / "trade-20260101-120000-before-upgrade.db").write_text(
+            "x", encoding="utf-8",
+        )
+
+        upd._prune_failed_migration_copies(tmp_path)
+
+        left = sorted(p.name for p in tmp_path.glob("*-failed-migration.db"))
+        assert len(left) == 3
+        assert left == [
+            "trade-20260102-120000-failed-migration.db",
+            "trade-20260103-120000-failed-migration.db",
+            "trade-20260104-120000-failed-migration.db",
+        ]
+        # 升级前备份不属于现场副本，不能误删
+        assert (tmp_path / "trade-20260101-120000-before-upgrade.db").is_file()
 
 
 def sqlite3_error_ref():

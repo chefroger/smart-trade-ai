@@ -61,6 +61,14 @@ class TestConversationLimitClamp:
         assert seen == [expected]
 
 
+class TestUpdateNeedsConfirmHeader:
+    def test_backend_rejects_update_without_confirm_header(self):
+        """前端 confirm() 只是浏览器层，后端必须再挡一道（审计 P1-10）。"""
+        src = _read_source("trade/app.py")
+        assert "X-Confirm-Update" in src
+        assert 'request.headers.get("X-Confirm-Update"' in src
+
+
 class TestConversationSaveScope:
     def test_foreign_library_is_rejected(self):
         """与 /chat 的 _validate_scope 对齐：库里没有这个库就不能按它存行。"""

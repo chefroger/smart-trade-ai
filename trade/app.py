@@ -607,6 +607,16 @@ def _create_system_router() -> APIRouter:
             from fastapi import HTTPException
             raise HTTPException(status_code=429, detail="系统端点请求过于频繁，请稍后重试。")
 
+        # 更新 = 拉代码 + 装依赖 + 重启，前端 confirm() 只是浏览器层，任何持 token
+        # 的脚本都能直接 POST。要求一个显式确认头，与删除公司同一套防误触语义
+        # （审计 P1-10）。
+        if request.headers.get("X-Confirm-Update", "").lower() != "yes":
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=400,
+                detail="更新需要确认：缺少 X-Confirm-Update: yes 请求头。",
+            )
+
         from trade.post_install import update_trade as _do_update
         result = _do_update()  # 现在返回结构化 dict，不再依赖 _capture_output
 

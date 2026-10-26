@@ -310,13 +310,8 @@ def _git_head(trade_dir: Path) -> str | None:
     return sha if r.returncode == 0 and len(sha) >= 7 else None
 
 
-def _remote_main_sha(trade_dir: Path) -> str | None:
-    """解析远端 main 当前的提交 SHA，用于把本次更新钉死在这个提交上。
-
-    为什么先查远端：`git pull origin main` 拉的是"命令执行那一刻"的分支头，
-    若拉取过程中远端被推了新提交，装进来的就未必是用户点更新时那个版本。
-    先记下 SHA、拉取后再回读 HEAD 比对，不一致就中止 —— 宁可让用户重试，
-    也不要把一个未经确认的提交装进本机。
+def _remote_main_sha_from(remote: str, cwd: Path) -> str | None:
+    """解析 `remote` 的 main 分支当前提交 SHA；解析失败返回 None。
 
     禁止交互提示（GIT_TERMINAL_PROMPT=0）：私有仓库/凭证过期时会让 `git` 在
     后台服务里等账号密码，界面永远停在"更新中"。
@@ -324,8 +319,8 @@ def _remote_main_sha(trade_dir: Path) -> str | None:
     try:
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         r = subprocess.run(
-            ["git", "ls-remote", "origin", "refs/heads/main"],
-            cwd=str(trade_dir), capture_output=True, text=True, timeout=60,
+            ["git", "ls-remote", remote, "refs/heads/main"],
+            cwd=str(cwd), capture_output=True, text=True, timeout=60,
             env=env,
         )
     except (FileNotFoundError, OSError, subprocess.SubprocessError):
@@ -337,6 +332,17 @@ def _remote_main_sha(trade_dir: Path) -> str | None:
     if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
         return None
     return sha
+
+
+def _remote_main_sha(trade_dir: Path) -> str | None:
+    """解析 origin/main 当前的提交 SHA，用于把本次更新钉死在这个提交上。
+
+    为什么先查远端：`git pull origin main` 拉的是"命令执行那一刻"的分支头，
+    若拉取过程中远端被推了新提交，装进来的就未必是用户点更新时那个版本。
+    先记下 SHA、拉取后再回读 HEAD 比对，不一致就中止 —— 宁可让用户重试，
+    也不要把一个未经确认的提交装进本机。
+    """
+    return _remote_main_sha_from("origin", trade_dir)
 
 
 def _verify_pinned_head(
@@ -351,6 +357,22 @@ def _verify_pinned_head(
     emit(f"  ❌ HEAD 与钉选提交不一致：期望 {target_sha[:8]}，实际 {got_short}")
     errors.append(f"pinned head mismatch: expected {target_sha[:8]}, got {got_short}")
     return False
+
+
+def _prune_failed_migration_copies(backups_dir: Path, keep: int = 3) -> None:
+    """只保留最近 `keep` 份 `*-failed-migration.db` 现场副本。
+
+    每次迁移失败都会另存一份；不清理会无限累积（审计 P1-10 残留）。
+    清理失败只忽略 —— 留盘比中断恢复安全。
+    """
+    try:
+        olds = sorted(
+            backups_dir.glob("trade-*-failed-migration.db"), reverse=True,
+        )
+        for stale in olds[keep:]:
+            stale.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _restore_db_after_failed_migration(
@@ -377,6 +399,7 @@ def _restore_db_after_failed_migration(
 
         snapshot_db(db_path, failed_copy)
         emit(f"  ℹ️ 迁移失败的库已另存：{failed_copy.name}")
+        _prune_failed_migration_copies(backup_path.parent)
     except Exception as e:
         # 现场拷贝失败不阻断恢复：备份本身还在
         warnings.append(f"failed-migration snapshot skipped: {e}")
@@ -548,16 +571,27 @@ def update_trade() -> dict:
             warnings.append(f"checkout rolled back after {reason}")
 
     # ── Step 1: git pull / clone ───────────────────────────────────────────
-    # 本次更新钉选的提交（clone 场景没有旧版本可比，不做钉选）
+    # 本次更新钉选的提交（clone 也在 clone 后 checkout 到同一个 SHA）
     target_sha: str | None = None
+    _REPO_URL = "https://github.com/chefroger/smart-trade-ai.git"
     if not trade_dir.is_dir():
         _emit("→ Step 1/7: git clone (install directory not found) ...")
         _emit(f"  Target: {trade_dir}")
         trade_dir.parent.mkdir(parents=True, exist_ok=True)
+        # 首次安装同样钉选：clone 拿到的是 clone 那一刻的分支头，先记下 SHA
+        target_sha = _remote_main_sha_from(_REPO_URL, trade_dir.parent)
+        if not target_sha:
+            _emit("  ❌ 无法解析远端 main 的最新提交（网络/代理或仓库不可达），已中止安装。")
+            errors.append("cannot resolve remote main commit")
+            return {
+                "ok": False, "version": "",
+                "error": "无法解析远端 main 的最新提交，请检查网络或代理后重试。",
+                "errors": errors, "warnings": warnings, "messages": messages,
+            }
+        _emit(f"  ℹ️ 本次安装钉选提交：{target_sha[:8]}")
         try:
             clone_result = subprocess.run(
-                ["git", "clone", "https://github.com/chefroger/smart-trade-ai.git",
-                 str(trade_dir)],
+                ["git", "clone", _REPO_URL, str(trade_dir)],
                 capture_output=True, text=True, timeout=300,
             )
         except FileNotFoundError:
@@ -569,6 +603,25 @@ def update_trade() -> dict:
             _emit(f"  ❌ git clone failed: {err}")
             errors.append(f"git clone failed: {err}")
             return {"ok": False, "version": "", "error": err, "errors": errors, "warnings": warnings, "messages": messages}
+        # 把本地 main 指到钉选提交（clone 期间远端可能被推进）；之后回读校验
+        pinned = subprocess.run(
+            ["git", "checkout", "-B", "main", target_sha],
+            cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
+        )
+        if pinned.returncode != 0:
+            err = (pinned.stderr or pinned.stdout).strip()
+            _emit(f"  ❌ 无法检出钉选提交 {target_sha[:8]}：{err[:200]}")
+            errors.append(f"checkout pinned clone failed: {err[:200]}")
+            _emit("  💡 已删除不完整的安装目录，请重试。")
+            shutil.rmtree(trade_dir, ignore_errors=True)
+            return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
+        if not _verify_pinned_head(trade_dir, target_sha, _emit, errors):
+            shutil.rmtree(trade_dir, ignore_errors=True)
+            return {
+                "ok": False, "version": "",
+                "error": f"clone 后 HEAD 与钉选提交不一致（期望 {target_sha[:8]}），已删除不完整目录。",
+                "errors": errors, "warnings": warnings, "messages": messages,
+            }
         _emit(f"  ✓ Repository cloned to {trade_dir}")
     else:
         _emit("→ Step 1/7: git pull ...")
