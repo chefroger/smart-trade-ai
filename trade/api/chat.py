@@ -540,6 +540,11 @@ async def trade_chat_stream(
                     if lib:
                         lib_name = lib["name"]
 
+                # 客户端已断连/已超时：迟到的回答不能再写进历史 —— 用户已经收到
+                # 中止提示，存档后会被下一轮当上下文注入（复审 P1-21 残口）。
+                if cancel_event.is_set():
+                    return None
+
                 # 先保存对话，再发送响应 —— 确保前端能拿到 conversation_id 做评分
                 conv_id = None
                 try:

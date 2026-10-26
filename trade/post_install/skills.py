@@ -100,7 +100,8 @@ def _copy_skills(src: Path, dst_base: Path, progress_callback=None) -> list[str]
         progress_callback: 可选回调 f(msg)，每安装一个 skill 调用一次
 
     Returns:
-        已安装的 skill 目录名列表（如 ["b2b-document", "auto-smtp-email", ...]）
+        已安装的 skill 目录名列表（如 ["b2b-document", "b2b-osint", ...]）；
+        `_BLOCKED_SKILLS` 内的 skill 不会被复制
     """
     installed = []
     for skill_dir in sorted(src.iterdir()):

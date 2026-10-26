@@ -6,7 +6,7 @@ Trade AI Assistant — 公司管理 API 路由。
   POST   /companies                          — 注册新公司
   GET    /companies/{company_id}              — 公司详情
   PUT    /companies/{company_id}              — 更新公司信息
-  DELETE /companies/{company_id}              — 删除公司（级联删除所有数据）
+  DELETE /companies/{company_id}              — 停用公司（软删除，数据保留）
   GET    /companies/{company_id}/agent-identity   — 获取 Agent 身份
   PUT    /companies/{company_id}/agent-identity   — 更新 Agent 身份
 """

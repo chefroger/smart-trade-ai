@@ -96,7 +96,7 @@ _NETWORK_HINTS = (
 
 
 def _classify_error(exc: Exception) -> tuple[str, str]:
-    """把异常分成两类：("protocol"|"no_vision"|"other", 人类可读原因)。
+    """把异常分成四类：("protocol"|"network"|"no_vision"|"other", 人类可读原因)。
 
     先判协议：路由/端点类的 404 文案里常带 "vision" 字样，顺序反了会误报成
     "模型不支持看图"，把用户引到错误的修复方向。

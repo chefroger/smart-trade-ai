@@ -61,11 +61,17 @@ def save_conversation(
     payload: ConversationSave,
     x_company_id: int = Depends(require_company),
 ):
-    """保存对话回合到 SQLite + Hindsight 长期记忆。"""
+    """保存对话回合到 SQLite + Hindsight 长期记忆。
+
+    library_id 必须属于当前公司：与 /chat 的 `_validate_scope` 对齐，
+    否则会存进「公司 A + 公司 B 的库」这种错标行（复审 P1-19 残口）。
+    """
     lib_name = payload.library_name
-    if payload.library_id and not lib_name:
+    if payload.library_id:
         lib = library_module.get(payload.library_id, company_id=x_company_id)
-        if lib:
+        if not lib:
+            raise HTTPException(status_code=400, detail="Library not found")
+        if not lib_name:
             lib_name = lib["name"]
 
     return chat_memory.save_with_context(

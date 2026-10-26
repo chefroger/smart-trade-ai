@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -99,3 +101,50 @@ class TestDeadlineEmitsError:
         body = await _collect(company)
 
         assert "event: done" in body
+
+
+class _LateAgent:
+    """超时之后才返回的 agent（hard_interrupt 不配合）—— 复现迟到答案。"""
+
+    def __init__(self, done: threading.Event):
+        self.done = done
+
+    def hard_interrupt(self, *a, **k):  # noqa: ARG002
+        pass
+
+    def chat(self, query):  # noqa: ARG002
+        time.sleep(0.25)
+        self.done.set()
+        return "迟到答案"
+
+    def run_conversation(self, query, task_id=None):  # noqa: ARG002
+        return {"final_response": self.chat(query)}
+
+
+class TestLateAnswerNotSaved:
+    """超时/断连后迟到的回答不得写进历史（复审 P1-21 流式残口）。"""
+
+    async def test_late_answer_is_not_saved_after_timeout(self, company):
+        import trade.api.chat as chat
+        from trade.api.models import ChatRequest
+
+        done = threading.Event()
+        saved = []
+
+        with patch.object(chat, "_STREAM_DEADLINE_SECONDS", 0.05), \
+             patch.object(chat, "create_agent", return_value=_LateAgent(done)), \
+             patch.object(chat, "build_query", return_value=("Q", "H")), \
+             patch.object(
+                 chat.chat_memory, "save_with_context",
+                 side_effect=lambda **kw: saved.append(kw) or {"id": 1},
+             ), \
+             patch("trade.license.check_license", return_value=(True, "")):
+            resp = await chat.trade_chat_stream(
+                ChatRequest(query="你好"), company["id"]
+            )
+            async for _chunk in resp.body_iterator:
+                pass
+
+        assert done.wait(2.0), "agent 工作线程没有跑完"
+        time.sleep(0.1)  # 给保存分支留出执行时间
+        assert saved == [], "用户已收到超时、流已关闭，迟到答案仍被写入了历史"

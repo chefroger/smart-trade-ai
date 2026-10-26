@@ -61,6 +61,23 @@ class TestConversationLimitClamp:
         assert seen == [expected]
 
 
+class TestConversationSaveScope:
+    def test_foreign_library_is_rejected(self):
+        """与 /chat 的 _validate_scope 对齐：库里没有这个库就不能按它存行。"""
+        import trade.api.conversations as conv_api
+        from trade.api.models import ConversationSave
+
+        with patch.object(conv_api.library_module, "get", return_value=None):
+            with pytest.raises(HTTPException) as exc:
+                conv_api.save_conversation(
+                    ConversationSave(query="q", response="r", library_id=99),
+                    x_company_id=1,
+                )
+
+        assert exc.value.status_code == 400
+        assert "Library" in exc.value.detail
+
+
 class TestCsvSizeAfterRead:
     @pytest.mark.asyncio
     async def test_chunked_upload_over_limit_rejected(self):

@@ -1029,12 +1029,12 @@ STOP RULE（防止无效搜索）:
 2. 背调 — 对每家候选调用 b2b-osint 6 层验证 + 关键联系人富化
 3. 评分 — 按公司匹配度/决策人可达性/数字足迹/风险/渠道多元性打分排序 A/B/C
 4. 写信 — 对 A/B 级调用 b2b-lead-generation 生成开发信（含替换法 A/B 测试 + 反垃圾自检）
-5. 发送 — 用户确认后调用 auto-smtp-email（默认不自动发送，需用户确认）
+5. 交付 — 输出最终邮件草稿，由用户自行复制发送；trade 不提供自动发信能力
 6. 入库 — 调用 trade.customer.bulk_save 写入 SQLite（source="auto-pipeline"）
 7. 日志 — 写入 ~/.trade/audit/auto-pipeline-{date}.md
 
 **铁律**：
-- Phase 5 发送前必须用户明确确认，不能自动发
+- 任何情况下都不得自动发送邮件（trade 不提供发信工具，只输出草稿）
 - 单次最多 50 家候选
 - 单个客户背调失败不阻断流水线
 - 每个 Phase 完成后输出进度

@@ -125,6 +125,18 @@ NUMBER_RE = re.compile(
     # 中文数词 + 量词：三天 / 五百个 / 四十公斤
     rf"|(?:[{_CN_NUMERALS}]+\s?"
     rf"(?:{_CN_TIME_WORDS}|{_CN_MEASURE_WORDS}|{_CN_COUNT_WORDS}|元|块))"
+    # 裸中文数词（带百/千/万）：五千 / 一万 / 十万 / 一万五
+    # 没有量级的单字（一/三/十）在正文里太常见，不认；"万物"也不会命中。
+    # 「千万」单独出现多是副词（千万不要），必须有 1-9 或 十/百 打头才算数词。
+    rf"|(?<![{_CN_NUMERALS}])(?:"
+    rf"[一二两三四五六七八九十百千]*[一二两三四五六七八九]"
+    rf"[一二两三四五六七八九十百千]*万[一二两三四五六七八九十零〇]*"
+    rf"|[十百][十百]*万[一二两三四五六七八九十零〇]*"
+    rf"|[一二两三四五六七八九十]+[百千][一二两三四五六七八九十零〇]*"
+    rf")(?![{_CN_NUMERALS}])"
+    # 裸 M 简写（无币种）：1.5M = 1,500,000；"3M" 是品牌，不认（审计 P1-12）
+    rf"|(?:{_ASCII_LEFT}(?!(?:3(?:\.0+)?)\s?(?-i:M){_ASCII_RIGHT})"
+    rf"{_NUM}\s?(?-i:M){_ASCII_RIGHT})"
     # 裸数字兜底：500 / 3.50 / 共500件
     # (?!\.\d)：不许把 1.5M 回溯成 1 而留下 ".5M" 残文
     rf"|(?:{_ASCII_LEFT}{_NUM}(?!\.\d){_ASCII_RIGHT})",
@@ -332,6 +344,11 @@ def number_key(raw: str) -> str | None:
             # 算成 15000，再乘一次 10000 会变成 1.5 亿
             factor = _cn_magnitude_factor(text) if has_arabic else 1
         return f"${_scale_value(num, factor)}"
+    # 裸 M 简写（无币种）：1.5M = 1500000。必须在单位判断之前 ——
+    # 否则 _trailing_unit 会把大写 M 当成品牌，只留下裸数字 "1.5"。
+    bare_m = re.fullmatch(r"(\d[\d,]*(?:\.\d+)?)\s?M", text)
+    if bare_m is not None:
+        return _scale_value(normalize_digits(bare_m.group(1)), 1_000_000)
     # 时间：统一换算成天
     factor = _time_factor(text, lowered)
     if factor is not None:

@@ -965,6 +965,38 @@ class TestChineseMagnitudes:
         assert changed is True, cleaned
 
 
+class TestBareNumberForms:
+    """空库草稿里的裸数字也必须能被识别（复审 P1-12 残口）。"""
+
+    @pytest.mark.parametrize("text,key", [
+        ("报价五千", "5000"),
+        ("报价十万", "100000"),
+        ("报价一百万", "1000000"),
+        ("报价 1.5M", "1500000"),
+    ])
+    def test_bare_forms_are_extracted(self, text, key):
+        assert extract_mod_numbers(text) == {key}
+
+    def test_brand_and_standard_are_not_numbers(self):
+        assert extract_mod_numbers("3M 品牌") == set()
+        assert extract_mod_numbers("5G 网络与 B2B 客户") == set()
+
+    def test_adverb_qianwan_is_not_a_number(self):
+        assert extract_mod_numbers("千万不要延误交期") == set()
+        # 真数词仍要识别
+        assert extract_mod_numbers("货值一千万") == {"10000000"}
+
+    def test_empty_library_strips_bare_forms(self):
+        ctx = CustomerContext(
+            matched=True, customer_id=1, customer_name="Acme",
+            product_entries=[],
+        )
+        for draft in ("报价五千", "报价 1.5M", "总价十万"):
+            cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
+            assert changed is True, cleaned
+            assert "待确认" in cleaned, cleaned
+
+
 class TestShortNameOverlap:
     @pytest.mark.parametrize("contact,candidate,expected", [
         ("Li", "Lily", False),
