@@ -40,6 +40,37 @@ router = APIRouter(tags=["chat"])
 # 提为模块常量是为了可测 —— 超时路径以前没有测试覆盖（它的 error 事件曾被丢弃）。
 _STREAM_DEADLINE_SECONDS = 1800.0
 
+# 同步聊天的 Agent 兜底超时（秒）。提为模块常量以便测试缩短。
+_SYNC_TIMEOUT_SECONDS = 600.0
+
+
+def _abort_running_agent(agent) -> None:
+    """超时 / 客户端放弃后，尽力让仍在跑的 agent 停下来（审计 P1-21）。
+
+    只 set 一个取消标记是不够的：`run_in_executor` 的 Future 取消**停不掉线程**，
+    `agent.chat()` 里正在执行的工具调用会继续跑、继续烧 token。Hermes 提供了
+    跨线程的 `interrupt()` / `hard_interrupt()`（工具侧按线程检查中断位），
+    这是唯一真正能让工具停下的手段。
+
+    但它们是上游内部 API：新旧版本可能没有。拿不到就只靠调用方的取消标记
+    挡住重试与落库 —— 中断失败绝不能让超时响应变成 500。
+    """
+    if agent is None:
+        return
+    for attempt in (
+        lambda: agent.hard_interrupt("trade: request timed out"),
+        lambda: agent.interrupt("trade: request timed out", hard_cancel=True),
+        lambda: agent.interrupt("trade: request timed out"),
+    ):
+        try:
+            attempt()
+            return
+        except (AttributeError, TypeError):
+            continue  # 该版本没有这个方法/签名，换下一种
+        except Exception:
+            _log.warning("Failed to interrupt timed-out agent", exc_info=True)
+            return
+
 # ── 简单内存限流（per-process，按公司隔离）──────────────────────────────────
 # 每个公司 60 秒窗口内最多 20 次 chat 请求（含 sync + SSE）
 _MAX_CHAT_PER_MINUTE = 20
@@ -201,10 +232,17 @@ async def trade_chat(
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
     evidence = ReadEvidenceCollector() if document_task else None
 
+    # 超时后主线程要靠它中断仍在跑的 agent；列表用于跨线程传引用
+    agent_holder: list = []
+    cancelled = threading.Event()
+
     def _call_agent() -> tuple[str, bool]:
         """返回 (回复文本, 是否成功)；失败文本不得用于门禁判定。"""
         last_error = ""
         for attempt in range(_MAX_AGENT_RETRIES + 1):
+            # 已超时：不再发起新尝试（用户早已拿到"已中止"）
+            if cancelled.is_set():
+                return "", False
             try:
                 agent = create_agent(
                     ephemeral_system_prompt=skill_hint,
@@ -212,6 +250,11 @@ async def trade_chat(
                     tool_start_callback=evidence.on_start if evidence else None,
                     tool_complete_callback=evidence.on_complete if evidence else None,
                 )
+                agent_holder.clear()
+                agent_holder.append(agent)
+                # 构造期间已超时：别再启动这一轮（主线程的 abort 会正好错过它）
+                if cancelled.is_set():
+                    return "", False
                 # 绑定公司身份：chat-memory 等插件工具只认服务端绑定，
                 # 不再信任模型自填的 company_id（审计 P0-2）。
                 with bind_company(cid, payload.customer_id):
@@ -219,6 +262,9 @@ async def trade_chat(
                         result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
                     else:
                         result = agent.chat(full_query)
+                if cancelled.is_set():
+                    # 超时后迟到的结果：用户已收到中止提示，不能再当成功回复
+                    return "", False
                 if result:
                     return result, True
                 if attempt < _MAX_AGENT_RETRIES:
@@ -259,9 +305,13 @@ async def trade_chat(
     try:
         response, agent_ok = await asyncio.wait_for(
             loop.run_in_executor(None, _call_agent),
-            timeout=600,
+            timeout=_SYNC_TIMEOUT_SECONDS,
         )
     except TimeoutError:
+        # Future 取消停不掉线程：先置取消标记（挡住重试与落库），
+        # 再尽力中断 agent，让正在跑的工具调用停下来（审计 P1-21）。
+        cancelled.set()
+        _abort_running_agent(agent_holder[0] if agent_holder else None)
         response, agent_ok = "⏰ Agent 执行时间过长（超过 10 分钟），已自动中止。请简化问题后重试。", False
 
     gate_result = None
@@ -284,15 +334,19 @@ async def trade_chat(
         if lib:
             lib_name = lib["name"]
 
-    conv = chat_memory.save_with_context(
-        company_id=cid, library_id=payload.library_id, query=query,
-        response=response, library_name=lib_name,
-        customer_id=payload.customer_id,
-        files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
-                    if gate_result else None),
-        context=payload.context or "",
-        skill=current_skill or "",
-    )
+    # 失败兜底文案（超时 / 模块未加载 / Agent 异常）不写入历史：
+    # 它们不是对用户的回答，存档后会被后续轮次当作上下文注入（审计 P1-21）。
+    conv = None
+    if agent_ok:
+        conv = chat_memory.save_with_context(
+            company_id=cid, library_id=payload.library_id, query=query,
+            response=response, library_name=lib_name,
+            customer_id=payload.customer_id,
+            files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
+                        if gate_result else None),
+            context=payload.context or "",
+            skill=current_skill or "",
+        )
     payload_out = {"response": response, "conversation": conv}
     if gate_result is not None:
         payload_out["analysis_skipped"] = gate_result.skipped
@@ -392,6 +446,7 @@ async def trade_chat_stream(
 
     _MAX_AGENT_RETRIES = 2
     cancel_event = threading.Event()  # 客户端断连时置位，阻止重试继续浪费 token
+    agent_holder: list = []  # 断连/超时时靠它中断仍在跑的 agent（见 _abort_running_agent）
 
     def _run_agent() -> str | None:
         last_error = ""
@@ -411,6 +466,11 @@ async def trade_chat_stream(
                     ephemeral_system_prompt=skill_hint,
                     skill_name=current_skill,
                 )
+                agent_holder.clear()
+                agent_holder.append(agent)
+                # 断连/超时发生在构造期间：别再启动这一轮
+                if cancel_event.is_set():
+                    return None
                 start = time.time()
                 # 同同步端点：把公司身份绑进本次 agent 调用的上下文。
                 with bind_company(cid, payload.customer_id):
@@ -558,11 +618,12 @@ async def trade_chat_stream(
                 if ev_type in ("response", "error"):
                     break
         finally:
-            # 客户端断连或异常 → 先发取消信号让 Agent 线程尽快退出重试循环，
-            # 减少 token 浪费。线程池中的 agent.chat() 无法被中断，
-            # 但重试和后续 emit 会被跳过。
+            # 客户端断连 / 超时 / 异常 → 先发取消信号让 Agent 线程退出重试循环，
+            # 再尽力中断它：Future.cancel() 停不掉线程里正在跑的工具调用，
+            # 只有 Hermes 的 interrupt() 能让工具侧看到中断位（审计 P1-21）。
             cancel_event.set()
             if not agent_task.done():
+                _abort_running_agent(agent_holder[0] if agent_holder else None)
                 agent_task.cancel()
                 try:
                     await agent_task

@@ -135,7 +135,7 @@ async def test_no_read_evidence_degrades_instead_of_failing(env, agent_stub):
 
 @pytest.mark.asyncio
 async def test_error_response_is_not_saved_as_complete_analysis(env, agent_stub):
-    """Agent 失败/超时的文案不能被当成完整分析结论。"""
+    """Agent 失败/超时的文案不能被当成完整分析结论，也不进历史（审计 P1-21）。"""
     agent_stub.chat.return_value = ""
     agent_stub.run_conversation.return_value = {"final_response": ""}
     saved = []
@@ -149,7 +149,8 @@ async def test_error_response_is_not_saved_as_complete_analysis(env, agent_stub)
     result = await _call_chat(env, agent_stub, STRICT_QUERY, evidence, saved)
 
     assert "空响应" in result["response"]
-    assert saved[0]["files_read"] is None
+    assert result["conversation"] is None
+    assert saved == [], "失败兜底文案不得写入聊天历史"
 
 
 def _agent_reporting_reads(reads, captured):
