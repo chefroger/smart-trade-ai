@@ -195,6 +195,9 @@ const I18N = {
         'sys.update_network':'⚠️ 更新请求失败，请检查网络连接后重试',
         'sys.update_confirm':'将从 GitHub 拉取最新代码、安装依赖并重启服务。\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
         'sys.update_confirm_version':'将从 GitHub 拉取最新代码、安装依赖并重启服务。\n目标版本：{version}（当前 {current}）\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
+        'usage.today':'今日已用 {used} / {limit} tokens',
+        'usage.unlimited':'今日已用 {used} tokens',
+        'usage.over':'今日已用 {used} / {limit} tokens · 已超额度（不拦截）',
         'sys.restart_toast':'🔄 正在重启 Trade 服务...',
         'sys.restart_ok':'✅ 重启命令已发送，页面将在几秒后刷新',
         'sys.restart_fail':'❌ 重启失败: ',
@@ -367,6 +370,9 @@ const I18N = {
         'sys.update_network':'⚠️ Update request failed, check network',
         'sys.update_confirm':'This will pull the latest code from GitHub, install dependencies and restart the service.\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
         'sys.update_confirm_version':'This will pull the latest code from GitHub, install dependencies and restart the service.\nTarget version: {version} (current {current})\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
+        'usage.today':'Today {used} / {limit} tokens',
+        'usage.unlimited':'Today {used} tokens',
+        'usage.over':'Today {used} / {limit} tokens · over quota (not blocked)',
         'sys.restart_toast':'🔄 Restarting Trade...',
         'sys.restart_ok':'✅ Restart command sent, page will refresh soon',
         'sys.restart_fail':'❌ Restart failed: ',
@@ -435,6 +441,8 @@ function _applyLanguage() {
     }
     // 6. 更新页面标题
     document.title = currentLang === 'en' ? 'Trade AI Assistant' : 'Trade AI Assistant — 智能外贸销售助手';
+    // 7. 用量文案随语言刷新（公司未选时函数内部自行隐藏）
+    loadUsageToday();
 }
 
 function _updateSidebarLabels() {
@@ -1106,6 +1114,40 @@ function _setBtnBusy(btn, busy) {
     } else {
         btn.disabled = false;
         if (btn.dataset.idleIcon !== undefined) btn.textContent = btn.dataset.idleIcon;
+    }
+}
+
+// ── 今日 token 用量（只提示，不拦截）──
+/**
+ * 刷新侧栏底部的「今日已用 X / 上限」。
+ *
+ * 审计 P1-16 的额度提示，按用户要求**不做拦截**：超过上限只把文字标红，
+ * 聊天照常执行。用裸 fetch 而不是 api()：失败时不该弹 toast 打扰聊天。
+ */
+async function loadUsageToday() {
+    const el = $('usage-today');
+    if (!el) return;
+    if (!currentCompanyId) { el.hidden = true; return; }
+    try {
+        const r = await fetch('/api/trade/usage/today',
+            _buildApiOpts('GET', null, TOKEN, currentCompanyId));
+        if (!r.ok) { el.hidden = true; return; }
+        const d = await r.json();
+        const used = Number(d.used) || 0;
+        const limit = Number(d.limit) || 0;
+        const fmt = n => Number(n).toLocaleString('en-US');
+        el.hidden = false;
+        el.classList.toggle('over', !!d.exceeded);
+        el.classList.toggle('warn', !d.exceeded && limit > 0 && used >= limit * 0.8);
+        if (d.exceeded) {
+            el.textContent = t('usage.over').replace('{used}', fmt(used)).replace('{limit}', fmt(limit));
+        } else if (limit > 0) {
+            el.textContent = t('usage.today').replace('{used}', fmt(used)).replace('{limit}', fmt(limit));
+        } else {
+            el.textContent = t('usage.unlimited').replace('{used}', fmt(used));
+        }
+    } catch(_) {
+        el.hidden = true;
     }
 }
 
@@ -2364,6 +2406,8 @@ async function sendMsg() {
         _currentConvId = null;
         _endChatStream(streamCtl);
         if (stopBtn) { stopBtn.classList.add('hidden'); stopBtn.onclick = null; }
+        // 每轮对话结束后刷新用量（后端在 agent 返回时已记账）
+        loadUsageToday();
     }
     sendBtn.disabled = false;
 }
@@ -4000,6 +4044,7 @@ async function onCompanyChange(cid) {
         // 通知后端切换 session 绑定（旧 cid 会触发 403，因此 _enforce_company_binding 需放行 /switch 端点）
         try { await api('POST', '/api/trade/companies/' + newCid + '/switch'); } catch(_) {}
         saveState();
+        loadUsageToday();
         // 首个公司 + 引导未完成 → 显示新手引导
         if (companies.length === 1 && !isOnboardingCompleted()) {
             showOnboardingGuide();
@@ -4009,6 +4054,7 @@ async function onCompanyChange(cid) {
     } else {
         currentCompanyId = null;
         saveState();
+        loadUsageToday();
         renderNoCompanyPage();
     }
 }
@@ -4306,6 +4352,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (currentCompanyId) {
         saveState();
+        loadUsageToday();
         const sel = $('company-select');
         if (sel) sel.value = currentCompanyId;
         // 首个公司 + 引导未完成 → 显示新手引导

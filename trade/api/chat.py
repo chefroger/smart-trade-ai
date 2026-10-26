@@ -45,17 +45,6 @@ _STREAM_DEADLINE_SECONDS = 1800.0
 _SYNC_TIMEOUT_SECONDS = 600.0
 
 
-def _check_daily_token_budget(cid: int) -> tuple[bool, str]:
-    """当日 token 额度检查；上限 0 = 不限（见 trade.usage.daily_token_limit）。"""
-    used, limit = usage_module.daily_budget_state(cid)
-    if limit and used >= limit:
-        return False, (
-            f"今日 token 用量已达上限（{used:,}/{limit:,}）。"
-            "请明天再试；如需调整，可设置环境变量 TRADE_DAILY_TOKEN_LIMIT（0 = 不限）。"
-        )
-    return True, ""
-
-
 def _abort_running_agent(agent) -> None:
     """超时 / 客户端放弃后，尽力让仍在跑的 agent 停下来（审计 P1-21）。
 
@@ -194,6 +183,21 @@ def _document_gate(document_task, request_task_id: str, collector):
     return None
 
 
+@router.get("/usage/today")
+def usage_today(cid: int = Depends(require_company)):
+    """今日 token 用量（仅提示，不拦截聊天）。
+
+    上限只影响界面配色与文案（超过后标红），聊天照常执行 —— 用户 2026-10-26
+    明确要求「提示但不拦」。
+    """
+    used, limit = usage_module.daily_budget_state(cid)
+    return {
+        "used": used,
+        "limit": limit,  # 0 = 不限
+        "exceeded": bool(limit and used >= limit),
+    }
+
+
 # ── 同步聊天 ──────────────────────────────────────────────────────────────
 
 @router.post("/chat")
@@ -213,10 +217,6 @@ async def trade_chat(
 
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
-    budget_ok, budget_msg = _check_daily_token_budget(cid)
-    if not budget_ok:
-        raise HTTPException(status_code=429, detail=budget_msg)
-
     _validate_scope(payload, cid)
 
     # 读取上次使用的 skill 名称（用于跳过重复注入）
@@ -403,10 +403,6 @@ async def trade_chat_stream(
 
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
-    budget_ok, budget_msg = _check_daily_token_budget(cid)
-    if not budget_ok:
-        raise HTTPException(status_code=429, detail=budget_msg)
-
     _validate_scope(payload, cid)
 
     # 读取上次使用的 skill 名称（用于跳过重复注入）

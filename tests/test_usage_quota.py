@@ -4,9 +4,9 @@
 这里锁定：
 
 1. 每次 agent 调用（含失败/中断的那次尝试）都把 token 记进 usage_ledger；
-2. 每公司每日默认 200 万 token 上限，超限返回 429；
+2. 每公司每日默认 200 万 token 额度，只用于界面提示，超限**不拦聊天**；
 3. `TRADE_DAILY_TOKEN_LIMIT=0` 表示不限；
-4. 台账读失败按不限处理，不能把正常聊天挡在门外。
+4. 额度状态由 `/usage/today` 暴露给前端（used / limit / exceeded）。
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -164,25 +163,47 @@ class TestTokensToday:
         assert n == 0
 
 
-class TestChatBudgetGate:
+class TestChatBudgetIsAdvisoryOnly:
+    """用户 2026-10-26 决定：额度只做提示，不拦截聊天。"""
+
     @pytest.mark.asyncio
-    async def test_over_limit_returns_429_without_calling_agent(self, company):
+    async def test_over_limit_still_answers(self, company):
         import trade.api.chat as chat
         from trade.api.models import ChatRequest
 
         _insert_usage(company["id"], 2_000_000, 1)
 
-        with patch.object(chat, "create_agent") as fake_create, \
+        with patch.object(chat, "create_agent", return_value=_CountingAgent()), \
+             patch.object(chat, "build_query", return_value=("Q", "H")), \
+             patch.object(chat.chat_memory, "save_with_context", return_value={"id": 1}), \
              patch("trade.license.check_license", return_value=(True, "")):
-            with pytest.raises(HTTPException) as exc:
-                await chat.trade_chat(ChatRequest(query="你好"), company["id"])
+            result = await chat.trade_chat(ChatRequest(query="你好"), company["id"])
 
-        assert exc.value.status_code == 429
-        assert "上限" in exc.value.detail
-        fake_create.assert_not_called()
+        assert result["response"] == "好的，这是回复。"
+
+    def test_usage_today_endpoint_reports_exceeded(self, company):
+        import trade.api.chat as chat
+
+        _insert_usage(company["id"], 2_100_000, 0)
+        data = chat.usage_today(company["id"])
+
+        assert data["used"] == 2_100_000
+        assert data["limit"] == 2_000_000
+        assert data["exceeded"] is True
+
+    def test_usage_today_endpoint_shows_used_when_unlimited(self, company, monkeypatch):
+        import trade.api.chat as chat
+
+        monkeypatch.setenv("TRADE_DAILY_TOKEN_LIMIT", "0")
+        _insert_usage(company["id"], 1234, 66)
+        data = chat.usage_today(company["id"])
+
+        assert data["used"] == 1300
+        assert data["limit"] == 0
+        assert data["exceeded"] is False
 
     @pytest.mark.asyncio
-    async def test_unlimited_env_bypasses_gate(self, company, monkeypatch):
+    async def test_unlimited_env_still_answers(self, company, monkeypatch):
         import trade.api.chat as chat
         from trade.api.models import ChatRequest
 

@@ -42,6 +42,19 @@ test('更新前有二次确认，且带目标版本提示', () => {
   assert.match(SRC, /'sys\.update_confirm'/);
 });
 
+test('今日用量在侧栏展示，且只提示不拦截', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.html'), 'utf8');
+  assert.match(html, /id="usage-today"/);
+  assert.match(SRC, /async function loadUsageToday\(\)/);
+  assert.match(SRC, /'\/api\/trade\/usage\/today'/);
+  assert.match(SRC, /classList\.toggle\('over'/);
+  assert.match(SRC, /classList\.toggle\('warn'/);
+  // 失败时静默隐藏，不能用 api() 在每轮聊天后弹 toast
+  assert.match(SRC, /if \(!r\.ok\) \{ el\.hidden = true; return; \}/);
+});
+
 test('两个更新入口都先确认再 POST', () => {
   for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
     const start = SRC.indexOf(fn);

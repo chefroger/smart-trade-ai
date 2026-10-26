@@ -102,6 +102,16 @@ body {
     font-size: 10px; padding: 2px 6px; border-radius: 999px; background: var(--accent-red);
     color: #fff; font-weight: 600; display: none;
 }
+/* 今日 token 用量：常驻在侧栏底部按钮上方的小字（审计 P1-16）。
+   80% 起变黄、超过上限变红 —— 只是提示，聊天不会被拦截。 */
+.usage-today {
+    padding: 8px 16px 0; font-size: 11px; line-height: 1.4;
+    color: var(--sidebar-text); opacity: 0.7; word-break: break-all;
+}
+.usage-today[hidden] { display: none; }
+.usage-today.warn { color: #FBBF24; opacity: 1; }
+.usage-today.over { color: #F87171; opacity: 1; }
+
 /* 图标按钮：一行放 4 个，每个正方形、图标居中。
    原来按钮带文字（「⬆️ 系统更新」），4 个并排会被挤成两行 —— 改成图标 + 悬停提示
    （data-tip），既放得下又不丢可发现性。 */

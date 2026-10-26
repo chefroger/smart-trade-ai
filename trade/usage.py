@@ -157,11 +157,10 @@ def tokens_today(conn: sqlite3.Connection, company_id: int) -> int:
 def daily_budget_state(company_id: int) -> tuple[int, int]:
     """返回 (今日已用, 上限)；上限 0 表示不限。
 
-    读库失败按"不限额"处理：额度是防滥用，不该因为一次读失败把正常业务挡在门外。
+    额度只用于界面提示，不再拦截聊天（2026-10-26 用户决定）；读库失败返回
+    (0, 上限) —— 展示 0 好过把整个请求打挂。
     """
     limit = daily_token_limit()
-    if limit <= 0:
-        return 0, 0
     try:
         from trade.database import get_connection
 
@@ -171,8 +170,8 @@ def daily_budget_state(company_id: int) -> tuple[int, int]:
         finally:
             conn.close()
     except Exception as e:
-        logger.warning("读取今日用量失败（本次按不限额处理）: %s", e)
-        return 0, 0
+        logger.warning("读取今日用量失败（界面显示 0）: %s", e)
+        return 0, limit
 
 
 def record_agent_usage(agent, *, company_id: int = 0, skill: str = "") -> float:

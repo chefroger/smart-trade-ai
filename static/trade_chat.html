@@ -96,6 +96,9 @@
          又不牺牲可发现性。
          ⚠️ 按钮上**不能**再留 title 属性：它和自定义提示会同时弹出来。
          图标刻意两两不同（⬆️/♻️、📖/📚、ℹ️），否则纯图标后用户分不清谁是谁。 -->
+    <!-- 今日 token 用量提示（审计 P1-16）：只展示，不拦聊天。
+         文案与配色由 trade_chat.js 的 loadUsageToday() 填。 -->
+    <div id="usage-today" class="usage-today" hidden></div>
     <div class="sidebar-footer">
         <button id="system-update-btn" onclick="doTradeUpdate(event)" data-tip="更新系统">⬆️</button>
         <button id="system-restart-btn" onclick="doRestartTrade(event)" data-tip="重启" hidden>♻️</button>
