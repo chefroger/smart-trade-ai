@@ -51,21 +51,29 @@ def _acquire_single_instance(lock_path: Path) -> bool:
     return True
 
 
-def _write_lock_port(port: int) -> None:
+def _port_file(lock_path: Path) -> Path:
+    """端口信息单独存一个文件。
+
+    不能写进锁文件：Windows 的 msvcrt.locking 锁住的是字节区间，向被锁区域
+    写入会失败（实测导致端口永远读不到）。
+    """
+    return lock_path.with_name(lock_path.stem + ".port")
+
+
+def _write_lock_port(lock_path: Path, port: int) -> None:
     if _LOCK_HANDLE is None:
         return
     try:
-        _LOCK_HANDLE.seek(0)
-        _LOCK_HANDLE.truncate()
-        _LOCK_HANDLE.write(f"{os.getpid()} {port}\n")
-        _LOCK_HANDLE.flush()
+        _port_file(lock_path).write_text(
+            f"{os.getpid()} {port}\n", encoding="utf-8",
+        )
     except OSError:
         pass
 
 
 def _read_lock_port(lock_path: Path) -> int | None:
     try:
-        parts = lock_path.read_text(encoding="utf-8").split()
+        parts = _port_file(lock_path).read_text(encoding="utf-8").split()
         return int(parts[1]) if len(parts) >= 2 else None
     except (OSError, ValueError, IndexError):
         return None
@@ -132,7 +140,7 @@ def main():
     if port is None:
         print(f"Error: {PREFERRED_PORT}-{PREFERRED_PORT + _PORT_TRIES - 1} 端口都被占用")
         return 1
-    _write_lock_port(port)
+    _write_lock_port(lock_path, port)
 
     app = create_app()
     serve_trade_chat(app)

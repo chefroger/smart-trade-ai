@@ -22,7 +22,7 @@ class TestSingleInstance:
         lock = tmp_path / "tradewin.lock"
         assert tradewin._acquire_single_instance(lock)
 
-        tradewin._write_lock_port(9123)
+        tradewin._write_lock_port(lock, 9123)
 
         assert tradewin._read_lock_port(lock) == 9123
 
