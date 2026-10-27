@@ -1019,12 +1019,9 @@ STOP RULE（防止无效搜索）:
             "full pipeline outreach", "automated outreach pipeline", "orchestrated lead gen",
         ],
         "aliases": ["b2b-lead-generation", "b2b-osint"],
-        "input_fmt": (
-            "产品描述 + 目标市场 + 目标客户类型 + 期望数量（可选）+ "
-            "是否启用自动发送（默认否）"
-        ),
+        "input_fmt": "产品描述 + 目标市场 + 目标客户类型 + 期望数量（可选）",
         "output_fmt": (
-            "7 阶段流水线报告：搜索 → 背调 → 评分 → 写信 → 发送 → 入库 → 日志。"
+            "7 阶段流水线报告：搜索 → 背调 → 评分 → 写信 → 交付草稿 → 入库 → 日志。"
             "输出含阶段统计 / TOP10 客户详情 / 下一步跟进建议 / 完整日志路径"
         ),
         "augment_prompt": """你是 auto-trade-customer-development 技能 — 外贸客户开发端到端编排器。

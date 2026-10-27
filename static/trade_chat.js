@@ -1290,7 +1290,7 @@ const _ALL_SKILLS = [
         {n:"b2b-cold-outreach",d:"B2B 冷 outreach 邮件撰写（开发信/推广信/跟进信）",t:"开发信、写推广信、cold email、outreach"},
         {n:"b2b-email-imitation",d:"开发信仿写与再创作 — 分析优秀邮件样本，学结构学风格",t:"仿写开发信、按照样本、模仿邮件、email imitation"},
         {n:"b2b-buyer-persona",d:"买家画像与角色分层 — 按角色定制 FAB 价值主张",t:"买家画像、按角色写、给采购写、buyer persona"},
-        {n:"auto-trade-customer-development",d:"全自动客户开发流水线 — 搜索→背调→评分→写信→发送",t:"全自动客户开发、一键开发、auto customer dev"},
+        {n:"auto-trade-customer-development",d:"全自动客户开发流水线 — 搜索→背调→评分→写信→交付草稿",t:"全自动客户开发、一键开发、auto customer dev"},
     ]},{g:"内容营销",items:[
         {n:"b2b-social-media",d:"社媒营销（Facebook/Instagram/TikTok/YouTube）",t:"社媒、Facebook、TikTok、内容日历、social media"},
         {n:"b2b-linkedin-marketing",d:"LinkedIn 营销策略与内容（Profile/帖子/InMail）",t:"LinkedIn、领英、linkedin marketing、InMail"},
