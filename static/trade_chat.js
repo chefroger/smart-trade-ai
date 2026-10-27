@@ -1726,6 +1726,7 @@ function stopCronPolling() {
 
 // ── 版本更新检查 ──
 let _versionPollTimer = null;
+let _toolGuardWarned = false;
 
 async function checkVersion() {
     // 关闭版本升级提醒：用户手上版本稳定就不强制升级
@@ -1734,6 +1735,12 @@ async function checkVersion() {
         if (!r.ok) return;
         const data = await r.json();
         console.log('Version check: current=' + data.version);
+        // 守卫随 chat-memory 插件加载：插件没部署/没启用时整套白名单缺席，
+        // 必须让用户看见，而不是只躺在 stderr 日志里。
+        if (data.tool_guard && data.tool_guard.ok === false && !_toolGuardWarned) {
+            _toolGuardWarned = true;
+            toast('⚠️ 工具安全守卫未生效：文件与命令白名单当前不起作用。请重启 Trade；若仍提示，检查 ~/.hermes/config.yaml 的 plugins.enabled 是否包含 chat-memory。');
+        }
     } catch(e) { /* 静默 */ }
 }
 

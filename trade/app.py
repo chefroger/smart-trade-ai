@@ -885,12 +885,22 @@ def create_app() -> FastAPI:
         except Exception:
             doctor_result = None
 
+        # 工具安全守卫是否真的会加载（插件未部署/未启用 = 整套守卫缺席）。
+        # 只读检查，不打印；前端据此给用户可见告警。
+        try:
+            from trade.bootstrap import verify_tool_guard_ready
+
+            tool_guard = verify_tool_guard_ready()
+        except Exception:
+            tool_guard = {"ok": False, "deployed": False, "enabled": False}
+
         return {
             "status": "ok",
             "app": "Foreign Trade Assistant",
             "version": version,
             "started_at": _STARTED_AT,
             "doctor": doctor_result,
+            "tool_guard": tool_guard,
         }
 
     return app

@@ -1063,43 +1063,15 @@ STOP RULE（防止无效搜索）:
             "收件人邮箱 + 主题 + 正文（纯文本/HTML）+ 抄送（可选）+ "
             "附件路径（可选）。批量发送时为列表。"
         ),
-        "output_fmt": (
-            "预览 → 用户确认 → 发送结果（成功/失败 + 错误详情）。"
-            "批量发送含每封状态 + 限速日志 + 汇总统计"
-        ),
-        "augment_prompt": """你是 auto-smtp-email 技能 — SMTP 邮件实际发送。
+        "output_fmt": "无 —— 该 skill 已被 Trade 停用，不提供发信能力",
+        "augment_prompt": """你是 auto-smtp-email 技能 — **已被 Trade 停用**。
 
-**铁律：预览后发送**
-1. 先生成完整预览（收件人/主题/正文/附件）给用户
-2. 用户明确回复"确认发送/发吧/OK"后才能调用 SMTP
-3. 任何模糊回复（如"嗯""好"）必须二次确认
+**铁律**：
+- 禁止调用 SMTP / smtplib / 任何发信接口
+- 禁止读取、使用或向用户索取 SMTP 凭证（SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS）
+- 禁止声称邮件已发送、已投递或已排队
 
-**凭证读取**：从 ~/.hermes/.env 读 SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS。
-- 缺字段时明确告诉用户去哪个邮箱后台生成授权码
-- Gmail: https://myaccount.google.com/apppasswords
-- 163: 邮箱设置 → POP3/SMTP/IMAP → 开启 SMTP → 生成授权码
-- 腾讯企业邮箱: 邮箱设置 → 客户端专用密码
-
-**发送流程**：
-1. 单封：smtplib.SMTP_SSL（465）或 SMTP+starttls（587）
-2. 批量：每封间隔 60-120 秒随机（避免被标记群发）
-3. 失败容错：单封失败不阻断后续，记录到 send_log
-4. 日志：写入 ~/.trade/audit/smtp-send-log-{date}.md
-
-**HTML 规则**：
-- 必须 multipart/alternative（纯文本+HTML 双版本）
-- 内联 CSS，禁用 JavaScript/iframe/外部图片追踪
-- 字体 web-safe，字号 ≥14px，移动端单列布局
-
-**反垃圾自检**（发送前强制）：
-- 主题行不含 SPAM 触发词（FREE/URGENT/GUARANTEED 等）
-- 主题不全大写、无过多感叹号
-- 正文大写单词 ≤1 个
-- 图片面积 < 50%
-- 包含退订方式
-- 附件 < 10MB
-
-详细错误码对照表见 skills/auto-smtp-email/SKILL.md。""",
+用户要求发信时，如实说明 Trade 不提供发信能力，只能交付可复制的邮件草稿（收件人/主题/正文），由用户本人通过自己的邮箱发送。""",
     },
     # ── b2b-email-imitation: 开发信仿写与再创作（P0）───────────────────
     {

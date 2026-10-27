@@ -133,6 +133,70 @@ class TestOtherToolsAndEscapes:
         assert verdict and verdict["action"] == "block"
 
 
+class TestVisionTool:
+    """vision_analyze 的 image_url 允许远程/data；本地路径同文件工具白名单。"""
+
+    def test_data_and_remote_urls_pass(self, roots):
+        assert g.check_tool_call("vision_analyze", {"image_url": "data:image/png;base64,AAA"}) is None
+        assert g.check_tool_call("vision_analyze", {"image_url": "https://example.com/a.png"}) is None
+        assert g.check_tool_call("vision_analyze", {"image_url": "http://example.com/a.png"}) is None
+
+    def test_local_path_inside_root_passes(self, roots):
+        img = roots / "shot.png"
+        img.write_bytes(b"x")
+        assert g.check_tool_call("vision_analyze", {"image_url": str(img)}) is None
+
+    def test_local_path_outside_root_blocked(self, roots, tmp_path):
+        img = tmp_path / "secret.png"
+        img.write_bytes(b"x")
+        verdict = g.check_tool_call("vision_analyze", {"image_url": str(img)})
+        assert verdict and verdict["action"] == "block"
+        assert "公司允许范围" in verdict["message"]
+
+    def test_file_url_outside_root_blocked(self, roots, tmp_path):
+        img = tmp_path / "secret.png"
+        img.write_bytes(b"x")
+        verdict = g.check_tool_call("vision_analyze", {"image_url": f"file://{img}"})
+        assert verdict and verdict["action"] == "block"
+
+    def test_missing_image_blocked(self, roots):
+        verdict = g.check_tool_call("vision_analyze", {})
+        assert verdict and verdict["action"] == "block"
+
+
+class TestSensitiveWrites:
+    """白名单根内的 identity / prompts 不允许 agent 改写（持久化提示注入）。"""
+
+    def test_write_identity_blocked(self, roots):
+        target = roots / "companies" / "acme" / "agent-identity.md"
+        target.parent.mkdir(parents=True)
+        verdict = g.check_tool_call("write_file", {"path": str(target), "content": "x"})
+        assert verdict and verdict["action"] == "block"
+        assert "身份文件" in verdict["message"]
+
+    def test_patch_identity_blocked(self, roots):
+        target = roots / "companies" / "acme" / "agent-identity.md"
+        target.parent.mkdir(parents=True)
+        verdict = g.check_tool_call("patch", {"path": str(target), "old": "a", "new": "b"})
+        assert verdict and verdict["action"] == "block"
+
+    def test_read_identity_allowed(self, roots):
+        target = roots / "companies" / "acme" / "agent-identity.md"
+        target.parent.mkdir(parents=True)
+        target.write_text("x", encoding="utf-8")
+        assert g.check_tool_call("read_file", {"path": str(target)}) is None
+
+    def test_write_company_prompt_blocked(self, roots):
+        target = roots / "prompts" / "system.md"
+        target.parent.mkdir(parents=True)
+        verdict = g.check_tool_call("write_file", {"path": str(target), "content": "x"})
+        assert verdict and verdict["action"] == "block"
+
+    def test_write_normal_file_allowed(self, roots):
+        target = roots / "notes.md"
+        assert g.check_tool_call("write_file", {"path": str(target), "content": "x"}) is None
+
+
 class TestPluginRegistration:
     def test_registers_guard_and_cron_hooks(self):
         from trade.cron_binding import on_post_tool_call as cron_post
@@ -153,3 +217,48 @@ class TestPluginRegistration:
         assert g.on_pre_tool_call in hooks.get("pre_tool_call", [])
         assert cron_pre in hooks.get("pre_tool_call", [])
         assert cron_post in hooks.get("post_tool_call", [])
+
+
+class TestGuardDeploymentCheck:
+    """守卫随插件加载：插件没部署/没启用 = 整套规则静默缺席，启动要可见告警。"""
+
+    def _home(self, tmp_path, monkeypatch, deployed=True, enabled=True, disabled=False):
+        import trade.bootstrap as bootstrap
+        from trade.post_install import skills as skills_mod
+
+        home = tmp_path / "hermes"
+        if deployed:
+            guard = home / "plugins" / "chat-memory" / "guardrails.py"
+            guard.parent.mkdir(parents=True)
+            guard.write_text("# guard", encoding="utf-8")
+        enabled_line = "  enabled: [chat-memory]" if enabled else "  enabled: []"
+        lines = ["plugins:", enabled_line]
+        if disabled:
+            lines.append("  disabled: [chat-memory]")
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        monkeypatch.setattr(skills_mod, "_get_hermes_home", lambda: home)
+        return bootstrap
+
+    def test_ok_when_deployed_and_enabled(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch)
+        assert bootstrap.verify_tool_guard_ready()["ok"] is True
+
+    def test_missing_plugin_is_not_ok(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch, deployed=False)
+        assert bootstrap.verify_tool_guard_ready()["ok"] is False
+
+    def test_not_enabled_is_not_ok(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch, enabled=False)
+        assert bootstrap.verify_tool_guard_ready()["ok"] is False
+
+    def test_disabled_wins(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch, disabled=True)
+        assert bootstrap.verify_tool_guard_ready()["ok"] is False
+
+    def test_announce_prints_visible_warning(self, tmp_path, monkeypatch, capsys):
+        bootstrap = self._home(tmp_path, monkeypatch, deployed=False)
+        bootstrap.verify_tool_guard_ready(announce=True)
+        err = capsys.readouterr().err
+        assert "工具安全守卫未生效" in err
+        assert "plugins.enabled" in err

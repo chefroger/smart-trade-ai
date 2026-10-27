@@ -553,11 +553,20 @@ def _local_skills_sync():
     _hermes_skills = get_hermes_home() / "skills"
     _hermes_skills.mkdir(parents=True, exist_ok=True)
 
+    # 停用 skill 的运行时残留要清掉（P1-13）：升级后没重装/没更新的老机器上，
+    # ~/.hermes/skills/auto-smtp-email/ 会一直留到下一次安装；启动时也清一次。
+    from trade.post_install.skills import _purge_blocked_skills
+    from trade.skill_registry import _BLOCKED_SKILLS
+
+    _purge_blocked_skills(_hermes_skills)
+
     synced = 0
     for skill_dir in sorted(_project_skills.iterdir()):
         if not skill_dir.is_dir() or not (
             skill_dir.name.startswith("b2b-") or skill_dir.name.startswith("auto-") or skill_dir.name == "chat-memory"
         ):
+            continue
+        if skill_dir.name in _BLOCKED_SKILLS:
             continue
         src = skill_dir / "SKILL.md"
         if not src.is_file():
@@ -933,6 +942,56 @@ def _try_load_yaml(text: str):
         return None
 
 
+def verify_tool_guard_ready(announce: bool = False) -> dict:
+    """检查工具守卫是否真的会加载：插件已部署 + 在 `plugins.enabled` 里。
+
+    守卫（文件白名单 / terminal / execute_code）全部挂在 chat-memory 插件上，
+    插件没加载就等于**整套守卫静默缺席**，而主聊天仍带着全工具集继续跑。
+    这里只回答"部署/启用"两件事；旧版 Hermes 没有 register_hook 的情况只能
+    由插件加载时的 warning 暴露（宿主能力，Trade 侧探测不到）。
+
+    `announce=True` 时把问题打到 stderr（启动路径用）；`/api/status` 轮询用
+    默认 False，避免每次请求都刷屏。
+    """
+    from trade.post_install.skills import _get_hermes_home
+
+    hermes_home = _get_hermes_home()
+    deployed = (hermes_home / "plugins" / "chat-memory" / "guardrails.py").is_file()
+
+    enabled = False
+    config_path = hermes_home / "config.yaml"
+    try:
+        data = _try_load_yaml(config_path.read_text(encoding="utf-8"))
+    except OSError:
+        data = None
+    if isinstance(data, dict):
+        plugins = data.get("plugins")
+        if isinstance(plugins, dict):
+            enabled_list = plugins.get("enabled")
+            disabled_list = plugins.get("disabled")
+            enabled = (
+                isinstance(enabled_list, list)
+                and _CHAT_MEMORY_PLUGIN_KEY in enabled_list
+                and not (isinstance(disabled_list, list) and _CHAT_MEMORY_PLUGIN_KEY in disabled_list)
+            )
+
+    ok = deployed and enabled
+    state = {"ok": ok, "deployed": deployed, "enabled": enabled}
+    if announce and not ok:
+        reasons = []
+        if not deployed:
+            reasons.append("插件文件未部署")
+        if not enabled:
+            reasons.append("~/.hermes/config.yaml 的 plugins.enabled 未启用 chat-memory")
+        print(
+            "  ⚠️ 工具安全守卫未生效（" + "；".join(reasons) + "）："
+            "文件路径白名单、terminal 命令白名单、execute_code 拒绝当前都不起作用。"
+            "请重启 Trade；若仍提示，检查 Hermes 配置里的 plugins.enabled。",
+            file=sys.stderr,
+        )
+    return state
+
+
 def background_github_skills_sync():
     """后台 daemon 线程：启动后静默同步一次，此后每天中午 12:30 定时同步。
 
@@ -1134,7 +1193,7 @@ def setup():
         # `ensure_document_deps` 会试 Hermes 的 lazy_deps）。这里逐个兜住：
         # 降级模式唯一不可违反的不变量是**服务必须起得来** —— 任一可选项失败都绝不能
         # 把升级界面挡在门外，那会让用户彻底无从下手。
-        for _optional_step in (sync_b2b_skills, sync_chat_memory_plugin, ensure_chat_memory_plugin_enabled, ensure_document_deps, ensure_desktop_integration):
+        for _optional_step in (sync_b2b_skills, sync_chat_memory_plugin, ensure_chat_memory_plugin_enabled, lambda: verify_tool_guard_ready(announce=True), ensure_document_deps, ensure_desktop_integration):
             try:
                 _optional_step()
             except Exception as exc:  # noqa: BLE001 — 见上：降级模式必须走到起服务
@@ -1149,6 +1208,7 @@ def setup():
     sync_b2b_skills()
     sync_chat_memory_plugin()
     ensure_chat_memory_plugin_enabled()
+    verify_tool_guard_ready(announce=True)
     ensure_document_deps()
     ensure_desktop_integration()
     start_doctor_if_needed()

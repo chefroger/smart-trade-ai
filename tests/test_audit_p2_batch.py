@@ -39,6 +39,14 @@ class TestRestoreNoUnsafeFallback:
         assert src.count("tar.extractall") == 1
 
 
+class TestStatusExposesToolGuard:
+    def test_status_reports_tool_guard(self):
+        """守卫缺席要能被前端看见：/api/status 必须上报其状态。"""
+        src = _read_source("trade/app.py")
+        assert '"tool_guard": tool_guard' in src
+        assert "verify_tool_guard_ready" in src
+
+
 class TestTokenNotLogged:
     def test_startup_log_has_no_token_fragment(self):
         src = _read_source("trade/app.py")
@@ -112,6 +120,58 @@ class TestBlockedSkillPurge:
         )
         assert "已被 Trade 停用" in skill
         assert "import smtplib" not in skill, "停用 skill 不应保留可执行发信代码"
+
+    def test_registry_augment_is_disabled(self):
+        """registry 的 augment_prompt 也是可达路径，不能留完整发送说明。"""
+        from trade.skill_registry import get_skill_by_name
+
+        skill = get_skill_by_name("auto-smtp-email")
+        augment = skill["augment_prompt"]
+        assert "已被 Trade 停用" in augment
+        assert "禁止调用 SMTP" in augment
+        # 不允许残留可执行的发送流程/凭证读取路径
+        assert "SMTP_SSL" not in augment
+        assert "starttls" not in augment
+        assert "~/.hermes/.env" not in augment
+        assert "60-120 秒" not in augment
+        assert "send_log" not in augment
+
+    def test_orchestrator_does_not_instruct_calling_it(self):
+        """编排器 SKILL.md 不能被教"确认后调用 auto-smtp-email"。"""
+        skill = (ROOT / "skills" / "auto-trade-customer-development" / "SKILL.md").read_text(
+            encoding="utf-8",
+        )
+        assert "确认后调用 auto-smtp-email" not in skill
+        assert "SMTP_HOST" not in skill
+        assert "不发送任何邮件" in skill
+
+    def test_startup_sync_purges_and_skips_blocked(self, tmp_path, monkeypatch):
+        """启动同步也要清残留、且不复制停用 skill（P1-13 时间窗口）。"""
+        import types
+
+        import trade.bootstrap as bootstrap
+
+        hermes_home = tmp_path / "hermes"
+        stale = hermes_home / "skills" / "auto-smtp-email"
+        stale.mkdir(parents=True)
+        (stale / "SKILL.md").write_text("old", encoding="utf-8")
+
+        trade_home = tmp_path / "trade-home"
+        skills_src = trade_home / "foreign-trade-assistant" / "skills"
+        (skills_src / "b2b-demo").mkdir(parents=True)
+        (skills_src / "b2b-demo" / "SKILL.md").write_text("demo", encoding="utf-8")
+        (skills_src / "auto-smtp-email").mkdir(parents=True)
+        (skills_src / "auto-smtp-email" / "SKILL.md").write_text("stub", encoding="utf-8")
+
+        stub = types.ModuleType("hermes_constants")
+        stub.get_hermes_home = lambda: hermes_home
+        monkeypatch.setitem(sys.modules, "hermes_constants", stub)
+        monkeypatch.setenv("TRADE_HOME", str(trade_home))
+
+        bootstrap._local_skills_sync()
+
+        assert not (hermes_home / "skills" / "auto-smtp-email").exists()
+        assert (hermes_home / "skills" / "b2b-demo" / "SKILL.md").is_file()
 
 
 class TestSkillSyncManifest:

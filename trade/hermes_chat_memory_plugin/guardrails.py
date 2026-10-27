@@ -10,13 +10,21 @@
 - `read_file` / `write_file` / `patch` / `search_files`：`path` 必须落在当前
   公司白名单根目录内（公司数据目录、工作目录、本公司文档库）。缺 path、
   相对路径、未绑定公司 → 一律拒绝（fail-closed）。
+- `write_file` / `patch` 额外拒绝两类高敏文件：公司 identity
+  (`companies/{slug}/agent-identity.md`) 与公司 prompts 目录下的 `*.md`
+  —— 它们在白名单根内，但运行时会作为系统提示读入，允许改写等于允许持久化
+  提示注入。
+- `vision_analyze`：`image_url` 为 http(s)/data URL 时放行；本地路径（含
+  `file://`）与文件工具同一套白名单校验。
 - `terminal`：只放行 `python -m trade.osint …` / `trade osint …`（技能里唯一
   需要的命令）；含 shell 元字符（; & | < > ` $() 换行）的一律拒绝。
-- `execute_code`：永久拒绝（技能不依赖，任意 Python 等于无沙箱）。
+- `execute_code`：拒绝（技能不依赖，任意 Python 等于无沙箱）。
 
 残留（未覆盖，如实记录）：`browser` 工具可能导航本地/下载文件；
 未绑定公司的运行（如 Gateway 里的 cron）没有公司上下文，文件访问退化为
 「所有活跃公司白名单目录的并集」—— 仍挡住系统路径，但无法区分公司。
+守卫随插件加载而生效：插件未部署/未启用或旧版 Hermes 无 `register_hook`
+时整套规则缺席，启动自检见 `trade.bootstrap.verify_tool_guard_ready`。
 """
 
 from __future__ import annotations
@@ -27,6 +35,15 @@ from pathlib import Path
 
 # 文件工具 → 路径参数名（都与 Hermes tools/file_tools.py 的 schema 一致）
 _FILE_TOOLS = frozenset({"read_file", "write_file", "patch", "search_files"})
+
+# 可写文件工具：对其额外做"高敏文件"判断（identity / prompts）
+_WRITE_TOOLS = frozenset({"write_file", "patch"})
+
+# vision_analyze 的 image_url 允许的远程形态；其余按本地路径处理
+_REMOTE_IMAGE_PREFIXES = ("http://", "https://", "data:")
+
+# 公司 identity 文件名（连字符是现行模板，下划线是历史写法）
+_IDENTITY_FILENAMES = frozenset({"agent-identity.md", "agent_identity.md"})
 
 # 允许的终端命令（argv 前缀）。只认 OSINT 机器判定入口 —— SKILL.md 里唯一
 # 需要 shell 的命令；其余一律走文件工具或由 Trade 自己的端点完成。
@@ -100,6 +117,46 @@ def _block(message: str) -> dict:
     return {"action": "block", "message": message}
 
 
+def _is_sensitive_write_target(path: Path, roots: list[Path]) -> bool:
+    """白名单根内、但一旦可写就会变成持久化提示注入的文件。
+
+    两类（都相对于公司 data_dir 根）：
+      - `companies/{slug}/agent-identity.md`（运行时优先读入 system prompt）
+      - `prompts/*.md`（公司级提示词目录）
+    """
+    for root in roots:
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            continue
+        parts = [p.lower() for p in rel.parts]
+        if len(parts) == 3 and parts[0] == "companies" and path.name.lower() in _IDENTITY_FILENAMES:
+            return True
+        if len(parts) == 2 and parts[0] == "prompts" and path.suffix.lower() == ".md":
+            return True
+    return False
+
+
+def _check_vision_image(args: dict) -> dict | None:
+    """`image_url` 允许远程/data URL；本地路径走同一套白名单校验。"""
+    raw = args.get("image_url") or args.get("image_path") or args.get("path")
+    if not isinstance(raw, str) or not raw.strip():
+        return _block(
+            "trade 工具守卫：vision_analyze 必须显式给 image_url（http(s)/data URL 或公司目录内的绝对路径）。"
+        )
+    target = raw.strip()
+    if target.lower().startswith(_REMOTE_IMAGE_PREFIXES):
+        return None
+    if target.lower().startswith("file://"):
+        from urllib.parse import unquote, urlparse
+
+        target = unquote(urlparse(target).path)
+        # Windows 的 file:///C:/x 会留下前导 "/C:"，还原成盘符形态
+        if os.name == "nt" and len(target) > 2 and target[0] == "/" and target[2] == ":":
+            target = target[1:]
+    return _check_file_path("vision_analyze", {"path": target})
+
+
 def _check_file_path(tool_name: str, args: dict) -> dict | None:
     raw = args.get("path")
     if not isinstance(raw, str) or not raw.strip():
@@ -129,6 +186,12 @@ def _check_file_path(tool_name: str, args: dict) -> dict | None:
         return _block(
             "trade 工具守卫：路径不在当前公司允许范围内，已拒绝。"
             "只能访问公司数据目录、工作目录和本公司文档库。"
+        )
+    if tool_name in _WRITE_TOOLS and _is_sensitive_write_target(resolved, roots):
+        return _block(
+            "trade 工具守卫：不允许改写公司身份文件或系统提示词"
+            "（agent-identity.md / prompts/*.md）。"
+            "身份与提示词的变更请通过 Trade 界面设置完成。"
         )
     return None
 
@@ -173,6 +236,8 @@ def check_tool_call(tool_name: str, args: dict | None) -> dict | None:
         )
     if tool_name in _FILE_TOOLS:
         return _check_file_path(tool_name, args if isinstance(args, dict) else {})
+    if tool_name == "vision_analyze":
+        return _check_vision_image(args if isinstance(args, dict) else {})
     if tool_name == "terminal":
         return _check_terminal(args if isinstance(args, dict) else {})
     return None
