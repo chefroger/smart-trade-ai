@@ -21,7 +21,7 @@ triggers:
   - 谈判
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.1.0
+version: 1.2.0
 author: Foreign Trade Assistant
 ---
 ---|-----------|------|
@@ -94,7 +94,7 @@ author: Foreign Trade Assistant
      - 客户分类：高价值（A）/ 中等（B）/ 潜力（C）
      - 具体行动建议：第一步做什么、第二步做什么
      - 开发信/邮件模板（个性化，以客户痛点开头，非产品广告）
-     - 跟进时间表：Day1 / Day3 / Day7 / Day14
+     - 跟进时间表：Day1 / Day3 / Day7 / Day14 / Day30
 
   如果用户没有明确说明产品或市场，请先询问这两个关键信息。
 
