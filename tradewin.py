@@ -60,23 +60,48 @@ def _port_file(lock_path: Path) -> Path:
     return lock_path.with_name(lock_path.stem + ".port")
 
 
+def _pid_alive(pid: int) -> bool:
+    """进程是否还活着（用 psutil；缺失时退回 os.kill(pid, 0)）。"""
+    try:
+        import psutil
+
+        return psutil.pid_exists(pid)
+    except Exception:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+
 def _write_lock_port(lock_path: Path, port: int) -> None:
     if _LOCK_HANDLE is None:
         return
+    path = _port_file(lock_path)
     try:
-        _port_file(lock_path).write_text(
-            f"{os.getpid()} {port}\n", encoding="utf-8",
+        path.write_text(f"{os.getpid()} {port}\n", encoding="utf-8")
+    except OSError as e:
+        # 不静默：写失败意味着第二个实例找不到已有端口，必须让用户看见
+        print(
+            f"Warning: 无法写入端口文件 {path}（{e}）。"
+            "第二个 TradeWin 实例将无法定位当前窗口。",
+            file=sys.stderr,
         )
-    except OSError:
-        pass
 
 
 def _read_lock_port(lock_path: Path) -> int | None:
+    """读取已有实例端口；文件缺失/损坏或记录进程已退出时返回 None。"""
     try:
         parts = _port_file(lock_path).read_text(encoding="utf-8").split()
-        return int(parts[1]) if len(parts) >= 2 else None
+        if len(parts) < 2:
+            return None
+        pid, port = int(parts[0]), int(parts[1])
     except (OSError, ValueError, IndexError):
         return None
+    if not _pid_alive(pid):
+        # 残留的 .port（进程已退出）不能当成有效端口，否则会打开错页面
+        return None
+    return port
 
 
 def _pick_free_port(host: str = "127.0.0.1", preferred: int = PREFERRED_PORT,
@@ -112,6 +137,25 @@ def _open_existing(host: str, port: int) -> None:
         pass
 
 
+def _open_or_report_existing(lock_path: Path, host: str) -> int:
+    """第二实例：有端口就开页面，读不到就明确报错。
+
+    端口缺失/损坏/记录进程已死时**不许**退回 9119 —— 当初逼走顺延的程序可能
+    正占着 9119，静默打开会让用户看到别人的服务。
+    """
+    port = _read_lock_port(lock_path)
+    if port is None:
+        print(
+            "Error: 已有 TradeWin 实例在运行，但读不到它的端口信息"
+            f"（{_port_file(lock_path)} 缺失、损坏或记录进程已退出）。\n"
+            "请关闭残留的 TradeWin 进程后重试；如仍失败，删除该端口文件再启动。",
+            file=sys.stderr,
+        )
+        return 1
+    _open_existing(host, port)
+    return 0
+
+
 def main():
     # 1. Bootstrap（路径、版本检查、env 加载、skills 同步）
     from trade.bootstrap import setup
@@ -128,8 +172,7 @@ def main():
     if not _acquire_single_instance(lock_path):
         # 已有 TradeWin 在跑：读它记录的端口，直接把界面打开
         print("TradeWin 已在运行，正在打开已有界面。")
-        _open_existing(host, _read_lock_port(lock_path) or PREFERRED_PORT)
-        return 0
+        return _open_or_report_existing(lock_path, host)
 
     # launchd/systemd 可能已经在跑 Trade 后端 —— 不重复启动，只开窗口
     if _existing_trade_running(host, PREFERRED_PORT):
