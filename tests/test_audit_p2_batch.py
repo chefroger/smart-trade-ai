@@ -46,6 +46,11 @@ class TestStatusExposesToolGuard:
         assert '"tool_guard": tool_guard' in src
         assert "verify_tool_guard_ready" in src
 
+    def test_both_chat_endpoints_block_when_guard_unavailable(self):
+        """守卫确定不可用时聊天必须阻断（同步 + 流式各一处）。"""
+        src = _read_source("trade/api/chat.py")
+        assert src.count("tool_guard_chat_block_reason()") == 2
+
 
 class TestTokenNotLogged:
     def test_startup_log_has_no_token_fragment(self):
@@ -144,6 +149,12 @@ class TestBlockedSkillPurge:
         assert "确认后调用 auto-smtp-email" not in skill
         assert "SMTP_HOST" not in skill
         assert "不发送任何邮件" in skill
+        # description 的流程也不能写"发送"（审计附录四）
+        description = next(
+            line for line in skill.splitlines() if line.startswith("description:")
+        )
+        assert "发送" not in description
+        assert "交付草稿" in description
 
     def test_startup_sync_purges_and_skips_blocked(self, tmp_path, monkeypatch):
         """启动同步也要清残留、且不复制停用 skill（P1-13 时间窗口）。"""

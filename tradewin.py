@@ -153,6 +153,7 @@ def _open_or_report_existing(lock_path: Path, host: str) -> int:
         )
         return 1
     _open_existing(host, port)
+    print(f"已打开已有界面：http://{host}:{port}/trade")
     return 0
 
 
@@ -171,7 +172,7 @@ def main():
     lock_path = _get_trade_data_dir() / "tradewin.lock"
     if not _acquire_single_instance(lock_path):
         # 已有 TradeWin 在跑：读它记录的端口，直接把界面打开
-        print("TradeWin 已在运行，正在打开已有界面。")
+        print("TradeWin 已在运行。")
         return _open_or_report_existing(lock_path, host)
 
     # launchd/systemd 可能已经在跑 Trade 后端 —— 不重复启动，只开窗口
@@ -225,4 +226,6 @@ def main():
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    main()
+    # 必须把 main() 的返回码交给进程：读不到端口时 main 返回 1，
+    # 直接调用会让退出码恒为 0，依赖退出码判断的脚本会误读为成功。
+    sys.exit(main())

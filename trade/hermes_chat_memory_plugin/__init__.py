@@ -17,7 +17,7 @@ import logging
 # 绝对路径要求 trade 是 installed package（pip install -e . 满足）。
 from trade.cron_binding import on_post_tool_call as on_cron_post_tool_call
 from trade.cron_binding import on_pre_tool_call as on_cron_pre_tool_call
-from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call
+from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call, report_hook_support
 from trade.hermes_chat_memory_plugin.tools import CHAT_MEMORY_LIST_SCHEMA, handle_chat_memory_list
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,10 @@ def register(ctx) -> None:
         # cron job 公司归属：拦截跨公司操作 + 创建后记录 job_id→公司（P1-17）
         _register_hook("pre_tool_call", on_cron_pre_tool_call)
         _register_hook("post_tool_call", on_cron_post_tool_call)
+        report_hook_support(True)
         logger.debug("chat-memory plugin registered tool + pre/post tool hooks")
     else:
+        report_hook_support(False)
         logger.warning(
             "Hermes plugin host has no register_hook; tool guard is disabled"
         )

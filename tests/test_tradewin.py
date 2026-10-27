@@ -98,6 +98,15 @@ class TestSecondInstanceOpensOrReports:
         assert opened == ["http://127.0.0.1:9123/trade"]
 
 
+class TestExitCode:
+    def test_main_return_value_propagates(self):
+        """main() 返回 1（读不到端口）时，进程退出码必须是 1 而不是 0。"""
+        src = (
+            Path(__file__).resolve().parent.parent / "tradewin.py"
+        ).read_text(encoding="utf-8")
+        assert "sys.exit(main())" in src
+
+
 class TestPortFallback:
     def test_busy_preferred_port_is_skipped(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy:

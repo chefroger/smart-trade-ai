@@ -975,21 +975,72 @@ def verify_tool_guard_ready(announce: bool = False) -> dict:
                 and not (isinstance(disabled_list, list) and _CHAT_MEMORY_PLUGIN_KEY in disabled_list)
             )
 
-    ok = deployed and enabled
-    state = {"ok": ok, "deployed": deployed, "enabled": enabled}
+    # 旧版 Hermes 的插件 ctx 没有 register_hook：插件能加载但守卫不生效，
+    # 只靠"部署+启用"会误报 ok。插件每次注册时把能力写进标记文件。
+    try:
+        from trade.hermes_chat_memory_plugin.guardrails import recorded_hook_support
+
+        hooks = recorded_hook_support()
+    except Exception:  # noqa: BLE001 — 读不到标记就按"未知"处理
+        hooks = None
+
+    ok = deployed and enabled and hooks is not False
+    state = {"ok": ok, "deployed": deployed, "enabled": enabled, "hooks": hooks}
     if announce and not ok:
         reasons = []
         if not deployed:
             reasons.append("插件文件未部署")
         if not enabled:
             reasons.append("~/.hermes/config.yaml 的 plugins.enabled 未启用 chat-memory")
+        if hooks is False:
+            reasons.append("当前 Hermes 不支持 register_hook，守卫无法挂载")
         print(
             "  ⚠️ 工具安全守卫未生效（" + "；".join(reasons) + "）："
             "文件路径白名单、terminal 命令白名单、execute_code 拒绝当前都不起作用。"
-            "请重启 Trade；若仍提示，检查 Hermes 配置里的 plugins.enabled。",
+            "请重启 Trade；若仍提示，检查 Hermes 配置里的 plugins.enabled 或升级 Hermes。",
             file=sys.stderr,
         )
     return state
+
+
+def tool_guard_chat_block_reason() -> str | None:
+    """聊天前的守卫门控：守卫确定不可用时返回阻断文案，否则 None。
+
+    放在 agent 构造**之后**调用：旧版 Hermes 的钩子能力要等插件在 agent
+    构造时加载才知道；在那之前阻断会让标记永远无法刷新（死锁）。
+    `TRADE_TOOL_GUARD=off` 是显式退出开关，不阻断。
+    """
+    try:
+        from trade.hermes_chat_memory_plugin.guardrails import guard_enabled
+
+        if not guard_enabled():
+            return None
+    except Exception:  # noqa: BLE001 — 读不到开关按开启处理（安全侧）
+        pass
+
+    state = verify_tool_guard_ready()
+    if state["ok"]:
+        return None
+    if state.get("hooks") is False:
+        return (
+            "⚠️ 当前 Hermes 版本不支持工具钩子（register_hook），"
+            "文件与命令安全守卫无法生效，聊天已暂停。请先升级 Hermes，再重启 Trade。"
+        )
+    reasons = []
+    if not state.get("deployed"):
+        reasons.append("插件未部署")
+    if not state.get("enabled"):
+        reasons.append("插件未启用")
+    # 两边都缺失（无插件、无配置）常见于测试/开发直连或尚未 setup：
+    # 只告警不阻断，否则测试环境与首次启动会直接锁死聊天。
+    if not reasons:
+        return None
+    if not state.get("deployed") and not state.get("enabled"):
+        return None
+    return (
+        "⚠️ 工具安全守卫未生效（" + "、".join(reasons) + "），聊天已暂停。"
+        "请重启 Trade；若仍提示，检查 ~/.hermes/config.yaml 的 plugins.enabled 是否包含 chat-memory。"
+    )
 
 
 def background_github_skills_sync():

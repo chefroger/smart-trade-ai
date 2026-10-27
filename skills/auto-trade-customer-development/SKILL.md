@@ -1,6 +1,6 @@
 ---
 name: auto-trade-customer-development
-description: 全自动外贸客户开发编排器 — 一句话触发「搜索 → 背调 → 评分 → 写信 → 发送 → 入库 → 日志」端到端流水线
+description: 全自动外贸客户开发编排器 — 一句话触发「搜索 → 背调 → 评分 → 写信 → 交付草稿 → 入库 → 日志」端到端流水线
 when_to_use:
   - "全自动客户开发流水线"
   - "定时搜索 + 自动生成开发信草稿（由用户自行发送）"
@@ -21,7 +21,7 @@ triggers:
   - 帮我跑一轮客户开发
   - 跑一批客户
 category: 自动化
-version: 1.2.0
+version: 1.2.1
 author: Trade
 injection_prompt: |
   你是 auto-trade-customer-development 技能 — 外贸客户开发端到端编排器。

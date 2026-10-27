@@ -271,6 +271,12 @@ async def trade_chat(
                 )
                 agent_holder.clear()
                 agent_holder.append(agent)
+                # 守卫不可用时不允许跑工具（agent 已构造，插件钩子能力此刻已知）
+                from trade.bootstrap import tool_guard_chat_block_reason
+
+                block_reason = tool_guard_chat_block_reason()
+                if block_reason:
+                    return block_reason, False
                 # 构造期间已超时：别再启动这一轮（主线程的 abort 会正好错过它）
                 if cancelled.is_set():
                     return "", False
@@ -493,6 +499,13 @@ async def trade_chat_stream(
                 )
                 agent_holder.clear()
                 agent_holder.append(agent)
+                # 守卫不可用时不允许跑工具（与同步端点一致）
+                from trade.bootstrap import tool_guard_chat_block_reason
+
+                block_reason = tool_guard_chat_block_reason()
+                if block_reason:
+                    _emit_threadsafe("error", {"message": block_reason})
+                    return None
                 # 断连/超时发生在构造期间：别再启动这一轮
                 if cancel_event.is_set():
                     return None

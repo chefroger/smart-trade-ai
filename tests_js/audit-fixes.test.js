@@ -33,6 +33,9 @@ test('守卫未生效时前端可见告警（不再只写 stderr）', () => {
   assert.match(SRC, /data\.tool_guard\.ok === false/);
   assert.match(SRC, /_toolGuardWarned/);
   assert.match(SRC, /工具安全守卫未生效/);
+  // 旧版 Hermes 无钩子时给出升级指引，而不是笼统的重启提示
+  assert.match(SRC, /data\.tool_guard\.hooks === false/);
+  assert.match(SRC, /聊天已暂停/);
 });
 
 test('api() 支持额外 header', () => {

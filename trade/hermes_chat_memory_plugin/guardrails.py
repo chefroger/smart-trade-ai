@@ -29,8 +29,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
+from datetime import datetime
 from pathlib import Path
 
 # 文件工具 → 路径参数名（都与 Hermes tools/file_tools.py 的 schema 一致）
@@ -62,6 +64,50 @@ def guard_enabled() -> bool:
     """`TRADE_TOOL_GUARD` 关闭值：off/0/false/no（大小写不敏感）；其余视为开启。"""
     raw = os.environ.get("TRADE_TOOL_GUARD", "").strip().lower()
     return raw not in {"off", "0", "false", "no"}
+
+
+# ── 宿主钩子能力标记 ─────────────────────────────────────────────────────
+# 旧版 Hermes 的插件 ctx 没有 register_hook：插件照常加载，但守卫不会生效。
+# 这件事只有插件运行在 Hermes 进程里时才知道，所以由插件落一个标记文件，
+# Trade 侧读它来避免「部署+启用=ok」的误报。
+
+
+def _hook_state_path() -> Path:
+    from trade.post_install.skills import _get_trade_home
+
+    return _get_trade_home() / "data" / "tool_guard.json"
+
+
+def report_hook_support(supported: bool) -> None:
+    """插件注册钩子时调用；写失败绝不影响插件加载。"""
+    try:
+        # 值没变就不重写（每次 agent 构造都会走到这里，避免无谓磁盘写入）
+        if recorded_hook_support() == bool(supported):
+            return
+        path = _hook_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "hooks": bool(supported),
+                    "at": datetime.now().isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001 — 标记失败不能让插件加载失败
+        pass
+
+
+def recorded_hook_support() -> bool | None:
+    """读取插件上次报告的钩子支持：True / False / None（还没加载过）。"""
+    try:
+        data = json.loads(_hook_state_path().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — 缺失/损坏都按"未知"处理
+        return None
+    value = data.get("hooks") if isinstance(data, dict) else None
+    return value if isinstance(value, bool) else None
 
 
 def _current_company_id() -> int | None:

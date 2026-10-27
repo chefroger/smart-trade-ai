@@ -1735,11 +1735,15 @@ async function checkVersion() {
         if (!r.ok) return;
         const data = await r.json();
         console.log('Version check: current=' + data.version);
-        // 守卫随 chat-memory 插件加载：插件没部署/没启用时整套白名单缺席，
-        // 必须让用户看见，而不是只躺在 stderr 日志里。
+        // 守卫随 chat-memory 插件加载：插件没部署/没启用/宿主不支持钩子时
+        // 整套白名单缺席，必须让用户看见，而不是只躺在 stderr 日志里。
         if (data.tool_guard && data.tool_guard.ok === false && !_toolGuardWarned) {
             _toolGuardWarned = true;
-            toast('⚠️ 工具安全守卫未生效：文件与命令白名单当前不起作用。请重启 Trade；若仍提示，检查 ~/.hermes/config.yaml 的 plugins.enabled 是否包含 chat-memory。');
+            if (data.tool_guard.hooks === false) {
+                toast('⚠️ 当前 Hermes 版本不支持工具钩子，安全守卫无法生效，聊天已暂停。请升级 Hermes 后重启 Trade。');
+            } else {
+                toast('⚠️ 工具安全守卫未生效：文件与命令白名单当前不起作用。请重启 Trade；若仍提示，检查 ~/.hermes/config.yaml 的 plugins.enabled 是否包含 chat-memory。');
+            }
         }
     } catch(e) { /* 静默 */ }
 }

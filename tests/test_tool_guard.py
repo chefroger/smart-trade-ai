@@ -262,3 +262,44 @@ class TestGuardDeploymentCheck:
         err = capsys.readouterr().err
         assert "工具安全守卫未生效" in err
         assert "plugins.enabled" in err
+
+    def _marker(self, tmp_path, monkeypatch):
+        marker = tmp_path / "tool_guard.json"
+        monkeypatch.setattr(g, "_hook_state_path", lambda: marker)
+        return marker
+
+    def test_plugin_without_hook_support_is_not_ok(self, tmp_path, monkeypatch):
+        """旧版 Hermes 能加载插件但没有 register_hook —— 不能误报 ok。"""
+        bootstrap = self._home(tmp_path, monkeypatch)
+        self._marker(tmp_path, monkeypatch)
+        g.report_hook_support(False)
+        assert g.recorded_hook_support() is False
+        state = bootstrap.verify_tool_guard_ready()
+        assert state["hooks"] is False
+        assert state["ok"] is False
+
+    def test_chat_blocked_when_host_lacks_hooks(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch)
+        self._marker(tmp_path, monkeypatch)
+        g.report_hook_support(False)
+        reason = bootstrap.tool_guard_chat_block_reason()
+        assert reason and "升级 Hermes" in reason
+
+    def test_chat_blocked_when_plugin_missing(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch, deployed=False)
+        self._marker(tmp_path, monkeypatch)
+        g.report_hook_support(True)
+        reason = bootstrap.tool_guard_chat_block_reason()
+        assert reason and "插件未部署" in reason
+
+    def test_chat_allowed_when_ready(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch)
+        self._marker(tmp_path, monkeypatch)
+        g.report_hook_support(True)
+        assert bootstrap.tool_guard_chat_block_reason() is None
+
+    def test_chat_allowed_when_guard_disabled(self, tmp_path, monkeypatch):
+        bootstrap = self._home(tmp_path, monkeypatch, deployed=False)
+        self._marker(tmp_path, monkeypatch)
+        monkeypatch.setenv("TRADE_TOOL_GUARD", "off")
+        assert bootstrap.tool_guard_chat_block_reason() is None
