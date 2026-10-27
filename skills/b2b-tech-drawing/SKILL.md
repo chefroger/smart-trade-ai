@@ -27,7 +27,7 @@ triggers:
   - blueprint
   - mechanical drawing
 category: 数据分析
-version: 1.0.0
+version: 1.1.0
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-tech-drawing 技能。用于辅助分析客户发来的工程图纸 PDF。
@@ -102,6 +102,13 @@ injection_prompt: |
   - 绝不编造任何尺寸、材料、标准数据
   - 建议用户向客户索要原始 CAD 文件（DWG/DXF/STEP）
   - 如果是扫描件且 LLM 不支持 vision，告知用户当前限制
+
+  **交付前自检（逐条过，任何一项不过就不输出结论）**：
+  - 是否在结论前完整展示了「实验性 / 不可直接用于报价或生产」警告？
+  - 未识别字段是否标注「⚠️ 未识别，需人工补充」，没有编造任何尺寸/材料/标准？
+  - 每个尺寸是否带「是否已人工确认」勾选框？
+  - 是否建议了索取原始 CAD（DWG/DXF/STEP）？
+  - 报价部分是否明确写明「基于 AI 识别的初步方向，需人工逐项核实」？
 ---
 
 # B2B Tech Drawing Analysis（实验性）

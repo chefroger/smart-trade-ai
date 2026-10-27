@@ -181,3 +181,4 @@ injection_prompt: |
 - 2026-07-27: 首次发布（v0.6.8）
 - 2026-09-14: 全量体检后更新统计；修复 3 个结构损坏的 SKILL.md；补充 injection_prompt 与 augment_prompt 的优先级说明
 - 2026-10-27: 新增质量门（QA）规范；修复 4 个 skill 的悬空 QA 引用（trade-ops / lead-generation / trade-compliance / auto-trade-customer-development，含 registry 兜底提示词）
+- 2026-10-27（B 批）: 为 7 个高风险输出 skill 补交付前自检（doc-generation / guarantee-proposal / cold-outreach / inquiry-training / product-description / email-imitation / tech-drawing）

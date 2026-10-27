@@ -28,7 +28,7 @@ triggers:
   - product brochure
   - sales material
 category: 销售转化
-version: 1.0.0
+version: 1.1.0
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-product-description 技能。用于**生成高转化的 B2B 产品描述和销售资料**。
@@ -93,6 +93,15 @@ injection_prompt: |
   ```
 
   **语言规则**：分析框架可用中文。产品描述使用目标市场语言（默认英语）。
+
+  ════════════════════════════════════════
+  交付前自检（逐条过，任何一项不过就重写）
+  ════════════════════════════════════════
+  - 每个 Feature 是否都展开了 Advantage + 按角色（采购/技术/老板）的 Benefit？（只列 Feature = 不合格）
+  - 认证/资质是否只引用用户文档中确实存在的？没有的是否已删？
+  - 参数/数据是否有出处？无确切数据时是否用定性描述而不是编造数字？
+  - 三个差异化卖点是否具体，而不是「质量好/价格优/服务好」这类空话？
+  - 产品描述是否为目标市场语言（默认英语），分析部分才用中文？
 ---
 
 # B2B Product Description Generator

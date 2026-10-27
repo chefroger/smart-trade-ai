@@ -345,14 +345,21 @@ class TestQualityGateIsSelfContained:
             + "\n".join(f"  {o}" for o in offenders)
         )
 
-    def test_core_qa_skills_carry_a_gate(self):
-        """修复过的四个 skill 必须在生效注入里带自检条目。"""
+    def test_high_risk_skills_carry_a_gate(self):
+        """高风险输出 skill 必须在生效注入里带自检条目（B 批 10 个）。"""
         from trade.skill_registry import get_skill_by_name
 
         for name in (
+            "b2b-doc-generation",
+            "b2b-guarantee-proposal",
             "b2b-trade-ops",
-            "b2b-lead-generation",
             "b2b-trade-compliance",
+            "b2b-cold-outreach",
+            "b2b-lead-generation",
+            "b2b-inquiry-training",
+            "b2b-product-description",
+            "b2b-email-imitation",
+            "b2b-tech-drawing",
             "auto-trade-customer-development",
         ):
             skill = get_skill_by_name(name)
