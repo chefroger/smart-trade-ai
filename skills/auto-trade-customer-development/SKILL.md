@@ -21,7 +21,7 @@ triggers:
   - 帮我跑一轮客户开发
   - 跑一批客户
 category: 自动化
-version: 1.0.0
+version: 1.1.0
 author: Trade
 injection_prompt: |
   你是 auto-trade-customer-development 技能 — 外贸客户开发端到端编排器。
@@ -73,7 +73,7 @@ injection_prompt: |
   - 必须基于 Phase 2 背调的具体细节（不能是泛泛模板）
   - 每家生成 3-5 个主题行变体（策略 A/B/C/D）
   - 每家生成 2 个正文变体（用于替换法 A/B 测试）
-  - **强制反垃圾自检**（对照 b2b-lead-generation Quality Gate Checklist）
+  - **强制反垃圾自检**（逐条过，任何一项不过就重写）：主题 ≤ 8 词且含客户的具体细节；无 "Dear Sir/Madam"；无夸大承诺；含明确下一步动作；非英语版本附母语审阅提醒
   - 输出：email_draft[]（subject_variants / body_variants / chosen_subject / chosen_body）
 
   【Phase 5 — 发送】用户确认后调用 auto-smtp-email

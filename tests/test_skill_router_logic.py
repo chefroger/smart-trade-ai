@@ -307,3 +307,53 @@ class TestPlatformSpecificInjectionIsSelfDetected:
         body = self._skill_text().split("---\n", 2)[2]
         for kw in ("P4P 词效分层", "数据参谋", "旺铺", "问鼎", "商家星等级"):
             assert kw in body, f"正文的阿里专属规则丢了：{kw}"
+
+
+class TestQualityGateIsSelfContained:
+    """QA 清单必须在**生效的注入文本**里（2026-10-27 规范，STANDARDS §8）。
+
+    旧做法在注入里写「对照文末 / SKILL.md 文末的 Quality Gate Checklist」，
+    但模型只拿到注入文本、没有 SKILL.md 正文 —— 这类指路等于没有 QA。
+    """
+
+    def _frontmatter(self, name):
+        import re
+        from pathlib import Path
+
+        import yaml
+
+        text = (Path(__file__).resolve().parent.parent
+                / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        return yaml.safe_load(re.match(r"^---\n(.*?)\n---\n", text, re.S).group(1))
+
+    def _active_prompt(self, skill):
+        """运行时真正注入的那份：SKILL.md injection_prompt 优先，否则 registry augment_prompt。"""
+        fm = self._frontmatter(skill["name"])
+        return fm.get("injection_prompt") or skill.get("augment_prompt") or ""
+
+    def test_no_active_prompt_points_at_body_checklist(self):
+        from trade.skill_registry import list_skills
+
+        offenders = []
+        for skill in list_skills():
+            prompt = self._active_prompt(skill)
+            for bad in ("文末", "Quality Gate"):
+                if bad in prompt:
+                    offenders.append(f"{skill['name']}：{bad}")
+        assert not offenders, (
+            "生效的注入文本里出现了指向正文的 QA 引用（模型读不到正文）：\n"
+            + "\n".join(f"  {o}" for o in offenders)
+        )
+
+    def test_core_qa_skills_carry_a_gate(self):
+        """修复过的四个 skill 必须在生效注入里带自检条目。"""
+        from trade.skill_registry import get_skill_by_name
+
+        for name in (
+            "b2b-trade-ops",
+            "b2b-lead-generation",
+            "b2b-trade-compliance",
+            "auto-trade-customer-development",
+        ):
+            skill = get_skill_by_name(name)
+            assert "自检" in self._active_prompt(skill), f"{name} 的生效注入里没有自检条目"

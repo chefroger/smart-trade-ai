@@ -142,6 +142,7 @@ injection_prompt: |
 - [ ] `triggers` 至少 5 个关键词
 - [ ] `category` 命中以下枚举之一：`客户开发` / `客户管理` / `文档管理` / `数据分析` / `平台运营` / `内容营销` / `销售转化` / `履约运营` / `合规风控` / `自动化` / `系统工具`
 - [ ] `version` 递增（修改时）
+- [ ] 若含 QA：写在**生效的注入文本**里（injection_prompt 或 registry augment_prompt），且自包含（不写「对照文末」）
 - [ ] `scripts/README.md` + `references/README.md` + `assets/README.md` 至少存在 3 个目录占位（即使内容为空）
 - [ ] 没有 broken 相对路径（`./references/` 或 `references/`）
 
@@ -162,6 +163,21 @@ injection_prompt: |
 
 ---
 
+## 8. 质量门（QA）规范
+
+**原则**：QA 清单必须出现在**真正注入给模型的那段文本**里。只写在 SKILL.md 正文 = 装饰，模型看不到。
+
+- **位置**：优先写进 SKILL.md 的 `injection_prompt`；该 skill 没有 injection_prompt 时，写进 `skill_registry.py` 的 `augment_prompt`（运行时实际注入的那份）。
+- **自包含**：不许写「对照文末 / SKILL.md 文末 / 参见某技能」——模型手里没有正文，这类指路等于没有 QA。
+- **篇幅**：≤10 行，逐条可勾选（每条一个是非判断）；按输出类型分支时最多两层。
+- **内容**：只放「不过就不能发」的硬检查（要素齐全、文化禁忌、术语版本、来源标注），不写「要专业」这类空话。
+- **正文清单**：允许在 SKILL.md 正文保留更细的自检表作文档，但注入文本不得引用它作为生效的 QA。
+
+> 参考实现：`b2b-trade-ops` / `b2b-trade-compliance` / `auto-trade-customer-development` 的 injection_prompt，以及 `b2b-lead-generation` 的 registry augment_prompt。
+
+---
+
 **修订历史**
 - 2026-07-27: 首次发布（v0.6.8）
 - 2026-09-14: 全量体检后更新统计；修复 3 个结构损坏的 SKILL.md；补充 injection_prompt 与 augment_prompt 的优先级说明
+- 2026-10-27: 新增质量门（QA）规范；修复 4 个 skill 的悬空 QA 引用（trade-ops / lead-generation / trade-compliance / auto-trade-customer-development，含 registry 兜底提示词）
