@@ -68,9 +68,15 @@ def _kill(pid: int, expected_create_time: float | None = None) -> None:
         return
 
 
-def _spawn(command: list[str], workdir: str) -> subprocess.Popen:
+def _spawn(
+    command: list[str], workdir: str, nonce: str = "",
+) -> subprocess.Popen:
+    env = dict(os.environ)
+    if nonce:
+        env["TRADE_RESTART_NONCE"] = nonce
     kwargs: dict = {
         "cwd": workdir,
+        "env": env,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "stdin": subprocess.DEVNULL,
@@ -82,35 +88,35 @@ def _spawn(command: list[str], workdir: str) -> subprocess.Popen:
     return subprocess.Popen(command, **kwargs)
 
 
-def _healthy(port: int, min_started_at: float = 0.0) -> bool:
-    """服务是否健康，且**确实是重启后新起的进程**。
+def _healthy(port: int, expected_nonce: str) -> bool:
+    """服务是否健康，且**确实是本次重启新起的进程**。
 
     只认 app 名会把"旧进程没杀掉"误判成新进程健康，从而删掉 pending、
-    丢掉回退点。这里额外要求 started_at 晚于旧进程的启动时间。
+    丢掉回退点。新进程会带着 watchdog 传入的 nonce 启动并经 /api/status
+    回传；nonce 不匹配（含空值）= 不是我们要等的那一个进程。
     """
+    if not expected_nonce:
+        return False  # 无 nonce 一律不判健康（fail-closed）
     try:
         with urllib.request.urlopen(
             f"http://127.0.0.1:{port}/api/status", timeout=2,
         ) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
-            if data.get("app") != _APP_NAME:
-                return False
-            try:
-                started_at = float(data.get("started_at") or 0)
-            except (TypeError, ValueError):
-                return False
-            return started_at > min_started_at
+            return (
+                data.get("app") == _APP_NAME
+                and data.get("nonce") == expected_nonce
+            )
     except Exception:
         return False
 
 
 def _wait_healthy(
-    port: int, timeout: float, min_started_at: float = 0.0,
+    port: int, timeout: float, nonce: str,
     proc: subprocess.Popen | None = None,
 ) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _healthy(port, min_started_at):
+        if _healthy(port, nonce):
             return True
         # 新进程已退出（端口冲突/启动崩溃）→ 不必等到超时
         if proc is not None and proc.poll() is not None:
@@ -143,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--repo", default="")
     p.add_argument("--workdir", required=True)
     p.add_argument("--pending-file", default="")
-    p.add_argument("--old-started-at", type=float, default=0.0)
+    p.add_argument("--nonce", required=True)
     p.add_argument("--log", required=True)
     p.add_argument("--timeout", type=float, default=90.0)
     p.add_argument("command", nargs=argparse.REMAINDER)
@@ -162,10 +168,14 @@ def main(argv: list[str] | None = None) -> int:
     time.sleep(2)
     _kill(args.old_pid, old_create)
     time.sleep(0.5)
-    proc = _spawn(cmd, args.workdir)
+    try:
+        proc = _spawn(cmd, args.workdir, args.nonce)
+    except Exception as e:  # noqa: BLE001 — 旧进程已死，必须留日志/pending
+        _log(log_path, f"spawn failed: {e!r}; pending kept for manual recovery")
+        return 1
     _log(log_path, f"new process pid={proc.pid}")
 
-    if _wait_healthy(args.port, args.timeout, args.old_started_at, proc):
+    if _wait_healthy(args.port, args.timeout, args.nonce, proc):
         _log(log_path, "new process healthy")
         if args.pending_file:
             try:
@@ -185,9 +195,13 @@ def main(argv: list[str] | None = None) -> int:
         _log(log_path, "rollback unsuccessful; leaving service stopped")
         return 1
 
-    proc2 = _spawn(cmd, args.workdir)
+    try:
+        proc2 = _spawn(cmd, args.workdir, args.nonce)
+    except Exception as e:  # noqa: BLE001 — 回退进程也起不来时保留 pending
+        _log(log_path, f"rollback spawn failed: {e!r}; pending kept")
+        return 1
     _log(log_path, f"rolled-back process pid={proc2.pid}")
-    if _wait_healthy(args.port, args.timeout, args.old_started_at, proc2):
+    if _wait_healthy(args.port, args.timeout, args.nonce, proc2):
         _log(log_path, "rolled-back process healthy")
         if args.pending_file:
             try:

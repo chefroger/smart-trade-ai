@@ -785,11 +785,33 @@ def update_trade(target_sha_request: str | None = None) -> dict:
                         ["git", "stash", "pop"], cwd=str(trade_dir),
                         capture_output=True, text=True, timeout=30,
                     )
-                    # stash pop 可能因冲突失败，此时改动仍留在 stash 里，必须告知用户
+                    # stash pop 冲突：index 进入 unmerged 状态，后续 reset --keep 必然
+                    # fatal。必须立即中止，并把代码恢复到升级前（改动仍在 stash 里，
+                    # 用户手动 pop 可取回），不能让仓库停在「冲突 + 新代码」的混合态。
                     if pop.returncode != 0:
-                        _emit(f"  ⚠ git stash pop 冲突，改动仍留在 stash 中：{pop.stderr.strip()}")
-                        _emit(f"  💡 请手动处理：cd {trade_dir} && git stash pop")
+                        _emit(f"  ⚠ git stash pop 冲突：{pop.stderr.strip()}")
+                        if pre_update_sha:
+                            hard = subprocess.run(
+                                ["git", "reset", "--hard", pre_update_sha],
+                                cwd=str(trade_dir), capture_output=True,
+                                text=True, timeout=120,
+                            )
+                            if hard.returncode == 0:
+                                _emit(f"  ↩ 已恢复到升级前代码（{pre_update_sha[:8]}）")
+                            else:
+                                _emit(
+                                    "  ⚠ 自动恢复失败，请手动执行："
+                                    f"cd {trade_dir} && git reset --hard {pre_update_sha}"
+                                )
+                        _emit("  ⚠ 你的本地改动仍在 git stash 中（未丢失）")
+                        _emit(f"  💡 恢复方式：cd {trade_dir} && git stash pop")
+                        errors.append("git stash pop conflicted; update aborted")
                         warnings.append("local changes remain stashed (git stash pop conflicted)")
+                        return {
+                            "ok": False, "version": "",
+                            "error": "本地改动与升级内容冲突，升级已中止；改动仍在 git stash 中。",
+                            "errors": errors, "warnings": warnings, "messages": messages,
+                        }
                 else:
                     err2 = pull2.stderr.strip()
                     _emit(f"  ❌ git pull failed after stash: {err2}")

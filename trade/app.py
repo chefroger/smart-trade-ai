@@ -40,6 +40,9 @@ def _check_license():
 
 _SESSION_TOKEN = secrets.token_urlsafe(32)
 _STARTED_AT = time.time()  # 进程启动时间戳，供前端重启检测
+# 重启 nonce：watchdog 用环境变量传给新进程，新进程经 /api/status 回传。
+# 只认匹配的 nonce，与墙钟、旧进程是否存活都无关（比 started_at 可靠）。
+_STARTUP_NONCE = os.environ.get("TRADE_RESTART_NONCE", "") or secrets.token_urlsafe(12)
 # 本进程实际监听的端口（重启 watchdog 探活用）。由 main()/tradewin 在启动时写入。
 _BOUND_PORT = 9119
 
@@ -438,24 +441,14 @@ def _perform_restart() -> None:
     except (OSError, ValueError):
         pre_sha = ""
     if pre_sha:
-        # 旧进程的启动时间：watchdog 用它区分"新进程健康"与"旧进程没杀掉"
-        old_started_at = 0.0
-        try:
-            import urllib.request as _ur
-
-            with _ur.urlopen(
-                f"http://127.0.0.1:{_BOUND_PORT}/api/status", timeout=2,
-            ) as _resp:
-                _status = json.loads(_resp.read().decode("utf-8", "replace"))
-                old_started_at = float(_status.get("started_at") or 0)
-        except Exception:
-            pass
+        # 新进程用这个 nonce 回传身份；旧进程不会持有它 → 探活不会误判
+        restart_nonce = secrets.token_urlsafe(12)
         try:
             _watchdog_cmd = [
                 _restart_python, "-m", "trade.restart_watchdog",
                 "--old-pid", str(old_pid),
                 "--port", str(_BOUND_PORT),
-                "--old-started-at", str(old_started_at),
+                "--nonce", restart_nonce,
                 "--pre-sha", pre_sha,
                 "--repo", str(_trade_runtime_dir()),
                 "--workdir", str(Path.cwd()),
@@ -987,6 +980,7 @@ def create_app() -> FastAPI:
             "app": "Foreign Trade Assistant",
             "version": version,
             "started_at": _STARTED_AT,
+            "nonce": _STARTUP_NONCE,
             "doctor": doctor_result,
             "tool_guard": tool_guard,
         }

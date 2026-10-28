@@ -1548,11 +1548,11 @@ class TestRestartWatchdog:
         from trade.restart_watchdog import _healthy, _wait_healthy
 
         # 1 端口不会是我们的服务
-        assert _healthy(1) is False
-        assert _wait_healthy(1, timeout=0.1) is False
+        assert _healthy(1, "nonce") is False
+        assert _wait_healthy(1, 0.1, "nonce") is False
 
-    def test_healthy_requires_new_started_at(self, monkeypatch):
-        """探活必须确认是新进程：旧进程还在时 started_at 不变，不能算健康。"""
+    def test_healthy_requires_matching_nonce(self, monkeypatch):
+        """探活只认本次重启的 nonce：旧进程（别的 nonce）不能算健康。"""
         import json as _json
 
         from trade import restart_watchdog as w
@@ -1570,14 +1570,14 @@ class TestRestartWatchdog:
             def __exit__(self, *a):
                 return False
 
-        payload = {"app": "Foreign Trade Assistant", "started_at": 100.0}
+        payload = {"app": "Foreign Trade Assistant", "nonce": "new-nonce"}
         monkeypatch.setattr(
             w.urllib.request, "urlopen", lambda *a, **k: _Resp(payload),
         )
 
-        assert w._healthy(9119, 100.0) is False  # 旧进程
-        assert w._healthy(9119, 99.0) is True    # 新进程
-        assert w._healthy(9119, 100.5) is False
+        assert w._healthy(9119, "new-nonce") is True
+        assert w._healthy(9119, "old-nonce") is False
+        assert w._healthy(9119, "") is False  # 空 nonce fail-closed
 
     def test_wait_healthy_stops_when_new_process_exits(self):
         from trade import restart_watchdog as w
@@ -1586,7 +1586,44 @@ class TestRestartWatchdog:
             def poll(self):
                 return 1
 
-        assert w._wait_healthy(1, timeout=10, min_started_at=0, proc=_Proc()) is False
+        assert w._wait_healthy(1, 10, "nonce", _Proc()) is False
+
+    def test_stash_pop_conflict_aborts_and_restores(self, tmp_path, monkeypatch):
+        """stash pop 冲突：升级立即中止，代码恢复到 pre_update_sha，改动留在 stash。"""
+        from trade.post_install import update as upd
+
+        fake_trade_dir = tmp_path / "foreign-trade-assistant"
+        fake_trade_dir.mkdir()
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        pre_sha = "a" * 40
+        monkeypatch.setattr(upd, "_git_head", lambda d: pre_sha)
+        monkeypatch.setattr(upd, "_remote_main_sha", lambda d: "b" * 40)
+
+        pulled = {"first": False}
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(list(cmd))
+            cp = MagicMock()
+            cp.returncode, cp.stdout, cp.stderr = 0, "", ""
+            if cmd[:3] == ["git", "pull", "--ff-only"] and not pulled["first"]:
+                cp.returncode, cp.stderr = 1, "diverged"
+                pulled["first"] = True
+            elif cmd[:3] == ["git", "stash", "pop"]:
+                cp.returncode, cp.stderr = 1, "CONFLICT"
+            return cp
+
+        monkeypatch.setattr(upd.subprocess, "run", fake_run)
+        monkeypatch.setattr(upd, "install_skills", lambda: None)
+        monkeypatch.setattr(upd, "update_skills", lambda: None)
+
+        result = upd.update_trade()
+
+        assert result["ok"] is False
+        assert "stash" in result["error"]
+        assert any(
+            c[:3] == ["git", "reset", "--hard"] and pre_sha in c for c in calls
+        ), "必须恢复到升级前代码，不能停在冲突态"
 
     def test_rollback_resets_repo(self, tmp_path):
         """探活失败后的回退是真的 git reset，不是只打日志。"""
