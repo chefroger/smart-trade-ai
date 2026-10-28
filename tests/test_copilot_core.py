@@ -213,6 +213,131 @@ class TestMatchCustomer:
         assert result.new_contact is True
 
 
+class TestShortNameConfirmation:
+    """W2：短名/单字命中疑似客户时先确认，确认前不带历史、不生成草稿。"""
+
+    def _patch(self, monkeypatch, customers):
+        monkeypatch.setattr(ctx_mod, "_list_company_customers", lambda cid: customers)
+        monkeypatch.setattr(ctx_mod, "_fuzzy_search", lambda q, cid: [])
+        monkeypatch.setattr(
+            ctx_mod, "_get_customer",
+            lambda cid, company: next(
+                (c for c in customers if int(c["id"]) == int(cid)), None
+            ),
+        )
+
+    def test_single_char_hit_asks_first(self, monkeypatch):
+        self._patch(monkeypatch, [{"id": 1, "name": "张三"}])
+
+        result = ctx_mod.match_customer("张", company_id=1)
+
+        assert result.needs_confirmation is True
+        assert result.matched is False
+        assert result.new_contact is True
+        assert result.customer_id is None
+        assert result.history == []
+        assert result.candidates == [{"id": 1, "name": "张三"}]
+        assert "你是说张三吗" in result.confirmation_question
+
+    def test_confirm_then_matches(self, monkeypatch):
+        self._patch(monkeypatch, [{"id": 1, "name": "张三"}])
+
+        result = ctx_mod.match_customer("张", company_id=1, confirmed_customer_id=1)
+
+        assert result.matched is True
+        assert result.new_contact is False
+        assert result.customer_id == 1
+        assert result.customer_name == "张三"
+        assert result.needs_confirmation is False
+
+    def test_unconfirmed_stays_new_contact(self, monkeypatch):
+        self._patch(monkeypatch, [{"id": 1, "name": "张三"}])
+
+        result = ctx_mod.match_customer("张", company_id=1)
+
+        assert result.new_contact is True
+        assert result.matched is False
+
+    def test_exact_short_name_no_question(self, monkeypatch):
+        """完全相等（Li→Li）不受影响，不多问。"""
+        self._patch(monkeypatch, [{"id": 1, "name": "Li"}])
+
+        result = ctx_mod.match_customer("Li", company_id=1)
+
+        assert result.matched is True
+        assert result.needs_confirmation is False
+
+    def test_multiple_candidates_listed(self, monkeypatch):
+        self._patch(monkeypatch, [{"id": 1, "name": "张三"}, {"id": 2, "name": "张三丰"}])
+
+        result = ctx_mod.match_customer("张", company_id=1)
+
+        assert result.needs_confirmation is True
+        assert {c["name"] for c in result.candidates} == {"张三", "张三丰"}
+        assert "张三" in result.confirmation_question
+        assert "张三丰" in result.confirmation_question
+
+    def test_build_context_skips_history_until_confirmed(self, monkeypatch):
+        customers = [{"id": 1, "name": "张三"}]
+        self._patch(monkeypatch, customers)
+        calls: list[int] = []
+        monkeypatch.setattr(
+            ctx_mod, "load_history",
+            lambda ctx, company_id, limit=10: calls.append(ctx.customer_id) or ["旧历史"],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "load_product_entries", lambda kw, company_id, limit=8: ([], [])
+        )
+
+        pending = ctx_mod.build_context("张", company_id=1)
+        assert pending.needs_confirmation is True
+        assert pending.history == []
+        assert calls == [], "确认前绝不能加载历史"
+
+        confirmed = ctx_mod.build_context("张", company_id=1, confirmed_customer_id=1)
+        assert confirmed.matched is True
+        assert confirmed.history == ["旧历史"]
+        assert calls == [1], "确认后才加载历史"
+
+    def test_generate_draft_stops_before_model(self, monkeypatch):
+        from trade.copilot.types import CustomerContext
+
+        ctx = CustomerContext(
+            needs_confirmation=True,
+            confirmation_question="你是说张三吗？确认后才会带入这位客户的资料。",
+        )
+        called: list[str] = []
+        monkeypatch.setattr(
+            draft_mod, "_run_with_retries",
+            lambda *a, **k: called.append("model") or "草稿",
+        )
+
+        result = draft_mod.generate_draft("hi", ctx, company_id=1)
+
+        assert "张三" in result.error
+        assert called == [], "确认前不得调用模型"
+
+    def test_four_char_first_name_path_unchanged(self, monkeypatch):
+        """John→John Smith 不在本项决定内，不得顺手改。"""
+        monkeypatch.setattr(
+            ctx_mod, "_list_company_customers",
+            lambda cid: [{"id": 2, "name": "John Smith"}],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_fuzzy_search",
+            lambda q, cid: [{"customer_id": 2, "score": 0.9, "match_type": "vector"}],
+        )
+        monkeypatch.setattr(
+            ctx_mod, "_get_customer",
+            lambda cid, company: {"id": 2, "name": "John Smith"},
+        )
+
+        result = ctx_mod.match_customer("John", company_id=1)
+
+        assert result.matched is True
+        assert result.needs_confirmation is False
+
+
 class TestLoadHistory:
     def test_unmatched_customer_gets_no_history(self):
         ctx = CustomerContext(matched=False, new_contact=True)

@@ -144,6 +144,12 @@ class CustomerContext:
     product_entries: list[dict[str, Any]] = field(default_factory=list)
     # 产品库里可引用的数字及其出处（铁律 3：数字只从库里取）
     facts: list[SourceRef] = field(default_factory=list)
+    # 短名/单字命中疑似客户：必须先让用户确认，确认前 matched=False、不带历史
+    needs_confirmation: bool = False
+    # 疑似候选（最多 5 个；每项含 id / name），供 UI 展示与二次确认
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    # 给用户看的确认问句（如「你是说张三吗？」）
+    confirmation_question: str = ""
 
 
 @dataclass

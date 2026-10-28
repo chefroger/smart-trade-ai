@@ -105,6 +105,7 @@ def match_customer(
     *,
     company_id: int,
     threshold: float = MATCH_THRESHOLD,
+    confirmed_customer_id: int | None = None,
 ) -> CustomerContext:
     """在**当前公司**的客户库里匹配对方名称。
 
@@ -112,10 +113,13 @@ def match_customer(
         contact: 抽取到的对方名称/昵称。
         company_id: 当前公司（严格作用域，跨公司绝不查）。
         threshold: 匹配阈值。
+        confirmed_customer_id: 用户在确认问句里点选的客户 id。提供且合法时
+            直接认定该客户（短名候选确认路径）。
 
     Returns:
         CustomerContext。未命中时 `matched=False` + `new_contact=True`，
-        **不带任何历史**。
+        **不带任何历史**。短名/单字命中疑似客户时 `needs_confirmation=True`，
+        候选放在 `candidates`，确认前不认、不带历史。
     """
     if not company_id or company_id <= 0:
         return CustomerContext(new_contact=True)
@@ -123,6 +127,19 @@ def match_customer(
     name = (contact or "").strip()
     if not name:
         return CustomerContext(new_contact=True)
+
+    # 用户已确认：直接认这一个客户（仍校验公司归属）
+    if confirmed_customer_id is not None:
+        chosen = _get_customer(int(confirmed_customer_id), company_id)
+        if chosen:
+            return CustomerContext(
+                customer_id=int(chosen.get("id") or 0),
+                customer_name=str(chosen.get("name") or name),
+                matched=True,
+                new_contact=False,
+                match_score=1.0,
+            )
+        return CustomerContext(customer_name=name, new_contact=True)
 
     customers = _list_company_customers(company_id)
     if not customers:
@@ -143,7 +160,24 @@ def match_customer(
         _log.info("副驾客户同名多候选（%d 条），按新客户处理", len(exact_matches))
         return CustomerContext(customer_name=name, new_contact=True)
 
-    # ② 模糊检索（向量优先，无向量时降级关键词）
+    # ② 短名/单字命中疑似客户 → 先确认，不直接认（P1-5 串户 vs P2-10 漏上下文）。
+    #    确认前 matched=False，因此 build_context 不会加载这位客户的历史。
+    normalized = _normalize_name(name)
+    if len(normalized) <= 3:
+        candidates = _short_name_candidates(normalized, customers)
+        if candidates:
+            return CustomerContext(
+                customer_name=name,
+                new_contact=True,
+                needs_confirmation=True,
+                candidates=[
+                    {"id": int(c.get("id") or 0), "name": str(c.get("name") or "")}
+                    for c in candidates[:5]
+                ],
+                confirmation_question=_confirmation_question(candidates),
+            )
+
+    # ③ 模糊检索（向量优先，无向量时降级关键词）
     hits = _fuzzy_search(name, company_id)
     if not hits:
         return CustomerContext(new_contact=True)
@@ -157,7 +191,7 @@ def match_customer(
             match_score=score,
         )
 
-    # ③ 多候选且分数接近 → 宁缺毋滥，按新客户处理
+    # ④ 多候选且分数接近 → 宁缺毋滥，按新客户处理
     if len(hits) > 1:
         second = float(hits[1].get("score") or 0.0)
         if second >= score - AMBIGUOUS_MARGIN:
@@ -171,7 +205,7 @@ def match_customer(
     if not cust:
         return CustomerContext(customer_name=name, new_contact=True, match_score=score)
 
-    # ④ 关键词降级命中的二次校验：LIKE 返回的 score 恒为 1.0，会直接越过
+    # ⑤ 关键词降级命中的二次校验：LIKE 返回的 score 恒为 1.0，会直接越过
     #    0.62 阈值；而 LIKE 也会扫 note/email —— 别家客户备注里出现这个名字
     #    同样会命中。名字本身没有实质重叠 → 按新客户（铁律 4）。
     keyword_hit = best.get("match_type") == "keyword" or score >= 0.9999
@@ -189,6 +223,32 @@ def match_customer(
         new_contact=False,
         match_score=score,
     )
+
+
+def _short_name_candidates(normalized: str, customers: list[dict]) -> list[dict]:
+    """找出名字包含这个短名/单字的客户（归一后），用于确认问句。"""
+    out: list[dict] = []
+    seen: set[int] = set()
+    for cust in customers:
+        cand = _normalize_name(str(cust.get("name") or ""))
+        if not cand or cand == normalized:
+            continue
+        if normalized in cand:
+            cid = int(cust.get("id") or 0)
+            if cid and cid not in seen:
+                seen.add(cid)
+                out.append(cust)
+    return out
+
+
+def _confirmation_question(candidates: list[dict]) -> str:
+    """生成确认问句；多个候选时列出前 5 个让用户选。"""
+    names = [str(c.get("name") or "").strip() for c in candidates[:5]]
+    names = [n for n in names if n]
+    if len(names) == 1:
+        return f"你是说{names[0]}吗？确认后才会带入这位客户的资料。"
+    more = "（仅列出前 5 位）" if len(candidates) > 5 else ""
+    return "你是指以下哪一位客户：" + " / ".join(names) + f"？{more}"
 
 
 def _list_company_customers(company_id: int) -> list[dict]:
@@ -545,12 +605,20 @@ def build_context(
     product_keywords: str = "",
     threshold: float = MATCH_THRESHOLD,
     with_history: bool = True,
+    confirmed_customer_id: int | None = None,
 ) -> CustomerContext:
     """完整组装上下文：匹配客户 → 取历史 → 检索产品库。
 
     命中既有客户时带历史；未命中时 `new_contact=True` 且**不带任何既有上下文**。
+    短名/单字命中疑似客户时返回 `needs_confirmation=True`（不加载历史）；
+    用户确认后带 `confirmed_customer_id` 再调一次，才会加载该客户历史。
     """
-    ctx = match_customer(contact, company_id=company_id, threshold=threshold)
+    ctx = match_customer(
+        contact,
+        company_id=company_id,
+        threshold=threshold,
+        confirmed_customer_id=confirmed_customer_id,
+    )
     if with_history and ctx.matched:
         ctx.history = load_history(ctx, company_id=company_id)
     ctx.product_entries, ctx.facts = load_product_entries(

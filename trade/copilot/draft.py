@@ -220,6 +220,13 @@ def generate_draft(
     `SystemExit` 的 `RelaunchExit`，只捕 `Exception` 会一路穿出去把调用方带崩。
     超时是**真**的截止时间（后台线程 + 事件等待），不是摆设。
     """
+    # 短名/单字命中疑似客户：必须先让用户确认身份，确认前不生成草稿。
+    # 这一步在 build_prompt（会带入历史/数字）之前，避免先带入、后确认。
+    if ctx.needs_confirmation:
+        return DraftResult(
+            error=ctx.confirmation_question or "请先确认客户身份后再生成草稿。"
+        )
+
     # 到期软着陆：试用/许可证结束后不能再出**新**草稿（已生成的草稿仍可查看）。
     # 许可证是整机一份，company_id 仅用于兼容签名。
     try:
