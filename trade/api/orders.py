@@ -15,6 +15,30 @@ _NUMERIC_LABELS = {
 }
 
 
+def _amount_key(value) -> float | None:
+    """0 与 None 在"是否改过"判断里等价：旧数据两者混用，不该因此拦编辑。"""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    return None if number == 0 else number
+
+
+def _amounts_unchanged(old: tuple, new: tuple) -> bool:
+    """合并后的金额与库里一致 → 只改了非金额字段，跳过金额校验。"""
+    for a, b in zip(old, new, strict=True):
+        va, vb = _amount_key(a), _amount_key(b)
+        if va is None or vb is None:
+            if va is not None or vb is not None:
+                return False
+            continue
+        if abs(float(va) - float(vb)) > 1e-6:
+            return False
+    return True
+
+
 def _reject_negatives(values: dict) -> None:
     """负数直接 400，不再静默归零（审计 P2-25）。
 
@@ -123,17 +147,25 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
             detail=f"订单状态不能从「{existing.get('status') or '未知'}」变为「{new_status}」。",
         )
 
-    # 只有真的改了金额字段才校验：旧记录本就可能不一致，改备注不该被它挡住
+    # 只有真的改了金额才校验：旧记录本就可能不一致，改备注不该被它挡住。
+    # 前端 PUT 会发全量 body，所以必须按"合并后 vs 库内"判断，不能只看字段是否出现。
     if {"quantity", "unit_price", "total_amount"} & changes.keys():
-        try:
-            qty, price, total = order_module.reconcile_amounts(
-                changes.get("quantity", existing.get("quantity")),
-                changes.get("unit_price", existing.get("unit_price")),
-                changes.get("total_amount", existing.get("total_amount")),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        changes.update(quantity=qty, unit_price=price, total_amount=total)
+        merged = (
+            changes.get("quantity", existing.get("quantity")),
+            changes.get("unit_price", existing.get("unit_price")),
+            changes.get("total_amount", existing.get("total_amount")),
+        )
+        current = (
+            existing.get("quantity"),
+            existing.get("unit_price"),
+            existing.get("total_amount"),
+        )
+        if not _amounts_unchanged(current, merged):
+            try:
+                qty, price, total = order_module.reconcile_amounts(*merged)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            changes.update(quantity=qty, unit_price=price, total_amount=total)
 
     result = order_module.update(order_id, company_id=cid, **changes)
     if not result:

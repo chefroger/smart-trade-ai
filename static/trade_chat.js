@@ -2942,11 +2942,11 @@ function showOrderEditModal(oid, presetCid) {
             if (!o) return;
             $('order-product').value = o.product_name||'';
             $('order-no').value = o.order_no||'';
-            $('order-qty').value = o.quantity||'';
+            $('order-qty').value = o.quantity == null ? '' : o.quantity;
             $('order-unit').value = o.unit||'套';
-            $('order-price').value = o.unit_price||'';
+            $('order-price').value = o.unit_price == null ? '' : o.unit_price;
             $('order-currency').value = o.currency||'USD';
-            $('order-total').value = o.total_amount||'';
+            $('order-total').value = o.total_amount == null ? '' : o.total_amount;
             $('order-status').value = o.status||'报价中';
             $('order-delivery').value = (o.delivery_date||'').slice(0,10);
             $('order-payment').value = o.payment_terms||'';
@@ -2962,6 +2962,15 @@ function showOrderEditModal(oid, presetCid) {
     }
 }
 
+/** 数字输入框：空值返回 null（待谈/未填），显式 0 返回 0。 */
+function _numOrNull(id) {
+    const el = $(id);
+    const raw = el ? String(el.value).trim() : '';
+    if (!raw) return null;
+    const n = parseFloat(raw);
+    return Number.isFinite(n) ? n : null;
+}
+
 async function saveOrder() {
     const editId = $('order-edit-id').value;
     const custId = $('order-cust-id').value || $('order-cust-sel').value;
@@ -2970,11 +2979,12 @@ async function saveOrder() {
     const body = {
         customer_id: parseInt(custId), product_name: product,
         order_no: $('order-no').value.trim(),
-        quantity: parseFloat($('order-qty').value)||0,
+        // 空字段发 null（≠ 0）：后端据此区分「单价待谈」与「显式 0 元」
+        quantity: _numOrNull('order-qty'),
         unit: $('order-unit').value.trim(),
-        unit_price: parseFloat($('order-price').value)||0,
+        unit_price: _numOrNull('order-price'),
         currency: $('order-currency').value,
-        total_amount: parseFloat($('order-total').value)||0,
+        total_amount: _numOrNull('order-total'),
         status: $('order-status').value,
         delivery_date: $('order-delivery').value,
         payment_terms: $('order-payment').value.trim(),

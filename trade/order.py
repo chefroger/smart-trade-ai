@@ -52,36 +52,55 @@ def can_transition_status(old: str, new: str) -> bool:
 
 def reconcile_amounts(
     quantity, unit_price, total_amount,
-) -> tuple[float, float, float]:
+) -> tuple[float | None, float | None, float]:
     """校验「数量 × 单价」与总金额一致，返回三元组 (quantity, unit_price, total)。
 
-    - 总金额为空（0 / None）而数量与单价都有值时，自动算出总金额（保留 2 位）；
-    - 三者都有值时做一致性校验，矛盾则抛 ValueError（文案直接展示给用户）；
-    - 数量与单价**都缺失**（只录了总额）时原样放行；只缺一项（含显式 0）而总额
-      非零时拒绝 —— 这种组合无法校验，放行等于接受来路不明的金额。
-
-    注意区分「显式 0」与「未填」：0 是用户给的值，参与校验；None 才是未填。
+    业务口径（2026-10-28 定）：
+    - 数量 > 0、单价 > 0：总额为空自动算出；总额非零则按容差校验。
+    - 数量 > 0、单价为空/0、总额 > 0：**单价待谈**，放行，单价返回 None
+      （按柜/整单报价、单价还没谈，是外贸常态）。
+    - 数量为空、单价为空、总额 > 0：只录总额，放行，两个都返回 None。
+    - 数量为空/0、单价 > 0、总额 > 0：拒绝（0 个单位不可能有总额）。
+    - 数量与单价都为空/0（且非“都未填”）、总额 > 0：拒绝（无法校验）。
     """
-    qty_missing = quantity is None
-    price_missing = unit_price is None
-    qty = float(quantity or 0)
-    price = float(unit_price or 0)
-    total = float(total_amount or 0)
+    qty = None if quantity is None else float(quantity)
+    price = None if unit_price is None else float(unit_price)
+    total = None if total_amount is None else float(total_amount)
+    q = qty or 0.0
+    p = price or 0.0
+    t = total or 0.0
 
-    expected = qty * price
-    if expected > 0 and total <= 0:
-        return qty, price, round(expected, 2)
-    if expected > 0 and total > 0 and abs(expected - total) > _AMOUNT_TOLERANCE:
+    if q > 0 and p > 0:
+        expected = q * p
+        if t <= 0:
+            return q, p, round(expected, 2)
+        if abs(expected - t) > _AMOUNT_TOLERANCE:
+            raise ValueError(
+                f"总金额 {t:g} 与 数量×单价（{q:g}×{p:g}={expected:g}）不一致，请核对后重填。"
+            )
+        return q, p, t
+
+    if q > 0 and p <= 0:
+        # 单价待谈：显式 0 也视为待谈（0 元单价配非零总额本身矛盾）
+        return q, None, t
+
+    if q <= 0 and p > 0:
+        if t > 0:
+            raise ValueError(
+                f"数量为 0（或未填），但总金额为 {t:g}；"
+                "0 个单位不可能有总额，请补全数量或清空总金额。"
+            )
+        return q, p, t
+
+    # 数量与单价都不足以算出金额
+    if t > 0:
+        if qty is None and price is None:
+            return None, None, t
         raise ValueError(
-            f"总金额 {total:g} 与 数量×单价（{qty:g}×{price:g}={expected:g}）不一致，请核对后重填。"
+            f"数量与单价都为 0（或未填全），但总金额为 {t:g}，无法校验；"
+            "请补全数量与单价，或把总金额留空。"
         )
-    # 数量/单价不足以算出金额（0 或缺一项），但总额非零：拒绝
-    if expected == 0 and total > 0 and not (qty_missing and price_missing):
-        raise ValueError(
-            f"总金额 {total:g} 与数量/单价不一致（数量={quantity or 0:g}，"
-            f"单价={unit_price or 0:g}，算不出该金额），请补全后重填。"
-        )
-    return qty, price, total
+    return q, price, t
 
 
 def _customer_in_company(conn, customer_id: int, company_id: int) -> bool:
@@ -99,11 +118,11 @@ def create(
     product_name: str,
     *,
     order_no: str = "",
-    quantity: float = 0,
+    quantity: float | None = None,
     unit: str = "",
-    unit_price: float = 0,
+    unit_price: float | None = None,
     currency: str = "USD",
-    total_amount: float = 0,
+    total_amount: float | None = None,
     status: str = "报价中",
     delivery_date: str = "",
     payment_terms: str = "",

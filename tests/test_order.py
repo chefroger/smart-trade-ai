@@ -208,7 +208,17 @@ class TestReconcileAmounts:
     def test_total_only_without_qty_and_price_is_kept(self):
         from trade import order
         # 数量与单价都未填（只录了总额）：无法校验，原样放行
-        assert order.reconcile_amounts(None, None, 500)[2] == 500
+        assert order.reconcile_amounts(None, None, 500) == (None, None, 500.0)
+
+    @pytest.mark.parametrize("price", [0, None])
+    def test_price_pending_with_known_quantity_passes(self, price):
+        """数量已定、单价待谈（0 或未填）、整单已报 → 放行，单价记为 None。"""
+        from trade import order
+
+        qty, unit_price, total = order.reconcile_amounts(100, price, 5000)
+        assert qty == 100.0
+        assert unit_price is None, "待谈单价不得静默算成 5000/100"
+        assert total == 5000.0
 
     @pytest.mark.parametrize(
         ("qty", "price", "total"),
@@ -216,15 +226,14 @@ class TestReconcileAmounts:
             (0, 10, 999),
             (0, 0, 999),
             (None, 10, 999),
-            (10, 0, 500),
-            (10, None, 500),
+            (None, 0, 999),
         ],
     )
     def test_partial_or_zero_amounts_with_total_rejected(self, qty, price, total):
-        """W4：(0,10,999)/(0,0,999)/(None,10,999) 这类组合不再放行。"""
+        """数量为 0/未填而总额非零 → 仍拒绝（不是待谈，是不一致）。"""
         from trade import order
 
-        with pytest.raises(ValueError, match="不一致"):
+        with pytest.raises(ValueError):
             order.reconcile_amounts(qty, price, total)
 
 
@@ -313,6 +322,42 @@ class TestOrderApiValidation:
         co, cust = self._mk(db)
         o = self._create(co["id"], cust["id"], status=status)
         assert o["status"] == status
+
+    def test_create_price_pending_passes(self, db):
+        """数量已定、单价待谈、整单已报 → 建单通过，单价存 NULL。"""
+        co, cust = self._mk(db)
+        o = self._create(
+            co["id"], cust["id"], quantity=100, unit_price=0, total_amount=5000,
+        )
+        assert o["unit_price"] is None
+        assert o["total_amount"] == 5000
+
+    def test_create_total_only_passes(self, db):
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], total_amount=5000)
+        assert o["quantity"] is None
+        assert o["unit_price"] is None
+        assert o["total_amount"] == 5000
+
+    def test_legacy_price_pending_order_can_edit_notes(self, db):
+        """旧数据 (100, 0, 5000)：前端 PUT 全量 body 也不能 400。"""
+        from trade import order as order_module
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+
+        co, cust = self._mk(db)
+        legacy = order_module.create(
+            company_id=co["id"], customer_id=cust["id"], product_name="旧单",
+            quantity=100, unit_price=0, total_amount=5000,
+        )
+        updated = update_order(
+            legacy["id"],
+            OrderUpdate(
+                quantity=100, unit_price=None, total_amount=5000, notes="补备注",
+            ),
+            cid=co["id"],
+        )
+        assert updated["notes"] == "补备注"
 
     def test_update_rejects_contradictory_amounts(self, db):
         from fastapi import HTTPException
