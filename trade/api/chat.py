@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from trade import chat_memory
 from trade import library as library_module
 from trade import usage as usage_module
-from trade.agent_context import bind_company
+from trade.agent_context import bind_company, extract_user_paths
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
 from trade.document_task import (
@@ -43,6 +43,18 @@ _STREAM_DEADLINE_SECONDS = 1800.0
 
 # 同步聊天的 Agent 兜底超时（秒）。提为模块常量以便测试缩短。
 _SYNC_TIMEOUT_SECONDS = 600.0
+
+
+def _external_paths_hint(paths: list[str]) -> str:
+    """用户本轮贴出外部文件时追加的提示：只读授权 + 敏感信息不复述。"""
+    listed = "\n".join(f"- {p}" for p in paths)
+    return (
+        "## 本轮用户显式贴出的文件\n"
+        "用户已在消息里亲手给出下列文件路径，本轮可只读访问这些精确文件：\n"
+        f"{listed}\n"
+        "只能读这些文件本身，不能据此访问目录、其它文件或执行它们。\n"
+        "回答或写草稿时不要复述密码、密钥、token 原文；需要提及时打码或只讲结论。"
+    )
 
 
 def _abort_running_agent(agent) -> None:
@@ -231,6 +243,10 @@ async def trade_chat(
         cid, payload.library_id, query, customer_id=payload.customer_id,
         last_skill_name=last_skill, language=payload.language or "zh",
     )
+    # W7：用户本轮亲手贴出的完整文件路径 → 本轮只读放行（仅这些精确文件）
+    user_paths = extract_user_paths(query)
+    if user_paths:
+        skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
     current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
@@ -283,7 +299,9 @@ async def trade_chat(
                 # 绑定公司身份：chat-memory 等插件工具只认服务端绑定，
                 # 不再信任模型自填的 company_id（审计 P0-2）。
                 try:
-                    with bind_company(cid, payload.customer_id):
+                    with bind_company(
+                        cid, payload.customer_id, user_paths=user_paths,
+                    ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
                         else:
@@ -423,6 +441,10 @@ async def trade_chat_stream(
         cid, payload.library_id, query, customer_id=payload.customer_id,
         last_skill_name=last_skill, language=payload.language or "zh",
     )
+    # W7：用户本轮亲手贴出的完整文件路径 → 本轮只读放行（仅这些精确文件）
+    user_paths = extract_user_paths(query)
+    if user_paths:
+        skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
     current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
@@ -512,7 +534,9 @@ async def trade_chat_stream(
                 start = time.time()
                 # 同同步端点：把公司身份绑进本次 agent 调用的上下文。
                 try:
-                    with bind_company(cid, payload.customer_id):
+                    with bind_company(
+                        cid, payload.customer_id, user_paths=user_paths,
+                    ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
                         else:

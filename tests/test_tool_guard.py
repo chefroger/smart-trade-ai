@@ -324,3 +324,82 @@ class TestGuardDeploymentCheck:
         self._marker(tmp_path, monkeypatch)
         monkeypatch.setenv("TRADE_TOOL_GUARD", "off")
         assert bootstrap.tool_guard_chat_block_reason() is None
+
+
+class TestUserPastedPaths:
+    """W7：用户本轮亲手贴出的精确文件只读放行，其余一律照旧。"""
+
+    def _bind(self, paths):
+        from trade.agent_context import bind_company
+
+        return bind_company(1, None, user_paths=paths)
+
+    def test_extract_paths_ignores_urls_dirs_and_missing(self, tmp_path):
+        from trade.agent_context import extract_user_paths
+
+        f = tmp_path / "报价单.txt"
+        f.write_text("x", encoding="utf-8")
+        d = tmp_path / "folder"
+        d.mkdir()
+        text = (
+            f"看下这个 {f} 和 https://example.com/a/b 还有 {d} "
+            f"以及 {tmp_path / 'missing.txt'}"
+        )
+
+        paths = extract_user_paths(text)
+
+        assert paths == [str(f.resolve())]
+
+    def test_extract_quoted_path_with_spaces(self, tmp_path):
+        from trade.agent_context import extract_user_paths
+
+        f = tmp_path / "my report.md"
+        f.write_text("x", encoding="utf-8")
+
+        assert extract_user_paths(f'读 "{f}"') == [str(f.resolve())]
+
+    def test_pasted_file_read_allowed(self, roots, tmp_path):
+        f = tmp_path / "external.txt"
+        f.write_text("x", encoding="utf-8")
+        with self._bind([str(f.resolve())]):
+            assert g.check_tool_call("read_file", {"path": str(f)}) is None
+
+    def test_pasted_file_write_still_blocked(self, roots, tmp_path):
+        f = tmp_path / "external.txt"
+        f.write_text("x", encoding="utf-8")
+        with self._bind([str(f.resolve())]):
+            verdict = g.check_tool_call(
+                "write_file", {"path": str(f), "content": "overwrite"}
+            )
+        assert verdict and verdict["action"] == "block"
+
+    def test_second_file_not_allowed(self, roots, tmp_path):
+        allowed = tmp_path / "one.txt"
+        other = tmp_path / "two.txt"
+        allowed.write_text("x", encoding="utf-8")
+        other.write_text("y", encoding="utf-8")
+        with self._bind([str(allowed.resolve())]):
+            verdict = g.check_tool_call("read_file", {"path": str(other)})
+        assert verdict and verdict["action"] == "block"
+
+    def test_no_pasted_paths_outside_blocked(self, roots, tmp_path):
+        f = tmp_path / "external.txt"
+        f.write_text("x", encoding="utf-8")
+        verdict = g.check_tool_call("read_file", {"path": str(f)})
+        assert verdict and verdict["action"] == "block"
+
+    def test_allowance_expires_after_turn(self, roots, tmp_path):
+        f = tmp_path / "external.txt"
+        f.write_text("x", encoding="utf-8")
+        with self._bind([str(f.resolve())]):
+            assert g.check_tool_call("read_file", {"path": str(f)}) is None
+        verdict = g.check_tool_call("read_file", {"path": str(f)})
+        assert verdict and verdict["action"] == "block"
+
+    def test_pasted_file_only_read_not_directory(self, roots, tmp_path):
+        """贴目录不会放行读目录（提取阶段就只保留文件）。"""
+        from trade.agent_context import extract_user_paths
+
+        d = tmp_path / "folder"
+        d.mkdir()
+        assert extract_user_paths(str(d)) == []
