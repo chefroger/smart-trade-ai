@@ -39,6 +39,14 @@ import pytest
         ("市场调研", "b2b-market-analysis"),
         ("竞争对手分析", "b2b-market-analysis"),
         ("end to end lead generation", "auto-trade-customer-development"),
+        # 单公司进口核查（W8 简易方案；2026-10-28 补激活词）
+        ("这个公司是否有从中国进口产品", "b2b-customs-data"),
+        ("这家公司有没有从中国进口过", "b2b-customs-data"),
+        ("他们进口什么产品", "b2b-customs-data"),
+        ("能查到它从中国进口了什么吗", "b2b-customs-data"),
+        ("这家公司向谁采购", "b2b-customs-data"),
+        ("who imports from china", "b2b-customs-data"),
+        ("bill of lading for this company", "b2b-customs-data"),
     ],
 )
 def test_natural_language_routes_to_specialized_skill(query, expected):
@@ -49,6 +57,16 @@ def test_natural_language_routes_to_specialized_skill(query, expected):
 
     assert result is not None
     assert result["name"] == expected
+
+
+def test_supplier_search_not_stolen_by_customs_triggers():
+    """补进口类激活词后，找国内供应商仍归 b2b-china-leads。"""
+    from trade.skill_router import match_skill
+
+    result = match_skill("帮我找中国供应商")
+
+    assert result is not None
+    assert result["name"] == "b2b-china-leads"
 
 
 def test_specialized_outreach_beats_generic_lead_generation():

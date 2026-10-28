@@ -591,8 +591,16 @@ STOP RULE（防止无效搜索）:
             "buyer analysis", "supplier analysis", "trade intelligence",
             # Fragments
             "谁在进口", "哪些公司在买", "海关记录", "进出口查询",
+            # 单公司进口核查（无海关数据时走简易方案；W8 补充）
+            "进口过", "从中国进口", "有没有从中国买过", "是否进口",
+            "有没有进口", "进口什么", "进口了哪些", "进口记录",
+            "进口数据", "进口提单", "海关提单", "提单数据", "美国进口",
+            "进口商", "向谁采购", "谁给它供货", "进口来源",
             # English fragments
             "import data", "export data", "trade data",
+            "import from china", "imports from china", "import records",
+            "import history", "import shipments", "bill of lading",
+            "importer", "who imports", "importyeti",
         ],
         "aliases": [],
         "input_fmt": "产品HS编码 或 产品名称 + 目标市场（国家/地区）",

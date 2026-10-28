@@ -6,6 +6,7 @@ when_to_use:
   - "筛选高价值采购商"
   - "做市场调研 / 竞品分析"
   - "用户提到「海关数据」「采购商」「进出口」"
+  - "用户问某公司是否从中国进口 / 进口了什么（无海关数据时走简易方案）"
   - "不要用于：客户公司真伪验证（用 b2b-osint）"
 triggers:
   - 海关数据
@@ -20,7 +21,7 @@ triggers:
   - 找买家
   # ... (see skill_registry.py for full list)
 category: 数据分析
-version: 1.2.0
+version: 1.2.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-customs-data 技能。当用户需要分析海关进出口数据、筛选高价值采购商、做市场调研或竞品分析时，按以下流程执行。
