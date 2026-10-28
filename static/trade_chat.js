@@ -4167,7 +4167,7 @@ const HERMES_UPGRADE_TEXT = {
     idle:             {icon:'⬆️', title:'准备升级 Hermes', message:'Trade 需要更新版本的 Hermes，正在准备升级…'},
     checking_network: {icon:'🔍', title:'正在检查网络',    message:'正在确认能否访问 GitHub…'},
     upgrading:        {icon:'⬆️', title:'正在升级 Hermes', message:'升级进行中，请勿关闭 Trade。这一步可能需要几分钟。'},
-    done:             {icon:'✅', title:'升级完成',        message:'Hermes 已升级完成，正在重启 Trade，请稍候…'},
+    done:             {icon:'✅', title:'升级完成',        message:'Hermes 已升级完成。请点击「重启 Trade」使新版本生效。'},
     offline:          {icon:'🌐', title:'需要先开启代理',  message:'无法访问 GitHub，升级没有开始。请开启代理（VPN）后点「重试」。'},
     failed:           {icon:'⚠️', title:'升级失败',        message:'Hermes 没有升级成功。请确认网络通畅后点「重试」。'},
     // 不是「升级 Hermes」能解决的问题：Hermes 已经是新版，旧的是 Trade 自己的运行环境。

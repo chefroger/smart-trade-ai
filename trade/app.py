@@ -438,11 +438,24 @@ def _perform_restart() -> None:
     except (OSError, ValueError):
         pre_sha = ""
     if pre_sha:
+        # 旧进程的启动时间：watchdog 用它区分"新进程健康"与"旧进程没杀掉"
+        old_started_at = 0.0
+        try:
+            import urllib.request as _ur
+
+            with _ur.urlopen(
+                f"http://127.0.0.1:{_BOUND_PORT}/api/status", timeout=2,
+            ) as _resp:
+                _status = json.loads(_resp.read().decode("utf-8", "replace"))
+                old_started_at = float(_status.get("started_at") or 0)
+        except Exception:
+            pass
         try:
             _watchdog_cmd = [
                 _restart_python, "-m", "trade.restart_watchdog",
                 "--old-pid", str(old_pid),
                 "--port", str(_BOUND_PORT),
+                "--old-started-at", str(old_started_at),
                 "--pre-sha", pre_sha,
                 "--repo", str(_trade_runtime_dir()),
                 "--workdir", str(Path.cwd()),

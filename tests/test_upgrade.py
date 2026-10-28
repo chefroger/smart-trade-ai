@@ -1551,6 +1551,43 @@ class TestRestartWatchdog:
         assert _healthy(1) is False
         assert _wait_healthy(1, timeout=0.1) is False
 
+    def test_healthy_requires_new_started_at(self, monkeypatch):
+        """探活必须确认是新进程：旧进程还在时 started_at 不变，不能算健康。"""
+        import json as _json
+
+        from trade import restart_watchdog as w
+
+        class _Resp:
+            def __init__(self, data):
+                self._body = _json.dumps(data).encode()
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        payload = {"app": "Foreign Trade Assistant", "started_at": 100.0}
+        monkeypatch.setattr(
+            w.urllib.request, "urlopen", lambda *a, **k: _Resp(payload),
+        )
+
+        assert w._healthy(9119, 100.0) is False  # 旧进程
+        assert w._healthy(9119, 99.0) is True    # 新进程
+        assert w._healthy(9119, 100.5) is False
+
+    def test_wait_healthy_stops_when_new_process_exits(self):
+        from trade import restart_watchdog as w
+
+        class _Proc:
+            def poll(self):
+                return 1
+
+        assert w._wait_healthy(1, timeout=10, min_started_at=0, proc=_Proc()) is False
+
     def test_rollback_resets_repo(self, tmp_path):
         """探活失败后的回退是真的 git reset，不是只打日志。"""
         import subprocess as sp

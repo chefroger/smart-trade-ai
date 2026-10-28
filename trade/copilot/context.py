@@ -128,22 +128,38 @@ def match_customer(
     if not name:
         return CustomerContext(new_contact=True)
 
-    # 用户已确认：直接认这一个客户（仍校验公司归属）
-    if confirmed_customer_id is not None:
-        chosen = _get_customer(int(confirmed_customer_id), company_id)
-        if chosen:
-            return CustomerContext(
-                customer_id=int(chosen.get("id") or 0),
-                customer_name=str(chosen.get("name") or name),
-                matched=True,
-                new_contact=False,
-                match_score=1.0,
-            )
-        return CustomerContext(customer_name=name, new_contact=True)
-
     customers = _list_company_customers(company_id)
     if not customers:
         return CustomerContext(new_contact=True)
+
+    # 用户已确认：只接受**本次短名候选里**的那一个 id（防同公司任意 id 直认）
+    if confirmed_customer_id is not None:
+        chosen = _get_customer(int(confirmed_customer_id), company_id)
+        if not chosen:
+            return CustomerContext(customer_name=name, new_contact=True)
+        normalized = _normalize_name(name)
+        if len(normalized) <= 3:
+            candidates = _short_name_candidates(normalized, customers)
+            if candidates:
+                allowed_ids = {int(c.get("id") or 0) for c in candidates}
+                if int(confirmed_customer_id) not in allowed_ids:
+                    return CustomerContext(
+                        customer_name=name,
+                        new_contact=True,
+                        needs_confirmation=True,
+                        candidates=[
+                            {"id": int(c.get("id") or 0), "name": str(c.get("name") or "")}
+                            for c in candidates[:5]
+                        ],
+                        confirmation_question=_confirmation_question(candidates),
+                    )
+        return CustomerContext(
+            customer_id=int(chosen.get("id") or 0),
+            customer_name=str(chosen.get("name") or name),
+            matched=True,
+            new_contact=False,
+            match_score=1.0,
+        )
 
     # ① 归一后完全相同 → 命中；同名多条 → 宁缺毋滥，按新客户（铁律 4）
     exact_matches = _exact_name_hits(name, customers)

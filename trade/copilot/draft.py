@@ -178,7 +178,12 @@ def build_prompt(
         "products": products,
         "profile": profile,
     }
-    return _SLOT_RE.sub(lambda m: slots.get(m.group(1), m.group(0)), _DRAFT_PROMPT)
+    prompt = _SLOT_RE.sub(lambda m: slots.get(m.group(1), m.group(0)), _DRAFT_PROMPT)
+    # 敏感信息：草稿侧也要有提示（W7/D5 的 best-effort 保护）
+    return prompt + (
+        "\n\n## 敏感信息\n"
+        "草稿与说明里不要复述密码、密钥、token 原文；需要提及时打码或只讲结论。"
+    )
 
 
 def parse_draft(raw: str) -> DraftResult:
@@ -223,8 +228,12 @@ def generate_draft(
     # 短名/单字命中疑似客户：必须先让用户确认身份，确认前不生成草稿。
     # 这一步在 build_prompt（会带入历史/数字）之前，避免先带入、后确认。
     if ctx.needs_confirmation:
+        # 结构化"待确认"：不是失败，前端应弹确认而不是显示"草稿生成失败"
         return DraftResult(
-            error=ctx.confirmation_question or "请先确认客户身份后再生成草稿。"
+            needs_confirmation=True,
+            confirmation_question=(
+                ctx.confirmation_question or "请先确认客户身份后再生成草稿。"
+            ),
         )
 
     # 到期软着陆：试用/许可证结束后不能再出**新**草稿（已生成的草稿仍可查看）。

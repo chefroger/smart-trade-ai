@@ -166,7 +166,10 @@ class DraftResult:
     error: str = ""
     # 是否用了"（待确认）"占位（库里查不到该数字）
     has_placeholder: bool = False
+    # 短名命中疑似客户：需要 UI 先确认身份，尚未生成草稿（不是失败）
+    needs_confirmation: bool = False
+    confirmation_question: str = ""
 
     @property
     def ok(self) -> bool:
-        return not self.error
+        return not self.error and not self.needs_confirmation

@@ -33,8 +33,22 @@ def _log(path: Path, message: str) -> None:
         pass
 
 
-def _kill(pid: int) -> None:
-    """尽力终止进程（Windows 用 taskkill，POSIX 先 TERM 后 KILL）。"""
+def _proc_create_time(pid: int) -> float | None:
+    """读取进程创建时间（防 PID 复用）；psutil 不可用时返回 None。"""
+    try:
+        import psutil
+
+        return float(psutil.Process(pid).create_time())
+    except Exception:
+        return None
+
+
+def _kill(pid: int, expected_create_time: float | None = None) -> None:
+    """尽力终止进程；PID 已被复用（创建时间不符）时拒绝盲杀。"""
+    if expected_create_time is not None:
+        current = _proc_create_time(pid)
+        if current is None or abs(current - expected_create_time) > 1.0:
+            return
     try:
         if os.name == "nt":
             subprocess.run(
@@ -68,22 +82,39 @@ def _spawn(command: list[str], workdir: str) -> subprocess.Popen:
     return subprocess.Popen(command, **kwargs)
 
 
-def _healthy(port: int) -> bool:
+def _healthy(port: int, min_started_at: float = 0.0) -> bool:
+    """服务是否健康，且**确实是重启后新起的进程**。
+
+    只认 app 名会把"旧进程没杀掉"误判成新进程健康，从而删掉 pending、
+    丢掉回退点。这里额外要求 started_at 晚于旧进程的启动时间。
+    """
     try:
         with urllib.request.urlopen(
             f"http://127.0.0.1:{port}/api/status", timeout=2,
         ) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
-            return data.get("app") == _APP_NAME
+            if data.get("app") != _APP_NAME:
+                return False
+            try:
+                started_at = float(data.get("started_at") or 0)
+            except (TypeError, ValueError):
+                return False
+            return started_at > min_started_at
     except Exception:
         return False
 
 
-def _wait_healthy(port: int, timeout: float) -> bool:
+def _wait_healthy(
+    port: int, timeout: float, min_started_at: float = 0.0,
+    proc: subprocess.Popen | None = None,
+) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _healthy(port):
+        if _healthy(port, min_started_at):
             return True
+        # 新进程已退出（端口冲突/启动崩溃）→ 不必等到超时
+        if proc is not None and proc.poll() is not None:
+            return False
         time.sleep(2)
     return False
 
@@ -112,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--repo", default="")
     p.add_argument("--workdir", required=True)
     p.add_argument("--pending-file", default="")
+    p.add_argument("--old-started-at", type=float, default=0.0)
     p.add_argument("--log", required=True)
     p.add_argument("--timeout", type=float, default=90.0)
     p.add_argument("command", nargs=argparse.REMAINDER)
@@ -126,13 +158,14 @@ def main(argv: list[str] | None = None) -> int:
     log_path = Path(args.log)
     _log(log_path, f"watchdog start (old pid={args.old_pid}, port={args.port})")
 
+    old_create = _proc_create_time(args.old_pid)
     time.sleep(2)
-    _kill(args.old_pid)
+    _kill(args.old_pid, old_create)
     time.sleep(0.5)
     proc = _spawn(cmd, args.workdir)
     _log(log_path, f"new process pid={proc.pid}")
 
-    if _wait_healthy(args.port, args.timeout):
+    if _wait_healthy(args.port, args.timeout, args.old_started_at, proc):
         _log(log_path, "new process healthy")
         if args.pending_file:
             try:
@@ -154,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
 
     proc2 = _spawn(cmd, args.workdir)
     _log(log_path, f"rolled-back process pid={proc2.pid}")
-    if _wait_healthy(args.port, args.timeout):
+    if _wait_healthy(args.port, args.timeout, args.old_started_at, proc2):
         _log(log_path, "rolled-back process healthy")
         if args.pending_file:
             try:

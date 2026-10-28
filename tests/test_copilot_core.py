@@ -314,8 +314,22 @@ class TestShortNameConfirmation:
 
         result = draft_mod.generate_draft("hi", ctx, company_id=1)
 
-        assert "张三" in result.error
+        assert result.needs_confirmation is True
+        assert "张三" in result.confirmation_question
+        assert result.error == "", "待确认不是失败，不能塞进 error"
+        assert result.ok is False
         assert called == [], "确认前不得调用模型"
+
+    def test_confirm_id_outside_candidates_asks_again(self, monkeypatch):
+        """确认 id 必须来自本次候选，不能凭同公司任意 id 直认。"""
+        self._patch(monkeypatch, [{"id": 1, "name": "张三"}, {"id": 2, "name": "李四"}])
+
+        result = ctx_mod.match_customer(
+            "张", company_id=1, confirmed_customer_id=2,
+        )
+
+        assert result.needs_confirmation is True
+        assert result.matched is False
 
     def test_four_char_first_name_path_unchanged(self, monkeypatch):
         """John→John Smith 不在本项决定内，不得顺手改。"""

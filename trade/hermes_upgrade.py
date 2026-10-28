@@ -59,7 +59,7 @@ _success_hook: Callable[[], None] | None = None
 
 
 def set_success_hook(hook: Callable[[], None] | None) -> None:
-    """注入升级成功后的收尾动作（app 层传 _perform_restart）。"""
+    """注入升级成功后的收尾动作（app 层传手动重启标记回调）。"""
     global _success_hook
     _success_hook = hook
 
