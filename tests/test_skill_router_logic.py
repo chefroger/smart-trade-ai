@@ -47,6 +47,11 @@ import pytest
         ("这家公司向谁采购", "b2b-customs-data"),
         ("who imports from china", "b2b-customs-data"),
         ("bill of lading for this company", "b2b-customs-data"),
+        # 进口关键词优先于通用公司核查（Batch 4A）
+        ("查一下这家公司进口了什么", "b2b-customs-data"),
+        ("帮我查一下公司进口过什么", "b2b-customs-data"),
+        ("查一下这家公司", "b2b-osint"),
+        ("查一下这个公司的背景", "b2b-osint"),
     ],
 )
 def test_natural_language_routes_to_specialized_skill(query, expected):

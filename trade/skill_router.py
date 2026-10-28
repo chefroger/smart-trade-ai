@@ -208,6 +208,17 @@ _EXPLICIT_SCORE = 9999  # 显式调用（如 "用 b2b-osint"）获得绝对最�
 # 匹配权重
 _BOUNDARY_WEIGHT = 3   # 词边界匹配（如独立词"背景调查"）
 _SUBSTRING_WEIGHT = 1  # 宽松子串匹配（如"做一下背景调查再联系"）
+# 领域优先词命中时的加分：压过"查一下这家公司"这类通用核查触发词
+_DOMAIN_BOOST = 4
+
+# skill_name → priority_keywords（注册表声明；命中则加 _DOMAIN_BOOST）
+_PRIORITY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    str(_skill["name"]): tuple(
+        str(k).lower() for k in _skill.get("priority_keywords", ())
+    )
+    for _skill in _SKILLS
+    if _skill.get("priority_keywords")
+}
 
 # ── 预编译触发词正则（模块加载时一次性构建，避免每次 query 重复 re.compile）──
 # 结构：[(skill_idx, skill_name, [(trigger_text, boundary_re, substring_re_or_None), ...]), ...]
@@ -294,6 +305,9 @@ def _score_skills(query: str) -> list[dict]:
                 triggers_matched.append(kw)
 
         if total_score > 0:
+            priority = _PRIORITY_KEYWORDS.get(skill_name)
+            if priority and any(k in normed for k in priority):
+                total_score += _DOMAIN_BOOST
             results.append({
                 "skill_name": skill_name,
                 "score": total_score,
