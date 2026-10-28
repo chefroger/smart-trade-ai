@@ -31,6 +31,25 @@ from trade.post_install.skills import (
     update_skills,
 )
 
+
+def _pip_env() -> dict:
+    """pip 子进程环境：强制关闭 user-site。
+
+    用户 `~/.config/pip/pip.conf` 里若写了 `no-user = 1`，pip 26 会把它当成
+    `use_user_site="1"`（字符串真值）—— 在 venv 里做 --user 安装必报
+    「Can not perform a '--user' install」，升级第 4 步直接失败并回滚。
+    `--no-user` 是 pip 的隐藏 CLI 开关（优先级高于配置文件）；PIP_USER=0
+    再加一道环境层保险，两者都写死，升级不再受用户 pip 配置影响。
+    """
+    env = dict(os.environ)
+    env["PIP_USER"] = "0"
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    return env
+
+
+def _pip_install_args(*args: str) -> list[str]:
+    return [sys.executable, "-m", "pip", "install", "--no-user", *args]
+
 # ── 目录同步 ──────────────────────────────────────────────────────────────
 
 def _sync_dir_rsync(src: Path, dst: Path) -> None:
@@ -276,8 +295,8 @@ def _install_optional_deps(emit, warnings: list[str]) -> None:
     emit("→ Step 4b: 可选依赖（客户语义检索）...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", *_OPTIONAL_DEPS],
-            capture_output=True, text=True, timeout=300,
+            _pip_install_args(*_OPTIONAL_DEPS),
+            capture_output=True, text=True, timeout=300, env=_pip_env(),
         )
         if result.returncode == 0:
             emit("  ✓ sqlite-vec 已启用（客户语义检索可用）")
@@ -883,8 +902,8 @@ def update_trade(target_sha_request: str | None = None) -> dict:
     req_file = trade_dir / "requirements.txt"
     if req_file.is_file():
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", str(req_file)],
-            capture_output=True, text=True, timeout=600,
+            _pip_install_args("-r", str(req_file)),
+            capture_output=True, text=True, timeout=600, env=_pip_env(),
         )
         if result.returncode != 0:
             err = result.stderr.strip()
@@ -892,8 +911,10 @@ def update_trade(target_sha_request: str | None = None) -> dict:
             errors.append(f"pip install -r requirements.txt failed: {err[:200]}")
             _rollback_if_possible("pip install -r requirements.txt failed")
             return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
-    pip_args = [sys.executable, "-m", "pip", "install", "-e", str(trade_dir), "--no-deps"]
-    result = subprocess.run(pip_args, capture_output=True, text=True, timeout=600)
+    pip_args = _pip_install_args("-e", str(trade_dir), "--no-deps")
+    result = subprocess.run(
+        pip_args, capture_output=True, text=True, timeout=600, env=_pip_env(),
+    )
     if result.returncode != 0:
         err = result.stderr.strip()
         _emit(f"  ❌ pip install failed: {err}")

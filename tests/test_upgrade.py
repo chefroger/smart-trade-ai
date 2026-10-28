@@ -681,6 +681,49 @@ class TestUpdateTrade:
             if c[0] == "git" and len(c) > 2 and c[1] == "clone" and "hermes" in " ".join(c)
         ], "升级过程不应尝试重新克隆 hermes-agent"
 
+    def test_pip_install_forces_no_user(self, tmp_path, monkeypatch):
+        """W 修复：用户 pip.conf 的 no-user=1 不能把升级拖垮。
+
+        pip 26 会把 `no-user = 1` 解析成 use_user_site 真值；venv 里做 --user
+        安装必失败。升级必须显式带 --no-user + PIP_USER=0。
+        """
+        from trade.post_install import update as update_module
+
+        monkeypatch.setenv("PIP_USER", "1")  # 模拟环境里已有的坏值
+        assert update_module._pip_env()["PIP_USER"] == "0"
+
+        fake_trade_dir = tmp_path / "foreign-trade-assistant"
+        fake_trade_dir.mkdir()
+        (fake_trade_dir / ".trade-template").mkdir()
+        (fake_trade_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+        monkeypatch.setattr(update_module, "_get_trade_home", lambda: tmp_path)
+
+        calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append((list(cmd), kwargs))
+            cp = MagicMock()
+            cp.returncode, cp.stdout, cp.stderr = 0, "ok", ""
+            return cp
+
+        monkeypatch.setattr(update_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(update_module, "install_skills", lambda: None)
+        monkeypatch.setattr(update_module, "update_skills", lambda: None)
+        monkeypatch.setattr(update_module, "_sync_trade_template", lambda s, d: None)
+        monkeypatch.setattr(update_module, "_ensure_auto_start", lambda d: None)
+        import trade.database as db_module
+        monkeypatch.setattr(db_module, "init_db", lambda: tmp_path / "trade.db")
+
+        update_module.update_trade()
+
+        pip_calls = [
+            (cmd, kw) for cmd, kw in calls
+            if cmd[:4] == [sys.executable, "-m", "pip", "install"]
+        ]
+        assert pip_calls, "没有执行 pip install"
+        assert all("--no-user" in cmd for cmd, _ in pip_calls)
+        assert all((kw.get("env") or {}).get("PIP_USER") == "0" for _, kw in pip_calls)
+
     def test_update_trade_pip_install_failure(self, tmp_path, monkeypatch):
         """pip install 失败时，update_trade 应继续执行后续步骤但不退出。"""
         from trade.post_install import update as update_module
