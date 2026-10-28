@@ -119,19 +119,24 @@ class TestPortFallback:
             assert picked is not None
             assert picked != used
 
-    def test_all_ports_busy_returns_none(self):
-        sockets = []
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                probe.bind(("127.0.0.1", 0))
-                base = probe.getsockname()[1]
-            for port in range(base, base + 2):
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.bind(("127.0.0.1", port))
-                s.listen(1)
-                sockets.append(s)
+    def test_all_ports_busy_returns_none(self, monkeypatch):
+        """用桩 socket 模拟全部端口被占；不依赖真实端口（Windows 有保留端口段）。"""
+        class _BusySocket:
+            def __init__(self, *args, **kwargs):
+                pass
 
-            assert tradewin._pick_free_port("127.0.0.1", preferred=base, tries=2) is None
-        finally:
-            for s in sockets:
-                s.close()
+            def setsockopt(self, *args, **kwargs):
+                pass
+
+            def bind(self, addr):
+                raise OSError("address already in use")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        monkeypatch.setattr(tradewin.socket, "socket", _BusySocket)
+
+        assert tradewin._pick_free_port("127.0.0.1", preferred=9119, tries=9) is None
