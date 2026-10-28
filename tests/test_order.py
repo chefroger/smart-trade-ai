@@ -205,10 +205,27 @@ class TestReconcileAmounts:
         with pytest.raises(ValueError, match="不一致"):
             order.reconcile_amounts(10, 3.5, 999)
 
-    def test_missing_price_keeps_total(self):
+    def test_total_only_without_qty_and_price_is_kept(self):
         from trade import order
-        # 单价缺失时无法校验（例如只录了报价总额），原样放行
-        assert order.reconcile_amounts(10, 0, 500)[2] == 500
+        # 数量与单价都未填（只录了总额）：无法校验，原样放行
+        assert order.reconcile_amounts(None, None, 500)[2] == 500
+
+    @pytest.mark.parametrize(
+        ("qty", "price", "total"),
+        [
+            (0, 10, 999),
+            (0, 0, 999),
+            (None, 10, 999),
+            (10, 0, 500),
+            (10, None, 500),
+        ],
+    )
+    def test_partial_or_zero_amounts_with_total_rejected(self, qty, price, total):
+        """W4：(0,10,999)/(0,0,999)/(None,10,999) 这类组合不再放行。"""
+        from trade import order
+
+        with pytest.raises(ValueError, match="不一致"):
+            order.reconcile_amounts(qty, price, total)
 
 
 class TestOrderStatusMachine:
@@ -281,6 +298,22 @@ class TestOrderApiValidation:
         o = self._create(co["id"], cust["id"], quantity=10, unit_price=3.5)
         assert o["total_amount"] == 35.0
 
+    @pytest.mark.parametrize("status", ["已完成", "已取消"])
+    def test_create_rejects_terminal_status(self, db, status):
+        """W4：新建不得直接是终态（只能由状态机走到）。"""
+        from fastapi import HTTPException
+        co, cust = self._mk(db)
+        with pytest.raises(HTTPException) as exc:
+            self._create(co["id"], cust["id"], status=status)
+        assert exc.value.status_code == 400
+        assert "终态" in exc.value.detail or "已完成" in exc.value.detail
+
+    @pytest.mark.parametrize("status", ["报价中", "已下单", "已出货"])
+    def test_create_allows_active_status(self, db, status):
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], status=status)
+        assert o["status"] == status
+
     def test_update_rejects_contradictory_amounts(self, db):
         from fastapi import HTTPException
 
@@ -299,7 +332,10 @@ class TestOrderApiValidation:
         from trade.api.models import OrderUpdate
         from trade.api.orders import update_order
         co, cust = self._mk(db)
-        o = self._create(co["id"], cust["id"], status="已完成")
+        o = self._create(co["id"], cust["id"])
+        # 新建不得直接终态；这里走模块层把状态设到终态（本用例只测更新状态机）
+        from trade import order as order_module
+        order_module.update(o["id"], company_id=co["id"], status="已完成")
         with pytest.raises(HTTPException) as exc:
             update_order(o["id"], OrderUpdate(status="报价中"), cid=co["id"])
         assert exc.value.status_code == 400
@@ -363,6 +399,8 @@ class TestOrderApiValidation:
         from trade.api.models import OrderUpdate
         from trade.api.orders import update_order
         co, cust = self._mk(db)
-        o = self._create(co["id"], cust["id"], status="已完成")
+        o = self._create(co["id"], cust["id"])
+        from trade import order as order_module
+        order_module.update(o["id"], company_id=co["id"], status="已完成")
         updated = update_order(o["id"], OrderUpdate(notes="归档备注"), cid=co["id"])
         assert updated["notes"] == "归档备注"

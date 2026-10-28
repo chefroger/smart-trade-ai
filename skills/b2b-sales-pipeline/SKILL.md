@@ -37,7 +37,7 @@ triggers:
   - sales cadence
   - outreach sequence
 category: 销售转化
-version: 1.1.0
+version: 1.2.0
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-sales-pipeline 技能。用于**系统化设计客户推进策略**——从初次接触到成交到复购的全流程动作规划。
@@ -120,10 +120,12 @@ injection_prompt: |
   ## 📋 推荐动作
   [动作模板正文]
 
-  ## ⏭️ 下一步（如果无回应）
+  ## ⏭️ 跟进时间表
+  Day 1: [当前动作]
   Day 3: [具体行动]
   Day 7: [具体行动]
   Day 14: [具体行动]
+  Day 30: 最后一封 break-up（明确关闭本次跟进，但随时欢迎联系）
   ```
 
   ### Phase 2 输出

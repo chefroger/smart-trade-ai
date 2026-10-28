@@ -97,8 +97,8 @@ test('没有具体说明时回落到该状态的通用文案', () => {
     assert.ok(nodes['hermes-upgrade-message'].textContent.includes('代理'));
 });
 
-test('只有失败态才出现重试按钮（升级中给按钮会误导）', () => {
-    for (const status of ['checking_network', 'upgrading', 'done']) {
+test('升级中不给按钮；失败给重试；成功给手动重启', () => {
+    for (const status of ['checking_network', 'upgrading']) {
         const { api, nodes } = loadPanel();
         api.applyHermesUpgradeState({ status });
         assert.strictEqual(nodes['hermes-upgrade-actions'].children.length, 0,
@@ -111,6 +111,12 @@ test('只有失败态才出现重试按钮（升级中给按钮会误导）', ()
         assert.strictEqual(buttons.length, 1, `${status} 应该有重试按钮`);
         assert.strictEqual(buttons[0].textContent, '重试升级');
     }
+    // done：Hermes 升级成功不再自动重启，给一个手动重启按钮
+    const { api, nodes } = loadPanel();
+    api.applyHermesUpgradeState({ status: 'done' });
+    const buttons = nodes['hermes-upgrade-actions'].children;
+    assert.strictEqual(buttons.length, 1, 'done 应给手动重启按钮');
+    assert.strictEqual(buttons[0].textContent, '重启 Trade');
 });
 
 test('升级步骤渲染出可复制的完整命令', () => {

@@ -947,8 +947,9 @@ def verify_tool_guard_ready(announce: bool = False) -> dict:
 
     守卫（文件白名单 / terminal / execute_code）全部挂在 chat-memory 插件上，
     插件没加载就等于**整套守卫静默缺席**，而主聊天仍带着全工具集继续跑。
-    这里只回答"部署/启用"两件事；旧版 Hermes 没有 register_hook 的情况只能
-    由插件加载时的 warning 暴露（宿主能力，Trade 侧探测不到）。
+    回答三件事：插件已部署、已在 plugins.enabled、宿主钩子能力已知为 True。
+    旧版 Hermes 没有 register_hook 时插件会写 hooks=False；标记从未写过（None）
+    视为**未知**，不算 ok —— 不能让它看起来像"已确认安全"。
 
     `announce=True` 时把问题打到 stderr（启动路径用）；`/api/status` 轮询用
     默认 False，避免每次请求都刷屏。
@@ -984,7 +985,8 @@ def verify_tool_guard_ready(announce: bool = False) -> dict:
     except Exception:  # noqa: BLE001 — 读不到标记就按"未知"处理
         hooks = None
 
-    ok = deployed and enabled and hooks is not False
+    # hooks 未知（标记从未写过）不算 ok：不能让它看起来像"已确认安全"。
+    ok = deployed and enabled and hooks is True
     state = {"ok": ok, "deployed": deployed, "enabled": enabled, "hooks": hooks}
     if announce and not ok:
         reasons = []
@@ -994,6 +996,8 @@ def verify_tool_guard_ready(announce: bool = False) -> dict:
             reasons.append("~/.hermes/config.yaml 的 plugins.enabled 未启用 chat-memory")
         if hooks is False:
             reasons.append("当前 Hermes 不支持 register_hook，守卫无法挂载")
+        elif hooks is None and deployed and enabled:
+            reasons.append("宿主钩子状态未知（插件尚未记录）")
         print(
             "  ⚠️ 工具安全守卫未生效（" + "；".join(reasons) + "）："
             "文件路径白名单、terminal 命令白名单、execute_code 拒绝当前都不起作用。"

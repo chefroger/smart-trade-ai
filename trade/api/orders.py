@@ -55,6 +55,12 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
     c = cust_module.get(payload.customer_id, company_id=cid)
     if not c:
         raise HTTPException(status_code=404, detail="Customer not found")
+    # 新建不得直接是终态：已完成 / 已取消只能由状态机走到，否则等于绕过流水
+    if (payload.status or "") in {"已完成", "已取消"}:
+        raise HTTPException(
+            status_code=400,
+            detail="新建订单不能直接设置为已完成或已取消，请先按正常流程创建。",
+        )
     _reject_negatives({
         "quantity": payload.quantity,
         "unit_price": payload.unit_price,

@@ -193,12 +193,12 @@ const I18N = {
         // upgrade/restart button states
         'sys.updating':'⏳ 更新中...','sys.restarting':'⏳ 重启中...',
         'sys.updating_now':'⏳ 正在拉取最新代码并安装依赖，请稍候（约 1 分钟）…',
-        'sys.update_done_restart':'✅ 系统更新完成！正在重启...',
+        'sys.update_done_restart':'✅ 更新完成。请点击"🔄 重启"以应用新版本。',
         'sys.update_done':'✅ 更新完成。请点击"🔄 重启"以应用新版本。',
         'sys.update_fail':'❌ 更新失败: ','sys.update_unknown':'⚠️ 更新结果未知，请检查网络后重试',
         'sys.update_network':'⚠️ 更新请求失败，请检查网络连接后重试',
-        'sys.update_confirm':'将从 GitHub 拉取 main 分支最新代码、安装依赖并重启服务。\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
-        'sys.update_confirm_current':'当前版本 {current}。\n将从 GitHub 拉取 main 分支最新代码、安装依赖并重启服务。\n升级前会自动备份数据库；升级期间页面短暂不可用。\n\n确定现在更新吗？',
+        'sys.update_confirm':'将从 GitHub 拉取 main 分支代码、安装依赖；更新完成后由你手动点击「重启」生效。\n升级前会自动备份数据库。\n\n确定现在更新吗？',
+        'sys.update_confirm_current':'当前版本 {current}，目标提交 {target}。\n将拉取并安装这个提交；更新完成后由你手动点击「重启」生效。\n升级前会自动备份数据库。\n\n确定现在更新吗？',
         'usage.today':'今日已用 {used} / {limit} tokens',
         'usage.unlimited':'今日已用 {used} tokens',
         'usage.over':'今日已用 {used} / {limit} tokens · 已超额度（不拦截）',
@@ -372,12 +372,12 @@ const I18N = {
         'onb.start_btn':'🚀 Find First Customer','onb.skip_btn':'Skip, start directly',
         'sys.updating':'⏳ Updating...','sys.restarting':'⏳ Restarting...',
         'sys.updating_now':'⏳ Pulling latest code and installing dependencies, please wait (~1 min)…',
-        'sys.update_done_restart':'✅ Update complete! Restarting...',
+        'sys.update_done_restart':'✅ Update complete. Click "🔄 Restart" to apply.',
         'sys.update_done':'✅ Update complete. Click "🔄 Restart" to apply.',
         'sys.update_fail':'❌ Update failed: ','sys.update_unknown':'⚠️ Update result unknown, check network',
         'sys.update_network':'⚠️ Update request failed, check network',
-        'sys.update_confirm':'This will pull the latest code from the GitHub main branch, install dependencies and restart the service.\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
-        'sys.update_confirm_current':'Current version {current}.\nThis will pull the latest code from the GitHub main branch, install dependencies and restart the service.\nYour database is backed up before upgrading; the page will be briefly unavailable.\n\nUpdate now?',
+        'sys.update_confirm':'This will pull code from the GitHub main branch and install dependencies. You restart manually when it finishes.\nYour database is backed up before upgrading.\n\nUpdate now?',
+        'sys.update_confirm_current':'Current version {current}, target commit {target}.\nThis will install that commit; you restart manually when it finishes.\nYour database is backed up before upgrading.\n\nUpdate now?',
         'usage.today':'Today {used} / {limit} tokens',
         'usage.unlimited':'Today {used} tokens',
         'usage.over':'Today {used} / {limit} tokens · over quota (not blocked)',
@@ -1172,15 +1172,19 @@ async function loadUsageToday() {
 }
 
 // ── 系统更新 ──
+let _pendingUpdateTarget = '';
+
 /**
- * 更新前二次确认：只展示当前运行版本。
+ * 更新前二次确认：展示当前版本 + 本次要安装的目标提交短 SHA。
  *
- * 升级目标是 GitHub main 的最新内容，不再拿 release tag 当"最新版本"基准
- * （2026-10-26 用户决定：release 会落后 main，修完不立刻发版）。
- * 拿不到版本号时退回通用文案 —— 确认本身不能因网络失败被跳过。
+ * 目标 SHA 来自预览接口，并原样带到 /system/update —— 后端钉在这个提交上，
+ * 保证"确认框看到的版本 = 实际安装的版本"（2026-10-28 口径）。
+ * 预览失败时退回通用文案（确认本身不能因网络失败被跳过）。
  */
 async function _confirmTradeUpdate() {
     let current = '';
+    let target = '';
+    _pendingUpdateTarget = '';
     try {
         const r = await fetch('/api/status?_=' + Date.now(), { cache: 'no-store' });
         if (r.ok) {
@@ -1188,8 +1192,23 @@ async function _confirmTradeUpdate() {
             current = d.version || '';
         }
     } catch(_) { /* 版本信息拿不到不影响确认 */ }
-    const msg = current
-        ? t('sys.update_confirm_current').replace('{current}', current)
+    try {
+        const r = await fetch('/api/trade/system/update-preview?_=' + Date.now(), {
+            cache: 'no-store',
+            headers: {'X-Hermes-Session-Token': TOKEN},
+        });
+        if (r.ok) {
+            const d = await r.json();
+            if (d.ok && d.sha) {
+                _pendingUpdateTarget = d.sha;
+                target = d.short || d.sha.slice(0, 8);
+            }
+        }
+    } catch(_) { /* 预览失败：后端会临场取 main，确认照常进行 */ }
+    const msg = (current || target)
+        ? t('sys.update_confirm_current')
+            .replace('{current}', current || '?')
+            .replace('{target}', target || '?')
         : t('sys.update_confirm');
     return confirm(msg);
 }
@@ -1215,15 +1234,20 @@ async function doTradeUpdate(e) {
     var updateFailed = false;
     var restartScheduled = false;
     try {
-        const resp = await api('POST', '/api/trade/system/update', null, {'X-Confirm-Update': 'yes'});
+        const resp = await api('POST', '/api/trade/system/update',
+            {target_sha: _pendingUpdateTarget || null},
+            {'X-Confirm-Update': 'yes'});
         if (!resp) {
             updateFailed = true;
         } else if (resp.ok) {
             restartScheduled = !!resp.restart_scheduled;
+            // 更新结果展示实际安装的提交（与确认框里的目标一致）
+            const appliedShort = (resp.target_sha || _pendingUpdateTarget || '').slice(0, 8);
+            const suffix = appliedShort ? '（目标 ' + appliedShort + '）' : '';
             if (restartScheduled) {
-                toast(t('sys.update_done_restart'));
+                toast(t('sys.update_done_restart') + suffix);
             } else {
-                toast(t('sys.update_done'));
+                toast(t('sys.update_done') + suffix);
             }
             // 非致命步骤（skills 同步等）失败只算警告，不阻止升级，但必须让用户看见
             if (resp.warnings && resp.warnings.length) {
@@ -1762,36 +1786,32 @@ async function doUpdateSystem() {
     const btn = document.getElementById('update-banner');
     if (!(await _confirmTradeUpdate())) return;
     if (btn) btn.textContent = '更新中...';
-    var restartScheduled = false;
     try {
-        const resp = await api('POST', '/api/trade/system/update', null, {'X-Confirm-Update': 'yes'});
+        const resp = await api('POST', '/api/trade/system/update',
+            {target_sha: _pendingUpdateTarget || null},
+            {'X-Confirm-Update': 'yes'});
         if (resp?.ok) {
-            restartScheduled = !!resp.restart_scheduled;
-            toast(restartScheduled ? '✅ 系统更新完成！正在重启...' : '✅ 更新完成。请点击"🔄 重启"以应用新版本。');
+            const appliedShort = (resp.target_sha || _pendingUpdateTarget || '').slice(0, 8);
+            const suffix = appliedShort ? '（目标 ' + appliedShort + '）' : '';
+            toast('✅ 更新完成。请点击"🔄 重启"以应用新版本。' + suffix);
             // 非致命步骤失败只算警告，不阻止升级，但必须让用户看见
             if (resp.warnings && resp.warnings.length) {
                 toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '));
             }
+            // 后端永不自动重启：露出重启按钮，由用户自己点
+            if (btn) { btn.remove(); }
+            _showRestartPrompt();
+            checkVersion();
         } else if (resp?.error || (resp?.errors && resp.errors.length)) {
             toast('⚠️ 更新失败');
+            if (btn) btn.textContent = '⬆️ 升级';
         }
         // resp 为 null 时 api() 已 toast，不重复提示
     } catch(e) {
-        // 升级请求路径上服务器有可能抢先重启，吞异常并继续走重启等待流程
-        toast('🔄 服务正在重启，页面即将刷新...');
-        restartScheduled = true;
-    }
-    if (!restartScheduled) {
-        // 只更新不重启：露出重启按钮，由用户自己点
-        if (btn) { btn.remove(); }
-        _showRestartPrompt();
-        checkVersion();
-        return;
-    }
-    // 后端 BackgroundTasks 已调度重启——等待 DOWN→UP 后强制刷新（清 cache + cache-bust）
-    _waitForRestartAndReload(() => {
+        // 更新请求不会触发服务重启（后端不自动重启）：按普通网络失败处理
+        toast(t('sys.update_network'));
         if (btn) btn.textContent = '⬆️ 升级';
-    });
+    }
 }
 
 async function loadCronStatus(isPoll = false) {
@@ -4160,7 +4180,6 @@ const HERMES_UPGRADE_TEXT = {
 };
 
 let _hermesUpgradeAbort = null;
-let _hermesUpgradeReloading = false;
 
 /**
  * 启动时检查 Hermes 是否过旧；需要升级则显示面板并返回 true。
@@ -4260,6 +4279,14 @@ function applyHermesUpgradeState(upgrade) {
         btn.onclick = function() { startVenvRebuild(btn); };
         actions.appendChild(btn);
     }
+    // Hermes 升级成功不再自动重启：与系统更新一致，由用户点重启
+    if (status === 'done') {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary';
+        btn.textContent = '重启 Trade';
+        btn.onclick = function() { doRestartTrade({currentTarget: btn}); };
+        actions.appendChild(btn);
+    }
     // 升级已在进行/已结束时，步骤指引不占地方（失败时再显示出来给用户照做）。
     // rebuilding 也要隐藏：那时服务已经停了，屏上的「步骤」只会让人以为还要自己动手。
     const stepsBox = $('hermes-upgrade-steps');
@@ -4350,8 +4377,8 @@ async function startHermesUpgradeStream(offset) {
                 if (data.type === 'log') appendHermesUpgradeLog(data.line);
                 else if (data.type === 'state') {
                     applyHermesUpgradeState(data);
-                    // 升级成功 → 后端会重启 Trade，这里等新进程起来再刷新页面
-                    if (data.status === 'done') { reloadAfterHermesUpgrade(); return; }
+                    // 升级成功不再自动重启：提示用户点重启（与系统更新一致）
+                    if (data.status === 'done') { promptRestartAfterHermesUpgrade(); return; }
                 }
             }
         }
@@ -4366,15 +4393,10 @@ function appendHermesUpgradeLog(line) {
     box.scrollTop = box.scrollHeight;
 }
 
-/** 升级成功后等待 Trade 重启并刷新页面（复用既有的重启探测逻辑）。 */
-function reloadAfterHermesUpgrade() {
-    if (_hermesUpgradeReloading) return;
-    _hermesUpgradeReloading = true;
-    try { sessionStorage.setItem('_trade_upgrade_done', '1'); } catch(_) {}
-    _waitForRestartAndReload(() => {
-        // 超时兜底：仍有提示，避免用户对着「正在重启」干等
-        toast('升级已完成，如果页面没有自动刷新，请手动刷新一次');
-    });
+/** Hermes 升级成功：提示手动重启，不再自动等待服务重启。 */
+function promptRestartAfterHermesUpgrade() {
+    _showRestartPrompt();
+    toast('✅ Hermes 升级完成，请点击「🔄 重启」使新版本生效。');
 }
 
 // #endregion hermes-upgrade

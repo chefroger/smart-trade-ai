@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -1448,3 +1449,149 @@ class TestRollbackVerifiedByHead:
 
         assert ok is True
         assert any("已回退代码" in m for m in out)
+
+
+class TestUpdateTargetPin:
+    """W1：确认框的目标 SHA 必须原样钉进更新（显示即所用）。"""
+
+    def test_normalize_sha(self):
+        from trade.post_install import update as upd
+
+        assert upd._normalize_sha("A" * 40) == "a" * 40
+        assert upd._normalize_sha("a" * 39) is None
+        assert upd._normalize_sha("z" * 40) is None
+        assert upd._normalize_sha(None) is None
+        # 防参数注入：不允许把 git 选项塞进来
+        assert upd._normalize_sha("--upload-pack=x") is None
+
+    def test_invalid_target_rejected_before_any_git(self, monkeypatch):
+        from trade.post_install import update as upd
+
+        called = []
+        monkeypatch.setattr(upd, "_git_head", lambda d: called.append(d) or None)
+
+        result = upd.update_trade("not-a-sha")
+
+        assert result["ok"] is False
+        assert "格式非法" in result["error"]
+        assert called == [], "非法目标不得进入任何 git/备份步骤"
+
+    def test_pending_update_record(self, monkeypatch, tmp_path):
+        from trade.post_install import update as upd
+
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        upd._record_pending_update("b" * 40, "c" * 40, "0.7.0")
+
+        import json
+
+        data = json.loads(
+            (tmp_path / "data" / "pending_update.json").read_text(encoding="utf-8")
+        )
+        assert data["pre_update_sha"] == "b" * 40
+        assert data["target_sha"] == "c" * 40
+        assert data["version"] == "0.7.0"
+
+    def test_no_pending_record_for_fresh_install(self, monkeypatch, tmp_path):
+        from trade.post_install import update as upd
+
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        upd._record_pending_update(None, "c" * 40, "0.7.0")
+
+        assert not (tmp_path / "data" / "pending_update.json").exists()
+
+
+class TestRestartWatchdog:
+    def test_health_check_false_on_closed_port(self):
+        from trade.restart_watchdog import _healthy, _wait_healthy
+
+        # 1 端口不会是我们的服务
+        assert _healthy(1) is False
+        assert _wait_healthy(1, timeout=0.1) is False
+
+    def test_rollback_resets_repo(self, tmp_path):
+        """探活失败后的回退是真的 git reset，不是只打日志。"""
+        import subprocess as sp
+
+        from trade.restart_watchdog import _rollback
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+        def run(*args):
+            return sp.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True, text=True,
+                env={**os.environ, **env}, check=True,
+            )
+
+        run("init", "-q")
+        (repo / "f.txt").write_text("v1", encoding="utf-8")
+        run("add", ".")
+        run("commit", "-qm", "v1")
+        first = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        (repo / "f.txt").write_text("v2", encoding="utf-8")
+        run("commit", "-qam", "v2")
+
+        log = tmp_path / "watchdog.log"
+        assert _rollback(str(repo), first, log) is True
+        head = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        assert head == first
+        assert "rolled back" in log.read_text(encoding="utf-8")
+
+
+class TestRequestedShaPins:
+    def test_requested_sha_is_pinned_without_refetching_main(self, tmp_path, monkeypatch):
+        from trade.post_install import update as upd
+
+        fake_trade_dir = tmp_path / "foreign-trade-assistant"
+        fake_trade_dir.mkdir()
+        (fake_trade_dir / ".trade-template").mkdir()
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        target = "c" * 40
+        monkeypatch.setattr(upd, "_git_head", lambda d: target)
+        monkeypatch.setattr(
+            upd, "_remote_main_sha",
+            lambda d: (_ for _ in ()).throw(AssertionError("不得再取 main 头")),
+        )
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(cmd)
+            cp = MagicMock()
+            cp.returncode, cp.stdout, cp.stderr = 0, "Already up-to-date.", ""
+            return cp
+
+        monkeypatch.setattr(upd.subprocess, "run", fake_run)
+        monkeypatch.setattr(upd, "install_skills", lambda: None)
+        monkeypatch.setattr(upd, "update_skills", lambda: None)
+        monkeypatch.setattr(upd, "_sync_trade_template", lambda s, d: None)
+        monkeypatch.setattr(upd, "_ensure_auto_start", lambda d: None)
+        import trade.database as db_module
+        monkeypatch.setattr(db_module, "init_db", lambda: tmp_path / "trade.db")
+
+        result = upd.update_trade(target)
+
+        assert result["ok"] is True
+        assert result["target_sha"] == target
+        assert any(c[:2] == ["git", "merge-base"] for c in calls)
+        assert any(c[:2] == ["git", "reset"] and target in c for c in calls)
+
+
+class TestSystemRouterUpdatePreview:
+    def test_router_has_update_preview_and_target_body(self):
+        from trade.app import _create_system_router
+
+        router = _create_system_router()
+        paths = [r.path for r in router.routes if hasattr(r, "path")]
+        assert "/system/update-preview" in paths
+
+    def test_hermes_success_hook_is_manual_restart(self):
+        """Hermes 升级成功不再自动重启（W1）。"""
+        src = (Path(__file__).resolve().parent.parent / "trade" / "app.py").read_text(
+            encoding="utf-8"
+        )
+        assert "set_success_hook(_mark_hermes_restart_required)" in src
+        assert "set_success_hook(_perform_restart)" not in src
+        assert '"restart_required": _RESTART_REQUIRED["hermes"]' in src

@@ -93,6 +93,32 @@ test('更新不自动重启，完成后露出重启按钮', () => {
   );
 });
 
+test('更新确认框展示目标 SHA，并把它传给后端（显示即所用）', () => {
+  const start = SRC.indexOf('async function _confirmTradeUpdate');
+  assert.ok(start > 0, '找不到 _confirmTradeUpdate');
+  const body = SRC.slice(start, SRC.indexOf('\n}', start));
+  assert.match(body, /\/api\/trade\/system\/update-preview/);
+  assert.match(body, /_pendingUpdateTarget = d\.sha/);
+  assert.match(body, /\{target\}/);
+  for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
+    const b = SRC.slice(SRC.indexOf(fn), SRC.indexOf('\n}', SRC.indexOf(fn)));
+    assert.match(b, /target_sha: _pendingUpdateTarget/, `${fn} 必须把目标 SHA 传给后端`);
+  }
+});
+
+test('doUpdateSystem 不再假装服务会自动重启', () => {
+  const start = SRC.indexOf('async function doUpdateSystem');
+  const body = SRC.slice(start, SRC.indexOf('\n}', start));
+  assert.ok(!body.includes('服务器有可能抢先重启'), 'catch 分支不得再假设服务自动重启');
+  assert.ok(!body.includes('restartScheduled = true'));
+  assert.match(body, /_showRestartPrompt\(\)/);
+});
+
+test('Hermes 升级成功改为手动重启', () => {
+  assert.match(SRC, /promptRestartAfterHermesUpgrade/);
+  assert.ok(!SRC.includes('reloadAfterHermesUpgrade'), '旧的自动等待重启必须删掉');
+});
+
 test('两个更新入口都先确认再 POST', () => {
   for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
     const start = SRC.indexOf(fn);

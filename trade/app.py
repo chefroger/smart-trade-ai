@@ -4,6 +4,7 @@ Trade AI Assistant — FastAPI application factory.
 不依赖 Hermes 初始化副作用，可被 pytest 安全导入。
 """
 
+import json
 import os
 import secrets
 import shlex
@@ -39,6 +40,15 @@ def _check_license():
 
 _SESSION_TOKEN = secrets.token_urlsafe(32)
 _STARTED_AT = time.time()  # 进程启动时间戳，供前端重启检测
+# 本进程实际监听的端口（重启 watchdog 探活用）。由 main()/tradewin 在启动时写入。
+_BOUND_PORT = 9119
+
+# Hermes 后台升级成功后置 True：前端据此提示「重启 Trade 生效」。
+_RESTART_REQUIRED = {"hermes": False}
+
+
+def _mark_hermes_restart_required() -> None:
+    _RESTART_REQUIRED["hermes"] = True
 
 # 版本显示只认「正在运行的代码」—— 不再拿 GitHub release tag 做基准。
 # 2026-10-26 用户决定：升级就是拉取 GitHub main 最新内容，release 版本号
@@ -361,9 +371,13 @@ def _perform_restart() -> None:
     """终止当前 Trade 进程并以独立子进程启动新实例。
 
     核心策略：不杀自己（不可靠——uvicorn graceful shutdown 可能卡住）。
-    而是通过独立 shell 子进程去等待、杀旧、启新。
+    而是通过独立子进程去等待、杀旧、启新。
 
-    只由 /system/restart 调用；/system/update 不再自动重启（用户手动确认）。
+    只由 /system/restart 调用；/system/update 与 Hermes 升级成功都不再自动
+    重启（用户手动确认）。
+
+    刚更新过（存在 pending_update.json）时改走 `trade.restart_watchdog`：
+    新进程探活失败会自动回退到 pre_update_sha 再拉起；普通重启走原脚本。
     """
     import sys as _sys
 
@@ -414,6 +428,47 @@ def _perform_restart() -> None:
 
     # 杀 Gateway
     _kill_gateway()
+
+    # 刚更新过：交给 watchdog 探活，失败回退到升级前提交（P1-10 补偿）。
+    pending_file = trade_data / "pending_update.json"
+    pre_sha = ""
+    try:
+        _pending = json.loads(pending_file.read_text(encoding="utf-8"))
+        pre_sha = str(_pending.get("pre_update_sha") or "").strip()
+    except (OSError, ValueError):
+        pre_sha = ""
+    if pre_sha:
+        try:
+            _watchdog_cmd = [
+                _restart_python, "-m", "trade.restart_watchdog",
+                "--old-pid", str(old_pid),
+                "--port", str(_BOUND_PORT),
+                "--pre-sha", pre_sha,
+                "--repo", str(_trade_runtime_dir()),
+                "--workdir", str(Path.cwd()),
+                "--pending-file", str(pending_file),
+                "--log", str(trade_data / "restart-watchdog.log"),
+                "--",
+                *_restart_cmd,
+            ]
+            _watchdog_kwargs = {
+                "stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL,
+                "stdin": _sp.DEVNULL,
+            }
+            if os.name == "nt":
+                _watchdog_kwargs["creationflags"] = 0x00000200
+            else:
+                _watchdog_kwargs["start_new_session"] = True
+            _sp.Popen(_watchdog_cmd, **_watchdog_kwargs)
+            print(f"  🔄 重启 watchdog 已调度 (old PID={old_pid}, rollback={pre_sha[:8]})")
+            try:
+                pid_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            # watchdog 起不来不能挡住重启：退回原脚本，只是少了自动回退
+            print(f"  ⚠ watchdog 启动失败（{e}），使用普通重启脚本")
 
     # 构建独立 shell 脚本：sleep 等响应发完 → kill 旧进程 → 启动新进程
     if os.name == "nt":
@@ -602,8 +657,25 @@ def _create_system_router() -> APIRouter:
 
     router = APIRouter(tags=["system"], dependencies=[Depends(require_session)])
 
+    from pydantic import BaseModel
+
+    class _UpdatePayload(BaseModel):
+        # 前端预览接口返回、用户确认过的目标提交；缺省时后端临场取 main 头
+        target_sha: str | None = None
+
+    @router.get("/system/update-preview")
+    def api_update_preview(request: Request):
+        """返回本次更新将要钉选的远端 main 短 SHA（供确认框展示）。"""
+        _tk = request.headers.get("X-Hermes-Session-Token", "")
+        if _tk and not _check_system_rate_limit(_tk[:16]):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="系统端点请求过于频繁，请稍后重试。")
+
+        from trade.post_install.update import preview_update_target
+        return preview_update_target()
+
     @router.post("/system/update")
-    def api_update_trade(request: Request):
+    def api_update_trade(request: Request, payload: _UpdatePayload | None = None):
         """一键更新 Trade 系统（只拉取 + 装依赖，不自动重启）。
 
         **不自动重启**：audit P1-10 的安全替代方案 —— 拉取完成即返回，由用户
@@ -627,7 +699,8 @@ def _create_system_router() -> APIRouter:
             )
 
         from trade.post_install import update_trade as _do_update
-        result = _do_update()  # 现在返回结构化 dict，不再依赖 _capture_output
+        # 钉到用户在确认框里看到的那个提交（预览接口返回）；缺省时后端临场取 main
+        result = _do_update(payload.target_sha if payload else None)
 
         # 只更新不重启：让用户在确认结果后自己点「重启」，避免新代码起不来
         # 时连旧服务也没了（audit P1-10 允许的替代方案）。
@@ -686,6 +759,8 @@ def _create_system_router() -> APIRouter:
             # 不可用时附带可照做的步骤（与终端提示共用同一份文案）
             "steps": [] if usable else compat_steps(state),
             "upgrade": upgrade_status(),
+            # Hermes 升级成功但 Trade 还没重启：前端提示手动重启，不再自动重启
+            "restart_required": _RESTART_REQUIRED["hermes"],
         }
 
     @router.post("/system/hermes-upgrade")
@@ -989,10 +1064,10 @@ def main() -> None:
     if not args.no_gateway and hermes_is_usable():
         _ensure_gateway_running()
 
-    # 注册「Hermes 升级成功 → 重启 Trade」的回调：只有新进程才会加载升级后的 Hermes，
-    # 兼容判定也才会从「过旧」翻成可用。用注入而不是让 hermes_upgrade 反向 import app。
+    # Hermes 升级成功不再自动重启（与 Trade 自身更新统一为手动重启）。
+    # 回调只置标记，前端从 /system/hermes-compat 读 restart_required 后提示用户。
     from trade.hermes_upgrade import set_success_hook
-    set_success_hook(_perform_restart)
+    set_success_hook(_mark_hermes_restart_required)
 
     # 后台静默从 GitHub 同步 skills，不阻塞服务启动
     from trade.bootstrap import background_github_skills_sync
@@ -1008,6 +1083,10 @@ def main() -> None:
         import threading
         import webbrowser
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    # 记录实际端口：重启 watchdog 需要知道自己该探哪个端口
+    global _BOUND_PORT
+    _BOUND_PORT = args.port
 
     # 重启场景：旧进程可能仍在占用端口，uvicorn 内部将端口冲突转成 sys.exit(1)
     # 而非抛出 OSError，因此还需捕获 SystemExit。最多等 10 秒。

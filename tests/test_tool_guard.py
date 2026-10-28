@@ -242,7 +242,28 @@ class TestGuardDeploymentCheck:
 
     def test_ok_when_deployed_and_enabled(self, tmp_path, monkeypatch):
         bootstrap = self._home(tmp_path, monkeypatch)
+        self._marker(tmp_path, monkeypatch)
+        g.report_hook_support(True)
         assert bootstrap.verify_tool_guard_ready()["ok"] is True
+
+    def test_unknown_hooks_is_not_ok(self, tmp_path, monkeypatch):
+        """W6：hooks 从未写过时不得报 ok，也不能阻断聊天。"""
+        bootstrap = self._home(tmp_path, monkeypatch)
+        self._marker(tmp_path, monkeypatch)  # 不写任何值
+
+        state = bootstrap.verify_tool_guard_ready()
+        assert state["hooks"] is None
+        assert state["ok"] is False
+        # 未知 ≠ 已知坏：沿用放行口径，不阻断聊天
+        assert bootstrap.tool_guard_chat_block_reason() is None
+
+    def test_double_missing_stays_non_blocking(self, tmp_path, monkeypatch):
+        """W6 不得顺手把"双缺失放行"改成阻断。"""
+        bootstrap = self._home(tmp_path, monkeypatch, deployed=False, enabled=False)
+        self._marker(tmp_path, monkeypatch)
+
+        assert bootstrap.verify_tool_guard_ready()["ok"] is False
+        assert bootstrap.tool_guard_chat_block_reason() is None
 
     def test_missing_plugin_is_not_ok(self, tmp_path, monkeypatch):
         bootstrap = self._home(tmp_path, monkeypatch, deployed=False)

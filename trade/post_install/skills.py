@@ -92,43 +92,163 @@ def _get_package_skills_dir() -> Path | None:
     return None
 
 
-def _write_skill_manifest(dst_base: Path, names: list[str] | None = None) -> None:
-    """记录同步后的 SKILL.md SHA-256 清单，供事后审计（审计 P2-3）。
+_MANIFEST_SCHEMA = 2
+_MANIFEST_NAME = ".sync-manifest.json"
+_MANIFEST_HISTORY_LIMIT = 20
 
-    远端没有签名，客户端无法证明来源；但至少留下「这次装了什么哈希」的台账，
-    后续发现内容异常时能定位是哪次同步引入的。
+
+def _skill_dir_names(dst_base: Path) -> list[str]:
+    """目标目录里的受管 skill 名（排除停用项与临时目录）。"""
+    from trade.skill_registry import _BLOCKED_SKILLS
+
+    try:
+        return sorted(
+            d.name for d in dst_base.iterdir()
+            if d.is_dir()
+            and (
+                d.name.startswith("b2b-")
+                or d.name.startswith("auto-")
+                or d.name == "chat-memory"
+            )
+            and d.name not in _BLOCKED_SKILLS
+        )
+    except OSError:
+        return []
+
+
+def _manifest_files(dst_base: Path) -> dict[str, str]:
+    """SKILL.md + references/ 下全部文件的 SHA-256（相对路径 → 哈希）。"""
+    files: dict[str, str] = {}
+    for name in _skill_dir_names(dst_base):
+        skill_dir = dst_base / name
+        candidates = []
+        skill_md = skill_dir / "SKILL.md"
+        if skill_md.is_file():
+            candidates.append(skill_md)
+        refs = skill_dir / "references"
+        if refs.is_dir():
+            candidates.extend(
+                p for p in sorted(refs.rglob("*"))
+                if p.is_file() and p.name != ".DS_Store"
+                and p.suffix not in {".pyc", ".pyo"}
+            )
+        for path in candidates:
+            try:
+                files[path.relative_to(dst_base).as_posix()] = hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+            except OSError:
+                continue
+    return files
+
+
+def _manifest_digest(updated_at: str, files: dict[str, str]) -> str:
+    """清单自哈希：覆盖 schema / updated_at / files（history 不参与）。"""
+    raw = json.dumps(
+        {"schema": _MANIFEST_SCHEMA, "updated_at": updated_at, "files": files},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _write_skill_manifest(dst_base: Path, names: list[str] | None = None) -> None:
+    """写清单 v2：SKILL.md + references 全量哈希、历史、自哈希（审计 P2-3）。
+
+    `names` 仅为兼容保留，**不决定清单内容**：安装路径只传本次新增 skill 时，
+    清单会丢掉目录里已有条目（W5）。一律扫描目标目录。
     """
     try:
-        from trade.skill_registry import _BLOCKED_SKILLS
-
-        if names is None:
-            names = [
-                d.name for d in dst_base.iterdir()
-                if d.is_dir() and (
-                    d.name.startswith("b2b-") or d.name.startswith("auto-")
-                    or d.name == "chat-memory"
-                )
-            ]
-        files: dict[str, str] = {}
-        for name in names:
-            if name in _BLOCKED_SKILLS:
-                continue
-            skill_md = dst_base / name / "SKILL.md"
-            if skill_md.is_file():
-                files[f"{name}/SKILL.md"] = hashlib.sha256(
-                    skill_md.read_bytes()
-                ).hexdigest()
-        manifest = dst_base / ".sync-manifest.json"
-        manifest.write_text(
-            json.dumps(
-                {"updated_at": datetime.now().isoformat(timespec="seconds"),
-                 "files": files},
-                ensure_ascii=False, indent=2,
-            ) + "\n",
+        files = _manifest_files(dst_base)
+        updated_at = datetime.now().isoformat(timespec="seconds")
+        manifest = dst_base / _MANIFEST_NAME
+        history: list = []
+        try:
+            old = json.loads(manifest.read_text(encoding="utf-8"))
+            if isinstance(old, dict) and isinstance(old.get("history"), list):
+                history = old["history"][-_MANIFEST_HISTORY_LIMIT:]
+        except (OSError, ValueError):
+            history = []
+        digest = _manifest_digest(updated_at, files)
+        history = (history + [{
+            "updated_at": updated_at,
+            "file_count": len(files),
+            "manifest_hash": digest,
+        }])[-_MANIFEST_HISTORY_LIMIT:]
+        data = {
+            "schema": _MANIFEST_SCHEMA,
+            "updated_at": updated_at,
+            "history": history,
+            "files": files,
+            "manifest_hash": digest,
+        }
+        tmp = manifest.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        tmp.replace(manifest)
     except Exception as e:
         print(f"  ⚠ skill manifest 写入失败（不影响同步）：{e}", file=sys.stderr)
+
+
+def verify_skill_manifest(dst_base: Path) -> dict:
+    """读取清单并与磁盘比对（W5）；返回结构化报告，不抛异常。
+
+    能发现：清单缺失/损坏、自哈希不符（清单被改）、文件缺失、清单漏记、
+    文件哈希变化。签名/来源证明不在此层（另档）。
+    """
+    empty = {
+        "ok": False, "reason": "",
+        "missing_on_disk": [], "missing_in_manifest": [], "hash_mismatch": [],
+    }
+    manifest = dst_base / _MANIFEST_NAME
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except OSError:
+        return {**empty, "reason": "manifest_missing"}
+    except ValueError:
+        return {**empty, "reason": "manifest_corrupt"}
+    if not isinstance(data, dict) or not isinstance(data.get("files"), dict):
+        return {**empty, "reason": "manifest_invalid"}
+
+    recorded: dict[str, str] = data["files"]
+    updated_at = data.get("updated_at")
+    expected = data.get("manifest_hash")
+    if not isinstance(updated_at, str) or not isinstance(expected, str):
+        return {**empty, "reason": "self_hash_missing"}
+    if _manifest_digest(updated_at, recorded) != expected:
+        return {**empty, "reason": "self_hash_mismatch"}
+
+    actual = _manifest_files(dst_base)
+    missing_on_disk = sorted(set(recorded) - set(actual))
+    missing_in_manifest = sorted(set(actual) - set(recorded))
+    hash_mismatch = sorted(
+        name for name in set(recorded) & set(actual)
+        if recorded[name] != actual[name]
+    )
+    ok = not (missing_on_disk or missing_in_manifest or hash_mismatch)
+    return {
+        "ok": ok,
+        "reason": "ok" if ok else "files_mismatch",
+        "missing_on_disk": missing_on_disk,
+        "missing_in_manifest": missing_in_manifest,
+        "hash_mismatch": hash_mismatch,
+    }
+
+
+def _verify_manifest_or_warn(dst_base: Path) -> None:
+    """写完后立刻验一遍：写入/落盘异常要在日志里留痕，而不是静默。"""
+    report = verify_skill_manifest(dst_base)
+    if report["ok"]:
+        return
+    detail = report["reason"]
+    if report["reason"] == "files_mismatch":
+        detail += (
+            f"（缺失 {len(report['missing_on_disk'])}，"
+            f"漏记 {len(report['missing_in_manifest'])}，"
+            f"哈希不符 {len(report['hash_mismatch'])}）"
+        )
+    print(f"  ⚠ skill 清单校验未通过：{detail}", file=sys.stderr)
 
 
 def _purge_blocked_skills(dst_base: Path) -> None:
@@ -195,7 +315,9 @@ def _copy_skills(src: Path, dst_base: Path, progress_callback=None) -> list[str]
         if progress_callback:
             progress_callback(f"  ✓ {skill_dir.name}")
 
-    _write_skill_manifest(dst_base, installed)
+    # 安装路径也要全目录扫描：只传本次 installed 会丢掉目录里已有的 skill（W5）
+    _write_skill_manifest(dst_base)
+    _verify_manifest_or_warn(dst_base)
     return installed
 
 
@@ -491,6 +613,7 @@ def update_skills() -> None:
                 failed += 1
 
     _write_skill_manifest(hermes_skills_dir)
+    _verify_manifest_or_warn(hermes_skills_dir)
     print(
         f"\n[update_skills] Done. {updated} updated, {skipped} skipped, {failed} failed."
     )

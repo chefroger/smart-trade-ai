@@ -188,6 +188,10 @@ def main():
 
     app = create_app()
     serve_trade_chat(app)
+    # 让重启 watchdog 知道本进程的真实端口（桌面端可能顺延到 9120+）
+    from trade import app as _app_module
+
+    _app_module._BOUND_PORT = port
 
     # 3. 启动 uvicorn 在后台线程
     server_thread = threading.Thread(

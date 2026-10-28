@@ -16,6 +16,7 @@ update_trade() 按序执行 7 个步骤：
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -371,6 +372,63 @@ def _remote_main_sha(trade_dir: Path) -> str | None:
     return _remote_main_sha_from("origin", trade_dir)
 
 
+def _normalize_sha(value: str | None) -> str | None:
+    """接受 40 位十六进制提交 SHA；非法返回 None（防参数注入）。"""
+    if not isinstance(value, str):
+        return None
+    sha = value.strip().lower()
+    if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+        return None
+    return sha
+
+
+def preview_update_target() -> dict:
+    """前端确认框用：返回本次更新将要钉选的远端 main 短 SHA。"""
+    trade_dir = _get_trade_home() / "foreign-trade-assistant"
+    if not trade_dir.is_dir():
+        return {"ok": False, "error": "安装目录不存在，无法检查更新目标。"}
+    sha = _remote_main_sha(trade_dir)
+    if not sha:
+        return {
+            "ok": False,
+            "error": "无法解析远端 main 的最新提交（网络/代理或仓库不可达）。",
+        }
+    return {"ok": True, "sha": sha, "short": sha[:8]}
+
+
+def _pending_update_path() -> Path:
+    return _get_trade_home() / "data" / "pending_update.json"
+
+
+def _record_pending_update(
+    pre_update_sha: str | None, target_sha: str | None, version: str,
+) -> None:
+    """记下"已更新、待重启"的现场，供重启 watchdog 回退使用。
+
+    只有真正换了代码（有旧提交 + 目标提交）才写；首次安装没有可回退点。
+    """
+    if not pre_update_sha or not target_sha:
+        return
+    try:
+        path = _pending_update_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "pre_update_sha": pre_update_sha,
+                    "target_sha": target_sha,
+                    "version": version,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as e:
+        print(f"  ⚠ 无法记录待重启更新现场（{e}）；重启将跳过自动回退。", file=sys.stderr)
+
+
 def _verify_pinned_head(
     trade_dir: Path, target_sha: str, emit, errors: list[str],
 ) -> bool:
@@ -507,10 +565,15 @@ def _rollback_checkout(
     return True
 
 
-def update_trade() -> dict:
+def update_trade(target_sha_request: str | None = None) -> dict:
     """一键更新 Foreign Trade Assistant 系统。
 
-    返回结构化结果: {"ok": bool, "version": str, "errors": list[str], "messages": list[str]}
+    `target_sha_request`：前端预览接口返回、用户确认过的目标提交。
+    提供时更新钉在**这一个**提交上（不再临场重取 main），保证"确认框显示的
+    SHA = 实际安装的 SHA"。
+
+    返回结构化结果: {"ok": bool, "version": str, "target_sha": str,
+                     "errors": list[str], "messages": list[str]}
 
     7 步更新流程（全部在 ~/.trade/foreign-trade-assistant/ 中执行，不依赖开发目录）：
       1. git pull / git clone
@@ -530,6 +593,15 @@ def update_trade() -> dict:
     messages: list[str] = []
     new_version = ""
     pre_update_db_backup: Path | None = None
+
+    # 前端确认过的目标提交（可选）。非法值直接拒绝，不进入任何 git 操作。
+    requested_sha = _normalize_sha(target_sha_request) if target_sha_request else None
+    if target_sha_request and not requested_sha:
+        return {
+            "ok": False, "version": "", "target_sha": "",
+            "error": "目标提交 SHA 格式非法（需要 40 位十六进制）。",
+            "errors": ["invalid target_sha"], "warnings": [], "messages": [],
+        }
 
     def _emit(msg: str) -> None:
         """同时 print 和记录到 messages（保持 CLI 和 API 兼容）。"""
@@ -651,17 +723,21 @@ def update_trade() -> dict:
         _emit(f"  ✓ Repository cloned to {trade_dir}")
     else:
         _emit("→ Step 1/7: git pull ...")
-        # 先把"用户点更新这一刻远端 main 指向的提交"钉下来，拉取后核对
-        target_sha = _remote_main_sha(trade_dir)
-        if not target_sha:
-            _emit("  ❌ 无法解析远端 main 的最新提交（网络/代理或仓库不可达），已中止升级。")
-            errors.append("cannot resolve remote main commit")
-            return {
-                "ok": False, "version": "",
-                "error": "无法解析远端 main 的最新提交，请检查网络或代理后重试。",
-                "errors": errors, "warnings": warnings, "messages": messages,
-            }
-        _emit(f"  ℹ️ 本次更新钉选提交：{target_sha[:8]}")
+        # 目标提交：前端确认过就用它（显示即所用）；否则临场取 main 当前头。
+        if requested_sha:
+            target_sha = requested_sha
+            _emit(f"  ℹ️ 本次更新钉选提交（用户确认）：{target_sha[:8]}")
+        else:
+            target_sha = _remote_main_sha(trade_dir)
+            if not target_sha:
+                _emit("  ❌ 无法解析远端 main 的最新提交（网络/代理或仓库不可达），已中止升级。")
+                errors.append("cannot resolve remote main commit")
+                return {
+                    "ok": False, "version": "",
+                    "error": "无法解析远端 main 的最新提交，请检查网络或代理后重试。",
+                    "errors": errors, "warnings": warnings, "messages": messages,
+                }
+            _emit(f"  ℹ️ 本次更新钉选提交：{target_sha[:8]}")
         try:
             result = subprocess.run(
                 ["git", "pull", "--ff-only", "origin", "main"],
@@ -714,6 +790,37 @@ def update_trade() -> dict:
         else:
             last_line = result.stdout.strip().split("\n")[-1] if result.stdout.strip() else "Already up-to-date."
             _emit(f"  ✓ {last_line}")
+
+        # 用户确认过的固定提交：拉取后钉回该提交（拉取期间远端可能已前进）。
+        if requested_sha:
+            anc = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", target_sha, "FETCH_HEAD"],
+                cwd=str(trade_dir), capture_output=True, text=True, timeout=60,
+            )
+            if anc.returncode != 0:
+                _rollback_if_possible("target sha not on main")
+                _emit(f"  ❌ 目标提交 {target_sha[:8]} 不在远端 main 上，已中止。")
+                errors.append("target sha not on main")
+                return {
+                    "ok": False, "version": "", "target_sha": target_sha,
+                    "error": "目标提交不在 main 分支上，请重新检查更新后重试。",
+                    "errors": errors, "warnings": warnings, "messages": messages,
+                }
+            pin = subprocess.run(
+                ["git", "reset", "--keep", target_sha],
+                cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
+            )
+            if pin.returncode != 0:
+                detail = (pin.stderr or pin.stdout).strip()[:200]
+                _rollback_if_possible("cannot pin requested sha")
+                _emit(f"  ❌ 无法钉到确认的提交 {target_sha[:8]}：{detail}")
+                errors.append(f"cannot pin requested sha: {detail}")
+                return {
+                    "ok": False, "version": "", "target_sha": target_sha,
+                    "error": f"无法切换到确认的版本：{detail}",
+                    "errors": errors, "warnings": warnings, "messages": messages,
+                }
+            _emit(f"  ✓ 已钉到确认的提交 {target_sha[:8]}")
 
         # 回读 HEAD：只认钉选的那个提交。不一致说明拉取过程中远端被推进
         # （或工作区有异常），此时装进来的不是用户确认过的版本 —— 回退并中止。
@@ -857,12 +964,17 @@ def update_trade() -> dict:
     # 一旦重启失败（或本次 ok=False）就成了「假升级成功」。
 
     if ok:
-        # 有非致命警告时也重启，但把警告一并回报给前端
+        # 记录"已更新待重启"现场：重启 watchdog 探活失败时回退到这里。
+        _record_pending_update(pre_update_sha, target_sha, new_version)
+        # 更新不再自动重启：用户看到结果后自己点重启（P1-10 的安全替代）
         if warnings:
-            _emit(f"\n✅ Trade update complete（{len(warnings)} 项警告）. Restarting...")
+            _emit(
+                f"\n✅ Trade update complete（{len(warnings)} 项警告）. "
+                "Restart Trade manually to apply."
+            )
         else:
-            _emit("\n✅ Trade update complete. Restarting...")
+            _emit("\n✅ Trade update complete. Restart Trade manually to apply.")
     else:
-        _emit("\n⚠️  Update completed with errors. No restart.")
-    return {"ok": ok, "version": new_version, "errors": errors,
-            "warnings": warnings, "messages": messages}
+        _emit("\n⚠️  Update completed with errors. No restart scheduled.")
+    return {"ok": ok, "version": new_version, "target_sha": target_sha or "",
+            "errors": errors, "warnings": warnings, "messages": messages}

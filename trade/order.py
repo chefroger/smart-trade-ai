@@ -56,10 +56,14 @@ def reconcile_amounts(
     """校验「数量 × 单价」与总金额一致，返回三元组 (quantity, unit_price, total)。
 
     - 总金额为空（0 / None）而数量与单价都有值时，自动算出总金额（保留 2 位）；
-    - 三者都有值时做一致性校验，矛盾则抛 ValueError（文案直接展示给用户）。
+    - 三者都有值时做一致性校验，矛盾则抛 ValueError（文案直接展示给用户）；
+    - 数量与单价**都缺失**（只录了总额）时原样放行；只缺一项（含显式 0）而总额
+      非零时拒绝 —— 这种组合无法校验，放行等于接受来路不明的金额。
 
-    数量或单价缺任一项时无法校验（例如只录了报价总额），原样放行。
+    注意区分「显式 0」与「未填」：0 是用户给的值，参与校验；None 才是未填。
     """
+    qty_missing = quantity is None
+    price_missing = unit_price is None
     qty = float(quantity or 0)
     price = float(unit_price or 0)
     total = float(total_amount or 0)
@@ -70,6 +74,12 @@ def reconcile_amounts(
     if expected > 0 and total > 0 and abs(expected - total) > _AMOUNT_TOLERANCE:
         raise ValueError(
             f"总金额 {total:g} 与 数量×单价（{qty:g}×{price:g}={expected:g}）不一致，请核对后重填。"
+        )
+    # 数量/单价不足以算出金额（0 或缺一项），但总额非零：拒绝
+    if expected == 0 and total > 0 and not (qty_missing and price_missing):
+        raise ValueError(
+            f"总金额 {total:g} 与数量/单价不一致（数量={quantity or 0:g}，"
+            f"单价={unit_price or 0:g}，算不出该金额），请补全后重填。"
         )
     return qty, price, total
 

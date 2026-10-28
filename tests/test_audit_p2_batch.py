@@ -205,6 +205,107 @@ class TestSkillSyncManifest:
         assert len(data["files"]["b2b-demo/SKILL.md"]) == 64
 
 
+class TestSkillManifestVerify:
+    """W5：清单能验、覆盖 references、安装路径不丢条目、有历史与自哈希。"""
+
+    def _mk(self, tmp_path, name="b2b-a"):
+        d = tmp_path / name
+        (d / "references").mkdir(parents=True)
+        (d / "SKILL.md").write_text("demo", encoding="utf-8")
+        (d / "references" / "qa_pairs.md").write_text("qa", encoding="utf-8")
+        return d
+
+    def test_manifest_covers_references_and_history(self, tmp_path):
+        import json
+
+        from trade.post_install.skills import _write_skill_manifest
+
+        self._mk(tmp_path)
+        _write_skill_manifest(tmp_path)
+
+        data = json.loads((tmp_path / ".sync-manifest.json").read_text(encoding="utf-8"))
+        assert "b2b-a/SKILL.md" in data["files"]
+        assert "b2b-a/references/qa_pairs.md" in data["files"]
+        assert isinstance(data["history"], list) and data["history"]
+        assert len(data["manifest_hash"]) == 64
+
+    def test_install_path_does_not_drop_existing_entries(self, tmp_path):
+        """只传本次 installed 也不能丢目录里已有的 skill。"""
+        import json
+
+        from trade.post_install.skills import _write_skill_manifest
+
+        self._mk(tmp_path, "b2b-a")
+        self._mk(tmp_path, "b2b-b")
+        _write_skill_manifest(tmp_path, ["b2b-a"])
+
+        data = json.loads((tmp_path / ".sync-manifest.json").read_text(encoding="utf-8"))
+        assert "b2b-a/SKILL.md" in data["files"]
+        assert "b2b-b/SKILL.md" in data["files"]
+
+    def test_copy_skills_keeps_preexisting_manifest_entries(self, tmp_path):
+        """安装路径（_copy_skills）也要全扫，不能只记本次 installed。"""
+        import json
+
+        from trade.post_install.skills import _copy_skills
+
+        src = tmp_path / "src"
+        (src / "b2b-a").mkdir(parents=True)
+        (src / "b2b-a" / "SKILL.md").write_text("a", encoding="utf-8")
+        dst = tmp_path / "dst"
+        (dst / "b2b-b").mkdir(parents=True)
+        (dst / "b2b-b" / "SKILL.md").write_text("b", encoding="utf-8")
+
+        _copy_skills(src, dst)
+
+        data = json.loads((dst / ".sync-manifest.json").read_text(encoding="utf-8"))
+        assert "b2b-a/SKILL.md" in data["files"]
+        assert "b2b-b/SKILL.md" in data["files"]
+
+    def test_verify_ok_after_write(self, tmp_path):
+        from trade.post_install.skills import (
+            _write_skill_manifest,
+            verify_skill_manifest,
+        )
+
+        self._mk(tmp_path)
+        _write_skill_manifest(tmp_path)
+        assert verify_skill_manifest(tmp_path)["ok"] is True
+
+    def test_verify_detects_added_reference(self, tmp_path):
+        from trade.post_install.skills import (
+            _write_skill_manifest,
+            verify_skill_manifest,
+        )
+
+        self._mk(tmp_path)
+        _write_skill_manifest(tmp_path)
+        (tmp_path / "b2b-a" / "references" / "new.md").write_text("x", encoding="utf-8")
+
+        report = verify_skill_manifest(tmp_path)
+        assert report["ok"] is False
+        assert "b2b-a/references/new.md" in report["missing_in_manifest"]
+
+    def test_verify_detects_tampered_manifest(self, tmp_path):
+        import json
+
+        from trade.post_install.skills import (
+            _write_skill_manifest,
+            verify_skill_manifest,
+        )
+
+        self._mk(tmp_path)
+        _write_skill_manifest(tmp_path)
+        path = tmp_path / ".sync-manifest.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["files"]["b2b-a/SKILL.md"] = "0" * 64  # 篡改哈希
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        report = verify_skill_manifest(tmp_path)
+        assert report["ok"] is False
+        assert report["reason"] == "self_hash_mismatch"
+
+
 class TestLicenseRoutesRequireSession:
     def test_router_has_session_dependency(self):
         src = _read_source("trade/api/license.py")
