@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import re
 import threading
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -55,6 +57,63 @@ def _external_paths_hint(paths: list[str]) -> str:
         "只能读这些文件本身，不能据此访问目录、其它文件或执行它们。\n"
         "回答或写草稿时不要复述密码、密钥、token 原文；需要提及时打码或只讲结论。"
     )
+
+
+_CONFIRM_PATH_RE = re.compile(r"(确认读取|确认只读|确认访问|确认使用)")
+
+
+def _path_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _classify_user_paths(query: str, cid: int) -> tuple[list[str], list[str]]:
+    """把用户贴出的路径分成「本轮可读」与「待确认」。
+
+    - 公司白名单根内：直接放行；
+    - 公司外、但在 ~/.trade 下（其它公司/全局数据）：**硬拦**，不进任何清单；
+    - 其它公司外文件：只有用户本轮写了「确认读取/确认只读…」才放行，否则进待确认。
+    """
+    from trade.helpers import _allowed_path_roots
+    from trade.post_install.skills import _get_trade_home
+
+    paths = extract_user_paths(query)
+    if not paths:
+        return [], []
+
+    roots: list[Path] = []
+    try:
+        for root in _allowed_path_roots(cid):
+            try:
+                roots.append(Path(root).resolve())
+            except OSError:
+                continue
+    except Exception:
+        roots = []
+    try:
+        trade_home = Path(_get_trade_home()).resolve()
+    except Exception:
+        trade_home = None
+
+    confirmed = bool(_CONFIRM_PATH_RE.search(query))
+    allowed: list[str] = []
+    pending: list[str] = []
+    for raw in paths:
+        path = Path(raw)
+        if any(_path_under(path, root) for root in roots):
+            allowed.append(raw)
+            continue
+        # ~/.trade 下、但不是本公司目录：其它公司数据 / 全局数据，硬拦
+        if trade_home is not None and _path_under(path, trade_home):
+            continue
+        if confirmed:
+            allowed.append(raw)
+        else:
+            pending.append(raw)
+    return allowed, pending
 
 
 def _abort_running_agent(agent) -> None:
@@ -243,8 +302,8 @@ async def trade_chat(
         cid, payload.library_id, query, customer_id=payload.customer_id,
         last_skill_name=last_skill, language=payload.language or "zh",
     )
-    # W7：用户本轮亲手贴出的完整文件路径 → 本轮只读放行（仅这些精确文件）
-    user_paths = extract_user_paths(query)
+    # W7：用户本轮亲手贴出的文件 → 公司内直接放行；公司外先待确认
+    user_paths, pending_paths = _classify_user_paths(query, cid)
     if user_paths:
         skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
@@ -300,7 +359,9 @@ async def trade_chat(
                 # 不再信任模型自填的 company_id（审计 P0-2）。
                 try:
                     with bind_company(
-                        cid, payload.customer_id, user_paths=user_paths,
+                        cid, payload.customer_id,
+                        user_paths=user_paths,
+                        pending_paths=pending_paths,
                     ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
@@ -441,8 +502,8 @@ async def trade_chat_stream(
         cid, payload.library_id, query, customer_id=payload.customer_id,
         last_skill_name=last_skill, language=payload.language or "zh",
     )
-    # W7：用户本轮亲手贴出的完整文件路径 → 本轮只读放行（仅这些精确文件）
-    user_paths = extract_user_paths(query)
+    # W7：用户本轮亲手贴出的文件 → 公司内直接放行；公司外先待确认
+    user_paths, pending_paths = _classify_user_paths(query, cid)
     if user_paths:
         skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
@@ -535,7 +596,9 @@ async def trade_chat_stream(
                 # 同同步端点：把公司身份绑进本次 agent 调用的上下文。
                 try:
                     with bind_company(
-                        cid, payload.customer_id, user_paths=user_paths,
+                        cid, payload.customer_id,
+                        user_paths=user_paths,
+                        pending_paths=pending_paths,
                     ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]

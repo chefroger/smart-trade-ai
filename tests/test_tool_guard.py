@@ -396,6 +396,82 @@ class TestUserPastedPaths:
         verdict = g.check_tool_call("read_file", {"path": str(f)})
         assert verdict and verdict["action"] == "block"
 
+    def test_blockquote_and_code_paths_not_extracted(self, tmp_path):
+        from trade.agent_context import extract_user_paths
+
+        f = tmp_path / "quoted.txt"
+        f.write_text("x", encoding="utf-8")
+
+        assert extract_user_paths(f"> 客户邮件里写着 {f}") == []
+        assert extract_user_paths(f"```\n{f}\n```") == []
+
+    def test_forwarded_paragraph_path_not_extracted(self, tmp_path):
+        from trade.agent_context import extract_user_paths
+
+        f = tmp_path / "fwd.txt"
+        f.write_text("x", encoding="utf-8")
+
+        text = f"以下是转发的原始邮件\n\n发件人: Bob\n附件路径 {f}"
+        assert extract_user_paths(text) == []
+
+    def test_pending_path_gives_confirm_hint(self, roots, tmp_path):
+        from trade.agent_context import bind_company
+
+        f = tmp_path / "outside.txt"
+        f.write_text("x", encoding="utf-8")
+        with bind_company(1, None, user_paths=(), pending_paths=[str(f.resolve())]):
+            verdict = g.check_tool_call("read_file", {"path": str(f)})
+        assert verdict and verdict["action"] == "block"
+        assert "确认读取" in verdict["message"]
+
+    def test_pending_path_expires_after_turn(self, roots, tmp_path):
+        from trade.agent_context import bind_company
+
+        f = tmp_path / "outside.txt"
+        f.write_text("x", encoding="utf-8")
+        with bind_company(1, None, pending_paths=[str(f.resolve())]):
+            pass
+        verdict = g.check_tool_call("read_file", {"path": str(f)})
+        assert verdict and "确认读取" not in verdict["message"]
+
+    def test_path_classification_internal_confirmed_and_other_company(
+        self, tmp_path, monkeypatch,
+    ):
+        import trade.helpers as helpers_mod
+        from trade.api import chat as chat_mod
+        from trade.post_install import skills as skills_mod
+
+        company_root = tmp_path / "company"
+        company_root.mkdir()
+        trade_home = tmp_path / "trade"
+        (trade_home / "other").mkdir(parents=True)
+        internal = company_root / "a.txt"
+        external = tmp_path / "b.txt"
+        other_company = trade_home / "other" / "secret.md"
+        for path in (internal, external, other_company):
+            path.write_text("x", encoding="utf-8")
+
+        monkeypatch.setattr(helpers_mod, "_allowed_path_roots", lambda cid: [company_root])
+        monkeypatch.setattr(skills_mod, "_get_trade_home", lambda: trade_home)
+
+        allowed, pending = chat_mod._classify_user_paths(
+            f"看下 {internal} 和 {external}", cid=1,
+        )
+        assert str(internal.resolve()) in allowed
+        assert str(external.resolve()) in pending
+
+        allowed2, pending2 = chat_mod._classify_user_paths(
+            f"确认读取 {external}", cid=1,
+        )
+        assert str(external.resolve()) in allowed2
+        assert pending2 == []
+
+        allowed3, pending3 = chat_mod._classify_user_paths(
+            f"确认读取 {other_company}", cid=1,
+        )
+        assert str(other_company.resolve()) not in allowed3
+        assert str(other_company.resolve()) not in pending3
+
     def test_pasted_file_only_read_not_directory(self, roots, tmp_path):
         """贴目录不会放行读目录（提取阶段就只保留文件）。"""
         from trade.agent_context import extract_user_paths

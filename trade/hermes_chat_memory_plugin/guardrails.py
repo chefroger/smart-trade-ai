@@ -185,6 +185,25 @@ def _user_pasted_file(raw: str) -> bool:
     return str(resolved) in allowed
 
 
+def _pending_pasted_path(raw: str) -> bool:
+    """用户贴了、但还没确认的公司外路径 → 给出确认指引。"""
+    try:
+        from trade.agent_context import current_pending_paths
+
+        pending = current_pending_paths()
+    except Exception:
+        return False
+    if not pending:
+        return False
+    try:
+        resolved = Path(raw).expanduser().resolve()
+        if not resolved.is_file():
+            return False
+    except (OSError, ValueError):
+        return False
+    return str(resolved) in pending
+
+
 def _is_sensitive_write_target(path: Path, roots: list[Path]) -> bool:
     """白名单根内、但一旦可写就会变成持久化提示注入的文件。
 
@@ -239,9 +258,16 @@ def _check_file_path(tool_name: str, args: dict) -> dict | None:
             f"trade 工具守卫：只接受绝对路径，收到相对路径 {candidate!r}。"
             "请使用 Trade Context / 文档库中给出的绝对路径。"
         )
-    # W7：用户本轮亲手贴出的文件 → 只读放行（精确文件；写/执行不走这里）
-    if tool_name in _READ_ONLY_ALLOWLIST_TOOLS and _user_pasted_file(candidate):
-        return None
+    # W7：用户本轮亲手贴出的文件 → 只读放行（精确文件；写/执行不走这里）。
+    # 公司外文件先回待确认，提示用户如何授权。
+    if tool_name in _READ_ONLY_ALLOWLIST_TOOLS:
+        if _user_pasted_file(candidate):
+            return None
+        if _pending_pasted_path(candidate):
+            return _block(
+                f"trade 工具守卫：{candidate} 在当前公司目录之外，本轮尚未确认。"
+                f"请用户回复「确认读取 {candidate}」后重试。"
+            )
 
     company_id = _current_company_id()
     roots = _allowed_roots(company_id)

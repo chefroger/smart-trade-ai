@@ -132,27 +132,33 @@ def match_customer(
     if not customers:
         return CustomerContext(new_contact=True)
 
-    # 用户已确认：只接受**本次短名候选里**的那一个 id（防同公司任意 id 直认）
+    # 用户已确认：允许集 = {精确匹配 id} ∪ {本次短名候选 id}。
+    # 与名字长度、候选是否为空无关 —— 同公司其它 id 不得直认（防串户）。
     if confirmed_customer_id is not None:
         chosen = _get_customer(int(confirmed_customer_id), company_id)
         if not chosen:
             return CustomerContext(customer_name=name, new_contact=True)
+
+        exact_matches = _exact_name_hits(name, customers)
         normalized = _normalize_name(name)
-        if len(normalized) <= 3:
-            candidates = _short_name_candidates(normalized, customers)
-            if candidates:
-                allowed_ids = {int(c.get("id") or 0) for c in candidates}
-                if int(confirmed_customer_id) not in allowed_ids:
-                    return CustomerContext(
-                        customer_name=name,
-                        new_contact=True,
-                        needs_confirmation=True,
-                        candidates=[
-                            {"id": int(c.get("id") or 0), "name": str(c.get("name") or "")}
-                            for c in candidates[:5]
-                        ],
-                        confirmation_question=_confirmation_question(candidates),
-                    )
+        candidates = (
+            _short_name_candidates(normalized, customers)
+            if len(normalized) <= 3 else []
+        )
+        allowed_ids = {int(c.get("id") or 0) for c in exact_matches}
+        allowed_ids |= {int(c.get("id") or 0) for c in candidates}
+
+        if int(confirmed_customer_id) not in allowed_ids:
+            return CustomerContext(
+                customer_name=name,
+                new_contact=True,
+                needs_confirmation=True,
+                candidates=[
+                    {"id": int(c.get("id") or 0), "name": str(c.get("name") or "")}
+                    for c in candidates[:5]
+                ],
+                confirmation_question=_confirmation_question(candidates),
+            )
         return CustomerContext(
             customer_id=int(chosen.get("id") or 0),
             customer_name=str(chosen.get("name") or name),
@@ -261,6 +267,8 @@ def _confirmation_question(candidates: list[dict]) -> str:
     """生成确认问句；多个候选时列出前 5 个让用户选。"""
     names = [str(c.get("name") or "").strip() for c in candidates[:5]]
     names = [n for n in names if n]
+    if not names:
+        return "你确认的客户与当前识别的名称不一致，请确认是哪一位客户。"
     if len(names) == 1:
         return f"你是说{names[0]}吗？确认后才会带入这位客户的资料。"
     more = "（仅列出前 5 位）" if len(candidates) > 5 else ""

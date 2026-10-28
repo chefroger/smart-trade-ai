@@ -320,6 +320,30 @@ class TestShortNameConfirmation:
         assert result.ok is False
         assert called == [], "确认前不得调用模型"
 
+    def test_confirm_exact_name_id_matches(self, monkeypatch):
+        """长名字路径：自身精确匹配的 id 可以确认。"""
+        self._patch(monkeypatch, [{"id": 1, "name": "Robert"}, {"id": 2, "name": "Alice"}])
+
+        result = ctx_mod.match_customer(
+            "Robert", company_id=1, confirmed_customer_id=1,
+        )
+
+        assert result.matched is True
+        assert result.customer_id == 1
+
+    def test_confirm_long_name_other_id_asks_again(self, monkeypatch):
+        """长名字 + 同公司另一人 id → 不得直认（防 Alice 历史进 Bob 草稿）。"""
+        self._patch(monkeypatch, [{"id": 1, "name": "Robert"}, {"id": 2, "name": "Alice"}])
+
+        result = ctx_mod.match_customer(
+            "Robert", company_id=1, confirmed_customer_id=2,
+        )
+
+        assert result.matched is False
+        assert result.needs_confirmation is True
+        assert result.history == []
+        assert result.confirmation_question, "空候选也必须有可读问句"
+
     def test_confirm_id_outside_candidates_asks_again(self, monkeypatch):
         """确认 id 必须来自本次候选，不能凭同公司任意 id 直认。"""
         self._patch(monkeypatch, [{"id": 1, "name": "张三"}, {"id": 2, "name": "李四"}])

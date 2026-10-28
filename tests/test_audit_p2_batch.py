@@ -43,8 +43,9 @@ class TestUserPathsWiring:
     def test_chat_endpoints_bind_user_paths(self):
         """W7：两个聊天端点都要把用户贴出的路径传给守卫（仅本轮）。"""
         src = _read_source("trade/api/chat.py")
-        assert src.count("extract_user_paths(query)") == 2
+        assert src.count("_classify_user_paths(query, cid)") == 2
         assert src.count("user_paths=user_paths") == 2
+        assert src.count("pending_paths=pending_paths") == 2
         assert "_external_paths_hint" in src
         assert "不要复述密码、密钥、token 原文" in src
 
