@@ -1242,7 +1242,8 @@ async function doTradeUpdate(e) {
         } else if (resp.ok) {
             restartScheduled = !!resp.restart_scheduled;
             // 更新结果展示实际安装的提交（与确认框里的目标一致）
-            const appliedShort = (resp.target_sha || _pendingUpdateTarget || '').slice(0, 8);
+            // 只显示用户在确认框里见过的 SHA；预览失败时宁可不显示
+            const appliedShort = (_pendingUpdateTarget || '').slice(0, 8);
             const suffix = appliedShort ? '（目标 ' + appliedShort + '）' : '';
             if (restartScheduled) {
                 toast(t('sys.update_done_restart') + suffix);
@@ -1765,6 +1766,9 @@ async function checkVersion() {
             _toolGuardWarned = true;
             if (data.tool_guard.hooks === false) {
                 toast('⚠️ 当前 Hermes 版本不支持工具钩子，安全守卫无法生效，聊天已暂停。请升级 Hermes 后重启 Trade。');
+            } else if (data.tool_guard.hooks == null && data.tool_guard.deployed && data.tool_guard.enabled) {
+                // 未知 ≠ 坏：首次聊天时插件才写标记，发一条消息即可确认
+                toast('ℹ️ 工具安全守卫状态待确认：发一条消息后会自动确认（无需重启）。');
             } else {
                 toast('⚠️ 工具安全守卫未生效：文件与命令白名单当前不起作用。请重启 Trade；若仍提示，检查 ~/.hermes/config.yaml 的 plugins.enabled 是否包含 chat-memory。');
             }
@@ -1791,7 +1795,8 @@ async function doUpdateSystem() {
             {target_sha: _pendingUpdateTarget || null},
             {'X-Confirm-Update': 'yes'});
         if (resp?.ok) {
-            const appliedShort = (resp.target_sha || _pendingUpdateTarget || '').slice(0, 8);
+            // 只显示用户在确认框里见过的 SHA；预览失败时宁可不显示
+            const appliedShort = (_pendingUpdateTarget || '').slice(0, 8);
             const suffix = appliedShort ? '（目标 ' + appliedShort + '）' : '';
             toast('✅ 更新完成。请点击"🔄 重启"以应用新版本。' + suffix);
             // 非致命步骤失败只算警告，不阻止升级，但必须让用户看见
@@ -4206,6 +4211,11 @@ async function checkHermesCompatOrShowPanel() {
         });
         if (r.ok) compat = await r.json();
     } catch(_) {}
+    // Hermes 后台升级成功但 Trade 还没重启：提示手动重启（不自动重启）
+    if (compat && compat.usable && compat.restart_required) {
+        _showRestartPrompt();
+        toast('✅ Hermes 升级完成，请点击「🔄 重启」使新版本生效。');
+    }
     // 拿不到状态就不拦 —— 不能因为一个检查把整个软件挡在门外
     if (!compat || compat.usable) return false;
     showHermesUpgradePanel(compat);

@@ -143,12 +143,38 @@ def _manifest_files(dst_base: Path) -> dict[str, str]:
 
 
 def _manifest_digest(updated_at: str, files: dict[str, str]) -> str:
-    """清单自哈希：覆盖 schema / updated_at / files（history 不参与）。"""
+    """清单自哈希：覆盖 schema / updated_at / files（history 用哈希链单独校验）。"""
     raw = json.dumps(
         {"schema": _MANIFEST_SCHEMA, "updated_at": updated_at, "files": files},
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
+
+
+def _history_entry_hash(entry: dict) -> str:
+    """单条 history 的哈希（覆盖 prev_hash，形成链）。"""
+    payload = {
+        key: entry.get(key)
+        for key in ("updated_at", "file_count", "manifest_hash", "prev_hash")
+    }
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _verify_history_chain(history: list, anchor: str) -> bool:
+    """按链顺序校验 history；截断后第一条的 prev_hash 必须等于 anchor。"""
+    prev = anchor or ""
+    for entry in history:
+        if not isinstance(entry, dict):
+            return False
+        if entry.get("prev_hash") != prev:
+            return False
+        if entry.get("entry_hash") != _history_entry_hash(entry):
+            return False
+        prev = entry.get("entry_hash")
+    return True
 
 
 def _write_skill_manifest(dst_base: Path, names: list[str] | None = None) -> None:
@@ -162,22 +188,38 @@ def _write_skill_manifest(dst_base: Path, names: list[str] | None = None) -> Non
         updated_at = datetime.now().isoformat(timespec="seconds")
         manifest = dst_base / _MANIFEST_NAME
         history: list = []
+        anchor = ""
         try:
             old = json.loads(manifest.read_text(encoding="utf-8"))
-            if isinstance(old, dict) and isinstance(old.get("history"), list):
-                history = old["history"][-_MANIFEST_HISTORY_LIMIT:]
+            old_history = old.get("history") if isinstance(old, dict) else None
+            # 旧版清单没有链字段：直接重新起链，避免把无 entry_hash 的条目掺进来
+            if isinstance(old_history, list) and all(
+                isinstance(e, dict) and isinstance(e.get("entry_hash"), str)
+                for e in old_history
+            ):
+                history = old_history[-_MANIFEST_HISTORY_LIMIT:]
+                anchor = str(old.get("history_anchor") or "")
         except (OSError, ValueError):
             history = []
+            anchor = ""
         digest = _manifest_digest(updated_at, files)
-        history = (history + [{
+        entry = {
             "updated_at": updated_at,
             "file_count": len(files),
             "manifest_hash": digest,
-        }])[-_MANIFEST_HISTORY_LIMIT:]
+            "prev_hash": history[-1]["entry_hash"] if history else anchor,
+        }
+        entry["entry_hash"] = _history_entry_hash(entry)
+        history = history + [entry]
+        if len(history) > _MANIFEST_HISTORY_LIMIT:
+            dropped = len(history) - _MANIFEST_HISTORY_LIMIT
+            anchor = history[dropped - 1]["entry_hash"]
+            history = history[dropped:]
         data = {
             "schema": _MANIFEST_SCHEMA,
             "updated_at": updated_at,
             "history": history,
+            "history_anchor": anchor,
             "files": files,
             "manifest_hash": digest,
         }
@@ -218,6 +260,15 @@ def verify_skill_manifest(dst_base: Path) -> dict:
         return {**empty, "reason": "self_hash_missing"}
     if _manifest_digest(updated_at, recorded) != expected:
         return {**empty, "reason": "self_hash_mismatch"}
+
+    history = data.get("history")
+    anchor = data.get("history_anchor", "")
+    if (
+        not isinstance(history, list)
+        or not isinstance(anchor, str)
+        or not _verify_history_chain(history, anchor)
+    ):
+        return {**empty, "reason": "history_chain_mismatch"}
 
     actual = _manifest_files(dst_base)
     missing_on_disk = sorted(set(recorded) - set(actual))

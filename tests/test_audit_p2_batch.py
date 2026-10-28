@@ -39,6 +39,44 @@ class TestRestoreNoUnsafeFallback:
         assert src.count("tar.extractall") == 1
 
 
+class TestCustomsSkillConsistency:
+    """Batch 4B/4C/4D：注入与正文对齐、无品类专用规则、模板不冒充海关数据。"""
+
+    def _text(self) -> str:
+        return (ROOT / "skills" / "b2b-customs-data" / "SKILL.md").read_text(
+            encoding="utf-8",
+        )
+
+    def test_injection_and_body_carry_new_rules(self):
+        import re
+
+        import yaml
+
+        text = self._text()
+        fm = yaml.safe_load(re.match(r"^---\n(.*?)\n---\n", text, re.S).group(1))
+        ip = fm["injection_prompt"]
+        body = text.split("---", 2)[2]
+
+        for kw in (
+            "目标是人时", "用户提供 CSV/Excel 时", "实体分层",
+            "百分比口径", "品类判断", "输出格式（强制）",
+        ):
+            assert kw in ip, f"注入缺少：{kw}"
+        for kw in ("目标是人时", "实体分层", "百分比口径", "品类判断", "输出格式"):
+            assert kw in body, f"正文缺少：{kw}"
+
+    def test_no_category_specific_hs_pair(self):
+        """按 Lau 口径：不在 skill 里写死单一品类 / HS 编码对。"""
+        text = self._text()
+        assert "8546" not in text
+        assert "8547" not in text
+
+    def test_phase6_template_does_not_claim_customs_data(self):
+        text = self._text()
+        assert "Public records show" in text
+        assert "Your import data shows" not in text
+
+
 class TestUserPathsWiring:
     def test_chat_endpoints_bind_user_paths(self):
         """W7：两个聊天端点都要把用户贴出的路径传给守卫（仅本轮）。"""
@@ -296,6 +334,42 @@ class TestSkillManifestVerify:
         report = verify_skill_manifest(tmp_path)
         assert report["ok"] is False
         assert "b2b-a/references/new.md" in report["missing_in_manifest"]
+
+    def test_verify_detects_history_tamper(self, tmp_path):
+        import json
+
+        from trade.post_install.skills import (
+            _write_skill_manifest,
+            verify_skill_manifest,
+        )
+
+        self._mk(tmp_path)
+        _write_skill_manifest(tmp_path)
+        path = tmp_path / ".sync-manifest.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["history"][0]["file_count"] = 999
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        report = verify_skill_manifest(tmp_path)
+        assert report["ok"] is False
+        assert report["reason"] == "history_chain_mismatch"
+
+    def test_history_truncation_keeps_chain_valid(self, tmp_path):
+        import json
+
+        from trade.post_install.skills import (
+            _write_skill_manifest,
+            verify_skill_manifest,
+        )
+
+        self._mk(tmp_path)
+        for _ in range(21):
+            _write_skill_manifest(tmp_path)
+
+        data = json.loads((tmp_path / ".sync-manifest.json").read_text(encoding="utf-8"))
+        assert len(data["history"]) == 20
+        assert data["history_anchor"], "截断后必须保留链头锚点"
+        assert verify_skill_manifest(tmp_path)["ok"] is True
 
     def test_verify_detects_tampered_manifest(self, tmp_path):
         import json

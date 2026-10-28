@@ -583,6 +583,17 @@ def _local_skills_sync():
         synced += 1
 
     if synced > 0:
+        # 启动同步也改了 SKILL.md → 清单必须同步更新，否则每天制造“旧清单+新文件”假报警
+        try:
+            from trade.post_install.skills import (
+                _verify_manifest_or_warn,
+                _write_skill_manifest,
+            )
+
+            _write_skill_manifest(_hermes_skills)
+            _verify_manifest_or_warn(_hermes_skills)
+        except Exception as e:  # noqa: BLE001 — 清单失败不影响启动
+            print(f"  ⚠ skill 清单更新失败：{e}", file=sys.stderr)
         print(f"  Skills synced: {synced} updated (local)")
     else:
         print("  Skills: up-to-date")
@@ -998,6 +1009,9 @@ def verify_tool_guard_ready(announce: bool = False) -> dict:
             reasons.append("当前 Hermes 不支持 register_hook，守卫无法挂载")
         elif hooks is None and deployed and enabled:
             reasons.append("宿主钩子状态未知（插件尚未记录）")
+        # 未知 ≠ 已知坏：首次聊天后插件就会写标记，启动时不要误报“守卫未生效”
+        if hooks is None and deployed and enabled:
+            return state
         print(
             "  ⚠️ 工具安全守卫未生效（" + "；".join(reasons) + "）："
             "文件路径白名单、terminal 命令白名单、execute_code 拒绝当前都不起作用。"
