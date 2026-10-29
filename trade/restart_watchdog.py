@@ -44,12 +44,25 @@ def _proc_create_time(pid: int) -> float | None:
         return None
 
 
-def _kill(pid: int, expected_create_time: float | None = None) -> None:
-    """尽力终止进程；PID 已被复用（创建时间不符）时拒绝盲杀。"""
+def _kill(
+    pid: int, expected_create_time: float | None = None,
+    log_path: Path | None = None,
+) -> None:
+    """尽力终止进程；PID 已被复用（创建时间不符）时拒绝盲杀。
+
+    取不到创建时间（psutil 缺失）时无法证明身份，仍按原样终止（否则旧进程
+    占着端口、新进程起不来），但必须在 watchdog 日志里留一行，事后可追溯。
+    """
     if expected_create_time is not None:
         current = _proc_create_time(pid)
         if current is None or abs(current - expected_create_time) > 1.0:
             return
+    elif log_path is not None:
+        _log(
+            log_path,
+            f"pid {pid}: create_time unavailable (psutil missing) — "
+            "identity unverified, killing anyway",
+        )
     try:
         if os.name == "nt":
             subprocess.run(
@@ -270,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
 
     old_create = _proc_create_time(args.old_pid)
     time.sleep(2)
-    _kill(args.old_pid, old_create)
+    _kill(args.old_pid, old_create, log_path)
     time.sleep(0.5)
     try:
         proc = _spawn(cmd, args.workdir, nonce)

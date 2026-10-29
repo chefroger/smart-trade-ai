@@ -423,6 +423,8 @@ class TestUserPastedPaths:
             verdict = g.check_tool_call("read_file", {"path": str(f)})
         assert verdict and verdict["action"] == "block"
         assert "确认读取" in verdict["message"]
+        # 确认口径必须写清「只读本轮、不归属本公司数据」
+        assert "不会把这些文件归属到本公司的数据或历史" in verdict["message"]
 
     def test_pending_path_expires_after_turn(self, roots, tmp_path):
         from trade.agent_context import bind_company

@@ -354,6 +354,29 @@ class TestSkillManifestVerify:
         assert report["ok"] is False
         assert report["reason"] == "history_chain_mismatch"
 
+    def test_verify_detects_tampered_middle_history_entry(self, tmp_path):
+        """篡改**中间**一条（不是最新条）必须断链。"""
+        import json
+
+        from trade.post_install.skills import (
+            _write_skill_manifest,
+            verify_skill_manifest,
+        )
+
+        self._mk(tmp_path)
+        for _ in range(3):
+            _write_skill_manifest(tmp_path)
+
+        path = tmp_path / ".sync-manifest.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        middle = len(data["history"]) // 2
+        data["history"][middle]["manifest_hash"] = "0" * 64
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        report = verify_skill_manifest(tmp_path)
+        assert report["ok"] is False
+        assert report["reason"] == "history_chain_mismatch"
+
     def test_history_truncation_keeps_chain_valid(self, tmp_path):
         import json
 

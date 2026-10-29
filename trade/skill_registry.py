@@ -596,6 +596,8 @@ STOP RULE（防止无效搜索）:
             "有没有进口", "进口什么", "进口了哪些", "进口记录",
             "进口数据", "进口提单", "海关提单", "提单数据", "美国进口",
             "进口商", "向谁采购", "谁给它供货", "进口来源",
+            # 最自然的整句问法（W8 审计：行为已由 priority_keywords 覆盖，补字面）
+            "查一下这家公司进口", "查一下这家公司进口了什么",
             # English fragments
             "import data", "export data", "trade data",
             "import from china", "imports from china", "import records",

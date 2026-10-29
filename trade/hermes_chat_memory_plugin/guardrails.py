@@ -266,7 +266,8 @@ def _check_file_path(tool_name: str, args: dict) -> dict | None:
         if _pending_pasted_path(candidate):
             return _block(
                 f"trade 工具守卫：{candidate} 在当前公司目录之外，本轮尚未确认。"
-                f"请用户回复「确认读取 {candidate}」后重试。"
+                f"请用户回复「确认读取 {candidate}」后重试 —— "
+                "确认只授权本轮只读，不会把这些文件归属到本公司的数据或历史。"
             )
 
     company_id = _current_company_id()

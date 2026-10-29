@@ -803,8 +803,16 @@ def update_trade(target_sha_request: str | None = None) -> dict:
                                     "  ⚠ 自动恢复失败，请手动执行："
                                     f"cd {trade_dir} && git reset --hard {pre_update_sha}"
                                 )
+                        else:
+                            # 没有可回退点（读不到 HEAD）：仓库可能停在 UU 冲突态
+                            _emit(
+                                "  ⚠ 没有升级前的提交可回退，仓库可能停在冲突状态；"
+                                f"请先 cd {trade_dir} && git status 查看后再处理。"
+                            )
                         _emit("  ⚠ 你的本地改动仍在 git stash 中（未丢失）")
-                        _emit(f"  💡 恢复方式：cd {trade_dir} && git stash pop")
+                        _emit(
+                            f"  💡 恢复方式：cd {trade_dir} && git status && git stash pop"
+                        )
                         errors.append("git stash pop conflicted; update aborted")
                         warnings.append("local changes remain stashed (git stash pop conflicted)")
                         return {
