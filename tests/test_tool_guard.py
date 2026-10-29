@@ -495,3 +495,27 @@ class TestUserPastedPaths:
         d = tmp_path / "folder"
         d.mkdir()
         assert extract_user_paths(str(d)) == []
+
+
+class TestAvailabilityFirst:
+    """2026-10-29 事故回归：守卫任何情况下都不得让聊天不可用。
+
+    「聊天已暂停」这类阻断文案一旦回到后端，老用户更新后就会直接无法使用。
+    这条用例钉住它不再出现（前端另有 JS 断言）。
+    """
+
+    def test_no_chat_suspension_copy_in_backend(self):
+        trade_dir = Path(__file__).resolve().parent.parent / "trade"
+        hits = [
+            p.relative_to(trade_dir).as_posix()
+            for p in trade_dir.rglob("*.py")
+            if "聊天已暂停" in p.read_text(encoding="utf-8")
+        ]
+        assert hits == [], f"阻断文案不得回到后端：{hits}"
+
+    def test_chat_gate_returns_none_without_strict(self, monkeypatch):
+        """默认模式下门控恒放行（不依赖守卫的部署/启用状态）。"""
+        import trade.bootstrap as bootstrap
+
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        assert bootstrap.tool_guard_chat_block_reason() is None
