@@ -11,6 +11,11 @@
 # 解析失配（triggers/injection_prompt 全丢，技能退化为零指令注入）。
 *.md text eol=lf
 
+# JS must stay LF: 2026-10-29 事故 —— vendor JS 带 SRI（sha384 按 LF 算），
+# Windows 检出转 CRLF 后 SRI 校验失败，脚本被拒执行，聊天发不出消息。
+# SRI 已删；这条规则同样防「行尾影响代码/校验」的同类问题。
+*.js text eol=lf
+
 # Binary files
 *.ico binary
 *.png binary

@@ -5,9 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
 <title>Trade AI Assistant — 智能外贸销售助手</title>
-<!-- 本地打包（审计 P2-23）：离线也能渲染 markdown / 做 XSS 清洗，不再依赖 CDN。 -->
-<script src="/static/vendor/marked.umd.js" integrity="sha384-SIgPzdreGEWG7eadwygSU+kb05fTwy7pw+JvOJ2VwHUqxs9fwzuRzHol8lzPDkRl"></script>
-<script src="/static/vendor/purify.min.js" integrity="sha384-piCcpDdJ7qVeK4Tv8Z6Hpcr3ZBIgP16TxQTPVfsLFdZ5uDgwc3Y8Ho7oUnqf12qu"></script>
+<!-- 本地打包（审计 P2-23）：离线也能渲染 markdown / 做 XSS 清洗，不再依赖 CDN。
+     注意：**不要**给同源本地文件加 integrity（SRI）。SRI 防的是第三方 CDN 被投毒；
+     能改本地文件的人已经拿下机器，没有安全收益。而哈希按 LF 字节计算，
+     Windows 检出（core.autocrlf）把文件转成 CRLF 后校验必失败 → 脚本被拒绝执行
+     → marked/DOMPurify 为 undefined → 发消息静默失败（2026-10-29 实测事故）。 -->
+<script src="/static/vendor/marked.umd.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
 <script>marked.setOptions({ breaks: true, gfm: true });</script>
 <link rel="stylesheet" href="/static/trade_chat.css">
 <body>

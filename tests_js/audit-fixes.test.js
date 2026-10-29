@@ -87,6 +87,18 @@ test('今日用量在侧栏展示，且只提示不拦截', () => {
   assert.match(SRC, /if \(!r\.ok\) \{ el\.hidden = true; return; \}/);
 });
 
+test('本地 JS 一律不用 SRI，且 .gitattributes 钉住 LF', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.join(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'static', 'trade_chat.html'), 'utf8');
+  // 2026-10-29 事故：SRI 哈希按 LF 算，Windows 检出转 CRLF → 校验失败 →
+  // 脚本被拒执行 → marked 未定义 → 发消息静默失败。同源本地文件不要 SRI。
+  assert.ok(!html.includes('integrity='), '同源本地 script 不得带 integrity');
+  const attrs = fs.readFileSync(path.join(root, '.gitattributes'), 'utf8');
+  assert.match(attrs, /^\*\.js text eol=lf$/m, '.gitattributes 必须固定 *.js 为 LF');
+});
+
 test('markdown / DOMPurify 本地打包，离线可用', () => {
   const fs = require('node:fs');
   const path = require('node:path');
