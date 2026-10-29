@@ -29,6 +29,8 @@ def roots(tmp_path, monkeypatch):
     allowed.mkdir()
     monkeypatch.setattr(g, "_current_company_id", lambda: 1)
     monkeypatch.setattr(g, "_allowed_roots", lambda cid: [allowed.resolve()])
+    # strict 只对 Trade 进程有效（TRADE_HOST）；单独跑 hermes CLI 时永不生效
+    monkeypatch.setenv("TRADE_HOST", "1")
     monkeypatch.setenv("TRADE_TOOL_GUARD", "strict")
     return allowed
 
@@ -79,6 +81,7 @@ class TestFileTools:
         assert "绝对路径" in verdict["message"]
 
     def test_unbound_company_blocked(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TRADE_HOST", "1")
         monkeypatch.setenv("TRADE_TOOL_GUARD", "strict")
         monkeypatch.setattr(g, "_current_company_id", lambda: None)
         monkeypatch.setattr(g, "_allowed_roots", lambda cid: [])
@@ -310,6 +313,7 @@ class TestGuardDeploymentCheck:
         bootstrap.verify_tool_guard_ready(announce=True)
         assert "工具安全守卫未生效" not in capsys.readouterr().err
 
+        monkeypatch.setenv("TRADE_HOST", "1")
         monkeypatch.setenv("TRADE_TOOL_GUARD", "strict")
         bootstrap.verify_tool_guard_ready(announce=True)
         err = capsys.readouterr().err
@@ -519,3 +523,19 @@ class TestAvailabilityFirst:
 
         monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
         assert bootstrap.tool_guard_chat_block_reason() is None
+
+    def test_standalone_hermes_is_never_guarded(self, tmp_path, monkeypatch):
+        """单独跑 `hermes` CLI 时守卫必须完全不存在 —— 插件是装在全局的。
+
+        2026-10-29 Lau：守卫连用户自己的 Hermes 一起掐掉，比守卫本身更不可接受。
+        """
+        outside = tmp_path / "任意文件.txt"
+        outside.write_text("x", encoding="utf-8")
+        # 即使用户把 strict 写进全局环境，Hermes CLI 进程没有 TRADE_HOST
+        monkeypatch.setenv("TRADE_TOOL_GUARD", "strict")
+        monkeypatch.delenv("TRADE_HOST", raising=False)
+
+        assert g.strict_mode() is False
+        assert g.check_tool_call("read_file", {"path": str(outside)}) is None
+        assert g.check_tool_call("terminal", {"command": "ls -la ~"}) is None
+        assert g.check_tool_call("execute_code", {"code": "print(1)"}) is None

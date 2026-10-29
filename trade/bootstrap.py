@@ -405,6 +405,16 @@ def check_native_architecture(auto_repair: bool = True) -> bool:
 # ── .env 加载 + YOLO 模式 ────────────────────────────────────────────────
 
 
+def _mark_trade_host() -> None:
+    """标记当前进程是 Trade（不是用户直接用 `hermes` 命令行）。
+
+    守卫插件装在 `~/.hermes/plugins/`，Hermes CLI 也会加载它；不加区分的话
+    strict 模式会连用户单独使用 Hermes 的能力一起掐掉（2026-10-29 Lau：
+    这比守卫本身更不可接受）。环境变量只作用于本进程树。
+    """
+    os.environ["TRADE_HOST"] = "1"
+
+
 def _disable_hermes_lazy_installs() -> None:
     """设置上游的 sealed-venv 开关（无导入、幂等，可重复调用）。
 
@@ -516,6 +526,7 @@ def load_env_and_set_yolo():
     # 该函数会用 os.environ[name] = value 覆盖，顺序反了会被用户的 .env 顶掉
     # （setup() 开头已先设过一次，覆盖子命令分发与版本检查这两个更早的窗口）。
     _disable_hermes_lazy_installs()
+    _mark_trade_host()
 
 
 # ── Skills 同步 ──────────────────────────────────────────────────────────
@@ -1222,6 +1233,7 @@ def setup():
     """
     # 第 0 步：只设环境变量，必须先于一切可能 import Hermes 的动作
     _disable_hermes_lazy_installs()
+    _mark_trade_host()
 
     # 第 1 步：架构检查在路径准备之前 —— 它不需要 Hermes，而架构不符时后面全是白跑
     if not check_native_architecture():

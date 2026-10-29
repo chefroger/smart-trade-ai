@@ -1,10 +1,15 @@
-"""工具层守卫（默认关闭，`TRADE_TOOL_GUARD=strict` 才启用）。
+"""工具层守卫（默认关闭；`TRADE_TOOL_GUARD=strict` + 在 Trade 进程内才启用）。
 
 2026-10-29 Lau 决定：**默认不拦截任何工具调用**。理由：用户是在自己电脑上
 操作自己的数据，把 agent 关进公司目录的白名单盒子只会限制用户自己 ——
 桌面 / 下载里的合同、报价单本来就是用户自己的文件，却要先打一句
 「确认读取 <路径>」才能让 AI 看，属于自己给自己上锁。守卫代码保留，需要
 收紧的机器可显式开启：`TRADE_TOOL_GUARD=strict`（兼容 on/1/true/yes）。
+
+**只对 Trade 生效**：插件装在 `~/.hermes/plugins/`，用户单独跑 `hermes`
+命令行时也会加载它。因此守卫额外要求进程带 `TRADE_HOST=1`（由
+`trade/bootstrap.setup()` 设置）；Hermes CLI 没有这个标记，守卫对它完全
+不存在 —— 2026-10-29 Lau：连用户自己的 Hermes 一起掐掉比守卫本身更不可接受。
 
 strict 模式下（审计 P1-3 / P1-20 的原规则）：
 
@@ -61,12 +66,26 @@ _ALLOWED_ARGV_PREFIXES = (
 _SHELL_META = (";", "&", "|", "<", ">", "`", "$", "\n", "\r")
 
 
-def strict_mode() -> bool:
-    """只有显式要求才开启守卫：`TRADE_TOOL_GUARD=strict`（或 on/1/true/yes）。
+def _inside_trade() -> bool:
+    """当前进程是不是 Trade 起的（`trade/bootstrap.setup()` 会设 `TRADE_HOST=1`）。
 
-    默认（未设置 / 其它值）返回 False —— 用户自己的电脑、自己的数据，
-    不替用户设限。大小写不敏感。
+    守卫插件装在 `~/.hermes/plugins/` 下，**用户单独跑 `hermes` 命令行时也会加载它**。
+    若不加这层区分，strict 模式会连用户自己的 Hermes 一起掐掉（文件/命令都被
+    白名单挡住）—— 2026-10-29 Lau：这比守卫本身更不可接受。
+    环境变量作用域仅限 Trade 进程树，hermes CLI 是另一个进程，读不到它。
     """
+    return os.environ.get("TRADE_HOST", "").strip() == "1"
+
+
+def strict_mode() -> bool:
+    """只有「在 Trade 里」且显式要求才开启守卫。
+
+    `TRADE_TOOL_GUARD=strict`（或 on/1/true/yes）+ 当前进程是 Trade。
+    默认（未设置 / 其它值 / 未在 Trade 内）返回 False —— 用户自己的电脑、
+    自己的数据，不替用户设限；单独使用 Hermes 时守卫完全不存在。
+    """
+    if not _inside_trade():
+        return False
     raw = os.environ.get("TRADE_TOOL_GUARD", "").strip().lower()
     return raw in {"strict", "on", "1", "true", "yes"}
 
