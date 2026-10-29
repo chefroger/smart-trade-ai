@@ -115,7 +115,7 @@ Hermes 会自动完成 clone、安装依赖、注册 skills 等全部步骤，�
 | # | 方式 | 适合场景 |
 |---|------|---------|
 | 1 | **Hermes 代装** | 已装好 Hermes 并配置好 LLM，让 AI 帮你装 Trade |
-| 2 | **一键脚本** | macOS/Linux，或 Windows 想用命令行 |
+| 2 | **一键脚本** | macOS / Linux / Windows 都有一键脚本 |
 | 3 | **手动一步步装** | 想完全控制每一步 |
 
 ---
@@ -149,7 +149,7 @@ trade
 > 如果 `trade` 命令找不到，说明 PATH 没生效，可以改用：
 > ```powershell
 > cd $env:LOCALAPPDATA\trade\foreign-trade-assistant
-> python server.py
+> $env:LOCALAPPDATA\trade\venv\Scripts\python.exe server.py
 > ```
 > 然后浏览器手动打开 http://127.0.0.1:9119/trade
 
@@ -157,13 +157,21 @@ trade
 
 ---
 
-### 方式 2：一键脚本（macOS / Linux）
+### 方式 2：一键脚本
+
+**macOS / Linux：**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh | bash
 ```
 
-脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 39 个 skills → 数据库初始化。
+**Windows（PowerShell）：**
+
+```powershell
+irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
+```
+
+脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 39 个 skills → 数据库初始化 → 开机自启 + 桌面快捷方式（Windows）。
 
 > **如果你希望安装前先审查脚本**：
 > ```bash
@@ -171,16 +179,36 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 > less install.sh       # 审查后
 > bash install.sh
 > ```
+> ```powershell
+> irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 -OutFile install.ps1
+> notepad install.ps1  # 审查后
+> .\install.ps1
+> ```
 
 ### 想固定版本？从 Release 装
 
 访问 [Releases](https://github.com/chefroger/smart-trade-ai/releases) 下载最新版，或指定版本：
+
+**macOS / Linux：**
 
 ```bash
 git clone --branch v0.6.8 https://github.com/chefroger/smart-trade-ai.git ~/.trade/foreign-trade-assistant
 cd ~/.trade/foreign-trade-assistant && pip install -e ".[docs]"
 install-trade-skills
 python server.py
+```
+
+**Windows（PowerShell）：**
+
+```powershell
+$TradeHome = "$env:LOCALAPPDATA\trade"
+git clone --branch v0.6.8 https://github.com/chefroger/smart-trade-ai.git $TradeHome\foreign-trade-assistant
+cd $TradeHome\foreign-trade-assistant
+python -m venv $TradeHome\venv
+$TradeHome\venv\Scripts\pip.exe install -r requirements.txt
+$TradeHome\venv\Scripts\pip.exe install -e "." --no-deps
+$TradeHome\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
+$TradeHome\venv\Scripts\python.exe server.py
 ```
 
 ### 方式 3：手动一步步装
@@ -239,15 +267,32 @@ irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/ins
 # 2. 配置 LLM
 hermes setup
 
-# 3. 安装 Smart Trade AI
-git clone --branch main https://github.com/chefroger/smart-trade-ai.git $env:LOCALAPPDATA\trade\foreign-trade-assistant
-cd $env:LOCALAPPDATA\trade\foreign-trade-assistant; pip install -e "."; install-trade-skills
+# 3. 安装 Smart Trade AI（用 3.14 建独立虚拟环境）
+$TradeHome = "$env:LOCALAPPDATA\trade"
+python -V        # 必须是 Python 3.14.x，是 3.11~3.13 就先回去重装
+git clone --branch main https://github.com/chefroger/smart-trade-ai.git $TradeHome\foreign-trade-assistant
+cd $TradeHome\foreign-trade-assistant
+python -m venv $TradeHome\venv
+$TradeHome\venv\Scripts\pip.exe install -r requirements.txt
+$TradeHome\venv\Scripts\pip.exe install -e "." --no-deps
 
-python server.py
+# 4. 安装 skills、初始化数据库并启动
+$TradeHome\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
+$TradeHome\venv\Scripts\python.exe -c "from trade.database import init_db; init_db()"
+$TradeHome\venv\Scripts\python.exe server.py
 # → 浏览器打开 http://127.0.0.1:9119/trade
 ```
 
+> **为什么必须建 venv、并且分两条 pip 命令**：
+> Trade 是**进程内**嵌 Hermes 运行的，解释器必须与 Hermes 同为 Python 3.14；
+> `pip install -r requirements.txt` 装文档解析依赖（openpyxl / python-docx / pymupdf），
+> `pip install -e "." --no-deps` 装 Trade 本体 —— `--no-deps` 是必须的，
+> 否则 pip 会去解析 `hermes-agent`，而它不支持被 pip 安装。
+
 > 如果第 3 步 `pip install` 报 `Filename too long` 错误，说明长路径未生效，请确认已完成第 0 步并重启电脑。
+
+> 想让 `trade` 命令在任意目录可用（并开机自启 + 桌面快捷方式），直接改用
+> [方式 2 的一键脚本](#方式-2一键脚本) —— 它会一并生成 `trade.cmd`、写好 PATH、建好开机自启。
 
 ---
 
@@ -438,12 +483,13 @@ install-trade-skills
 ```powershell
 cd $env:LOCALAPPDATA\trade\foreign-trade-assistant
 git pull origin main
-pip install -e "."
-install-trade-skills
+$env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -r requirements.txt
+$env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -e "." --no-deps
+$env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
 ```
 
 4. 所有命令执行完后，关闭 PowerShell
-5. 双击桌面上的 Trade 图标启动，或在终端重新运行 `python server.py`
+5. 双击桌面上的 Trade 图标启动，或在终端重新运行 `$env:LOCALAPPDATA\trade\venv\Scripts\python.exe server.py`
 
 **Linux：**
 
@@ -487,19 +533,20 @@ python server.py
 ```powershell
 cd $env:LOCALAPPDATA\trade\foreign-trade-assistant
 git pull origin main
-pip install -e "."
-install-trade-skills
-python server.py
+$env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -r requirements.txt
+$env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -e "." --no-deps
+$env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
+$env:LOCALAPPDATA\trade\venv\Scripts\python.exe server.py
 ```
 
 **常见错误对照：**
 
 | 前端提示 | 实际原因 | 手动执行哪步 |
 |---------|---------|------------|
-| ⚠️ 更新结果未知，请检查网络 | `git pull` 超时（120s）或 HTTP 错误 | 全部 4 步 |
-| ⚠️ 请求超时 | `fetch()` 120s AbortController 触发 | 全部 4 步 |
+| ⚠️ 更新结果未知，请检查网络 | `git pull` 超时（120s）或 HTTP 错误 | 全部步骤 |
+| ⚠️ 请求超时 | `fetch()` 120s AbortController 触发 | 全部步骤 |
 | ⚠️ 升级完成，但有 N 项警告 | skills 同步等**非关键步骤**失败（网络波动）——不影响升级 | 无需处理：代码与依赖已更新并会正常重启，仅技能清单可能未更新，可稍后手动执行 `install-trade-skills` |
-| ❌ 更新失败: Git 未安装或不在 PATH 中 | 系统找不到 `git` 命令 | [安装 Git](https://git-scm.com/download/win) 后全部 4 步 |
+| ❌ 更新失败: Git 未安装或不在 PATH 中 | 系统找不到 `git` 命令 | [安装 Git](https://git-scm.com/download/win) 后重跑全部步骤 |
 | ❌ 更新失败: pip install failed | 依赖包下载失败（PyPI 不通） | `pip install -e "."` 重试 |
 | ❌ 更新失败: git pull / clone failed | GitHub 连不上 | 开 VPN 全局模式后重试 `git pull` |
 
@@ -536,7 +583,8 @@ python server.py
 
 ```powershell
 $env:HERMES_HOME = "$env:LOCALAPPDATA\hermes"
-python server.py
+cd $env:LOCALAPPDATA\trade\foreign-trade-assistant
+$env:LOCALAPPDATA\trade\venv\Scripts\python.exe server.py
 ```
 
 **Linux：**
