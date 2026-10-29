@@ -24,10 +24,12 @@ def _fresh_db(tmp_path: Path) -> Path:
     db = tmp_path / "trade.db"
     conn = sqlite3.connect(db)
     for table in ("companies", "trade_companies", "libraries", "customers",
-                  "customer_libraries", "conversations", "orders", "usage_ledger",
-                  "cron_job_companies", "trial_events"):
+                  "customer_libraries", "conversations", "orders", "order_items",
+                  "usage_ledger", "cron_job_companies", "trial_events"):
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
+    # 迁移 1（订单明细回填）已应用 —— 否则 init_db 会写入，理应备份
+    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'backfill_order_items')")
     conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")
     conn.execute("ALTER TABLE conversations ADD COLUMN customer_id INTEGER")
     conn.commit()

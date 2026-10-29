@@ -126,9 +126,23 @@ class CustomerDuplicateGroup(BaseModel):
 # ── Order ─────────────────────────────────────────────────────────────────────
 
 
+class OrderItemIn(BaseModel):
+    """订单明细行：一张订单可含多种商品。数量/单价/行总额为空 = 待谈。"""
+
+    product_name: str = Field(..., description="品名")
+    quantity: float | None = Field(None, description="数量（禁止负数，由端点校验）")
+    unit: str | None = Field(None, description="单位")
+    unit_price: float | None = Field(None, description="单价（禁止负数，由端点校验）")
+    currency: str | None = Field(None, description="币种（缺省取订单头）")
+    total_amount: float | None = Field(None, description="行总额（禁止负数，由端点校验）")
+    notes: str | None = Field(None, description="行备注")
+
+
 class OrderCreate(BaseModel):
     customer_id: int = Field(..., description="客户 ID")
-    product_name: str = Field(..., description="品名")
+    # 单商品订单可继续只发 product_name；多商品用 items，此时 product_name 可省略
+    product_name: str | None = Field(None, description="品名（单商品快捷写法）")
+    items: list[OrderItemIn] | None = Field(None, description="明细行（多商品）")
     order_no: str | None = Field(None, description="订单号")
     quantity: float | None = Field(None, description="数量（禁止负数，由端点校验）")
     unit: str | None = Field(None, description="单位")
@@ -144,6 +158,7 @@ class OrderCreate(BaseModel):
 class OrderUpdate(BaseModel):
     customer_id: int | None = Field(None, description="客户 ID")
     product_name: str | None = Field(None, description="品名")
+    items: list[OrderItemIn] | None = Field(None, description="明细行（整单替换）")
     order_no: str | None = Field(None, description="订单号")
     quantity: float | None = Field(None, description="数量（禁止负数，由端点校验）")
     unit: str | None = Field(None, description="单位")

@@ -158,6 +158,24 @@ CREATE TABLE IF NOT EXISTS orders (
     updated_at      TEXT    DEFAULT (datetime('now', 'localtime'))
 );
 
+-- 订单明细行：一张订单可含多种商品（外贸 PI 常态）。
+-- 这里是商品行的事实来源；orders 上的 product_name/quantity/... 是同表摘要列，
+-- 由 trade/order.py 的 _sync_order_summary 统一重算，供客户简报/搜索/列表兼容读取。
+CREATE TABLE IF NOT EXISTS order_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id        INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    position        INTEGER NOT NULL DEFAULT 0,   -- 展示顺序，小的在前
+    product_name    TEXT    NOT NULL DEFAULT '',
+    quantity        REAL,                         -- 可 NULL：待谈/未填 ≠ 0
+    unit            TEXT    DEFAULT '',
+    unit_price      REAL,                         -- 可 NULL：单价待谈
+    currency        TEXT    DEFAULT 'USD',
+    total_amount    REAL,                         -- 行总额；可 NULL
+    notes           TEXT    DEFAULT '',
+    created_at      TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at      TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS order_libraries (
     order_id   INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
@@ -201,6 +219,7 @@ CREATE INDEX IF NOT EXISTS idx_libraries_company   ON libraries(company_id);
 CREATE INDEX IF NOT EXISTS idx_customers_company    ON customers(company_id);
 CREATE INDEX IF NOT EXISTS idx_orders_company      ON orders(company_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer     ON orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_order   ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_company ON conversations(company_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_library ON conversations(library_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_created  ON conversations(created_at);
@@ -378,8 +397,8 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
 
 _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
-    "customer_libraries", "conversations", "orders", "usage_ledger",
-    "cron_job_companies", "trial_events",
+    "customer_libraries", "conversations", "orders", "order_items",
+    "usage_ledger", "cron_job_companies", "trial_events",
 })
 
 
@@ -403,6 +422,14 @@ def _needs_schema_work(conn: sqlite3.Connection) -> bool:
             return True
         # 迁移表本身不存在 → 待建
         if "schema_migrations" not in existing:
+            return True
+        # 有未应用的迁移 → 会写入数据（如订单明细回填），先备份
+        applied = {
+            row[0] for row in conn.execute(
+                "SELECT version FROM schema_migrations"
+            ).fetchall()
+        }
+        if 1 not in applied:  # keep in sync with _apply_pending_migrations
             return True
         # 备用列缺失 → ALTER TABLE（清单必须与 _add_spare_columns 保持一致）
         for table in ("companies", "trade_companies", "libraries", "customers",
@@ -506,9 +533,21 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
 
     # 定义所有已知迁移: (version, name, sql)
     migrations: list[tuple[int, str, str]] = [
-        # Future migrations go here. Example:
-        # (2, "add_customer_email_index",
-        #  "CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(contact);"),
+        # v1：订单加明细行后，把每张历史订单的平铺字段回填成一行明细。
+        # 只做一次（schema_migrations 记账）—— 做成每次启动都跑的幂等 SQL 会导致
+        # 用户主动删光明细的单子在下次启动时被"复活"。
+        (1, "backfill_order_items", """
+            INSERT INTO order_items (
+                order_id, position, product_name, quantity, unit,
+                unit_price, currency, total_amount, notes
+            )
+            SELECT o.id, 0, o.product_name, o.quantity, o.unit,
+                   o.unit_price, o.currency, o.total_amount, o.notes
+            FROM orders o
+            WHERE NOT EXISTS (
+                SELECT 1 FROM order_items i WHERE i.order_id = o.id
+            );
+        """),
     ]
 
     # 获取已应用的版本

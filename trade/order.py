@@ -117,10 +117,201 @@ def _customer_in_company(conn, customer_id: int, company_id: int) -> bool:
     return row is not None
 
 
+# ── 订单明细（一单多行商品）──────────────────────────────────────────────────
+
+
+def _prepare_items(items, currency: str = "USD") -> list[dict]:
+    """标准化明细行并逐行做金额校验（保留「单价待谈」语义）。
+
+    行级规则与订单头一致：数量/单价/总额可为 NULL；任一行无法校验就整体拒绝，
+    不落半张订单。
+    """
+    prepared: list[dict] = []
+    for idx, raw in enumerate(items or []):
+        if not isinstance(raw, dict):
+            raise ValueError("订单明细格式不正确。")
+        name = str(raw.get("product_name") or "").strip()
+        if not name:
+            raise ValueError(f"第 {idx + 1} 行商品缺少品名。")
+        qty, price, total = reconcile_amounts(
+            raw.get("quantity"), raw.get("unit_price"), raw.get("total_amount"),
+        )
+        prepared.append({
+            "position": idx,
+            "product_name": name,
+            "quantity": qty,
+            "unit": str(raw.get("unit") or ""),
+            "unit_price": price,
+            "currency": str(raw.get("currency") or currency or "USD"),
+            "total_amount": total,
+            "notes": str(raw.get("notes") or ""),
+        })
+    if not prepared:
+        raise ValueError("订单至少需要一行商品。")
+    return prepared
+
+
+def _insert_items(conn, order_id: int, items: list[dict]) -> None:
+    conn.executemany(
+        "INSERT INTO order_items (order_id, position, product_name, quantity, unit, "
+        "unit_price, currency, total_amount, notes) VALUES (?,?,?,?,?,?,?,?,?)",
+        [
+            (order_id, it["position"], it["product_name"], it["quantity"],
+             it["unit"], it["unit_price"], it["currency"],
+             it["total_amount"], it["notes"])
+            for it in items
+        ],
+    )
+
+
+def _items_for(conn, order_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM order_items WHERE order_id = ? ORDER BY position, id",
+        (order_id,),
+    ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def _attach_items(conn, orders: list[dict]) -> list[dict]:
+    """批量挂上 items（一次查询，避免 N+1）。"""
+    if not orders:
+        return orders
+    ids = [int(o["id"]) for o in orders]
+    by_order: dict[int, list[dict]] = {oid: [] for oid in ids}
+    placeholders = ",".join("?" for _ in ids)
+    for row in conn.execute(
+        f"SELECT * FROM order_items WHERE order_id IN ({placeholders}) "
+        "ORDER BY order_id, position, id",
+        ids,
+    ).fetchall():
+        by_order[int(row["order_id"])].append(_row_to_dict(row))
+    for o in orders:
+        o["items"] = by_order.get(int(o["id"]), [])
+    return orders
+
+
+def _sync_order_summary(conn, order_id: int) -> None:
+    """把明细汇总回 orders 的摘要列（客户简报 / 搜索 / 列表 / 旧 UI 都读这里）。
+
+    口径：
+    - 单行：五列直接取该行。
+    - 多行：品名取前 3 项拼接（超出加「等N项」）；数量仅在各行单位一致且都有数量
+      时求和，否则 NULL/空（避免把「套」和「米」加在一起）；单价多行一律 NULL
+      （行级单价才有意义）；总额**仅当所有行都有总额**时求和 —— 任一行待谈就
+      留 NULL，绝不展示部分合计。
+    """
+    rows = conn.execute(
+        "SELECT * FROM order_items WHERE order_id = ? ORDER BY position, id",
+        (order_id,),
+    ).fetchall()
+    if not rows:
+        return
+
+    if len(rows) == 1:
+        it = rows[0]
+        summary = (
+            it["product_name"], it["quantity"], it["unit"] or "",
+            it["unit_price"], it["total_amount"],
+        )
+    else:
+        names = [str(it["product_name"]) for it in rows[:3]]
+        name = " / ".join(names)
+        if len(rows) > 3:
+            name += f" 等{len(rows)}项"
+        units = {str(it["unit"] or "") for it in rows}
+        quantities = [it["quantity"] for it in rows]
+        if len(units) == 1 and all(q is not None for q in quantities):
+            qty: float | None = sum(float(q) for q in quantities)
+            unit = units.pop()
+        else:
+            qty, unit = None, ""
+        totals = [it["total_amount"] for it in rows]
+        total = (
+            sum(float(t) for t in totals)
+            if all(t is not None for t in totals) else None
+        )
+        summary = (name, qty, unit, None, total)
+
+    conn.execute(
+        "UPDATE orders SET product_name = ?, quantity = ?, unit = ?, "
+        "unit_price = ?, total_amount = ?, "
+        "updated_at = datetime('now','localtime') WHERE id = ?",
+        (*summary, order_id),
+    )
+
+
+_ITEM_FLAT_FIELDS = ("product_name", "quantity", "unit", "unit_price", "total_amount")
+
+
+def _apply_flat_fields_to_items(conn, order_id: int, existing, updates: dict) -> None:
+    """兼容旧 UI 的平铺金额：把字段落到明细行，不让头/行两处各自为政。
+
+    - 0 条明细（历史直插或迁移前数据）→ 用合并后的平铺值惰性补一行；
+    - 恰好 1 条 → 平铺字段落到该行；
+    - 多行 → 平铺字段与当前摘要一致就忽略（旧 UI 会全量 PUT），不一致直接拒绝，
+      避免「改了一个头的金额」把多行明细的语义弄坏。
+    """
+    flat = {k: updates[k] for k in _ITEM_FLAT_FIELDS if k in updates}
+    if not flat:
+        return
+    rows = conn.execute(
+        "SELECT * FROM order_items WHERE order_id = ? ORDER BY position, id",
+        (order_id,),
+    ).fetchall()
+    if len(rows) > 1:
+        for key, value in flat.items():
+            if not _amounts_equal(existing[key], value):
+                raise ValueError(
+                    "这是多商品订单，请按行修改明细，不要直接改订单头的合计字段。"
+                )
+        return
+    if not rows:
+        merged = {
+            "product_name": flat.get("product_name", existing["product_name"]),
+            "quantity": flat.get("quantity", existing["quantity"]),
+            "unit": flat.get("unit", existing["unit"] or ""),
+            "unit_price": flat.get("unit_price", existing["unit_price"]),
+            "total_amount": flat.get("total_amount", existing["total_amount"]),
+        }
+        conn.execute(
+            "INSERT INTO order_items (order_id, position, product_name, quantity, "
+            "unit, unit_price, currency, total_amount) VALUES (?,?,?,?,?,?,?,?)",
+            (order_id, 0, merged["product_name"], merged["quantity"], merged["unit"],
+             merged["unit_price"], existing["currency"], merged["total_amount"]),
+        )
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in flat)
+    conn.execute(
+        f"UPDATE order_items SET {set_clause}, updated_at = datetime('now','localtime') "
+        "WHERE order_id = ?",
+        [*flat.values(), order_id],
+    )
+
+
+def _amounts_equal(a, b) -> bool:
+    """0 与 NULL 视为等价（历史数据两种写法混用）。"""
+    def _key(v):
+        if v is None:
+            return None
+        try:
+            number = float(v)
+        except (TypeError, ValueError):
+            return v
+        return None if number == 0 else number
+
+    ka, kb = _key(a), _key(b)
+    if ka is None or kb is None:
+        return ka is None and kb is None
+    try:
+        return abs(float(ka) - float(kb)) <= 1e-6
+    except (TypeError, ValueError):
+        return ka == kb
+
+
 def create(
     company_id: int,
     customer_id: int,
-    product_name: str,
+    product_name: str = "",
     *,
     order_no: str = "",
     quantity: float | None = None,
@@ -132,23 +323,45 @@ def create(
     delivery_date: str = "",
     payment_terms: str = "",
     notes: str = "",
+    items: list[dict] | None = None,
 ) -> dict:
-    """创建一条订单记录。校验 customer 必须属于指定公司。"""
+    """创建一条订单（订单头 + 明细行）。校验 customer 必须属于指定公司。
+
+    `items` 缺省时用平铺字段构造一行，兼容旧调用方。
+    """
     conn = get_connection()
     try:
         if not _customer_in_company(conn, customer_id, company_id):
             raise ValueError(f"customer {customer_id} does not belong to company {company_id}")
+        if items is None:
+            items = [{
+                "product_name": product_name,
+                "quantity": quantity,
+                "unit": unit,
+                "unit_price": unit_price,
+                "total_amount": total_amount,
+                "currency": currency,
+            }]
+        prepared = _prepare_items(items, currency)
+        conn.execute("BEGIN IMMEDIATE")
         cur = conn.execute(
             "INSERT INTO orders (company_id, customer_id, order_no, product_name, "
             "quantity, unit, unit_price, currency, total_amount, status, "
             "delivery_date, payment_terms, notes) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (company_id, customer_id, order_no, product_name,
-             quantity, unit, unit_price, currency, total_amount, status,
+            (company_id, customer_id, order_no, prepared[0]["product_name"],
+             prepared[0]["quantity"], prepared[0]["unit"], prepared[0]["unit_price"],
+             currency, prepared[0]["total_amount"], status,
              delivery_date, payment_terms, notes),
         )
+        order_id = cur.lastrowid
+        _insert_items(conn, order_id, prepared)
+        _sync_order_summary(conn, order_id)
         conn.commit()
-        return get(cur.lastrowid, company_id=company_id)
+        return get(order_id, company_id=company_id)
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -167,7 +380,7 @@ def list_by_customer(customer_id: int, *, company_id: int | None = None) -> list
             "ORDER BY created_at DESC",
             (customer_id, company_id),
         ).fetchall()
-        return [_row_to_dict(r) for r in rows]
+        return _attach_items(conn, [_row_to_dict(r) for r in rows])
     finally:
         conn.close()
 
@@ -180,7 +393,7 @@ def list_by_company(company_id: int, limit: int = 50) -> list[dict]:
             "SELECT * FROM orders WHERE company_id = ? ORDER BY created_at DESC LIMIT ?",
             (company_id, limit),
         ).fetchall()
-        return [_row_to_dict(r) for r in rows]
+        return _attach_items(conn, [_row_to_dict(r) for r in rows])
     finally:
         conn.close()
 
@@ -195,15 +408,23 @@ def get(order_id: int, *, company_id: int | None = None) -> dict | None:
             "SELECT * FROM orders WHERE id = ? AND company_id = ?",
             (order_id, company_id),
         ).fetchone()
-        return _row_to_dict(row) if row else None
+        if not row:
+            return None
+        data = _row_to_dict(row)
+        data["items"] = _items_for(conn, order_id)
+        return data
     finally:
         conn.close()
 
 
-def update(order_id: int, *, company_id: int | None = None, **kwargs) -> dict | None:
+def update(
+    order_id: int, *, company_id: int | None = None,
+    items: list[dict] | None = None, **kwargs,
+) -> dict | None:
     """部分更新订单字段（必须限定公司；缺失时 fail-closed，审计 P2-30）。
 
     如果传入了 customer_id，校验新 customer 必须属于同一公司。
+    传 `items` = 整单替换明细；不传则按平铺字段落到明细行（兼容旧 UI）。
     """
     if company_id is None:
         return None
@@ -215,7 +436,7 @@ def update(order_id: int, *, company_id: int | None = None, **kwargs) -> dict | 
         k: v for k, v in kwargs.items()
         if k in allowed and (v is not None or k in CLEARABLE_FIELDS)
     }
-    if not updates:
+    if items is None and not updates:
         return get(order_id, company_id=company_id)
 
     conn = get_connection()
@@ -225,22 +446,43 @@ def update(order_id: int, *, company_id: int | None = None, **kwargs) -> dict | 
         # SQLite 抛 SQLITE_BUSY_SNAPSHOT 且**不重试**（busy_timeout 不生效），
         # 并发下必然 "database is locked"（2026-10-21 实测）。
         conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM orders WHERE id = ? AND company_id = ?",
+            (order_id, company_id),
+        ).fetchone()
+        if not existing:
+            conn.rollback()
+            return None
         # 如果更新了 customer_id，校验新客户归属
         if "customer_id" in updates:
             if not _customer_in_company(conn, updates["customer_id"], company_id):
                 conn.rollback()
                 return None
 
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [order_id, company_id]
-        n = conn.execute(
-            f"UPDATE orders SET {set_clause}, updated_at = datetime('now','localtime') "
-            "WHERE id = ? AND company_id = ?",
-            values,
-        ).rowcount
-        if n == 0:
-            conn.rollback()
-            return None
+        if items is not None:
+            # 整单替换：删+插+重算摘要，同一事务
+            prepared = _prepare_items(
+                items, updates.get("currency") or existing["currency"],
+            )
+            conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
+            _insert_items(conn, order_id, prepared)
+        else:
+            # 兼容旧 UI：平铺金额落到明细行（0/1/多行三种情形见函数说明）
+            _apply_flat_fields_to_items(conn, order_id, existing, updates)
+
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            values = list(updates.values()) + [order_id, company_id]
+            n = conn.execute(
+                f"UPDATE orders SET {set_clause}, updated_at = datetime('now','localtime') "
+                "WHERE id = ? AND company_id = ?",
+                values,
+            ).rowcount
+            if n == 0:
+                conn.rollback()
+                return None
+
+        _sync_order_summary(conn, order_id)
         conn.commit()
         return get(order_id, company_id=company_id)
     except Exception:
@@ -437,14 +679,20 @@ def _contact_mentioned(contact: str, query: str) -> bool:
 def _search_by_customer_and_product(customer_id: int, product_kw: str, limit: int = 5) -> list[dict]:
     # 转义 LIKE 通配符，防止产品名中的 % 或 _ 匹配意外行
     safe_kw = product_kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{safe_kw}%"
     conn = get_connection()
     try:
+        # 摘要列只含前 3 项品名 —— 多行订单靠 EXISTS 兜底匹配任意一行
         rows = conn.execute(
-            "SELECT * FROM orders WHERE customer_id = ? AND product_name LIKE ? ESCAPE '\\' "
-            "ORDER BY created_at DESC LIMIT ?",
-            (customer_id, f"%{safe_kw}%", limit),
+            "SELECT * FROM orders o WHERE o.customer_id = ? AND ("
+            "  o.product_name LIKE ? ESCAPE '\\' OR EXISTS ("
+            "    SELECT 1 FROM order_items i WHERE i.order_id = o.id "
+            "    AND i.product_name LIKE ? ESCAPE '\\'"
+            "  )"
+            ") ORDER BY o.created_at DESC LIMIT ?",
+            (customer_id, pattern, pattern, limit),
         ).fetchall()
-        return [_row_to_dict(r) for r in rows]
+        return _attach_items(conn, [_row_to_dict(r) for r in rows])
     finally:
         conn.close()
 
@@ -456,7 +704,7 @@ def _search_by_customer(customer_id: int, limit: int = 10) -> list[dict]:
             "SELECT * FROM orders WHERE customer_id = ? ORDER BY created_at DESC LIMIT ?",
             (customer_id, limit),
         ).fetchall()
-        return [_row_to_dict(r) for r in rows]
+        return _attach_items(conn, [_row_to_dict(r) for r in rows])
     finally:
         conn.close()
 
@@ -473,8 +721,29 @@ def _search_by_company(company_id: int, limit: int = 20) -> list[dict]:
         conn.close()
 
 
+def _format_price_part(unit_price, currency: str) -> str | None:
+    """单价文字。无单价时**必须明写待谈**，否则模型会用 总额÷数量 反推。"""
+    if unit_price:
+        return f"单价 {unit_price} {currency}"
+    if unit_price is None:
+        return "单价待谈"
+    return "单价待谈（旧数据，单价未填）"
+
+
+def _format_item_line(item: dict, currency: str) -> str:
+    parts = [f"    · {item.get('product_name') or '（未填品名）'}"]
+    if item.get("quantity") is not None:
+        parts.append(f"{item['quantity']}{item.get('unit') or ''}")
+    price = _format_price_part(item.get("unit_price"), currency)
+    if price:
+        parts.append(price)
+    if item.get("total_amount") is not None:
+        parts.append(f"行总额 {item['total_amount']} {currency}")
+    return " · ".join(parts)
+
+
 def _format_order_context(rows: list[dict], cust: dict | None = None, product_kw: str = "") -> str | None:
-    """将订单列表格式化为 LLM 可读的上下文文本。"""
+    """将订单列表格式化为 LLM 可读的上下文文本（多商品订单逐行列出）。"""
     if not rows:
         return None
 
@@ -486,20 +755,40 @@ def _format_order_context(rows: list[dict], cust: dict | None = None, product_kw
 
     lines.append("")
     for o in rows:
+        currency = o.get("currency") or "USD"
+        items = o.get("items") or []
+        if items:
+            head = f"  [{o['status']}] {len(items)} 项商品"
+            if o.get("order_no"):
+                head += f" · 订单号 {o['order_no']}"
+            lines.append(head)
+            for item in items:
+                lines.append(_format_item_line(item, item.get("currency") or currency))
+            if o.get("total_amount") is not None:
+                lines.append(f"    合计 {o['total_amount']} {currency}")
+            else:
+                # 任一行待谈 → 头合计为 NULL；明说，别让模型自己加总
+                lines.append("    合计：待谈（有行未定价）")
+            if o.get("delivery_date"):
+                lines.append(f"    交期: {o['delivery_date']}")
+            if o.get("created_at"):
+                lines.append(f"    创建: {o['created_at'][:10]}")
+            continue
+
+        # 无明细行（迁移前数据 / 直接 SQL 写入）：回退单行格式
         parts = [f"  [{o['status']}] {o['product_name']}"]
         if o.get("quantity"):
             parts.append(f"{o['quantity']}{o.get('unit','')}")
         if o.get("unit_price"):
-            parts.append(f"单价 {o['unit_price']} {o.get('currency','USD')}")
+            parts.append(f"单价 {o['unit_price']} {currency}")
         elif o.get("quantity") or o.get("total_amount"):
-            # 有数量或总额却没有单价 = 待谈；0 是旧数据（历史里 0 与"未填"混用）。
-            # 必须明写，否则模型会自己用 总额 ÷ 数量 反推一个不存在的单价。
+            # 有数量或总额却没有单价 = 待谈；0 是旧数据（历史里 0 与"未填"混用）
             parts.append(
                 "单价待谈" if o.get("unit_price") is None
                 else "单价待谈（旧数据，单价未填）"
             )
         if o.get("total_amount"):
-            parts.append(f"总金额 {o['total_amount']} {o.get('currency','USD')}")
+            parts.append(f"总金额 {o['total_amount']} {currency}")
         if o.get("order_no"):
             parts.append(f"订单号: {o['order_no']}")
         if o.get("delivery_date"):

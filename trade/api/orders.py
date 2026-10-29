@@ -56,6 +56,18 @@ def _reject_negatives(values: dict) -> None:
         )
 
 
+def _reject_negative_items(items: list[dict]) -> None:
+    """明细行逐行拒负数，报错指名第几行，方便用户定位。"""
+    for idx, item in enumerate(items, start=1):
+        for key, label in _NUMERIC_LABELS.items():
+            value = item.get(key)
+            if isinstance(value, (int, float)) and value < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"第 {idx} 行{label}不能为负数，请修正后重试。",
+                )
+
+
 @router.get("/orders")
 def list_orders(cid: int = Depends(require_company)):
     """列出当前公司的所有订单。"""
@@ -74,7 +86,10 @@ def list_customer_orders(customer_id: int, cid: int = Depends(require_company)):
 
 @router.post("/orders")
 def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
-    """创建订单。校验客户归属 + 金额一致性（总金额为空时自动算出）。"""
+    """创建订单。校验客户归属 + 金额一致性（总金额为空时自动算出）。
+
+    多商品用 items；只发平铺字段 = 单商品订单（兼容旧前端）。
+    """
     from trade import customer as cust_module
     c = cust_module.get(payload.customer_id, company_id=cid)
     if not c:
@@ -85,6 +100,29 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
             status_code=400,
             detail="新建订单不能直接设置为已完成或已取消，请先按正常流程创建。",
         )
+
+    items = (
+        [item.model_dump() for item in payload.items]
+        if payload.items is not None else None
+    )
+    if items is not None:
+        if not items:
+            raise HTTPException(status_code=400, detail="订单至少需要一行商品。")
+        _reject_negative_items(items)
+        return order_module.create(
+            company_id=cid,
+            customer_id=payload.customer_id,
+            order_no=payload.order_no or "",
+            currency=payload.currency or "USD",
+            status=payload.status or "报价中",
+            delivery_date=payload.delivery_date or "",
+            payment_terms=payload.payment_terms or "",
+            notes=payload.notes or "",
+            items=items,
+        )
+
+    if not (payload.product_name or "").strip():
+        raise HTTPException(status_code=400, detail="请填写品名，或至少添加一行商品。")
     _reject_negatives({
         "quantity": payload.quantity,
         "unit_price": payload.unit_price,
@@ -134,12 +172,19 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
     if not existing:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    # items 显式传列表 = 整单替换明细；传 null / 不传 = 走平铺字段兼容路径
+    items = changes.pop("items", None)
+
     # 非可清空字段传 null = 未提供，直接丢掉（避免把 product_name 写成 NULL）。
     # 金额字段在 CLEARABLE_FIELDS 里：显式 null 表示"清空 / 待谈"，必须保留。
     for key in list(changes):
         if changes[key] is None and key not in order_module.CLEARABLE_FIELDS:
             changes.pop(key)
     _reject_negatives(changes)
+    if items is not None:
+        if not items:
+            raise HTTPException(status_code=400, detail="订单至少需要一行商品。")
+        _reject_negative_items(items)
 
     new_status = changes.get("status")
     if new_status and not order_module.can_transition_status(existing.get("status") or "", new_status):
@@ -150,7 +195,8 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
 
     # 只有真的改了金额才校验：旧记录本就可能不一致，改备注不该被它挡住。
     # 前端 PUT 会发全量 body，所以必须按"合并后 vs 库内"判断，不能只看字段是否出现。
-    if {"quantity", "unit_price", "total_amount"} & changes.keys():
+    # 传了 items 时金额由 order.py 逐行校验，这里不再按头级合并。
+    if items is None and {"quantity", "unit_price", "total_amount"} & changes.keys():
         merged = (
             changes.get("quantity", existing.get("quantity")),
             changes.get("unit_price", existing.get("unit_price")),
@@ -173,7 +219,13 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
                 raise HTTPException(status_code=400, detail=str(exc))
             changes.update(quantity=qty, unit_price=price, total_amount=total)
 
-    result = order_module.update(order_id, company_id=cid, **changes)
+    try:
+        result = order_module.update(
+            order_id, company_id=cid, items=items, **changes,
+        )
+    except ValueError as exc:
+        # 明细行校验（品名缺失 / 多商品单改头级金额）→ 400，不是 500
+        raise HTTPException(status_code=400, detail=str(exc))
     if not result:
         raise HTTPException(status_code=404, detail="Order not found")
     return result

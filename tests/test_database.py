@@ -40,7 +40,8 @@ class TestSchemaCreation:
         ).fetchall()
         table_names = {t[0] for t in tables}
         expected = {"companies", "trade_companies", "libraries", "customers",
-                    "customer_libraries", "conversations"}
+                    "customer_libraries", "conversations",
+                    "orders", "order_items"}
         assert expected.issubset(table_names), f"Missing tables: {expected - table_names}"
 
         # 验证索引
@@ -51,7 +52,7 @@ class TestSchemaCreation:
         expected_indexes = {
             "idx_libraries_company", "idx_customers_company",
             "idx_conversations_company", "idx_conversations_library",
-            "idx_conversations_created",
+            "idx_conversations_created", "idx_order_items_order",
         }
         assert expected_indexes.issubset(index_names), \
             f"Missing indexes: {expected_indexes - index_names}"
