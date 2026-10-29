@@ -299,19 +299,22 @@ class TestGuardDeploymentCheck:
         assert state["hooks"] is False
         assert state["ok"] is False
 
-    def test_chat_blocked_when_host_lacks_hooks(self, tmp_path, monkeypatch):
+    def test_chat_not_blocked_when_host_lacks_hooks(self, tmp_path, monkeypatch):
+        """2026-10-29 起硬阻断降级为只警告：钩子能力缺失也不再拦聊天。"""
         bootstrap = self._home(tmp_path, monkeypatch)
         self._marker(tmp_path, monkeypatch)
         g.report_hook_support(False)
-        reason = bootstrap.tool_guard_chat_block_reason()
-        assert reason and "升级 Hermes" in reason
+        # 告警仍在（就绪状态依旧非 ok），但不允许再阻断聊天
+        assert bootstrap.verify_tool_guard_ready()["ok"] is False
+        assert bootstrap.tool_guard_chat_block_reason() is None
 
-    def test_chat_blocked_when_plugin_missing(self, tmp_path, monkeypatch):
+    def test_chat_not_blocked_when_plugin_missing(self, tmp_path, monkeypatch):
+        """插件未部署同样只警告不拦截（老用户更新后必须能继续聊天）。"""
         bootstrap = self._home(tmp_path, monkeypatch, deployed=False)
         self._marker(tmp_path, monkeypatch)
         g.report_hook_support(True)
-        reason = bootstrap.tool_guard_chat_block_reason()
-        assert reason and "插件未部署" in reason
+        assert bootstrap.verify_tool_guard_ready()["ok"] is False
+        assert bootstrap.tool_guard_chat_block_reason() is None
 
     def test_chat_allowed_when_ready(self, tmp_path, monkeypatch):
         bootstrap = self._home(tmp_path, monkeypatch)
