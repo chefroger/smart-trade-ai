@@ -83,22 +83,30 @@ class TestUserPathsWiring:
         src = _read_source("trade/api/chat.py")
         assert src.count("_classify_user_paths(query, cid)") == 2
         assert src.count("user_paths=user_paths") == 2
-        assert src.count("pending_paths=pending_paths") == 2
+        # 2026-10-29：贴出即授权，不再有「待确认」清单
+        assert "pending_paths" not in src
         assert "_external_paths_hint" in src
         assert "不要复述密码、密钥、token 原文" in src
 
 
 class TestStatusExposesToolGuard:
     def test_status_reports_tool_guard(self):
-        """守卫缺席要能被前端看见：/api/status 必须上报其状态。"""
+        """守卫状态仍上报 /api/status（诊断用，前端不再据此弹 toast）。"""
         src = _read_source("trade/app.py")
         assert '"tool_guard": tool_guard' in src
         assert "verify_tool_guard_ready" in src
 
-    def test_both_chat_endpoints_block_when_guard_unavailable(self):
-        """守卫确定不可用时聊天必须阻断（同步 + 流式各一处）。"""
+    def test_chat_gate_never_blocks(self):
+        """2026-10-29 起门控恒放行：两处调用点保留，但函数体只剩 return None。"""
         src = _read_source("trade/api/chat.py")
         assert src.count("tool_guard_chat_block_reason()") == 2
+        boot = _read_source("trade/bootstrap.py")
+        start = boot.index("def tool_guard_chat_block_reason() -> str | None:")
+        body = boot[start : boot.index("\n\ndef ", start)]
+        # 不再读任何状态、不再拼阻断文案，函数体只剩一条 return None
+        assert "state[" not in body
+        assert "聊天已暂停" not in body
+        assert body.rstrip().endswith("return None")
 
 
 class TestTokenNotLogged:

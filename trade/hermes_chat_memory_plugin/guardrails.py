@@ -1,30 +1,28 @@
-"""工具层守卫：文件路径白名单 + 命令白名单（审计 P1-3 / P1-20）。
+"""工具层守卫（默认关闭，`TRADE_TOOL_GUARD=strict` 才启用）。
 
-为什么必须放在插件钩子里：Trade 不改 Hermes，也不能依赖 prompt 约束 ——
-客户消息里的提示注入可以让模型直接调 `read_file("/etc/passwd")` 或
-`terminal("curl ... | sh")`。Hermes 提供 `pre_tool_call` 钩子，返回
-`{"action": "block", "message": ...}` 就能在工具执行前否决（YOLO 模式也挡得住）。
+2026-10-29 Lau 决定：**默认不拦截任何工具调用**。理由：用户是在自己电脑上
+操作自己的数据，把 agent 关进公司目录的白名单盒子只会限制用户自己 ——
+桌面 / 下载里的合同、报价单本来就是用户自己的文件，却要先打一句
+「确认读取 <路径>」才能让 AI 看，属于自己给自己上锁。守卫代码保留，需要
+收紧的机器可显式开启：`TRADE_TOOL_GUARD=strict`（兼容 on/1/true/yes）。
 
-规则（默认开启，`TRADE_TOOL_GUARD=off` 可关闭）：
+strict 模式下（审计 P1-3 / P1-20 的原规则）：
 
 - `read_file` / `write_file` / `patch` / `search_files`：`path` 必须落在当前
   公司白名单根目录内（公司数据目录、工作目录、本公司文档库）。缺 path、
-  相对路径、未绑定公司 → 一律拒绝（fail-closed）。
+  相对路径、未绑定公司 → 拒绝（fail-closed）。
+- 用户本轮亲手贴出的外部文件：只读放行（精确文件），不再要求二次确认。
 - `write_file` / `patch` 额外拒绝两类高敏文件：公司 identity
   (`companies/{slug}/agent-identity.md`) 与公司 prompts 目录下的 `*.md`
-  —— 它们在白名单根内，但运行时会作为系统提示读入，允许改写等于允许持久化
-  提示注入。
+  —— 它们在白名单根内，但运行时会作为系统提示读入。
 - `vision_analyze`：`image_url` 为 http(s)/data URL 时放行；本地路径（含
   `file://`）与文件工具同一套白名单校验。
-- `terminal`：只放行 `python -m trade.osint …` / `trade osint …`（技能里唯一
-  需要的命令）；含 shell 元字符（; & | < > ` $() 换行）的一律拒绝。
-- `execute_code`：拒绝（技能不依赖，任意 Python 等于无沙箱）。
+- `terminal`：只放行 `python -m trade.osint …` / `trade osint …`；含 shell
+  元字符（; & | < > ` $() 换行）的一律拒绝。
+- `execute_code`：拒绝。
 
-残留（未覆盖，如实记录）：`browser` 工具可能导航本地/下载文件；
-未绑定公司的运行（如 Gateway 里的 cron）没有公司上下文，文件访问退化为
-「所有活跃公司白名单目录的并集」—— 仍挡住系统路径，但无法区分公司。
-守卫随插件加载而生效：插件未部署/未启用或旧版 Hermes 无 `register_hook`
-时整套规则缺席，启动自检见 `trade.bootstrap.verify_tool_guard_ready`。
+未启用时 `check_tool_call()` 恒返回 None（放行），钩子本身零副作用。
+`trade.bootstrap.verify_tool_guard_ready()` 只在 strict 模式下才打印告警。
 """
 
 from __future__ import annotations
@@ -63,10 +61,14 @@ _ALLOWED_ARGV_PREFIXES = (
 _SHELL_META = (";", "&", "|", "<", ">", "`", "$", "\n", "\r")
 
 
-def guard_enabled() -> bool:
-    """`TRADE_TOOL_GUARD` 关闭值：off/0/false/no（大小写不敏感）；其余视为开启。"""
+def strict_mode() -> bool:
+    """只有显式要求才开启守卫：`TRADE_TOOL_GUARD=strict`（或 on/1/true/yes）。
+
+    默认（未设置 / 其它值）返回 False —— 用户自己的电脑、自己的数据，
+    不替用户设限。大小写不敏感。
+    """
     raw = os.environ.get("TRADE_TOOL_GUARD", "").strip().lower()
-    return raw not in {"off", "0", "false", "no"}
+    return raw in {"strict", "on", "1", "true", "yes"}
 
 
 # ── 宿主钩子能力标记 ─────────────────────────────────────────────────────
@@ -185,25 +187,6 @@ def _user_pasted_file(raw: str) -> bool:
     return str(resolved) in allowed
 
 
-def _pending_pasted_path(raw: str) -> bool:
-    """用户贴了、但还没确认的公司外路径 → 给出确认指引。"""
-    try:
-        from trade.agent_context import current_pending_paths
-
-        pending = current_pending_paths()
-    except Exception:
-        return False
-    if not pending:
-        return False
-    try:
-        resolved = Path(raw).expanduser().resolve()
-        if not resolved.is_file():
-            return False
-    except (OSError, ValueError):
-        return False
-    return str(resolved) in pending
-
-
 def _is_sensitive_write_target(path: Path, roots: list[Path]) -> bool:
     """白名单根内、但一旦可写就会变成持久化提示注入的文件。
 
@@ -258,17 +241,10 @@ def _check_file_path(tool_name: str, args: dict) -> dict | None:
             f"trade 工具守卫：只接受绝对路径，收到相对路径 {candidate!r}。"
             "请使用 Trade Context / 文档库中给出的绝对路径。"
         )
-    # W7：用户本轮亲手贴出的文件 → 只读放行（精确文件；写/执行不走这里）。
-    # 公司外文件先回待确认，提示用户如何授权。
-    if tool_name in _READ_ONLY_ALLOWLIST_TOOLS:
-        if _user_pasted_file(candidate):
-            return None
-        if _pending_pasted_path(candidate):
-            return _block(
-                f"trade 工具守卫：{candidate} 在当前公司目录之外，本轮尚未确认。"
-                f"请用户回复「确认读取 {candidate}」后重试 —— "
-                "确认只授权本轮只读，不会把这些文件归属到本公司的数据或历史。"
-            )
+    # 用户本轮亲手贴出的文件 → 只读放行（精确文件；写/执行不走这里）。
+    # 2026-10-29：不再要求「确认读取」二次确认 —— 用户贴出来本身就是授权。
+    if tool_name in _READ_ONLY_ALLOWLIST_TOOLS and _user_pasted_file(candidate):
+        return None
 
     company_id = _current_company_id()
     roots = _allowed_roots(company_id)
@@ -325,8 +301,11 @@ def _check_terminal(args: dict) -> dict | None:
 
 
 def check_tool_call(tool_name: str, args: dict | None) -> dict | None:
-    """返回 block 指令或 None（放行）。纯函数，便于单测。"""
-    if not guard_enabled():
+    """返回 block 指令或 None（放行）。纯函数，便于单测。
+
+    默认放行一切；只有 `TRADE_TOOL_GUARD=strict` 时才走下面的白名单规则。
+    """
+    if not strict_mode():
         return None
     if tool_name == "execute_code":
         return _block(
@@ -347,4 +326,7 @@ def on_pre_tool_call(tool_name: str = "", args=None, **_kw) -> dict | None:
     try:
         return check_tool_call(tool_name, args if isinstance(args, dict) else {})
     except Exception:
-        return _block("trade 工具守卫：内部异常，已拒绝本次工具调用。")
+        # strict 模式 fail-closed；默认模式放行 —— 守卫自己的 bug 不能把聊天锁死
+        if strict_mode():
+            return _block("trade 工具守卫：内部异常，已拒绝本次工具调用。")
+        return None

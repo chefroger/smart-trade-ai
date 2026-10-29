@@ -1,11 +1,13 @@
-"""工具层守卫：文件路径白名单 + 命令白名单（审计 P1-3 / P1-20）。
+"""工具层守卫（默认关闭；`TRADE_TOOL_GUARD=strict` 才启用）。
 
-Trade 不改 Hermes，靠插件 `pre_tool_call` 钩子在工具执行前否决：
+2026-10-29 Lau 决定：用户在自己电脑上操作自己的数据，守卫默认**不拦任何工具**。
+下面 strict 模式的白名单规则仍被测到，但只在显式开启时生效。
+
+strict 模式下（审计 P1-3 / P1-20 的原规则）：
 - 文件四工具（read_file/write_file/patch/search_files）的 path 必须在公司白名单内；
+- 用户本轮亲手贴出的外部文件只读放行（不再二次确认）；
 - terminal 只放行 OSINT 判定命令，且拒绝 shell 元字符；
-- execute_code 永久拒绝。
-
-fail-closed：未绑定公司、路径解析失败、钩子内部异常都按"拒绝"处理。
+- execute_code 拒绝。
 """
 
 from __future__ import annotations
@@ -22,13 +24,36 @@ from trade.hermes_chat_memory_plugin import guardrails as g
 
 @pytest.fixture
 def roots(tmp_path, monkeypatch):
-    """把白名单固定成 tmp_path，避免读真实 DB。"""
+    """把白名单固定成 tmp_path，并显式开启 strict 模式（守卫默认关闭）。"""
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     monkeypatch.setattr(g, "_current_company_id", lambda: 1)
     monkeypatch.setattr(g, "_allowed_roots", lambda cid: [allowed.resolve()])
-    monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+    monkeypatch.setenv("TRADE_TOOL_GUARD", "strict")
     return allowed
+
+
+class TestDefaultOff:
+    """默认不拦：用户自己的电脑、自己的数据。"""
+
+    def test_default_allows_everything(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        outside = tmp_path / "桌面合同.txt"
+        outside.write_text("x", encoding="utf-8")
+        # 公司外文件、任意命令、execute_code 全部放行
+        assert g.check_tool_call("read_file", {"path": str(outside)}) is None
+        assert g.check_tool_call("write_file", {"path": str(outside)}) is None
+        assert g.check_tool_call("terminal", {"command": "ls -la ~"}) is None
+        assert g.check_tool_call("execute_code", {"code": "print(1)"}) is None
+        assert g.strict_mode() is False
+
+    def test_hook_exception_does_not_block_by_default(self, monkeypatch):
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.setattr(
+            g, "check_tool_call",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        assert g.on_pre_tool_call("read_file", {"path": "/tmp/x"}) is None
 
 
 class TestFileTools:
@@ -54,6 +79,7 @@ class TestFileTools:
         assert "绝对路径" in verdict["message"]
 
     def test_unbound_company_blocked(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TRADE_TOOL_GUARD", "strict")
         monkeypatch.setattr(g, "_current_company_id", lambda: None)
         monkeypatch.setattr(g, "_allowed_roots", lambda cid: [])
         verdict = g.check_tool_call("read_file", {"path": str(tmp_path / "a.txt")})
@@ -120,9 +146,10 @@ class TestOtherToolsAndEscapes:
     def test_web_tool_passes(self, roots):
         assert g.check_tool_call("web_search", {"query": "acme"}) is None
 
-    def test_guard_can_be_disabled(self, roots, monkeypatch):
-        monkeypatch.setenv("TRADE_TOOL_GUARD", "off")
-        assert g.check_tool_call("execute_code", {"code": "x"}) is None
+    def test_any_non_strict_value_keeps_guard_off(self, roots, monkeypatch):
+        for value in ("off", "", "0", "false", "no"):
+            monkeypatch.setenv("TRADE_TOOL_GUARD", value)
+            assert g.check_tool_call("execute_code", {"code": "x"}) is None, value
 
     def test_hook_never_raises(self, roots, monkeypatch):
         monkeypatch.setattr(
@@ -277,8 +304,13 @@ class TestGuardDeploymentCheck:
         bootstrap = self._home(tmp_path, monkeypatch, disabled=True)
         assert bootstrap.verify_tool_guard_ready()["ok"] is False
 
-    def test_announce_prints_visible_warning(self, tmp_path, monkeypatch, capsys):
+    def test_announce_prints_visible_warning_only_in_strict(self, tmp_path, monkeypatch, capsys):
+        """strict 模式才告警；默认关闭时不刷 stderr。"""
         bootstrap = self._home(tmp_path, monkeypatch, deployed=False)
+        bootstrap.verify_tool_guard_ready(announce=True)
+        assert "工具安全守卫未生效" not in capsys.readouterr().err
+
+        monkeypatch.setenv("TRADE_TOOL_GUARD", "strict")
         bootstrap.verify_tool_guard_ready(announce=True)
         err = capsys.readouterr().err
         assert "工具安全守卫未生效" in err
@@ -417,31 +449,19 @@ class TestUserPastedPaths:
         text = f"以下是转发的原始邮件\n\n发件人: Bob\n附件路径 {f}"
         assert extract_user_paths(text) == []
 
-    def test_pending_path_gives_confirm_hint(self, roots, tmp_path):
+    def test_pasted_external_file_allowed_without_confirm(self, roots, tmp_path):
+        """贴出即授权：strict 模式下也不再要求「确认读取」二次往返。"""
         from trade.agent_context import bind_company
 
         f = tmp_path / "outside.txt"
         f.write_text("x", encoding="utf-8")
-        with bind_company(1, None, user_paths=(), pending_paths=[str(f.resolve())]):
-            verdict = g.check_tool_call("read_file", {"path": str(f)})
-        assert verdict and verdict["action"] == "block"
-        assert "确认读取" in verdict["message"]
-        # 确认口径必须写清「只读本轮、不归属本公司数据」
-        assert "不会把这些文件归属到本公司的数据或历史" in verdict["message"]
+        with bind_company(1, None, user_paths=[str(f.resolve())]):
+            assert g.check_tool_call("read_file", {"path": str(f)}) is None
 
-    def test_pending_path_expires_after_turn(self, roots, tmp_path):
-        from trade.agent_context import bind_company
-
-        f = tmp_path / "outside.txt"
-        f.write_text("x", encoding="utf-8")
-        with bind_company(1, None, pending_paths=[str(f.resolve())]):
-            pass
-        verdict = g.check_tool_call("read_file", {"path": str(f)})
-        assert verdict and "确认读取" not in verdict["message"]
-
-    def test_path_classification_internal_confirmed_and_other_company(
+    def test_path_classification_keeps_company_isolation(
         self, tmp_path, monkeypatch,
     ):
+        """贴出即放行，但 ~/.trade 下其它公司的文件仍不进清单。"""
         import trade.helpers as helpers_mod
         from trade.api import chat as chat_mod
         from trade.post_install import skills as skills_mod
@@ -459,23 +479,14 @@ class TestUserPastedPaths:
         monkeypatch.setattr(helpers_mod, "_allowed_path_roots", lambda cid: [company_root])
         monkeypatch.setattr(skills_mod, "_get_trade_home", lambda: trade_home)
 
-        allowed, pending = chat_mod._classify_user_paths(
+        allowed = chat_mod._classify_user_paths(
             f"看下 {internal} 和 {external}", cid=1,
         )
         assert str(internal.resolve()) in allowed
-        assert str(external.resolve()) in pending
+        assert str(external.resolve()) in allowed
 
-        allowed2, pending2 = chat_mod._classify_user_paths(
-            f"确认读取 {external}", cid=1,
-        )
-        assert str(external.resolve()) in allowed2
-        assert pending2 == []
-
-        allowed3, pending3 = chat_mod._classify_user_paths(
-            f"确认读取 {other_company}", cid=1,
-        )
-        assert str(other_company.resolve()) not in allowed3
-        assert str(other_company.resolve()) not in pending3
+        allowed2 = chat_mod._classify_user_paths(f"看下 {other_company}", cid=1)
+        assert str(other_company.resolve()) not in allowed2
 
     def test_pasted_file_only_read_not_directory(self, roots, tmp_path):
         """贴目录不会放行读目录（提取阶段就只保留文件）。"""

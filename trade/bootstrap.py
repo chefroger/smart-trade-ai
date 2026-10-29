@@ -953,18 +953,32 @@ def _try_load_yaml(text: str):
         return None
 
 
-def verify_tool_guard_ready(announce: bool = False) -> dict:
-    """检查工具守卫是否真的会加载：插件已部署 + 在 `plugins.enabled` 里。
+def _tool_guard_strict_mode() -> bool:
+    """守卫是否被显式要求收紧（`TRADE_TOOL_GUARD=strict`）。默认 False。"""
+    try:
+        from trade.hermes_chat_memory_plugin.guardrails import strict_mode
 
-    守卫（文件白名单 / terminal / execute_code）全部挂在 chat-memory 插件上，
-    插件没加载就等于**整套守卫静默缺席**，而主聊天仍带着全工具集继续跑。
-    回答三件事：插件已部署、已在 plugins.enabled、宿主钩子能力已知为 True。
+        return strict_mode()
+    except Exception:  # noqa: BLE001 — 插件未安装时按默认（关闭）处理
+        return False
+
+
+def verify_tool_guard_ready(announce: bool = False) -> dict:
+    """检查 strict 模式的工具守卫是否真的会加载（插件已部署 + 已启用）。
+
+    2026-10-29 起守卫**默认关闭**（`TRADE_TOOL_GUARD=strict` 才启用）：
+    用户在自己电脑上操作自己的数据，不替用户设限。因此：
+    - 非 strict 模式下无论插件状态如何都**不告警**（缺守卫是预期状态）；
+    - strict 模式下才检查「插件已部署 + 已启用 + 宿主钩子能力已知为 True」，
+      并在 `announce=True` 时把问题打到 stderr；
+    - `/api/status` 始终返回事实状态（诊断用），前端不再据此弹 toast。
+
     旧版 Hermes 没有 register_hook 时插件会写 hooks=False；标记从未写过（None）
     视为**未知**，不算 ok —— 不能让它看起来像"已确认安全"。
-
-    `announce=True` 时把问题打到 stderr（启动路径用）；`/api/status` 轮询用
-    默认 False，避免每次请求都刷屏。
     """
+    if announce and not _tool_guard_strict_mode():
+        # 默认关闭：守卫缺席是设计如此，不刷告警
+        announce = False
     from trade.post_install.skills import _get_hermes_home
 
     hermes_home = _get_hermes_home()
@@ -1030,10 +1044,9 @@ def tool_guard_chat_block_reason() -> str | None:
     文案，导致老用户更新后「完全无法聊天」且无自助出路；守卫本身在未配置的
     机器上本来就没生效，拦人只伤了可用性。
 
-    函数签名保留（调用方 trade/api/chat.py 两处不动），仅行为改为放行。
-    告警仍在：verify_tool_guard_ready() 的启动期 stderr 提示、/api/status 的
-    tool_guard 字段、前端 toast 全部保留；check_tool_call() 的工具层拦截也不动
-    （插件加载着的机器照常受保护）。
+    函数签名保留（调用方 trade/api/chat.py 两处不动），恒返回 None。
+    守卫本身默认关闭（`TRADE_TOOL_GUARD=strict` 才启用）；未启用时不告警、
+    前端也不再弹提示（2026-10-29 用户口径：警告没用，别打扰）。
     """
     return None
 

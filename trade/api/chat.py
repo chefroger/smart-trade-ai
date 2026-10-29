@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
-import re
 import threading
 import time
 from pathlib import Path
@@ -59,9 +58,6 @@ def _external_paths_hint(paths: list[str]) -> str:
     )
 
 
-_CONFIRM_PATH_RE = re.compile(r"(确认读取|确认只读|确认访问|确认使用)")
-
-
 def _path_under(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -70,19 +66,20 @@ def _path_under(path: Path, root: Path) -> bool:
         return False
 
 
-def _classify_user_paths(query: str, cid: int) -> tuple[list[str], list[str]]:
-    """把用户贴出的路径分成「本轮可读」与「待确认」。
+def _classify_user_paths(query: str, cid: int) -> list[str]:
+    """用户本轮亲手贴出、且允许 AI 只读访问的文件清单。
 
-    - 公司白名单根内：直接放行；
-    - 公司外、但在 ~/.trade 下（其它公司/全局数据）：**硬拦**，不进任何清单；
-    - 其它公司外文件：只有用户本轮写了「确认读取/确认只读…」才放行，否则进待确认。
+    2026-10-29 起不再有「待确认」往返：用户贴出路径本身就是授权
+    （自己电脑上的自己的文件，不需要再打一句「确认读取」）。
+    仍保留一条：~/.trade 下但不是本公司目录（其它公司/全局数据）不进清单 ——
+    多公司隔离是产品口径，不因放宽守卫而放开。
     """
     from trade.helpers import _allowed_path_roots
     from trade.post_install.skills import _get_trade_home
 
     paths = extract_user_paths(query)
     if not paths:
-        return [], []
+        return []
 
     roots: list[Path] = []
     try:
@@ -98,22 +95,16 @@ def _classify_user_paths(query: str, cid: int) -> tuple[list[str], list[str]]:
     except Exception:
         trade_home = None
 
-    confirmed = bool(_CONFIRM_PATH_RE.search(query))
     allowed: list[str] = []
-    pending: list[str] = []
     for raw in paths:
         path = Path(raw)
-        if any(_path_under(path, root) for root in roots):
-            allowed.append(raw)
-            continue
         # ~/.trade 下、但不是本公司目录：其它公司数据 / 全局数据，硬拦
-        if trade_home is not None and _path_under(path, trade_home):
+        if trade_home is not None and _path_under(path, trade_home) and not any(
+            _path_under(path, root) for root in roots
+        ):
             continue
-        if confirmed:
-            allowed.append(raw)
-        else:
-            pending.append(raw)
-    return allowed, pending
+        allowed.append(raw)
+    return allowed
 
 
 def _abort_running_agent(agent) -> None:
@@ -302,8 +293,8 @@ async def trade_chat(
         cid, payload.library_id, query, customer_id=payload.customer_id,
         last_skill_name=last_skill, language=payload.language or "zh",
     )
-    # W7：用户本轮亲手贴出的文件 → 公司内直接放行；公司外先待确认
-    user_paths, pending_paths = _classify_user_paths(query, cid)
+    # 用户本轮亲手贴出的文件 → 直接只读放行（贴出来即授权，不再二次确认）
+    user_paths = _classify_user_paths(query, cid)
     if user_paths:
         skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
@@ -361,7 +352,6 @@ async def trade_chat(
                     with bind_company(
                         cid, payload.customer_id,
                         user_paths=user_paths,
-                        pending_paths=pending_paths,
                     ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
@@ -502,8 +492,8 @@ async def trade_chat_stream(
         cid, payload.library_id, query, customer_id=payload.customer_id,
         last_skill_name=last_skill, language=payload.language or "zh",
     )
-    # W7：用户本轮亲手贴出的文件 → 公司内直接放行；公司外先待确认
-    user_paths, pending_paths = _classify_user_paths(query, cid)
+    # 用户本轮亲手贴出的文件 → 直接只读放行（贴出来即授权，不再二次确认）
+    user_paths = _classify_user_paths(query, cid)
     if user_paths:
         skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
@@ -598,7 +588,6 @@ async def trade_chat_stream(
                     with bind_company(
                         cid, payload.customer_id,
                         user_paths=user_paths,
-                        pending_paths=pending_paths,
                     ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]

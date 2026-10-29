@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-trade-ai"
-version = "0.6.9"
+version = "0.7.0"
 description = "Smart Trade AI — AI sales assistant for B2B trade companies. Lead generation, customer due diligence, document analysis, social media, and daily automation."
 readme = "README.md"
 # 注意：**不要**因为「部署必须用 Python 3.14」就把这里抬到 >=3.14。

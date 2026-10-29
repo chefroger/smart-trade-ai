@@ -1763,7 +1763,6 @@ function stopCronPolling() {
 
 // ── 版本更新检查 ──
 let _versionPollTimer = null;
-let _toolGuardWarned = false;
 
 async function checkVersion() {
     // 关闭版本升级提醒：用户手上版本稳定就不强制升级
@@ -1772,19 +1771,8 @@ async function checkVersion() {
         if (!r.ok) return;
         const data = await r.json();
         console.log('Version check: current=' + data.version);
-        // 守卫随 chat-memory 插件加载：插件没部署/没启用/宿主不支持钩子时
-        // 整套白名单缺席，必须让用户看见，而不是只躺在 stderr 日志里。
-        if (data.tool_guard && data.tool_guard.ok === false && !_toolGuardWarned) {
-            _toolGuardWarned = true;
-            if (data.tool_guard.hooks === false) {
-                toast('⚠️ 当前 Hermes 版本不支持工具钩子，安全守卫无法生效，聊天已暂停。请升级 Hermes 后重启 Trade。');
-            } else if (data.tool_guard.hooks == null && data.tool_guard.deployed && data.tool_guard.enabled) {
-                // 未知 ≠ 坏：首次聊天时插件才写标记，发一条消息即可确认
-                toast('ℹ️ 工具安全守卫状态待确认：发一条消息后会自动确认（无需重启）。');
-            } else {
-                toast('⚠️ 工具安全守卫未生效：文件与命令白名单当前不起作用。请重启 Trade；若仍提示，检查 ~/.hermes/config.yaml 的 plugins.enabled 是否包含 chat-memory。');
-            }
-        }
+        // 2026-10-29：不再弹「工具守卫未生效」toast —— 守卫默认关闭，
+        // 用户在自己电脑上操作自己的数据，这条提示只制造焦虑、没有作用。
     } catch(e) { /* 静默 */ }
 }
 

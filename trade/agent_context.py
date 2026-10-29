@@ -25,13 +25,9 @@ _current_company_id: ContextVar[int | None] = ContextVar(
 _current_customer_id: ContextVar[int | None] = ContextVar(
     "trade_agent_customer_id", default=None
 )
-# 用户本轮亲手贴出的完整文件路径（只读、仅本轮）。守卫据此放行精确文件。
+# 用户本轮亲手贴出的完整文件路径（只读、仅本轮）。守卫（strict 模式）据此放行精确文件。
 _current_user_paths: ContextVar[tuple[str, ...]] = ContextVar(
     "trade_agent_user_paths", default=()
-)
-# 用户贴了但还没确认的外部路径（本轮守卫拒绝并提示如何确认）
-_current_pending_paths: ContextVar[tuple[str, ...]] = ContextVar(
-    "trade_agent_pending_paths", default=()
 )
 
 # 引号包裹的路径（支持空格）；未加引号的 POSIX/~/Windows 盘符/UNC 路径。
@@ -55,11 +51,6 @@ def current_customer_id() -> int | None:
 def current_user_paths() -> tuple[str, ...]:
     """本轮机主贴出、且已解析为绝对路径的文件清单（无则为空元组）。"""
     return _current_user_paths.get()
-
-
-def current_pending_paths() -> tuple[str, ...]:
-    """用户贴了、但尚未确认的公司外路径（守卫据此给出确认提示）。"""
-    return _current_pending_paths.get()
 
 
 # 引用 / 代码块 / 转发段落里的路径不算用户亲手授权（W7-A）
@@ -124,17 +115,14 @@ def bind_company(
     company_id: int | None,
     customer_id: int | None = None,
     user_paths: tuple[str, ...] | list[str] = (),
-    pending_paths: tuple[str, ...] | list[str] = (),
 ):
     """把公司/客户/本轮用户路径绑定到当前上下文，退出时恢复。"""
     company_token = _current_company_id.set(company_id)
     customer_token = _current_customer_id.set(customer_id)
     paths_token = _current_user_paths.set(tuple(user_paths or ()))
-    pending_token = _current_pending_paths.set(tuple(pending_paths or ()))
     try:
         yield
     finally:
-        _current_pending_paths.reset(pending_token)
         _current_user_paths.reset(paths_token)
         _current_customer_id.reset(customer_token)
         _current_company_id.reset(company_token)
