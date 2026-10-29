@@ -519,6 +519,17 @@ body {
     backdrop-filter: blur(8px);
 }
 @keyframes toastIn { from { opacity: 0; transform: translateY(16px) scale(0.95); } }
+/* 常驻提示：升级失败/警告必须能看清（3 秒自动消失等于没提示） */
+.toast.sticky {
+    max-width: min(520px, 90vw); white-space: pre-wrap; word-break: break-word;
+    padding-right: 36px; padding-top: 12px; padding-bottom: 12px;
+    max-height: 40vh; overflow-y: auto; user-select: text;
+}
+.toast-close {
+    position: absolute; top: 4px; right: 6px; background: none; border: none;
+    color: #fff; opacity: .7; font-size: 18px; line-height: 1; cursor: pointer; padding: 4px 6px;
+}
+.toast-close:hover { opacity: 1; }
 .hidden { display: none !important; }
 .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

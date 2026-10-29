@@ -41,6 +41,23 @@ test('api() 支持额外 header', () => {
 });
 
 // 审计 P1-10：更新 = 拉代码 + 装依赖 + 重启，必须二次确认，不能一键静默装。
+test('升级失败/警告用常驻提示，不再 3 秒一闪而过', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.css'), 'utf8');
+  // toast 支持 sticky（不自动消失 + 关闭按钮）
+  assert.match(SRC, /function toast\(msg, opts\)/);
+  assert.match(SRC, /toast-close/);
+  assert.match(css, /\.toast\.sticky/);
+  // 两个升级入口的失败分支都要带出真实原因，并常驻
+  assert.match(SRC, /function _updateErrorText\(resp\)/);
+  const hits = SRC.match(/toast\(_updateErrorText\(resp\), \{sticky: true\}\)/g) || [];
+  assert.strictEqual(hits.length, 2, '两个升级入口都要常驻显示失败原因');
+  // 旧的一闪而过写法不得回来
+  assert.ok(!SRC.includes("toast(t('sys.update_fail') + errMsg)"));
+  assert.ok(!SRC.includes("toast('⚠️ 更新失败')"));
+});
+
 test('更新前有二次确认（只展示当前版本，不展示 release 目标版本）', () => {
   assert.match(SRC, /async function _confirmTradeUpdate\(\)/);
   assert.match(SRC, /return confirm\(msg\)/);

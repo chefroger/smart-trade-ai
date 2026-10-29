@@ -909,7 +909,8 @@ async function api(method, path, body, extraHeaders) {
             else if (r.status === 402) showLicenseExpired(msg);
             else if (r.status === 404) toast(msg);
             else if (r.status === 409) toast(msg);
-            else toast(msg);
+            // 5xx / 429 是「用户需要看清原因」的失败，常驻显示
+            else toast(msg, {sticky: r.status >= 500 || r.status === 429});
             return null;
         }
         return r.json();
@@ -1236,6 +1237,23 @@ function _showRestartPrompt() {
     if (rb) rb.hidden = false;
 }
 
+/**
+ * 把升级失败结果拼成一段时间不会消失的提示文本。
+ *
+ * 后端返回 {error, errors, messages}：error 是给用户看的短句，messages 是
+ * 逐步日志。只显示前半句时用户无法自助排查，所以附上日志最后几行。
+ */
+function _updateErrorText(resp) {
+    const err = (resp && (resp.error || (resp.errors && resp.errors.join('; ')))) || '未知原因';
+    let text = '❌ 更新失败：' + err;
+    const msgs = (resp && resp.messages) || [];
+    if (msgs.length) {
+        // 最后 4 行足以定位（git / pip 的报错都在末尾），避免糊一屏
+        text += '\n\n' + msgs.slice(-4).join('\n');
+    }
+    return text;
+}
+
 async function doTradeUpdate(e) {
     // 用 currentTarget 或回退到事件对象，再不行直接查 DOM
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-update-btn');
@@ -1264,11 +1282,12 @@ async function doTradeUpdate(e) {
             }
             // 非致命步骤（skills 同步等）失败只算警告，不阻止升级，但必须让用户看见
             if (resp.warnings && resp.warnings.length) {
-                toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '));
+                toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '),
+                    {sticky: true});
             }
         } else if (resp.error || (resp.errors && resp.errors.length)) {
-            const errMsg = resp.error || resp.errors.join('; ');
-            toast(t('sys.update_fail') + errMsg);
+            // 常驻提示：3 秒自动消失的 toast 用户根本看不清（2026-10-29 反馈）
+            toast(_updateErrorText(resp), {sticky: true});
             updateFailed = true;
         } else {
             toast(t('sys.update_unknown'));
@@ -1415,10 +1434,25 @@ async function updateSkills(e) {
 function $(id) { return document.getElementById(id); }
 function showModal(id) { $(id).classList.remove('hidden'); }
 function hideModal(id) { $(id).classList.add('hidden'); }
-function toast(msg) {
+function toast(msg, opts) {
+    // sticky：不自动消失，带 × 关闭按钮。升级失败/警告这类必须看清的提示用它 ——
+    // 3 秒自动消失的 toast 对小白用户等于没提示（2026-10-29 反馈「一闪而过」）。
+    const sticky = !!(opts && opts.sticky);
     const c = $('toast-container');
-    const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
-    c.appendChild(t); setTimeout(() => t.remove(), 3000);
+    const t = document.createElement('div');
+    t.className = 'toast' + (sticky ? ' sticky' : '');
+    t.textContent = msg;
+    if (sticky) {
+        const x = document.createElement('button');
+        x.type = 'button'; x.className = 'toast-close'; x.textContent = '×';
+        x.setAttribute('aria-label', '关闭');
+        x.onclick = function () { t.remove(); };
+        t.appendChild(x);
+    } else {
+        setTimeout(() => t.remove(), 3000);
+    }
+    c.appendChild(t);
+    return t;
 }
 // #region html-escape-utils —— 这段被 tests_js/esc.test.js 按标记整体抽取测试，勿删标记
 // HTML 转义表：& < > 三个是文本上下文必需，" 和 ' 是属性上下文必需
@@ -1801,14 +1835,16 @@ async function doUpdateSystem() {
             toast('✅ 更新完成。请点击"🔄 重启"以应用新版本。' + suffix);
             // 非致命步骤失败只算警告，不阻止升级，但必须让用户看见
             if (resp.warnings && resp.warnings.length) {
-                toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '));
+                toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '),
+                    {sticky: true});
             }
             // 后端永不自动重启：露出重启按钮，由用户自己点
             if (btn) { btn.remove(); }
             _showRestartPrompt();
             checkVersion();
         } else if (resp?.error || (resp?.errors && resp.errors.length)) {
-            toast('⚠️ 更新失败');
+            // 之前这里只有一句「更新失败」，用户无从知道原因
+            toast(_updateErrorText(resp), {sticky: true});
             if (btn) btn.textContent = '⬆️ 升级';
         }
         // resp 为 null 时 api() 已 toast，不重复提示
