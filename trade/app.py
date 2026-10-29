@@ -473,6 +473,28 @@ def _perform_restart() -> None:
         pre_sha = str(_pending.get("pre_update_sha") or "").strip()
     except (OSError, ValueError):
         pre_sha = ""
+
+    # launchd KeepAlive 托管、又不需要回退点：直接让 launchd 重启。
+    # 普通重启脚本是「杀旧 → exec 新」，但在 KeepAlive 下 launchd 会抢先补起
+    # 一个实例占住端口，exec 的新进程绑不上 —— 交给 launchctl 才没有竞争。
+    _launchd_label = _launchd_label_if_managed()
+    if _launchd_label and not pre_sha:
+        try:
+            _sp.Popen(
+                ["launchctl", "kickstart", "-k",
+                 f"gui/{os.getuid()}/{_launchd_label}"],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, stdin=_sp.DEVNULL,
+                start_new_session=True,
+            )
+            print(f"  🔄 已交给 launchd 重启（{_launchd_label}）")
+            try:
+                pid_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
+        except Exception as e:  # noqa: BLE001 — kickstart 起不来就用原脚本
+            print(f"  ⚠ launchctl kickstart 失败（{e}），改用普通重启脚本")
+
     if pre_sha:
         # 新进程用这个 nonce 回传身份；旧进程不会持有它 → 探活不会误判
         restart_nonce = secrets.token_urlsafe(12)
@@ -489,7 +511,6 @@ def _perform_restart() -> None:
                 "--log", str(trade_data / "restart-watchdog.log"),
             ]
             # KeepAlive 托管时不能再自己 spawn（launchd 会抢先占端口）→ 交给 launchctl
-            _launchd_label = _launchd_label_if_managed()
             if _launchd_label:
                 _watchdog_cmd += ["--launchd-label", _launchd_label]
             _watchdog_cmd += ["--", *_restart_cmd]

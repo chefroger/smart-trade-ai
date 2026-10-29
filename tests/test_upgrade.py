@@ -258,6 +258,36 @@ class TestPerformRestart:
         assert popen_kwargs.get("start_new_session") is True
         assert "creationflags" not in popen_kwargs
 
+    @patch("trade.app._sp")
+    @patch("trade.app._kill_gateway")
+    @patch("trade.app._launchd_label_if_managed", return_value="com.trade.assistant")
+    @patch("trade.app._get_trade_data_dir")
+    def test_launchd_managed_plain_restart_uses_kickstart(
+        self, mock_data_dir, mock_label, mock_kill_gw, mock_sp,
+    ):
+        """KeepAlive 托管、无回退点：必须交给 launchctl，不许 kill+spawn 抢端口。"""
+        import tempfile
+
+        from trade.app import _perform_restart
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        mock_data_dir.return_value = tmp_dir
+
+        mock_sp.DEVNULL = -1
+        mock_sp.Popen = MagicMock()
+
+        with patch("trade.app.os") as mock_os:
+            mock_os.name = "posix"
+            mock_os.getuid = MagicMock(return_value=501)
+            mock_os.getpid = MagicMock(return_value=12345)
+
+            _perform_restart()
+
+        cmd = mock_sp.Popen.call_args[0][0]
+        assert cmd[:3] == ["launchctl", "kickstart", "-k"], cmd
+        assert cmd[3] == "gui/501/com.trade.assistant", cmd
+        assert "/bin/sh" not in cmd, "托管时不得再走「杀旧+exec」脚本"
+
 
 # ── update_trade 失败分级测试 ─────────────────────────────────────────────
 
