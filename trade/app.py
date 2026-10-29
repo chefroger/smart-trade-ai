@@ -682,6 +682,27 @@ _SYS_MAX = 5      # 最多 5 次
 # 流本身只读进程内状态 —— 所以两边不该用同一个阈值。
 _SYS_STREAM_MAX = 30
 
+# 升级串行锁：界面上连点两下（或两个标签页）会并发跑 git pull / pip install，
+# 撞 .git/index.lock、把依赖装坏。第二次点击直接告知「正在进行」，不再起第二份。
+_update_lock = threading.Lock()
+
+
+def _log_update_failure(message: str) -> None:
+    """把升级失败的异常文本追加到 ~/.trade/logs/update.log（best-effort）。
+
+    用户只会转述「更新失败」；没有这份日志，事后无法定位真实原因。
+    """
+    try:
+        from trade.post_install.skills import _get_trade_home
+
+        log_dir = _get_trade_home() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with (log_dir / "update.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"[{stamp}] {message}\n")
+    except OSError:
+        pass
+
 
 def _check_system_rate_limit(
     key: str, *, max_hits: int = _SYS_MAX, window: float = _SYS_WINDOW
@@ -749,8 +770,37 @@ def _create_system_router() -> APIRouter:
             )
 
         from trade.post_install import update_trade as _do_update
-        # 钉到用户在确认框里看到的那个提交（预览接口返回）；缺省时后端临场取 main
-        result = _do_update(payload.target_sha if payload else None)
+
+        # 串行化：并发升级会互撞 git 锁 / 把依赖装坏。第二次点击直接返回提示，
+        # 不排队、不重复跑（界面连点是常态，尤其是网络慢的时候）。
+        if not _update_lock.acquire(blocking=False):
+            return {
+                "ok": False,
+                "version": "",
+                "target_sha": "",
+                "error": "更新正在进行中，请等待完成后再试。",
+                "errors": ["update already running"],
+                "warnings": [],
+                "messages": [],
+                "restart_scheduled": False,
+            }
+        try:
+            # 钉到用户在确认框里看到的那个提交（预览接口返回）；缺省时后端临场取 main
+            result = _do_update(payload.target_sha if payload else None)
+        except Exception as e:  # noqa: BLE001 — 绝不能把升级按钮变成 500
+            # 未捕获异常会让前端只看到「请求失败 (500)」，用户只会说「更新失败」。
+            # 转成结构化结果，把真实原因带到界面上。
+            import traceback
+
+            traceback.print_exc()
+            _log_update_failure(str(e))
+            result = {
+                "ok": False, "version": "", "target_sha": "",
+                "error": f"更新过程中出现异常：{e}",
+                "errors": [str(e)], "warnings": [], "messages": [],
+            }
+        finally:
+            _update_lock.release()
 
         # 只更新不重启：让用户在确认结果后自己点「重启」，避免新代码起不来
         # 时连旧服务也没了（audit P1-10 允许的替代方案）。

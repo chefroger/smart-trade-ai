@@ -47,8 +47,47 @@ def _pip_env() -> dict:
     return env
 
 
+def _trade_venv_python() -> Path | None:
+    """Trade 自己的虚拟环境解释器；不存在（或不是 venv）返回 None。"""
+    for base in (_get_trade_home() / "venv", Path.home() / ".trade" / "venv"):
+        if not (base / "pyvenv.cfg").is_file():
+            continue
+        for rel in (("Scripts", "python.exe"), ("bin", "python")):
+            cand = base.joinpath(*rel)
+            if cand.is_file():
+                return cand
+    return None
+
+
+def _pip_python() -> tuple[str, str | None]:
+    """pip 该用哪个解释器：优先 Trade 的 venv，其次当前解释器。
+
+    返回 (解释器路径, 给用户看的提示或 None)。
+
+    为什么要这个：升级按钮必须在任何运行方式下都能用（可用性第一）。
+    老 README 教用户用系统 Python 跑 `python server.py`，这些机器上没有
+    Trade venv —— 原实现直接拒绝升级（not_in_trade_venv），用户只会看到
+    「更新失败」且毫无自助出路。现在改为：有 Trade venv 就把依赖装进
+    venv（不污染系统）；没有就用当前解释器继续升级，只提示、不中止。
+    """
+    venv_py = _trade_venv_python()
+    if venv_py is not None:
+        try:
+            same = venv_py.resolve() == Path(sys.executable).resolve()
+        except OSError:
+            same = False
+        if not same:
+            return str(venv_py), f"依赖将安装到 Trade 的虚拟环境：{venv_py}"
+        return sys.executable, None
+    if sys.prefix == sys.base_prefix:
+        return sys.executable, (
+            "当前不在虚拟环境内，依赖会装进系统 Python（升级继续，不会中止）"
+        )
+    return sys.executable, None
+
+
 def _pip_install_args(*args: str) -> list[str]:
-    return [sys.executable, "-m", "pip", "install", "--no-user", *args]
+    return [_pip_python()[0], "-m", "pip", "install", "--no-user", *args]
 
 # ── 目录同步 ──────────────────────────────────────────────────────────────
 
@@ -310,37 +349,16 @@ def _install_optional_deps(emit, warnings: list[str]) -> None:
 
 # ── 一键更新主函数 ────────────────────────────────────────────────────────
 
-def _refuse_reason_for_interpreter() -> str | None:
-    """当前解释器是否允许执行升级；不允许时返回给用户看的原因（允许返回 None）。
+def _interpreter_note() -> str | None:
+    """升级环境提示（**不中止升级**）：pip 会装到哪、可能有什么后果。
 
-    为什么必须挡：升级过程中的全部 `pip install` 都用 `sys.executable`。若 update_trade()
-    是被**系统 python** 调起的（cron / launchd / 计划任务 / 用户手敲 python），依赖会装进
-    **全局 site-packages** —— 既污染用户系统，又因为 Trade 的启动器指向自己的 venv，
-    下次启动仍然缺依赖，白升一场。
-
-    判据刻意保守（宁可放过、不可误拦）：只在**确知** Trade 的 venv 存在、且当前解释器
-    不在其中时才拒绝。在开发机上从仓库直接跑（本机没有 trade venv）不会被拦。
+    2026-10-29：原 `_refuse_reason_for_interpreter()` 会直接中止升级
+    （`not_in_trade_venv`）—— 老 README 教用户用系统 Python 跑 Trade，这些
+    机器永远升不了级，用户只看到「更新失败」。可用性第一：改为提示 + 继续，
+    pip 解释器由 `_pip_python()` 选择（有 Trade venv 就装进 venv）。
     """
-    venv_markers = [
-        _get_trade_home() / "venv",
-        Path.home() / ".trade" / "venv",
-    ]
-    # pyvenv.cfg 是两个平台上都可靠的 venv 标志
-    existing = [v for v in venv_markers if (v / "pyvenv.cfg").is_file()]
-
-    if sys.prefix == sys.base_prefix:
-        # 根本不在任何 venv 里 → 一定会写进全局 site-packages
-        return "当前解释器不在任何虚拟环境内，继续升级会污染系统 Python 的包目录。"
-
-    # Windows 路径大小写不敏感 → 归一化后再比，避免把「就是同一个 venv」误判成不同
-    here = os.path.normcase(str(Path(sys.prefix).resolve()))
-    in_trade_venv = any(
-        here == os.path.normcase(str(v.resolve())) for v in existing
-    )
-    if existing and not in_trade_venv:
-        # 在某个 venv 里，但不是 Trade 的那个 → 装了也不会生效
-        return "当前解释器不是 Trade 自己的运行环境，升级不会生效。"
-    return None
+    _, hint = _pip_python()
+    return hint
 
 
 def _git_head(trade_dir: Path) -> str | None:
@@ -639,19 +657,12 @@ def update_trade(target_sha_request: str | None = None) -> dict:
             "messages": messages,
         }
 
-    # ── Step 0b: 解释器必须跑在 Trade 自己的 venv 内 ───────────────────────
-    _refuse = _refuse_reason_for_interpreter()
-    if _refuse:
-        _emit(f"  ✗ 升级已中止：{_refuse}")
-        _emit(f"    当前解释器: {sys.executable}")
-        _emit("    请在 Trade 界面里点「更新」，或在终端执行 `trade update`。")
-        return {
-            "ok": False,
-            "version": "",
-            "errors": ["not_in_trade_venv"],
-            "warnings": warnings,
-            "messages": messages,
-        }
+    # ── Step 0b: 解释器提示（只提示，不中止）───────────────────────────────
+    # 可用性第一：无论用户是 venv 还是系统 Python 跑的 Trade，升级都必须能进行。
+    _note = _interpreter_note()
+    if _note:
+        _emit(f"  ℹ️ {_note}")
+        warnings.append(_note)
 
     # ── Step 0c: 升级前数据库备份 ──────────────────────────────────────────
     # 为什么必须在 Step 1 之前：数据库迁移不可逆，一旦迁移失败或新版本行为有变，

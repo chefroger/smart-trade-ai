@@ -19,16 +19,16 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _bypass_interpreter_guard(monkeypatch):
-    """绕过「解释器必须在 Trade venv 内」的守卫。
+def _pin_pip_interpreter(monkeypatch):
+    """把 pip 解释器钉在当前测试解释器上。
 
-    这一组用例测的是升级的各**步骤**，而它们跑在开发/CI 解释器里（不是 Trade 的 venv），
-    真实守卫会把整个流程拦掉 —— 那是守卫在正常工作，不是被测代码有问题。
-    守卫自身的逻辑与接线由 tests/test_doctor.py::TestUpdateInterpreterGuard 覆盖。
+    升级已经不再因解释器中止（2026-10-29），但开发机上**真的有**
+    `~/.trade/venv` —— 不钉的话测试里的 pip 子进程会指到真实 venv。
+    `_pip_python` 的选择逻辑由 tests/test_doctor.py::TestUpdateInterpreterGuard 覆盖。
     """
     from trade.post_install import update as upd
 
-    monkeypatch.setattr(upd, "_refuse_reason_for_interpreter", lambda: None)
+    monkeypatch.setattr(upd, "_pip_python", lambda: (sys.executable, None))
 
 
 # 钉选测试用的稳定提交：默认让「远端 main」与「本地 HEAD」一致，
