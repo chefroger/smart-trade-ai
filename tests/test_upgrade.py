@@ -262,10 +262,14 @@ class TestPerformRestart:
     @patch("trade.app._kill_gateway")
     @patch("trade.app._launchd_label_if_managed", return_value="com.trade.assistant")
     @patch("trade.app._get_trade_data_dir")
-    def test_launchd_managed_plain_restart_uses_kickstart(
+    def test_launchd_managed_plain_restart_uses_watchdog(
         self, mock_data_dir, mock_label, mock_kill_gw, mock_sp,
     ):
-        """KeepAlive 托管、无回退点：必须交给 launchctl，不许 kill+spawn 抢端口。"""
+        """KeepAlive 托管、无回退点：交给 watchdog 做 kickstart + 退出码/事后探活。
+
+        不能在本进程直接 kickstart —— 进程会被 launchd 杀掉，退出码与探活
+        都没机会执行；也不能走「杀旧 + exec」脚本（会与 launchd 抢端口）。
+        """
         import tempfile
 
         from trade.app import _perform_restart
@@ -284,8 +288,10 @@ class TestPerformRestart:
             _perform_restart()
 
         cmd = mock_sp.Popen.call_args[0][0]
-        assert cmd[:3] == ["launchctl", "kickstart", "-k"], cmd
-        assert cmd[3] == "gui/501/com.trade.assistant", cmd
+        assert "trade.restart_watchdog" in cmd, cmd
+        assert "--launchd-label" in cmd, cmd
+        assert cmd[cmd.index("--launchd-label") + 1] == "com.trade.assistant"
+        assert "--pre-sha" not in cmd, "没有 pending 时不应传回退点"
         assert "/bin/sh" not in cmd, "托管时不得再走「杀旧+exec」脚本"
 
 
