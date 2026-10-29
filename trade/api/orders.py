@@ -134,7 +134,8 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
     if not existing:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    # 非可清空字段传 null = 未提供，直接丢掉（避免把 quantity/product_name 写成 NULL）
+    # 非可清空字段传 null = 未提供，直接丢掉（避免把 product_name 写成 NULL）。
+    # 金额字段在 CLEARABLE_FIELDS 里：显式 null 表示"清空 / 待谈"，必须保留。
     for key in list(changes):
         if changes[key] is None and key not in order_module.CLEARABLE_FIELDS:
             changes.pop(key)
@@ -160,7 +161,12 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
             existing.get("unit_price"),
             existing.get("total_amount"),
         )
-        if not _amounts_unchanged(current, merged):
+        if _amounts_unchanged(current, merged):
+            # 金额没动：不要回写。前端会发全量 body，回写会把库里的 NULL
+            # 悄悄换成 0（_amount_key 视二者等价），前端就显示成"0"而不是"待谈"。
+            for key in ("quantity", "unit_price", "total_amount"):
+                changes.pop(key, None)
+        else:
             try:
                 qty, price, total = order_module.reconcile_amounts(*merged)
             except ValueError as exc:

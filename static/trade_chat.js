@@ -123,6 +123,8 @@ const I18N = {
         'order.title':'新增订单','order.edit_title':'编辑订单',
         'order.no':'订单号','order.product':'产品名称 *','order.qty':'数量',
         'order.unit':'单位','order.price':'单价','order.currency':'币种',
+        'order.price_pending':'单价待谈',
+        'order.price_pending_legacy':'单价待谈（旧数据，单价未填）',
         'order.amount':'总金额','order.status':'状态','order.delivery':'交货日期',
         'order.payment':'付款方式','order.notes':'备注',
         // onboarding
@@ -311,6 +313,8 @@ const I18N = {
         'order.title':'New Order','order.edit_title':'Edit Order',
         'order.no':'Order No.','order.product':'Product *','order.qty':'Qty',
         'order.unit':'Unit','order.price':'Unit Price','order.currency':'Currency',
+        'order.price_pending':'Price TBD',
+        'order.price_pending_legacy':'Price TBD (legacy data, price not filled)',
         'order.amount':'Total','order.status':'Status','order.delivery':'Delivery',
         'order.payment':'Payment Terms','order.notes':'Notes',
         'onb.welcome':'Welcome to Trade AI Assistant!',
@@ -2865,6 +2869,13 @@ function startChatWithCustomer(cid, name) {
 
 // ── Order List / Modal ─────────────────────────────────────
 
+/** 单价展示文案：null = 待谈；0 = 旧数据（Batch 1 前 0 与"未填"混用）。 */
+function _orderPriceText(o) {
+    if (o.unit_price == null) return t('order.price_pending');
+    if (Number(o.unit_price) === 0) return t('order.price_pending_legacy');
+    return t('order.price') + ' ' + o.unit_price + ' ' + (o.currency || 'USD');
+}
+
 async function loadOrdersForCustomer(cid) {
     const container = $('detail-orders');
     if (!container) return;
@@ -2881,6 +2892,7 @@ async function loadOrdersForCustomer(cid) {
                 <span style="color:${stColor};font-weight:500;">● ${esc(o.status)}</span>
                 <b>${esc(o.product_name)}</b>
                 ${o.quantity ? '<span style="color:var(--text-secondary);">'+esc(o.quantity)+esc(o.unit||'')+'</span>' : ''}
+                <span style="color:var(--text-muted);"> ${esc(_orderPriceText(o))}</span>
                 ${o.total_amount ? '<span style="color:var(--accent);font-weight:500;"> '+esc(o.total_amount)+' '+esc(o.currency||'USD')+'</span>' : ''}
                 ${o.order_no ? '<span style="color:var(--text-muted);margin-left:8px;">#'+esc(o.order_no)+'</span>' : ''}
             </div>`;
@@ -2949,7 +2961,13 @@ function showOrderEditModal(oid, presetCid) {
             $('order-no').value = o.order_no||'';
             $('order-qty').value = o.quantity == null ? '' : o.quantity;
             $('order-unit').value = o.unit||'套';
-            $('order-price').value = o.unit_price == null ? '' : o.unit_price;
+            // null / 0 都不回填数字：留空就是"待谈"，占位符把状态说清楚
+            const pricePending = o.unit_price == null || Number(o.unit_price) === 0;
+            $('order-price').value = pricePending ? '' : o.unit_price;
+            if (pricePending) {
+                $('order-price').placeholder = _orderPriceText(o);
+                $('order-price').title = _orderPriceText(o);
+            }
             $('order-currency').value = o.currency||'USD';
             $('order-total').value = o.total_amount == null ? '' : o.total_amount;
             $('order-status').value = o.status||'报价中';

@@ -210,6 +210,54 @@ class TestReconcileAmounts:
         # 数量与单价都未填（只录了总额）：无法校验，原样放行
         assert order.reconcile_amounts(None, None, 500) == (None, None, 500.0)
 
+    def test_all_blank_stays_null_not_zero(self):
+        """三者都未填 → NULL，不能变成 0（否则前端显示成 0 而不是待谈）。"""
+        from trade import order
+
+        assert order.reconcile_amounts(None, None, None) == (None, None, None)
+
+    def test_qty_with_pending_price_keeps_total_null(self):
+        """数量已定、单价待谈、总额也未填 → 总额保持 NULL。"""
+        from trade import order
+
+        qty, price, total = order.reconcile_amounts(100, None, None)
+        assert qty == 100.0
+        assert price is None
+        assert total is None
+
+
+class TestOrderContextPricePending:
+    """订单上下文必须写明「单价待谈」，否则模型会用 总额÷数量 反推单价。"""
+
+    def _row(self, **kw):
+        base = {
+            "status": "报价中", "product_name": "Widget", "quantity": 100,
+            "unit": "套", "unit_price": None, "currency": "USD",
+            "total_amount": 5000, "order_no": "", "delivery_date": "",
+            "created_at": "",
+        }
+        base.update(kw)
+        return base
+
+    def test_null_price_shows_pending(self):
+        from trade import order
+
+        text = order._format_order_context([self._row()])
+        assert "单价待谈" in text
+
+    def test_legacy_zero_price_is_labelled(self):
+        from trade import order
+
+        text = order._format_order_context([self._row(unit_price=0)])
+        assert "单价待谈（旧数据，单价未填）" in text
+
+    def test_real_price_prints_value(self):
+        from trade import order
+
+        text = order._format_order_context([self._row(unit_price=50)])
+        assert "单价 50" in text
+        assert "单价待谈" not in text
+
     @pytest.mark.parametrize("price", [0, None])
     def test_price_pending_with_known_quantity_passes(self, price):
         """数量已定、单价待谈（0 或未填）、整单已报 → 放行，单价记为 None。"""
@@ -409,18 +457,64 @@ class TestOrderApiValidation:
         assert cleared["notes"] is None
 
     def test_update_null_required_field_is_ignored(self, db):
-        """非可清空字段（品名/数量）传 null 不能把数据写坏。"""
+        """非可清空字段（品名）传 null 不能把数据写坏。"""
         from trade.api.models import OrderUpdate
         from trade.api.orders import update_order
         co, cust = self._mk(db)
         o = self._create(co["id"], cust["id"], quantity=10, unit_price=3.5)
 
         updated = update_order(
-            o["id"], OrderUpdate(quantity=None, product_name=None), cid=co["id"],
+            o["id"], OrderUpdate(product_name=None), cid=co["id"],
         )
 
         assert updated["quantity"] == 10
         assert updated["product_name"] == "Widget"
+
+    def test_clear_quantity_with_price_and_total_is_rejected(self, db):
+        """清空数量但单价与总额仍在 → 三者矛盾，必须 400 而不是静默保留。"""
+        from fastapi import HTTPException
+
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], quantity=10, unit_price=3.5)
+
+        with pytest.raises(HTTPException) as exc:
+            update_order(o["id"], OrderUpdate(quantity=None), cid=co["id"])
+
+        assert exc.value.status_code == 400
+
+    def test_clear_unit_price_makes_it_pending(self, db):
+        """单价待谈：有单价/总额的订单，清空单价后单价为 NULL、其余不动。"""
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], quantity=100, unit_price=50)
+
+        updated = update_order(
+            o["id"], OrderUpdate(unit_price=None), cid=co["id"],
+        )
+
+        assert updated["quantity"] == 100
+        assert updated["unit_price"] is None
+        assert updated["total_amount"] == 5000
+
+    def test_clear_all_amounts_writes_nulls(self, db):
+        """三个金额都清空 → 库里是 NULL，不是 0。"""
+        from trade.api.models import OrderUpdate
+        from trade.api.orders import update_order
+        co, cust = self._mk(db)
+        o = self._create(co["id"], cust["id"], quantity=100, unit_price=50)
+
+        updated = update_order(
+            o["id"],
+            OrderUpdate(quantity=None, unit_price=None, total_amount=None),
+            cid=co["id"],
+        )
+
+        assert updated["quantity"] is None
+        assert updated["unit_price"] is None
+        assert updated["total_amount"] is None
 
     def test_negative_amount_returns_400(self, db):
         """负数不再静默归零，直接 400（审计 P2-25）。"""

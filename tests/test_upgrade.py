@@ -1588,6 +1588,81 @@ class TestRestartWatchdog:
 
         assert w._wait_healthy(1, 10, "nonce", _Proc()) is False
 
+    def test_started_at_fallback_when_no_nonce(self, monkeypatch):
+        """回退到旧代码时它不认识 nonce：只能按启动时间判定。"""
+        import json as _json
+
+        from trade import restart_watchdog as w
+
+        class _Resp:
+            def __init__(self, data):
+                self._body = _json.dumps(data).encode()
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def _patch(started_at):
+            payload = {"app": "Foreign Trade Assistant", "started_at": started_at}
+            monkeypatch.setattr(
+                w.urllib.request, "urlopen", lambda *a, **k: _Resp(payload),
+            )
+
+        _patch(1000.0)
+        # 早于回退拉起时刻 → 是没被杀掉的旧进程，不算健康
+        assert w._healthy(9119, "", 2000.0) is False
+        # 晚于回退拉起时刻 → 是本次回退拉起的进程
+        assert w._healthy(9119, "", 500.0) is True
+        # 无 nonce 也无时间下界 → fail-closed
+        assert w._healthy(9119, "") is False
+
+    def test_legacy_cli_args_are_accepted(self, tmp_path, monkeypatch):
+        """升级前的旧进程只会传 --old-started-at：不能让 argparse 报错退出。"""
+        from trade import restart_watchdog as w
+
+        spawned = {}
+
+        class _Proc:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+        def fake_spawn(cmd, workdir, nonce=""):
+            spawned["nonce"] = nonce
+            return _Proc()
+
+        monkeypatch.setattr(w, "_spawn", fake_spawn)
+        monkeypatch.setattr(w, "_kill", lambda *a, **k: None)
+        monkeypatch.setattr(w, "_proc_create_time", lambda pid: None)
+        monkeypatch.setattr(w.time, "sleep", lambda *_a: None)
+        monkeypatch.setattr(w, "_wait_healthy", lambda *a, **k: True)
+
+        code = w.main([
+            "--old-pid", "1", "--port", "9119", "--old-started-at", "123.0",
+            "--pre-sha", "a" * 40, "--repo", str(tmp_path),
+            "--workdir", str(tmp_path), "--log", str(tmp_path / "wd.log"),
+            "--", "python", "server.py",
+        ])
+
+        assert code == 0, "旧命令行必须能跑通，否则用户点重启服务静默不动"
+        assert spawned["nonce"], "旧调用方没传 nonce 时，watchdog 必须自己生成一个"
+
+    def test_main_uses_parse_known_args(self):
+        """新版调用方多传参数时不能直接崩：必须 parse_known_args。"""
+        import inspect
+
+        from trade import restart_watchdog as w
+
+        src = inspect.getsource(w.main)
+        assert "parse_known_args(" in src
+        assert "p.parse_args(" not in src
+
     def test_stash_pop_conflict_aborts_and_restores(self, tmp_path, monkeypatch):
         """stash pop 冲突：升级立即中止，代码恢复到 pre_update_sha，改动留在 stash。"""
         from trade.post_install import update as upd

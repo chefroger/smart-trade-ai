@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -88,35 +89,49 @@ def _spawn(
     return subprocess.Popen(command, **kwargs)
 
 
-def _healthy(port: int, expected_nonce: str) -> bool:
+def _healthy(port: int, expected_nonce: str, min_started_at: float = 0.0) -> bool:
     """服务是否健康，且**确实是本次重启新起的进程**。
 
     只认 app 名会把"旧进程没杀掉"误判成新进程健康，从而删掉 pending、
-    丢掉回退点。新进程会带着 watchdog 传入的 nonce 启动并经 /api/status
-    回传；nonce 不匹配（含空值）= 不是我们要等的那一个进程。
+    丢掉回退点。两条判据，按可用性择一：
+
+    - nonce（首选）：新进程带着 watchdog 传入的 nonce 启动并经 /api/status
+      回传；nonce 不匹配 = 不是我们要等的那一个进程。
+    - started_at（回退用）：**回退到升级前代码**时，那份代码可能还不认识
+      nonce，只能要求它的启动时间晚于本次回退的拉起时刻。
+
+    两者都缺失 → fail-closed（无 nonce 且无时间下界时不判健康）。
     """
-    if not expected_nonce:
-        return False  # 无 nonce 一律不判健康（fail-closed）
+    if not expected_nonce and min_started_at <= 0:
+        return False
     try:
         with urllib.request.urlopen(
             f"http://127.0.0.1:{port}/api/status", timeout=2,
         ) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
-            return (
-                data.get("app") == _APP_NAME
-                and data.get("nonce") == expected_nonce
-            )
     except Exception:
         return False
+    if data.get("app") != _APP_NAME:
+        return False
+    if expected_nonce and data.get("nonce") == expected_nonce:
+        return True
+    if min_started_at > 0:
+        try:
+            started_at = float(data.get("started_at") or 0)
+        except (TypeError, ValueError):
+            return False
+        return started_at > min_started_at
+    return False
 
 
 def _wait_healthy(
     port: int, timeout: float, nonce: str,
     proc: subprocess.Popen | None = None,
+    min_started_at: float = 0.0,
 ) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _healthy(port, nonce):
+        if _healthy(port, nonce, min_started_at):
             return True
         # 新进程已退出（端口冲突/启动崩溃）→ 不必等到超时
         if proc is not None and proc.poll() is not None:
@@ -149,11 +164,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--repo", default="")
     p.add_argument("--workdir", required=True)
     p.add_argument("--pending-file", default="")
-    p.add_argument("--nonce", required=True)
+    # --nonce 由新版调用方传入；**升级前的旧进程**只会传 --old-started-at，
+    # 磁盘上的本模块却已是新版 —— 所以不能把任何一项设成 required，
+    # 且必须容忍未知参数：否则旧进程一调 watchdog 就 argparse 报错退出，
+    # 既不杀旧进程也不起新进程，用户点了「重启」服务静默不动。
+    p.add_argument("--nonce", default="")
+    p.add_argument("--old-started-at", type=float, default=0.0)
     p.add_argument("--log", required=True)
     p.add_argument("--timeout", type=float, default=90.0)
     p.add_argument("command", nargs=argparse.REMAINDER)
-    args = p.parse_args(argv)
+    args, _unknown = p.parse_known_args(argv)
 
     cmd = args.command
     if cmd and cmd[0] == "--":
@@ -164,18 +184,22 @@ def main(argv: list[str] | None = None) -> int:
     log_path = Path(args.log)
     _log(log_path, f"watchdog start (old pid={args.old_pid}, port={args.port})")
 
+    # 旧版调用方没传 nonce：本进程自己生成一个注入给新进程。
+    # 新进程是刚拉下来的新代码（认 TRADE_RESTART_NONCE），探活照样能精确判定。
+    nonce = args.nonce or secrets.token_urlsafe(12)
+
     old_create = _proc_create_time(args.old_pid)
     time.sleep(2)
     _kill(args.old_pid, old_create)
     time.sleep(0.5)
     try:
-        proc = _spawn(cmd, args.workdir, args.nonce)
+        proc = _spawn(cmd, args.workdir, nonce)
     except Exception as e:  # noqa: BLE001 — 旧进程已死，必须留日志/pending
         _log(log_path, f"spawn failed: {e!r}; pending kept for manual recovery")
         return 1
     _log(log_path, f"new process pid={proc.pid}")
 
-    if _wait_healthy(args.port, args.timeout, args.nonce, proc):
+    if _wait_healthy(args.port, args.timeout, nonce, proc):
         _log(log_path, "new process healthy")
         if args.pending_file:
             try:
@@ -195,13 +219,19 @@ def main(argv: list[str] | None = None) -> int:
         _log(log_path, "rollback unsuccessful; leaving service stopped")
         return 1
 
+    # 回退后跑的是 pre_sha 的代码，可能还不认识 nonce —— 探活须同时接受
+    # 「nonce 匹配」或「启动时间晚于此刻」，否则会把已恢复的服务误判成失败。
+    rollback_baseline = time.time()
     try:
-        proc2 = _spawn(cmd, args.workdir, args.nonce)
+        proc2 = _spawn(cmd, args.workdir, nonce)
     except Exception as e:  # noqa: BLE001 — 回退进程也起不来时保留 pending
         _log(log_path, f"rollback spawn failed: {e!r}; pending kept")
         return 1
     _log(log_path, f"rolled-back process pid={proc2.pid}")
-    if _wait_healthy(args.port, args.timeout, args.nonce, proc2):
+    if _wait_healthy(
+        args.port, args.timeout, nonce, proc2,
+        min_started_at=rollback_baseline - 5,
+    ):
         _log(log_path, "rolled-back process healthy")
         if args.pending_file:
             try:

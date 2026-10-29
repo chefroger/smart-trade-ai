@@ -17,10 +17,12 @@ from trade.database import get_connection
 
 ORDER_STATUSES = ("报价中", "已下单", "已出货", "已完成", "已取消")
 
-# 允许显式清空（写 NULL）的字段。必填/数值字段不在内：把它们清成 NULL 只会
-# 制造脏数据，用户要改数量应该给新值（审计 P2-28）。
+# 允许显式清空（写 NULL）的字段。数值字段必须在内：单价"待谈"、总额未定
+# 都是正常的报价阶段状态，清空即回到 NULL（Batch 1 的待谈口径），不能因为
+# 不在这个集合里就被静默丢弃、把旧值留在库里。
 CLEARABLE_FIELDS = frozenset({
     "order_no", "unit", "currency", "delivery_date", "payment_terms", "notes",
+    "quantity", "unit_price", "total_amount",
 })
 
 # 状态机：只允许沿业务链前进；取消只能在发货前；已完成 / 已取消为终态。
@@ -81,8 +83,9 @@ def reconcile_amounts(
         return q, p, t
 
     if q > 0 and p <= 0:
-        # 单价待谈：显式 0 也视为待谈（0 元单价配非零总额本身矛盾）
-        return q, None, t
+        # 单价待谈：显式 0 也视为待谈（0 元单价配非零总额本身矛盾）。
+        # 总额原样返回 —— 未填就是 NULL，别把"没填"写成 0。
+        return q, None, total
 
     if q <= 0 and p > 0:
         if t > 0:
@@ -90,7 +93,7 @@ def reconcile_amounts(
                 f"数量为 0（或未填），但总金额为 {t:g}；"
                 "0 个单位不可能有总额，请补全数量或清空总金额。"
             )
-        return q, p, t
+        return q, p, total
 
     # 数量与单价都不足以算出金额
     if t > 0:
@@ -100,7 +103,9 @@ def reconcile_amounts(
             f"数量与单价都为 0（或未填全），但总金额为 {t:g}，无法校验；"
             "请补全数量与单价，或把总金额留空。"
         )
-    return q, price, t
+    # 三者都为空/0：原样返回。None 保持 None（未填 ≠ 显式 0），
+    # 否则全空订单会被存成 0，前端显示成"0"而不是"待谈"。
+    return qty, price, total
 
 
 def _customer_in_company(conn, customer_id: int, company_id: int) -> bool:
@@ -486,6 +491,13 @@ def _format_order_context(rows: list[dict], cust: dict | None = None, product_kw
             parts.append(f"{o['quantity']}{o.get('unit','')}")
         if o.get("unit_price"):
             parts.append(f"单价 {o['unit_price']} {o.get('currency','USD')}")
+        elif o.get("quantity") or o.get("total_amount"):
+            # 有数量或总额却没有单价 = 待谈；0 是旧数据（历史里 0 与"未填"混用）。
+            # 必须明写，否则模型会自己用 总额 ÷ 数量 反推一个不存在的单价。
+            parts.append(
+                "单价待谈" if o.get("unit_price") is None
+                else "单价待谈（旧数据，单价未填）"
+            )
         if o.get("total_amount"):
             parts.append(f"总金额 {o['total_amount']} {o.get('currency','USD')}")
         if o.get("order_no"):
