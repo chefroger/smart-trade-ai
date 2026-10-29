@@ -33,20 +33,17 @@ test('中英文词典都有待谈文案', () => {
 test('订单列表显式渲染单价状态', () => {
     const idx = SRC.indexOf('async function loadOrdersForCustomer(cid)');
     assert.ok(idx !== -1, '找不到订单列表渲染');
-    const body = SRC.slice(idx, idx + 2000);
+    const body = SRC.slice(idx, idx + 2500);
 
-    assert.match(body, /_orderPriceText\(o\)/, '列表必须用统一 helper 显示单价/待谈');
+    assert.match(body, /_orderPriceText\(/, '列表必须用统一 helper 显示单价/待谈');
 });
 
-test('编辑弹窗把 null 与 0 都留空，并用占位符说明待谈', () => {
-    const idx = SRC.indexOf('$(\'order-price\').value');
-    assert.ok(idx !== -1, '找不到单价回填');
-    const body = SRC.slice(Math.max(0, idx - 600), idx + 400);
+test('明细行的 null 与 0 都留空，并用占位符说明待谈', () => {
+    const idx = SRC.indexOf('function addOrderItemRow(item)');
+    assert.ok(idx !== -1, '找不到明细行渲染');
+    const body = SRC.slice(idx, idx + 1600);
 
     assert.match(body, /pricePending/, '必须识别 null / 0 两种待谈来源');
-    assert.match(body, /placeholder = _orderPriceText\(o\)/, '留空时用占位符说明待谈');
-    assert.ok(
-        !/order-price'\)\.value = o\.unit_price \|\| ''/.test(body),
-        '旧写法会把 0 回填成 "0"，必须去掉',
-    );
+    assert.match(body, /placeholder = t\('order\.price_pending'\)/, '留空时占位符说明待谈');
+    assert.match(body, /title = t\('order\.price_pending_legacy'\)/, '旧数据要有独立说明');
 });

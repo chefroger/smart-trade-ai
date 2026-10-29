@@ -125,6 +125,10 @@ const I18N = {
         'order.unit':'单位','order.price':'单价','order.currency':'币种',
         'order.price_pending':'单价待谈',
         'order.price_pending_legacy':'单价待谈（旧数据，单价未填）',
+        'order.items':'商品明细','order.add_line':'+ 添加商品','order.remove_line':'删除这一行',
+        'order.line_total':'行总额','order.items_count':'等{n}项',
+        'order.items_required':'至少添加一行商品','order.item_name_required':'请填写每一行的品名',
+        'order.total_pending':'合计待谈','order.price_per_line':'按行报价',
         'order.amount':'总金额','order.status':'状态','order.delivery':'交货日期',
         'order.payment':'付款方式','order.notes':'备注',
         // onboarding
@@ -315,6 +319,10 @@ const I18N = {
         'order.unit':'Unit','order.price':'Unit Price','order.currency':'Currency',
         'order.price_pending':'Price TBD',
         'order.price_pending_legacy':'Price TBD (legacy data, price not filled)',
+        'order.items':'Line items','order.add_line':'+ Add item','order.remove_line':'Remove this line',
+        'order.line_total':'Line total','order.items_count':'({n} items)',
+        'order.items_required':'Add at least one line','order.item_name_required':'Enter a product name on every line',
+        'order.total_pending':'Total TBD','order.price_per_line':'Priced per line',
         'order.amount':'Total','order.status':'Status','order.delivery':'Delivery',
         'order.payment':'Payment Terms','order.notes':'Notes',
         'onb.welcome':'Welcome to Trade AI Assistant!',
@@ -2888,12 +2896,24 @@ async function loadOrdersForCustomer(cid) {
         }
         container.innerHTML = orders.map(o => {
             const stColor = o.status==='已下单'?'var(--accent-green)':o.status==='已出货'?'var(--primary)':o.status==='已完成'?'var(--text-muted)':'var(--accent)';
+            const items = o.items || [];
+            // 多商品：首行品名 + 等N项；单价只对单行有意义，多行标「按行报价」
+            const priceText = items.length > 1
+                ? t('order.price_per_line')
+                : _orderPriceText(items.length === 1 ? items[0] : o);
+            const pendingTotal = o.total_amount == null && items.length > 0;
             return `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px;cursor:pointer;" onclick="showOrderEditModal(${o.id})">
                 <span style="color:${stColor};font-weight:500;">● ${esc(o.status)}</span>
-                <b>${esc(o.product_name)}</b>
+                <b>${
+                    items.length > 1
+                        ? esc(items[0].product_name) + ' ' + t('order.items_count', {n: items.length})
+                        : esc(o.product_name)
+                }</b>
                 ${o.quantity ? '<span style="color:var(--text-secondary);">'+esc(o.quantity)+esc(o.unit||'')+'</span>' : ''}
-                <span style="color:var(--text-muted);"> ${esc(_orderPriceText(o))}</span>
-                ${o.total_amount ? '<span style="color:var(--accent);font-weight:500;"> '+esc(o.total_amount)+' '+esc(o.currency||'USD')+'</span>' : ''}
+                <span style="color:var(--text-muted);"> ${esc(priceText)}</span>
+                ${pendingTotal
+                    ? '<span style="color:var(--text-muted);"> '+t('order.total_pending')+'</span>'
+                    : (o.total_amount ? '<span style="color:var(--accent);font-weight:500;"> '+esc(o.total_amount)+' '+esc(o.currency||'USD')+'</span>' : '')}
                 ${o.order_no ? '<span style="color:var(--text-muted);margin-left:8px;">#'+esc(o.order_no)+'</span>' : ''}
             </div>`;
         }).join('');
@@ -2918,32 +2938,28 @@ function showOrderEditModal(oid, presetCid) {
     var stOptions = stValues.map(function(v, i) {
         return '<option value="' + v + '">' + t('order.status_' + stKeys[i]) + '</option>';
     }).join('');
-    backdrop.innerHTML = '<div class="modal" style="max-width:520px;width:95%;" onclick="event.stopPropagation()">' +
+    backdrop.innerHTML = '<div class="modal" style="max-width:660px;width:95%;" onclick="event.stopPropagation()">' +
         '<h3>' + (isEdit ? t('order.edit_title') : t('order.title')) + '</h3>' +
         '<input type="hidden" id="order-edit-id" value="'+(oid||'')+'">' +
         '<input type="hidden" id="order-cust-id" value="'+(presetCid||'')+'">' +
-        '<div id="order-cust-row" style="display:'+(presetCid?'none':'block')+';">' +
+        '<div id="order-cust-row" style="display:'+((isEdit||presetCid)?'none':'block')+';">' +
             '<div class="form-group"><label for="order-cust-sel">'+t('order.cust_label')+'</label><select id="order-cust-sel"></select></div>' +
         '</div>' +
         '<div class="form-row">' +
-            '<div class="form-group"><label for="order-product">'+t('order.product')+'</label><input type="text" id="order-product" placeholder="e.g. ADSS Cable"></div>' +
             '<div class="form-group"><label for="order-no">'+t('order.no')+'</label><input type="text" id="order-no" placeholder="PO-2026-001"></div>' +
-        '</div>' +
-        '<div class="form-row">' +
-            '<div class="form-group"><label for="order-qty">'+t('order.qty')+'</label><input type="number" id="order-qty" placeholder="1000" step="any" min="0"></div>' +
-            '<div class="form-group"><label for="order-unit">'+t('order.unit')+'</label><input type="text" id="order-unit" value="'+(currentLang==='en'?'set':'套')+'"></div>' +
-        '</div>' +
-        '<div class="form-row">' +
-            '<div class="form-group"><label for="order-price">'+t('order.price')+'</label><input type="number" id="order-price" placeholder="0.35" step="any" min="0"></div>' +
             '<div class="form-group"><label for="order-currency">'+t('order.currency')+'</label><select id="order-currency"><option>USD</option><option>EUR</option><option>CNY</option></select></div>' +
         '</div>' +
         '<div class="form-row">' +
-            '<div class="form-group"><label for="order-total">'+t('order.amount')+'</label><input type="number" id="order-total" placeholder="3500" step="any" min="0"></div>' +
             '<div class="form-group"><label for="order-status">'+t('order.status')+'</label><select id="order-status">'+stOptions+'</select></div>' +
+            '<div class="form-group"><label for="order-delivery">'+t('order.delivery')+'</label><input type="date" id="order-delivery"></div>' +
         '</div>' +
         '<div class="form-row">' +
-            '<div class="form-group"><label for="order-delivery">'+t('order.delivery')+'</label><input type="date" id="order-delivery"></div>' +
             '<div class="form-group"><label for="order-payment">'+t('order.payment')+'</label><input type="text" id="order-payment" placeholder="T/T 30/70"></div>' +
+        '</div>' +
+        '<div class="form-group">' +
+            '<label>'+t('order.items')+'</label>' +
+            '<div id="order-items"></div>' +
+            '<button type="button" class="btn-xs" style="margin-top:6px;" onclick="addOrderItemRow()">'+t('order.add_line')+'</button>' +
         '</div>' +
         '<div class="form-group"><label for="order-notes">'+t('order.notes')+'</label><textarea id="order-notes" style="min-height:50px;" placeholder="Notes"></textarea></div>' +
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
@@ -2954,30 +2970,33 @@ function showOrderEditModal(oid, presetCid) {
     '</div>';
     document.body.appendChild(backdrop);
 
+    // 新建默认给一行空明细；编辑拉回数据后整体替换
+    setOrderItems([]);
+
     if (isEdit) {
         api('GET', `/api/trade/orders/${oid}`).then(o => {
             if (!o) return;
-            $('order-product').value = o.product_name||'';
+            // 订单归属客户在编辑里不改：回填隐藏字段并保持隐藏（旧 bug：下拉是空的）
+            $('order-cust-id').value = o.customer_id || '';
+            $('order-cust-row').style.display = 'none';
             $('order-no').value = o.order_no||'';
-            $('order-qty').value = o.quantity == null ? '' : o.quantity;
-            $('order-unit').value = o.unit||'套';
-            // null / 0 都不回填数字：留空就是"待谈"，占位符把状态说清楚
-            const pricePending = o.unit_price == null || Number(o.unit_price) === 0;
-            $('order-price').value = pricePending ? '' : o.unit_price;
-            if (pricePending) {
-                $('order-price').placeholder = _orderPriceText(o);
-                $('order-price').title = _orderPriceText(o);
-            }
             $('order-currency').value = o.currency||'USD';
-            $('order-total').value = o.total_amount == null ? '' : o.total_amount;
             $('order-status').value = o.status||'报价中';
             $('order-delivery').value = (o.delivery_date||'').slice(0,10);
             $('order-payment').value = o.payment_terms||'';
             $('order-notes').value = o.notes||'';
+            const items = (o.items && o.items.length)
+                ? o.items
+                : [{ // 迁移前数据 / 无明细：用头字段拼一行
+                    product_name: o.product_name, quantity: o.quantity,
+                    unit: o.unit, unit_price: o.unit_price,
+                    total_amount: o.total_amount,
+                }];
+            setOrderItems(items);
         });
     }
     // 加载客户下拉
-    if (!presetCid) {
+    if (!presetCid && !isEdit) {
         api('GET', '/api/trade/customers').then(list => {
             const sel = $('order-cust-sel');
             sel.innerHTML = '<option value="">'+t('order.cust_select')+'</option>' + (list||[]).map(c=>'<option value="'+c.id+'">'+esc(c.name)+'</option>').join('');
@@ -2985,29 +3004,122 @@ function showOrderEditModal(oid, presetCid) {
     }
 }
 
-/** 数字输入框：空值返回 null（待谈/未填），显式 0 返回 0。 */
-function _numOrNull(id) {
-    const el = $(id);
+// ── 订单明细行（一单多商品）─────────────────────────────────────────────────
+
+/** 输入框取数：空 → null（待谈/未填），否则数字。 */
+function _numInput(el) {
     const raw = el ? String(el.value).trim() : '';
     if (!raw) return null;
     const n = parseFloat(raw);
     return Number.isFinite(n) ? n : null;
 }
 
+/** 新增一行商品；item 缺省 = 空行。 */
+function addOrderItemRow(item) {
+    const box = $('order-items');
+    if (!box) return;
+    const it = item || {};
+    const pricePending = it.unit_price == null || Number(it.unit_price) === 0;
+    const row = document.createElement('div');
+    row.className = 'order-item-row';
+    row.innerHTML =
+        '<input type="text" class="oi-name" placeholder="'+t('order.product')+'">' +
+        '<input type="number" class="oi-qty" step="any" min="0" placeholder="'+t('order.qty')+'">' +
+        '<input type="text" class="oi-unit" placeholder="'+t('order.unit')+'">' +
+        '<input type="number" class="oi-price" step="any" min="0" placeholder="'+t('order.price')+'">' +
+        '<input type="number" class="oi-total" step="any" min="0" placeholder="'+t('order.line_total')+'">' +
+        '<button type="button" class="btn-xs" title="'+t('order.remove_line')+'" onclick="removeOrderItemRow(this)">×</button>';
+    row.querySelector('.oi-name').value = it.product_name || '';
+    row.querySelector('.oi-qty').value = it.quantity == null ? '' : it.quantity;
+    row.querySelector('.oi-unit').value = it.unit || '';
+    row.querySelector('.oi-price').value = pricePending ? '' : it.unit_price;
+    if (pricePending) {
+        // null / 0 都不回填数字：留空就是"待谈"，占位符把状态说清楚
+        row.querySelector('.oi-price').placeholder = t('order.price_pending');
+        row.querySelector('.oi-price').title = t('order.price_pending_legacy');
+    }
+    row.querySelector('.oi-total').value = it.total_amount == null ? '' : it.total_amount;
+    row.querySelectorAll('.oi-qty, .oi-price').forEach(el => {
+        el.addEventListener('input', _orderRowRecalc);
+    });
+    // 手填行总额后不再被 数量×单价 覆盖
+    row.querySelector('.oi-total').addEventListener('input', e => {
+        e.target.dataset.manual = '1';
+    });
+    box.appendChild(row);
+}
+
+/** 数量/单价变化时自动算行总额（用户手填过就不再覆盖）。 */
+function _orderRowRecalc(e) {
+    const row = e.target.closest('.order-item-row');
+    if (!row) return;
+    const totalEl = row.querySelector('.oi-total');
+    if (!totalEl || totalEl.dataset.manual === '1') return;
+    const qty = _numInput(row.querySelector('.oi-qty'));
+    const price = _numInput(row.querySelector('.oi-price'));
+    totalEl.value = (qty != null && price != null)
+        ? String(Math.round(qty * price * 100) / 100) : '';
+}
+
+function removeOrderItemRow(btn) {
+    const row = btn.closest('.order-item-row');
+    const box = $('order-items');
+    if (!row || !box) return;
+    if (box.querySelectorAll('.order-item-row').length <= 1) {
+        // 至少保留一行：清空内容而不是删掉
+        row.querySelectorAll('input').forEach(el => {
+            el.value = '';
+            delete el.dataset.manual;
+        });
+        return;
+    }
+    row.remove();
+}
+
+/** 用给定明细整体重建行；空数组 = 一行空行。 */
+function setOrderItems(items) {
+    const box = $('order-items');
+    if (!box) return;
+    box.innerHTML = '';
+    (items && items.length ? items : [{}]).forEach(addOrderItemRow);
+}
+
+/** 收集明细：整行空忽略；填了内容却没品名 → 返回 null（调用方提示）。 */
+function _collectOrderItems() {
+    const rows = Array.from(document.querySelectorAll('#order-items .order-item-row'));
+    const out = [];
+    for (const row of rows) {
+        const name = row.querySelector('.oi-name').value.trim();
+        const qty = _numInput(row.querySelector('.oi-qty'));
+        const unit = row.querySelector('.oi-unit').value.trim();
+        const price = _numInput(row.querySelector('.oi-price'));
+        const total = _numInput(row.querySelector('.oi-total'));
+        if (!name && qty == null && price == null && total == null) continue;
+        if (!name) return null;
+        out.push({
+            product_name: name,
+            quantity: qty,
+            unit: unit,
+            unit_price: price,   // null = 待谈，不是 0
+            total_amount: total,
+        });
+    }
+    return out;
+}
+
 async function saveOrder() {
     const editId = $('order-edit-id').value;
     const custId = $('order-cust-id').value || $('order-cust-sel').value;
-    const product = $('order-product').value.trim();
-    if (!custId || !product) { toast(t('toast.cust_product_required')); return; }
+    if (!custId) { toast(t('toast.cust_product_required')); return; }
+    const items = _collectOrderItems();
+    if (items === null) { toast(t('order.item_name_required')); return; }
+    if (!items.length) { toast(t('order.items_required')); return; }
     const body = {
-        customer_id: parseInt(custId), product_name: product,
+        customer_id: parseInt(custId),
+        // 明细行是商品的事实来源；订单头只发订单级字段
+        items: items,
         order_no: $('order-no').value.trim(),
-        // 空字段发 null（≠ 0）：后端据此区分「单价待谈」与「显式 0 元」
-        quantity: _numOrNull('order-qty'),
-        unit: $('order-unit').value.trim(),
-        unit_price: _numOrNull('order-price'),
         currency: $('order-currency').value,
-        total_amount: _numOrNull('order-total'),
         status: $('order-status').value,
         delivery_date: $('order-delivery').value,
         payment_terms: $('order-payment').value.trim(),

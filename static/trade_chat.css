@@ -480,6 +480,23 @@ body {
 .form-row .form-group { flex: 1; }
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 
+/* 订单明细行：品名 | 数量 | 单位 | 单价 | 行总额 | 删除 */
+.order-item-row {
+    display: flex; gap: 6px; align-items: center; margin-bottom: 6px;
+}
+.order-item-row input {
+    padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 13px; font-family: inherit; background: var(--bg-input); outline: none;
+    min-width: 0;
+}
+.order-item-row input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
+.order-item-row .oi-name { flex: 2.4; }
+.order-item-row .oi-qty { flex: 1; }
+.order-item-row .oi-unit { flex: 0.9; }
+.order-item-row .oi-price { flex: 1; }
+.order-item-row .oi-total { flex: 1.1; }
+.order-item-row .btn-xs { flex: 0 0 auto; }
+
 .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
