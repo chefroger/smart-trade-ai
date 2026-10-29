@@ -370,6 +370,36 @@ def _kill_gateway() -> None:
             pass
 
 
+_LAUNCHD_LABEL = "com.trade.assistant"
+
+
+def _launchd_label_if_managed() -> str:
+    """当前进程由 macOS launchd 的 KeepAlive 守护托管时返回 label，否则空串。
+
+    为什么必须区分：KeepAlive 会在进程死掉时**立刻**补起一个并抢到端口，
+    watchdog 再自己 spawn 就会绑不上端口、被判不健康，进而把代码回滚。
+    托管场景下重启只能交给 `launchctl kickstart`。
+    """
+    if sys.platform != "darwin":
+        return ""
+    plist = Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist"
+    if not plist.is_file():
+        return ""
+    try:
+        r = _sp.run(
+            ["launchctl", "list", _LAUNCHD_LABEL],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, _sp.SubprocessError):
+        return ""
+    if r.returncode != 0:
+        return ""
+    # 输出三列：PID\t状态\tlabel；PID 为 "-" 表示任务已加载但没在跑。
+    # 必须是我们自己这个 pid —— 否则是别处手动起的实例，走普通重启路径。
+    pid_col = (r.stdout or "").strip().split("\t")[0].strip()
+    return _LAUNCHD_LABEL if pid_col == str(os.getpid()) else ""
+
+
 def _perform_restart() -> None:
     """终止当前 Trade 进程并以独立子进程启动新实例。
 
@@ -454,9 +484,12 @@ def _perform_restart() -> None:
                 "--workdir", str(Path.cwd()),
                 "--pending-file", str(pending_file),
                 "--log", str(trade_data / "restart-watchdog.log"),
-                "--",
-                *_restart_cmd,
             ]
+            # KeepAlive 托管时不能再自己 spawn（launchd 会抢先占端口）→ 交给 launchctl
+            _launchd_label = _launchd_label_if_managed()
+            if _launchd_label:
+                _watchdog_cmd += ["--launchd-label", _launchd_label]
+            _watchdog_cmd += ["--", *_restart_cmd]
             _watchdog_kwargs = {
                 "stdout": _sp.DEVNULL, "stderr": _sp.DEVNULL,
                 "stdin": _sp.DEVNULL,

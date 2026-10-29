@@ -1653,6 +1653,97 @@ class TestRestartWatchdog:
         assert code == 0, "旧命令行必须能跑通，否则用户点重启服务静默不动"
         assert spawned["nonce"], "旧调用方没传 nonce 时，watchdog 必须自己生成一个"
 
+    def test_launchd_path_uses_kickstart_and_never_spawns(self, tmp_path, monkeypatch):
+        """KeepAlive 托管：重启必须交给 launchctl，不能再自己 spawn 抢端口。"""
+        from trade import restart_watchdog as w
+
+        calls = {"kickstart": 0, "spawn": 0, "kill": 0}
+
+        def _boom(*a, **k):
+            calls["spawn"] += 1
+            raise AssertionError("launchd 托管时不得自己 spawn")
+
+        def _kill(*a, **k):
+            calls["kill"] += 1
+
+        monkeypatch.setattr(w, "_spawn", _boom)
+        monkeypatch.setattr(w, "_kill", _kill)
+        monkeypatch.setattr(w.time, "sleep", lambda *_a: None)
+        monkeypatch.setattr(
+            w, "_kickstart",
+            lambda label, log: calls.__setitem__("kickstart", calls["kickstart"] + 1) or True,
+        )
+        monkeypatch.setattr(w, "_wait_healthy", lambda *a, **k: True)
+
+        pending = tmp_path / "pending_update.json"
+        pending.write_text("{}", encoding="utf-8")
+
+        code = w.main([
+            "--old-pid", "1", "--port", "9119",
+            "--launchd-label", "com.trade.assistant",
+            "--pre-sha", "a" * 40, "--repo", str(tmp_path),
+            "--workdir", str(tmp_path), "--pending-file", str(pending),
+            "--log", str(tmp_path / "wd.log"),
+            "--", "python", "server.py",
+        ])
+
+        assert code == 0
+        assert calls == {"kickstart": 1, "spawn": 0, "kill": 0}
+        assert not pending.exists(), "健康后必须清掉 pending 现场"
+
+    def test_launchd_unhealthy_rolls_back_then_kickstarts_again(self, tmp_path, monkeypatch):
+        from trade import restart_watchdog as w
+
+        kicks = []
+
+        monkeypatch.setattr(w.time, "sleep", lambda *_a: None)
+        monkeypatch.setattr(
+            w, "_kickstart",
+            lambda label, log: kicks.append(label) or True,
+        )
+        # 第一次不健康，回退后第二次健康
+        health = iter([False, True])
+        monkeypatch.setattr(w, "_wait_healthy", lambda *a, **k: next(health))
+        rolled = []
+        monkeypatch.setattr(
+            w, "_rollback",
+            lambda repo, sha, log: rolled.append(sha) or True,
+        )
+
+        pending = tmp_path / "pending_update.json"
+        pending.write_text("{}", encoding="utf-8")
+
+        code = w.main([
+            "--old-pid", "1", "--port", "9119",
+            "--launchd-label", "com.trade.assistant",
+            "--pre-sha", "a" * 40, "--repo", str(tmp_path),
+            "--workdir", str(tmp_path), "--pending-file", str(pending),
+            "--log", str(tmp_path / "wd.log"),
+            "--", "python", "server.py",
+        ])
+
+        assert code == 2
+        assert rolled == ["a" * 40]
+        assert len(kicks) == 2, "回退后必须再 kickstart 一次"
+        assert not pending.exists()
+
+    def test_launchd_kickstart_command_and_rc(self, tmp_path, monkeypatch):
+        from trade import restart_watchdog as w
+
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            cp = MagicMock()
+            cp.returncode = 0
+            cp.stderr = b""
+            return cp
+
+        monkeypatch.setattr(w.subprocess, "run", fake_run)
+        assert w._kickstart("com.trade.assistant", tmp_path / "x.log") is True
+        assert seen["cmd"][:3] == ["launchctl", "kickstart", "-k"]
+        assert seen["cmd"][3].endswith("/com.trade.assistant")
+
     def test_main_uses_parse_known_args(self):
         """新版调用方多传参数时不能直接崩：必须 parse_known_args。"""
         import inspect
@@ -1662,6 +1753,66 @@ class TestRestartWatchdog:
         src = inspect.getsource(w.main)
         assert "parse_known_args(" in src
         assert "p.parse_args(" not in src
+
+
+class TestLaunchdDetection:
+    """KeepAlive 托管识别：认错会导致 restart 与 launchd 抢端口、回滚代码。"""
+
+    def _patch(self, monkeypatch, tmp_path, platform="darwin", plist=True,
+               stdout=None, rc=0):
+        from trade import app as app_mod
+
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        if plist:
+            d = tmp_path / "Library" / "LaunchAgents"
+            d.mkdir(parents=True)
+            (d / "com.trade.assistant.plist").write_text("x", encoding="utf-8")
+
+        class _R:
+            returncode = rc
+
+            def __init__(self):
+                self.stdout = stdout if stdout is not None else ""
+
+        monkeypatch.setattr(app_mod._sp, "run", lambda *a, **k: _R())
+        return app_mod
+
+    def test_non_macos_is_never_managed(self, monkeypatch, tmp_path):
+        mod = self._patch(monkeypatch, tmp_path, platform="linux")
+        assert mod._launchd_label_if_managed() == ""
+
+    def test_missing_plist_is_not_managed(self, monkeypatch, tmp_path):
+        mod = self._patch(monkeypatch, tmp_path, plist=False)
+        assert mod._launchd_label_if_managed() == ""
+
+    def test_our_pid_running_is_managed(self, monkeypatch, tmp_path):
+        mod = self._patch(
+            monkeypatch, tmp_path, stdout=f"{os.getpid()}\t0\tcom.trade.assistant\n",
+        )
+        assert mod._launchd_label_if_managed() == "com.trade.assistant"
+
+    def test_other_pid_is_not_managed(self, monkeypatch, tmp_path):
+        """其它实例在跑（手动起了第二份）→ 本进程不该交给 launchctl。"""
+        mod = self._patch(
+            monkeypatch, tmp_path, stdout="99999\t0\tcom.trade.assistant\n",
+        )
+        assert mod._launchd_label_if_managed() == ""
+
+    def test_job_loaded_but_not_running(self, monkeypatch, tmp_path):
+        mod = self._patch(
+            monkeypatch, tmp_path, stdout="-\t0\tcom.trade.assistant\n",
+        )
+        assert mod._launchd_label_if_managed() == ""
+
+    def test_launchctl_missing_degrades(self, monkeypatch, tmp_path):
+        mod = self._patch(monkeypatch, tmp_path)
+
+        def _raise(*a, **k):
+            raise FileNotFoundError("launchctl")
+
+        monkeypatch.setattr(mod._sp, "run", _raise)
+        assert mod._launchd_label_if_managed() == ""
 
     def test_stash_pop_conflict_aborts_and_restores(self, tmp_path, monkeypatch):
         """stash pop 冲突：升级立即中止，代码恢复到 pre_update_sha，改动留在 stash。"""

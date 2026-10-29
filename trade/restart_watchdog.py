@@ -140,6 +140,79 @@ def _wait_healthy(
     return False
 
 
+def _kickstart(label: str, log_path: Path) -> bool:
+    """通过 launchd 重启服务（-k = 先杀旧再起新），替代 kill + 自己 spawn。
+
+    为什么必须走 launchd：安装脚本给 macOS 建的守护带 KeepAlive=true，
+    我们一杀旧进程，launchd 立刻补起一个并抢到端口 → watchdog 自己 spawn
+    的进程永远绑不上、被判不健康、进而回滚代码。交给 launchd 起就不会有
+    两个实例抢同一个端口。
+    """
+    uid = os.getuid() if hasattr(os, "getuid") else ""
+    target = f"gui/{uid}/{label}"
+    try:
+        r = subprocess.run(
+            ["launchctl", "kickstart", "-k", target],
+            capture_output=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        _log(log_path, f"launchctl kickstart failed: {e!r}")
+        return False
+    if r.returncode != 0:
+        err = (r.stderr or b"").decode("utf-8", "replace").strip()[:300]
+        _log(log_path, f"launchctl kickstart rc={r.returncode}: {err}")
+        return False
+    return True
+
+
+def _clear_pending(pending_file: str) -> None:
+    """探活成功后删掉「待重启」现场。"""
+    if not pending_file:
+        return
+    try:
+        Path(pending_file).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _run_launchd(args, log_path: Path) -> int:
+    """launchd 托管时的重启路径：kickstart + 启动时间判定健康。
+
+    不能用 nonce：launchd 按 plist 的环境变量启动，注入不了本轮 nonce。
+    用「启动时间晚于本次 kickstart 时刻」证明是刚起的进程即可 —— 没被杀掉的
+    旧进程启动时间必然更早。
+    """
+    label = args.launchd_label
+    time.sleep(2)  # 先让 /system/restart 的 HTTP 响应发出去
+    started = time.time()
+    if not _kickstart(label, log_path):
+        _log(log_path, "kickstart failed; leaving service as-is")
+        return 1
+    _log(log_path, f"kickstarted {label}")
+    if _wait_healthy(args.port, args.timeout, "", None, min_started_at=started - 5):
+        _log(log_path, "launchd-restarted process healthy")
+        _clear_pending(args.pending_file)
+        return 0
+
+    _log(log_path, "launchd-restarted process did not become healthy")
+    if not args.pre_sha or not args.repo:
+        _log(log_path, "no pre-update commit; leaving service as-is")
+        return 1
+    if not _rollback(args.repo, args.pre_sha, log_path):
+        _log(log_path, "rollback unsuccessful; leaving service as-is")
+        return 1
+
+    started2 = time.time()
+    if not _kickstart(label, log_path):
+        return 1
+    if _wait_healthy(args.port, args.timeout, "", None, min_started_at=started2 - 5):
+        _log(log_path, "rolled-back launchd process healthy")
+        _clear_pending(args.pending_file)
+        return 2
+    _log(log_path, "rolled-back launchd process also unhealthy")
+    return 1
+
+
 def _rollback(repo: str, pre_sha: str, log_path: Path) -> bool:
     try:
         r = subprocess.run(
@@ -170,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     # 既不杀旧进程也不起新进程，用户点了「重启」服务静默不动。
     p.add_argument("--nonce", default="")
     p.add_argument("--old-started-at", type=float, default=0.0)
+    # 由 launchd 托管时（macOS KeepAlive 守护）必须交给 launchctl 重启
+    p.add_argument("--launchd-label", default="")
     p.add_argument("--log", required=True)
     p.add_argument("--timeout", type=float, default=90.0)
     p.add_argument("command", nargs=argparse.REMAINDER)
@@ -183,6 +258,11 @@ def main(argv: list[str] | None = None) -> int:
 
     log_path = Path(args.log)
     _log(log_path, f"watchdog start (old pid={args.old_pid}, port={args.port})")
+
+    # launchd 托管：由 launchctl 负责杀旧+起新，我们只负责探活与回滚
+    if args.launchd_label:
+        _log(log_path, f"launchd-managed: {args.launchd_label}")
+        return _run_launchd(args, log_path)
 
     # 旧版调用方没传 nonce：本进程自己生成一个注入给新进程。
     # 新进程是刚拉下来的新代码（认 TRADE_RESTART_NONCE），探活照样能精确判定。
