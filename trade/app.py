@@ -386,18 +386,21 @@ def _launchd_label_if_managed() -> str:
     if not plist.is_file():
         return ""
     try:
+        # 用无参 `launchctl list`（制表符分列的 PID/状态/Label 表格）。
+        # `launchctl list <label>` 在较新 macOS 上输出的是 plist 字典，解析不出 pid。
         r = _sp.run(
-            ["launchctl", "list", _LAUNCHD_LABEL],
-            capture_output=True, text=True, timeout=10,
+            ["launchctl", "list"], capture_output=True, text=True, timeout=10,
         )
     except (OSError, _sp.SubprocessError):
         return ""
     if r.returncode != 0:
         return ""
-    # 输出三列：PID\t状态\tlabel；PID 为 "-" 表示任务已加载但没在跑。
-    # 必须是我们自己这个 pid —— 否则是别处手动起的实例，走普通重启路径。
-    pid_col = (r.stdout or "").strip().split("\t")[0].strip()
-    return _LAUNCHD_LABEL if pid_col == str(os.getpid()) else ""
+    for line in (r.stdout or "").splitlines():
+        cols = line.split("\t")
+        if len(cols) >= 3 and cols[-1].strip() == _LAUNCHD_LABEL:
+            # 必须是我们自己这个 pid —— 否则是别处手动起的实例，走普通重启路径
+            return _LAUNCHD_LABEL if cols[0].strip() == str(os.getpid()) else ""
+    return ""
 
 
 def _perform_restart() -> None:

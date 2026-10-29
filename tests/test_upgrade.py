@@ -1788,20 +1788,31 @@ class TestLaunchdDetection:
 
     def test_our_pid_running_is_managed(self, monkeypatch, tmp_path):
         mod = self._patch(
-            monkeypatch, tmp_path, stdout=f"{os.getpid()}\t0\tcom.trade.assistant\n",
+            monkeypatch, tmp_path,
+            stdout=(
+                "PID\tStatus\tLabel\n"
+                "123\t0\tcom.apple.something\n"
+                f"{os.getpid()}\t-15\tcom.trade.assistant\n"
+            ),
         )
         assert mod._launchd_label_if_managed() == "com.trade.assistant"
 
     def test_other_pid_is_not_managed(self, monkeypatch, tmp_path):
         """其它实例在跑（手动起了第二份）→ 本进程不该交给 launchctl。"""
         mod = self._patch(
-            monkeypatch, tmp_path, stdout="99999\t0\tcom.trade.assistant\n",
+            monkeypatch, tmp_path, stdout="99999\t-15\tcom.trade.assistant\n",
         )
         assert mod._launchd_label_if_managed() == ""
 
     def test_job_loaded_but_not_running(self, monkeypatch, tmp_path):
         mod = self._patch(
             monkeypatch, tmp_path, stdout="-\t0\tcom.trade.assistant\n",
+        )
+        assert mod._launchd_label_if_managed() == ""
+
+    def test_label_absent_from_table(self, monkeypatch, tmp_path):
+        mod = self._patch(
+            monkeypatch, tmp_path, stdout="123\t0\tcom.apple.other\n",
         )
         assert mod._launchd_label_if_managed() == ""
 
