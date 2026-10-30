@@ -312,6 +312,83 @@ def _ensure_linux_auto_start(trade_dir: Path) -> None:
     print("  ✓ 已设置开机自启动")
 
 
+# ── Windows「正在运行的 exe 被占用」识别 ─────────────────────────────────
+
+def _looks_like_exe_lock(err: str) -> bool:
+    """判断 pip 失败是不是「正在运行的 exe 被占用」。
+
+    2026-10-30 Windows 客户机实测（铁证）：Trade 由 venv\\Scripts\\trade.exe
+    （pip 生成的 console script）启动，而升级第 4 步的 `pip install -e .` 要重写
+    同一个 trade.exe —— **Windows 不允许替换正在运行的 exe**（WinError 32）。
+    pip 的退路（先改名成 .deleteme）同样失败，于是 updater 判致命 → 回滚代码 →
+    界面只显示「升级失败」，而真实原因在界面上完全看不到。
+
+    判据要**同时**满足两个条件，避免误报：
+      1. 文本里有 Windows 的「占用」特征（WinError 32 / being used by another
+         process / 另一个程序正在使用此文件）；
+      2. 文本里提到了 .exe（pip 重写 console script 时会带上 'trade.exe.deleteme'）。
+    """
+    low = err.lower()
+    if ".exe" not in low:
+        return False
+    markers = (
+        "winerror 32",
+        "being used by another process",
+        "另一个程序正在使用此文件",
+        "resource temporarily unavailable",
+    )
+    return any(m in low for m in markers)
+
+
+def _install_trade_package(trade_dir: Path, emit, warnings: list[str]) -> str | None:
+    """editable 重装 Trade 自身（pip install -e . --no-deps）。
+
+    返回 None = 成功；返回字符串 = 致命错误（调用方要中止升级并回滚代码）。
+
+    「正在运行的 exe 被占用」在 Windows 上是升级按钮的经典死结：
+    pip 要重写的 trade.exe 正被本服务占着（WinError 32）。但它**不是致命错误**：
+    Trade 是 editable 安装，代码已由 Step 1 的 git pull 更新到位，版本号读的是
+    源码里的 pyproject.toml（trade/app.py:_pyproject_path），跟 pip 重装无关。
+    跳过的只是 console script 的重写 —— 而我们正在把启动方式从 trade.exe 迁到
+    python.exe + server.py（见 win_setup.resolve_trade_command）。所以这里降级为
+    警告，**升级照常算成功**（可用性高于一切）。
+    """
+    result = subprocess.run(
+        _pip_install_args("-e", str(trade_dir), "--no-deps"),
+        capture_output=True, text=True, timeout=600, env=_pip_env(),
+    )
+    if result.returncode == 0:
+        emit("  ✓ Package updated")
+        return None
+    err = result.stderr.strip()
+    if _looks_like_exe_lock(err):
+        hint = _exe_lock_hint(trade_dir)
+        emit("  ⚠ pip install -e . 因文件被占用而跳过（不影响本次升级生效）")
+        emit(f"  💡 {hint}")
+        warnings.append(hint)
+        return None
+    emit(f"  ❌ pip install failed: {err}")
+    return err
+
+
+def _exe_lock_hint(trade_dir: Path) -> str:
+    """给出「占用」场景下用户**能照做**的下一步（而不是一句「升级失败」）。
+
+    这次升级**不会因此失败**（editable 安装下代码已通过 git pull 生效，
+    版本号读的是源码里的 pyproject.toml）——跳过的只是 console script 的重写。
+    根治办法是让 Trade 不再由 trade.exe 启动：开机自启与桌面快捷方式在本次升级
+    里已改成 `python.exe + server.py`，**重启一次**即可生效。
+    """
+    py = Path(sys.executable)
+    server_py = trade_dir / "server.py"
+    return (
+        "Trade 正由 trade.exe 启动，Windows 不允许替换正在运行的可执行文件，"
+        "所以本次升级跳过了「重写 console script」这一步（不影响代码与版本号生效）。"
+        "请**重启一次 Trade** —— 重启后开机自启与桌面快捷方式会改用 "
+        f'"{py}" "{server_py}" 启动，之后升级就不会再撞这个问题。'
+    )
+
+
 # ── 可选依赖（best-effort）───────────────────────────────────────────────
 
 # 这些依赖**默认要装**，但**装不上也不能阻断**：不装时对应能力自动降级，其余功能零影响。
@@ -965,17 +1042,11 @@ def update_trade(target_sha_request: str | None = None) -> dict:
             errors.append(f"pip install -r requirements.txt failed: {err[:200]}")
             _rollback_if_possible("pip install -r requirements.txt failed")
             return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
-    pip_args = _pip_install_args("-e", str(trade_dir), "--no-deps")
-    result = subprocess.run(
-        pip_args, capture_output=True, text=True, timeout=600, env=_pip_env(),
-    )
-    if result.returncode != 0:
-        err = result.stderr.strip()
-        _emit(f"  ❌ pip install failed: {err}")
-        errors.append(f"pip install failed: {err[:200]}")
+    pkg_err = _install_trade_package(trade_dir, _emit, warnings)
+    if pkg_err is not None:
+        errors.append(f"pip install failed: {pkg_err[:200]}")
         _rollback_if_possible("pip install -e . failed")
-        return {"ok": False, "version": "", "error": err[:200], "errors": errors, "warnings": warnings, "messages": messages}
-    _emit("  ✓ Package updated")
+        return {"ok": False, "version": "", "error": pkg_err[:200], "errors": errors, "warnings": warnings, "messages": messages}
 
     # ── Step 4b: 可选依赖（best-effort，失败只警告）────────────────────────
     _install_optional_deps(_emit, warnings)

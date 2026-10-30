@@ -81,9 +81,21 @@ def _is_windows() -> bool:
 def resolve_trade_command(trade_dir: Path, *, executable: str | None = None) -> str:
     """返回启动 Trade 的**完整命令行**（不含参数，已做 batch 安全转换）。
 
-    优先用与当前解释器同目录的 `trade.exe`（console script，在 venv 的 Scripts 里）——
-    与文档里「用完整路径、不依赖 PATH」的做法一致，开机早期 PATH 未加载完也能跑。
-    没有就退回 `"<python>" "<server.py>"`，行为等价、不依赖 console script 是否在 PATH。
+    优先用 `"<python>" "<server.py>"`，**不用** venv 里的 `trade.exe` console script。
+
+    **为什么（2026-10-30 Windows 客户机实测，铁证）**：
+    `trade.exe` 是 pip 生成的可执行启动器，而 **Windows 不允许替换正在运行的 exe**
+    （WinError 32）。升级的第 4 步恰好就是 `pip install -e .` —— 要重写的正是这个
+    trade.exe。于是形成死结：
+
+        开机自启/桌面快捷方式用 trade.exe 起服务
+          → 升级时 pip 想重写 trade.exe → WinError 32
+          → updater 判为致命错误 → 回滚代码 → 界面只显示「升级失败」
+
+    **用户点一下必然失败**，而且失败原因在界面上完全看不到。
+    客户机改用 `python.exe server.py` 起服务后，同一条升级路径实测 ok:true（7/7 步全过）。
+
+    只有在 `server.py` 不存在时才退回 `trade.exe`（此时没有更好的选择）。
 
     Args:
         executable: 解释器路径，默认 `sys.executable`。可注入以便测试 ——
@@ -92,12 +104,17 @@ def resolve_trade_command(trade_dir: Path, *, executable: str | None = None) -> 
     返回带引号、可直接拼进 .bat 的字符串。
     """
     exe = executable or sys.executable
+    server_py = trade_dir / "server.py"
+    # 首选 python + server.py：不占任何「正在运行的文件」，升级时可正常重写
+    if server_py.is_file():
+        return f'"{to_batch_path(exe)}" "{to_batch_path(server_py)}"'
+    # 退化路径：server.py 缺失时才用 console script（注意它会被升级锁住）
     exe_dir = Path(exe).parent
     for name in ("trade.exe", "trade"):
         candidate = exe_dir / name
         if candidate.is_file():
             return f'"{to_batch_path(candidate)}"'
-    return f'"{to_batch_path(exe)}" "{to_batch_path(trade_dir / "server.py")}"'
+    return f'"{to_batch_path(exe)}" "{to_batch_path(server_py)}"'
 
 
 def build_autostart_bat(command: str, log_file: str) -> str:

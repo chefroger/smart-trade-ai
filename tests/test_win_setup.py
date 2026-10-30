@@ -18,6 +18,14 @@
 （`C:\\Users\\张伟\\AppData\\Local\\`）直接写进去会乱码；文档那段用
 `-Encoding ASCII` 写则是把非 ASCII 静默替换成 `?`。正确做法是**让生成的脚本
 保持纯 ASCII** —— 路径里的用户目录前缀换成 `%LOCALAPPDATA%` 运行时展开。
+
+## 为什么启动命令是 python.exe + server.py，不是 trade.exe
+
+2026-10-30 Windows 客户机实测：Trade 由 `venv\\Scripts\\trade.exe`（pip 生成的
+console script）启动时，升级第 4 步 `pip install -e .` 要重写这个 exe →
+**Windows 不允许替换正在运行的 exe**（WinError 32）→ 升级被判致命 → 回滚 →
+界面只显示「升级失败」，**点一下必然失败**。改用 `python.exe server.py`
+后同一条路径实测 ok:true。详见 tests/test_windows_upgrade_lock.py。
 """
 
 from __future__ import annotations
@@ -78,7 +86,29 @@ class TestGeneratedScripts:
         # Run(cmd, 0, False)：0 = 隐藏窗口，False = 不等待
         assert ", 0, False" in vbs, "窗口样式不是 0 → 会弹出终端窗口"
 
-    def test_resolve_command_prefers_venv_exe(self, tmp_path, monkeypatch):
+    def test_resolve_command_prefers_python_over_venv_exe(self, tmp_path, monkeypatch):
+        """**不能**优先用 venv 里的 trade.exe。
+
+        2026-10-30 Windows 客户机实测：trade.exe 正在运行时，升级第 4 步的
+        `pip install -e .` 要重写它 → WinError 32（Windows 不允许替换正在运行的
+        exe）→ updater 判致命 → 回滚 → 界面只显示「升级失败」。**点一下必然失败。**
+        改用 `python.exe server.py` 后同一路径实测 ok:true（7/7 步全过）。
+        """
+        exe_dir = tmp_path / "Scripts"
+        exe_dir.mkdir()
+        (exe_dir / "trade.exe").write_text("", encoding="utf-8")
+        (tmp_path / "server.py").write_text("", encoding="utf-8")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+        cmd = ws.resolve_trade_command(tmp_path, executable=str(exe_dir / "python.exe"))
+
+        assert "trade.exe" not in cmd, (
+            "启动命令仍用 trade.exe —— 升级时 pip 会因文件被占用而失败"
+        )
+        assert "python.exe" in cmd and "server.py" in cmd
+
+    def test_resolve_command_falls_back_to_venv_exe_without_server_py(self, tmp_path, monkeypatch):
+        """server.py 不存在时才退回 trade.exe（此时没有更好的选择）。"""
         exe_dir = tmp_path / "Scripts"
         exe_dir.mkdir()
         (exe_dir / "trade.exe").write_text("", encoding="utf-8")
@@ -87,16 +117,6 @@ class TestGeneratedScripts:
         cmd = ws.resolve_trade_command(tmp_path, executable=str(exe_dir / "python.exe"))
 
         assert "trade.exe" in cmd
-
-    def test_resolve_command_falls_back_to_python(self, tmp_path, monkeypatch):
-        exe_dir = tmp_path / "Scripts"
-        exe_dir.mkdir()
-        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-        (tmp_path / "server.py").write_text("", encoding="utf-8")
-
-        cmd = ws.resolve_trade_command(tmp_path, executable=str(exe_dir / "python.exe"))
-
-        assert "python.exe" in cmd and "server.py" in cmd
 
 
 class TestTaskXmlDetection:

@@ -403,6 +403,34 @@ def _launchd_label_if_managed() -> str:
     return ""
 
 
+def _fix_restart_argv(argv: list[str], *, windows: bool | None = None) -> list[str]:
+    """Windows：进程若是**用 trade.exe（console script）**起的，把 argv[0] 换成 server.py。
+
+    为什么（客户机 2026-10-30 实测）：console script 启动时 sys.argv[0] 就是那个
+    .exe 路径，于是重启命令被拼成「python.exe trade.exe --no-browser」——
+    把可执行文件当脚本喂给 python，**必然起不来**，「重启」按钮因此也是坏的。
+
+    POSIX 不受影响（覆盖运行中的脚本文件是允许的），所以只在 Windows 上改。
+    纯函数，不碰进程状态，便于测试。
+
+    windows 参数可注入：直接改 os.name 会连累 pathlib（Windows 上 Path() 抛
+    NotImplementedError，把整个 pytest 进程搞崩）——这个坑在 win_setup.py 里
+    已经踩过一次，所以这里用参数而不是 monkeypatch。
+    """
+    is_win = (os.name == "nt") if windows is None else windows
+    if not is_win or not argv:
+        return argv
+    argv0 = Path(argv[0])
+    if argv0.suffix.lower() not in (".exe", ".cmd", ".bat"):
+        return argv
+    server_py = Path(__file__).resolve().parent.parent / "server.py"
+    if not server_py.is_file():
+        return argv
+    fixed = list(argv)
+    fixed[0] = str(server_py)
+    return fixed
+
+
 def _perform_restart() -> None:
     """终止当前 Trade 进程并以独立子进程启动新实例。
 
@@ -455,7 +483,7 @@ def _perform_restart() -> None:
     old_pid = os.getpid()  # 直接用自己的 PID，不从文件读（更可靠）
 
     # 记录启动命令，交给 shell 子进程执行
-    _restart_cmd = [_restart_python] + _sys.argv
+    _restart_cmd = [_restart_python] + _fix_restart_argv(list(_sys.argv))
     # POSIX 走 sh：用 shlex.quote（repr 对含单引号的参数会生成 sh 无法解析的引法）
     _cmd_str = " ".join(shlex.quote(a) for a in _restart_cmd)
     # Windows 走 cmd，cmd 不认单引号：必须用 list2cmdline 生成双引号命令，
