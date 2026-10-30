@@ -10,6 +10,20 @@
 
 $ErrorActionPreference = "Stop"
 
+# 全局兜底：任何未预料的异常都要说清「哪一行、什么错」再退出。
+#
+# 为什么必须有（2026-10-30 实测）：用户用 `irm ... | iex` 跑，报错只甩一行红字，
+# 既不知道停在哪一步，也没法复述给技术支持 —— 而上游 `iex` 不会像 `-File` 那样
+# 打印脚本行号。装不上已经够糟，连原因都看不到就是彻底无从下手。
+trap {
+    Write-Host ""
+    Write-Host "  ✗ 安装中断：$($_.Exception.Message)" -ForegroundColor Red
+    $line = $_.InvocationInfo.ScriptLineNumber
+    if ($line) { Write-Host "    出错位置：第 $line 行" -ForegroundColor Red }
+    Write-Host "    请把上面这两行发给技术支持。" -ForegroundColor Yellow
+    exit 1
+}
+
 # 控制台输出用 UTF-8 —— 否则中文提示在默认 GBK 代码页下是乱码，
 # 用户群是电脑小白，乱码等于「看不懂 = 不敢用」。
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
