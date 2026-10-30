@@ -16,6 +16,7 @@ update_trade() 按序执行 7 个步骤：
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -313,10 +314,23 @@ def _ensure_linux_auto_start(trade_dir: Path) -> None:
 
 # ── 可选依赖（best-effort）───────────────────────────────────────────────
 
-# 客户语义检索用的向量扩展。**不是主链依赖**：不装则语义检索自动降级关键词，
-# 其余功能零影响。单独装、失败只警告 —— 个别平台（如 Windows ARM）没有
-# 对应 wheel，不能让一个可选能力把整次升级搞失败。
-_OPTIONAL_DEPS = ("sqlite-vec>=0.1.6",)
+# 这些依赖**默认要装**，但**装不上也不能阻断**：不装时对应能力自动降级，其余功能零影响。
+#   sqlite-vec          客户语义检索的 SQLite 向量扩展（个别平台无 wheel）
+#   sentence-transformers 高质量 embedding 后端（依赖 torch；torch 自 2.9 起不再发布
+#                       macOS x86_64 wheel → Intel Mac 装不上，属已知限制）
+# 单装、失败只警告 —— 不能让一个可选能力把整次升级搞失败。
+#
+# 每项是 (import 名, pip 规格, 展示名, 超时秒数)。超时给 ST 更长：
+# 它要拉约 300MB~1GB 的 torch，300s 容易踩线（踩线也只是失败，不阻断）。
+_OPTIONAL_DEPS = (
+    ("sqlite_vec", "sqlite-vec>=0.1.6", "sqlite-vec（客户语义检索）", 300),
+    (
+        "sentence_transformers",
+        "sentence-transformers>=5,<7",
+        "sentence-transformers（语义路由质量）",
+        900,
+    ),
+)
 
 
 def _install_optional_deps(emit, warnings: list[str]) -> None:
@@ -325,26 +339,25 @@ def _install_optional_deps(emit, warnings: list[str]) -> None:
     emit 由调用方传入（update_trade() 里的闭包，同时 print + 记 messages）——
     本函数是模块级的，拿不到那个闭包。
     """
-    try:
-        import sqlite_vec  # noqa: F401
-
-        return  # 已装
-    except ImportError:
-        pass
-    emit("→ Step 4b: 可选依赖（客户语义检索）...")
-    try:
-        result = subprocess.run(
-            _pip_install_args(*_OPTIONAL_DEPS),
-            capture_output=True, text=True, timeout=300, env=_pip_env(),
-        )
+    for module_name, spec, label, timeout in _OPTIONAL_DEPS:
+        # 已装就跳过（不重复下载）
+        if importlib.util.find_spec(module_name) is not None:
+            continue
+        emit(f"→ Step 4b: 可选依赖（{label}）...")
+        try:
+            result = subprocess.run(
+                _pip_install_args(spec),
+                capture_output=True, text=True, timeout=timeout, env=_pip_env(),
+            )
+        except Exception as e:  # 超时/环境异常都不该拖垮升级
+            emit(f"  ⚠ {label} 安装跳过：{e}")
+            warnings.append(f"optional dep {label} skipped: {e}")
+            continue
         if result.returncode == 0:
-            emit("  ✓ sqlite-vec 已启用（客户语义检索可用）")
+            emit(f"  ✓ {label} 已安装")
         else:
-            emit("  ⚠ sqlite-vec 安装失败：语义检索降级为关键词（其余功能不受影响）")
-            warnings.append("optional dep sqlite-vec failed to install")
-    except Exception as e:  # 超时/环境异常都不该拖垮升级
-        emit(f"  ⚠ 可选依赖安装跳过：{e}")
-        warnings.append(f"optional dep install skipped: {e}")
+            emit(f"  ⚠ {label} 安装失败：相关能力自动降级（其余功能不受影响）")
+            warnings.append(f"optional dep {label} failed to install")
 
 
 # ── 一键更新主函数 ────────────────────────────────────────────────────────

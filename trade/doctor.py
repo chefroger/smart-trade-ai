@@ -422,13 +422,23 @@ def check_post_install() -> list[CheckResult]:
         ))
 
     # Hindsight：长期记忆后端。复用 trade.memory 的可用性检测。
+    # **默认已安装**（requirements.txt 硬依赖）；但装了包 ≠ 生效 ——
+    # 还需要用户自己的 API key，所以这里分三档说清楚，不给虚假绿灯。
+    try:
+        import hindsight_client  # noqa: F401
+
+        _hindsight_pkg = True
+    except ImportError:
+        _hindsight_pkg = False
     try:
         from trade.memory import is_available as _mem_available
         ok = bool(_mem_available())
         out.append(CheckResult(
             "Hindsight（长期记忆）",
             STATUS_OK if ok else STATUS_WARN,
-            "已配置，跨会话记忆可用" if ok else "未安装/未配置：记忆降级为会话内（不阻断）",
+            "已配置，跨会话记忆可用" if ok
+            else ("已安装但未配置 API key：记忆降级为会话内（不阻断）" if _hindsight_pkg
+                  else "未安装：记忆降级为会话内（不阻断）"),
         ))
     except Exception as e:
         out.append(CheckResult("Hindsight（长期记忆）", STATUS_WARN, f"检查失败：{e}"))
@@ -445,10 +455,15 @@ def check_post_install() -> list[CheckResult]:
     except Exception as e:
         out.append(CheckResult("sqlite-vec（语义检索）", STATUS_WARN, f"检查失败：{e}"))
 
-    # sentence-transformers：高质量 embedding（可选）。缺失时用零依赖 TF-IDF。
+    # sentence-transformers：高质量 embedding。**默认尝试安装**（安装脚本/升级链路），
+    # 但装不上（Intel Mac：torch 无 macOS x86_64 wheel）时用零依赖 TF-IDF 兜底。
     try:
         import sentence_transformers  # noqa: F401
-        out.append(CheckResult("sentence-transformers", STATUS_OK, "已安装，语义路由质量更优"))
+        out.append(CheckResult(
+            "sentence-transformers", STATUS_OK,
+            "已安装，语义路由质量更优（默认后端仍是 TF-IDF，"
+            "设 TRADE_EMBEDDING_BACKEND=auto 启用 ST）",
+        ))
     except ImportError:
         out.append(CheckResult(
             "sentence-transformers", STATUS_WARN,

@@ -479,9 +479,9 @@ trade doctor
   ✓ Agent 构造: run_agent.AIAgent
   ✓ 急停状态（ESTOP）: 未处于急停状态，定时任务正常调度
   ✓ holehe（邮箱注册检测）: 已安装，Layer 1 可用
-  ⚠ Hindsight（长期记忆）: 未安装/未配置：记忆降级为会话内（不阻断）
+  ⚠ Hindsight（长期记忆）: 已安装但未配置 API key：记忆降级为会话内（不阻断）
   ✓ sqlite-vec（语义检索）: 可用：客户/文档支持语义搜索
-  ⚠ sentence-transformers: 未安装：使用内置 TF-IDF 后端（离线可用，改写查询召回稍弱）
+  ✓ sentence-transformers: 已安装，语义路由质量更优（默认后端仍是 TF-IDF，设 TRADE_EMBEDDING_BACKEND=auto 启用 ST）
   ✓ vision 工具在场: vision_analyze 在工具表中
   ✓ vision 读图: deepseek-flash 正确读出探测文字
   ✓ Tavily 搜索: 搜索可用
@@ -495,8 +495,11 @@ trade doctor
 模型、看它能否读出来；对话那项会真的走一次问答。所以它能发现"配置看着都对但实际调不
 通"的问题（例如搜索被网络拦截、所选模型其实不支持看图）。
 
-标 `⚠` 的是**可选能力层**，缺了不影响主流程（安装脚本会自动装 sqlite-vec 与 holehe；
-sentence-transformers 属可选项，装了更好、不装自动降级）。
+标 `⚠` 的是**可选能力层**，缺了不影响主流程：安装脚本会默认装 sqlite-vec、
+sentence-transformers 与 holehe；sentence-transformers 依赖 torch，而 torch 自 2.9 起
+不再发布 macOS x86_64 wheel —— **Intel Mac 装不上**，此时自动用内置 TF-IDF 后端兜底
+（其它平台正常）。Hindsight 客户端默认已装，但长期记忆要生效还需要你自己的
+Hindsight API key（没有就降级为会话内记忆）。
 
 自检**只在首次启动跑**；没通过则每次启动重试，直到修好为止（所以改完配置重启即可自动
 恢复）。跑一次约花极少量 token 和一次 Tavily 配额。

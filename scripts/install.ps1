@@ -353,6 +353,40 @@ if ($LASTEXITCODE -eq 0) {
         Write-Host "  ⚠ sqlite-vec 未安装：客户语义检索将降级为关键词检索（其余功能不受影响）" -ForegroundColor Yellow
     }
 }
+
+# 高质量 embedding 后端（sentence-transformers）：**默认尝试安装**。
+# 它依赖 torch —— torch 自 2.9 起不再发布 macOS x86_64 wheel（Intel Mac 装不上），
+# Windows / Linux / Apple Silicon 正常，但要拉约 300MB~1GB 的 torch，属预期耗时。
+# 正因为存在装不上的平台，这里**必须**是「失败只警告」：装不上就继续用内置
+# TF-IDF 后端，绝不能让整次安装失败（可用性高于一切）。
+& $PyCmd -c "import sentence_transformers" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  ✓ sentence-transformers 已安装（语义路由质量更优）" -ForegroundColor Green
+} else {
+    # 装不上是已知情况（Intel Mac：torch 没有 macOS x86_64 wheel）。
+    # 留两行 pip 报错给用户看 —— 否则「为什么没装上」无从查起。
+    #
+    # 为什么要临时改 ErrorActionPreference：PowerShell 7 里 2>&1 会把原生命令的
+    # stderr 变成错误记录，在 $ErrorActionPreference='Stop' 下会**抛异常** ——
+    # 于是「装不上」被当成「脚本崩了」。这里临时放宽，装完立刻恢复。
+    $stCode = 1
+    $stOut = @()
+    $prevEA = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $stOut = & $PipCmd install "sentence-transformers>=5,<7" 2>&1
+        $stCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEA
+    }
+    if ($stCode -eq 0) {
+        Write-Host "  ✓ sentence-transformers 安装完成（语义路由质量更优）" -ForegroundColor Green
+    } else {
+        Write-Host "  ⚠ sentence-transformers 未安装：语义路由将使用内置 TF-IDF 后端（其余功能不受影响）" -ForegroundColor Yellow
+        $stTail = @($stOut | Select-Object -Last 2) -join " "
+        if ($stTail) { Write-Host "    pip 报错（供参考）：$stTail" -ForegroundColor Cyan }
+    }
+}
 Pop-Location
 
 # 真实探针：确认装完确实能导入（与 Step 2 的 `import hermes_cli` 对齐）。

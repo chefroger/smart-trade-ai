@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smart-trade-ai"
-version = "0.7.4"
+version = "0.7.5"
 description = "Smart Trade AI — AI sales assistant for B2B trade companies. Lead generation, customer due diligence, document analysis, social media, and daily automation."
 readme = "README.md"
 # 注意：**不要**因为「部署必须用 Python 3.14」就把这里抬到 >=3.14。
@@ -71,6 +71,14 @@ dependencies = [
   # its httpx matches Hermes' pin (0.28.1), so no conflict. Trade runs it in a
   # subprocess (holehe uses trio, incompatible with asyncio) with a 120s timeout.
   "holehe>=1.61,<2.0",
+  # Long-term memory client (Hindsight) — REQUIRED, not optional.
+  # Pure Python (aiohttp stack, no C extension): installs on all three
+  # platforms and on Python 3.14 (verified by a real resolver dry-run).
+  # Lower bound matches the constraint Hermes' own catalog plugin declares
+  # (hindsight-client>=0.10.1). Installing the package is not the same as
+  # enabling it — the user's own Hindsight API key is still required; without
+  # it trade/memory.py degrades to session-only memory and blocks nothing.
+  "hindsight-client>=0.10.1,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -97,6 +105,12 @@ semantic = [
   # 纯本地、无服务器。缺失时 trade.vec_search 自动降级为关键词检索，
   # 故为 optional 而非 required。安装：pip install -e ".[semantic]"
   "sqlite-vec>=0.1.6",
+  # 高质量 embedding 后端（skill 语义路由 / 客户向量检索）。
+  # **一键安装脚本与升级链路会默认尝试安装它**（失败只警告 → 自动降级 TF-IDF），
+  # 这里列出只是为了给「手动强制安装」一条路。
+  # ⚠ 它依赖 torch，而 torch 自 2.9 起不再发布 macOS x86_64 wheel ——
+  # Intel Mac 上装不上，属已知限制（Apple Silicon / Windows / Linux 正常）。
+  "sentence-transformers>=5,<7",
 ]
 
 [project.scripts]
