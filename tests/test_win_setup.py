@@ -343,3 +343,79 @@ class TestNoStrayLaunchersOnDesktop:
         monkeypatch.delenv("TRADE_HOME", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "la"))
         assert "trade" in str(ws.launcher_dir())
+
+
+class TestDesktopShortcutIcon:
+    """桌面快捷方式要带 Trade 图标，且 ico 缺失时不能把快捷方式一起搞坏。
+
+    图标来源是仓库里的 `static/favicon.ico`（由 trade-icon.png 生成），复制到
+    launcher_dir() 后让 .lnk 指向它 —— 桌面上只该有 .lnk，图标文件跟着启动器走。
+    """
+
+    _DEFAULT = object()  # 哨兵：区分「没传」与「显式传 None」
+
+    @classmethod
+    def _run_shortcut(cls, monkeypatch, tmp_path, *, with_ico: bool, trade_dir=_DEFAULT):
+        """跑一次 ensure_desktop_shortcut，返回 (PowerShell 脚本, 结果消息, 桌面目录)。"""
+        if trade_dir is cls._DEFAULT:
+            trade_dir = tmp_path
+        if with_ico:
+            (tmp_path / "static").mkdir(exist_ok=True)
+            (tmp_path / "static" / "favicon.ico").write_bytes(b"ICO-BYTES")
+
+        desktop = tmp_path / "desktop"
+        desktop.mkdir()
+        launcher = tmp_path / "launcher"
+        lnk = desktop / "Trade.lnk"
+        captured: dict[str, str] = {}
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, timeout=30):
+            captured["ps"] = cmd[-1]
+            lnk.write_text("", encoding="utf-8")  # 模拟 PowerShell 建出 .lnk
+            return _Result()
+
+        monkeypatch.setattr(ws, "_run", fake_run)
+        monkeypatch.setattr(ws, "launcher_dir", lambda: launcher)
+        monkeypatch.setattr(
+            "trade.company.workdir._get_desktop_path", lambda: desktop
+        )
+
+        msg = ws.ensure_desktop_shortcut(tmp_path / "trade-open.vbs", trade_dir)
+        return captured["ps"], msg, launcher
+
+    def test_sets_icon_location_when_ico_exists(self, monkeypatch, tmp_path):
+        ps, _msg, launcher = self._run_shortcut(monkeypatch, tmp_path, with_ico=True)
+
+        assert "IconLocation" in ps, "快捷方式没设图标"
+        assert str(launcher / "trade.ico") in ps, "图标应指向 launcher_dir 里的副本"
+
+    def test_copies_ico_out_of_the_repo(self, monkeypatch, tmp_path):
+        """.ico 复制到 launcher_dir，不留在桌面（桌面只该有 .lnk）。"""
+        self._run_shortcut(monkeypatch, tmp_path, with_ico=True)
+
+        copied = tmp_path / "launcher" / "trade.ico"
+        assert copied.is_file()
+        assert copied.read_bytes() == b"ICO-BYTES"
+
+    def test_skips_icon_without_failing_when_missing(self, monkeypatch, tmp_path):
+        """没有 .ico 时跳过设图标，但快捷方式仍要建出来、不报错。"""
+        ps, msg, _launcher = self._run_shortcut(
+            monkeypatch, tmp_path, with_ico=False
+        )
+
+        assert "IconLocation" not in ps
+        assert msg.startswith("✓"), f"缺图标不应报错：{msg}"
+
+    def test_no_trade_dir_keeps_old_behaviour(self, monkeypatch, tmp_path):
+        """不传 trade_dir 时行为与旧版一致（只建快捷方式，不设图标）。"""
+        ps, msg, _launcher = self._run_shortcut(
+            monkeypatch, tmp_path, with_ico=True, trade_dir=None
+        )
+
+        assert "IconLocation" not in ps
+        assert msg.startswith("✓")
