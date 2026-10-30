@@ -305,18 +305,38 @@ def find_stray_desktop_launchers(desktop: Path) -> list[Path]:
     return found
 
 
-def ensure_desktop_shortcut(open_vbs: Path) -> str:
+def ensure_desktop_shortcut(open_vbs: Path, trade_dir: Path | None = None) -> str:
     """在**真实桌面**创建 Trade 快捷方式（指向 VBS → `trade open`）。
 
     用 PowerShell 的 WScript.Shell COM 创建 .lnk —— 不引入 pywin32 依赖。
     桌面路径用 workdir._get_desktop_path()（Windows 走 SHGetFolderPathW），
     OneDrive 重定向桌面的机器上也不会放错地方。
+
+    trade_dir 给出时顺带设图标：把仓库里的 `static/favicon.ico` 复制到
+    launcher_dir()（与 vbs 同目录），再让 .lnk 指向它。**.ico 缺失就跳过设图标**，
+    不报错也不阻断 —— 快捷方式本身仍要建出来。
     """
     from trade.company.workdir import _get_desktop_path
 
     desktop = _get_desktop_path()
     if not desktop.is_dir():
         return "⚠ 未找到桌面目录，跳过快捷方式"
+
+    # 图标：复制到 launcher_dir（桌面上只该有 .lnk，图标文件跟着启动器走）
+    icon_clause = ""
+    if trade_dir is not None:
+        src = Path(trade_dir) / "static" / "favicon.ico"
+        if src.is_file():
+            try:
+                dst = launcher_dir() / "trade.ico"
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                # 只有内容变了才写（幂等，也避免每次启动都碰盘）
+                data = src.read_bytes()
+                if not dst.is_file() or dst.read_bytes() != data:
+                    dst.write_bytes(data)
+                icon_clause = f"$sc.IconLocation = '{dst}'; "
+            except OSError:
+                pass  # 图标是锦上添花，失败不影响快捷方式
 
     lnk = desktop / "Trade.lnk"
     ps = (
@@ -326,6 +346,7 @@ def ensure_desktop_shortcut(open_vbs: Path) -> str:
         f"$sc.Arguments = '\"{open_vbs}\"'; "
         "$sc.WorkingDirectory = $env:USERPROFILE; "
         "$sc.Description = '打开 Trade 外贸 AI 助手'; "
+        f"{icon_clause}"
         "$sc.Save()"
     )
     result = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps])
@@ -387,7 +408,7 @@ def ensure_windows_setup(trade_dir: Path) -> list[str]:
         pass  # 清理失败不影响主流程
 
     try:
-        messages.append(ensure_desktop_shortcut(scripts["open_vbs"]))
+        messages.append(ensure_desktop_shortcut(scripts["open_vbs"], trade_dir))
     except Exception as e:
         messages.append(f"⚠ 创建桌面快捷方式失败：{e}")
 
