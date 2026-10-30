@@ -115,17 +115,6 @@ The script handles: Python check → Hermes Agent → Smart Trade AI → 39 skil
 > bash install.sh
 > ```
 
-### Want a specific version? Use a release
-
-Visit [Releases](https://github.com/chefroger/smart-trade-ai/releases) or specify a version:
-
-```bash
-git clone --branch v0.6.8 https://github.com/chefroger/smart-trade-ai.git ~/.trade/foreign-trade-assistant
-cd ~/.trade/foreign-trade-assistant && pip install -e ".[docs]"
-install-trade-skills
-python server.py
-```
-
 ### Or do it step by step
 
 **Prerequisites**: **Python 3.14** · Git · LLM API Key (DeepSeek recommended; OpenAI / Anthropic etc. also compatible)

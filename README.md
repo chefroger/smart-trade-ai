@@ -185,32 +185,6 @@ irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/inst
 > .\install.ps1
 > ```
 
-### 想固定版本？从 Release 装
-
-访问 [Releases](https://github.com/chefroger/smart-trade-ai/releases) 下载最新版，或指定版本：
-
-**macOS / Linux：**
-
-```bash
-git clone --branch v0.6.8 https://github.com/chefroger/smart-trade-ai.git ~/.trade/foreign-trade-assistant
-cd ~/.trade/foreign-trade-assistant && pip install -e ".[docs]"
-install-trade-skills
-python server.py
-```
-
-**Windows（PowerShell）：**
-
-```powershell
-$TradeHome = "$env:LOCALAPPDATA\trade"
-git clone --branch v0.6.8 https://github.com/chefroger/smart-trade-ai.git $TradeHome\foreign-trade-assistant
-cd $TradeHome\foreign-trade-assistant
-python -m venv $TradeHome\venv
-$TradeHome\venv\Scripts\pip.exe install -r requirements.txt
-$TradeHome\venv\Scripts\pip.exe install -e "." --no-deps
-$TradeHome\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
-$TradeHome\venv\Scripts\python.exe server.py
-```
-
 ### 方式 3：手动一步步装
 
 **前置条件**：**Python 3.14** · Git · LLM API Key（推荐 DeepSeek；也兼容 OpenAI / Anthropic 等）

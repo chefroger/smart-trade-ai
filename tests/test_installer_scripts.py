@@ -518,6 +518,95 @@ class TestVenvRebuildIsAtomic:
         assert swap_at > probe_at, "install.ps1 在 import 探针之前就切换运行环境了"
 
 
+class TestWindowsInstallerGaps:
+    """Windows 一键安装脚本必须自己补齐的 Windows 特有缺口。
+
+    这些都不是「macOS 版有、Windows 版没有」的排版差异，而是**只有 Windows 才会
+    踩到**的问题：Store 别名会弹商店、py 启动器才是精确选版本的入口、git 缺失时
+    小白看不懂英文报错、cmd.exe 按 OEM 代码页读 .bat 会把中文用户名写成 '?'。
+    """
+
+    def test_git_missing_gives_actionable_guidance(self):
+        """git 是克隆代码的硬前提，缺了必须给安装命令而不是让用户看英文报错。"""
+        assert "winget install Git.Git" in PS1, "install.ps1 未给出 git 的安装命令"
+        body = _code_lines(PS1)
+        git_at = body.index("Get-Command git")
+        clone_at = body.index('Invoke-CloneOrUpdate "foreign-trade-assistant"')
+        assert git_at < clone_at, "git 检查必须排在克隆之前"
+
+    def test_py_launcher_can_select_exact_version(self):
+        """`py -3.14` 是 Windows 独有的精确选版本入口（PATH 上的 python 常是 3.11）。"""
+        assert "Get-Command py" in PS1, "install.ps1 未尝试 Windows 的 py 启动器"
+        assert "-3.14" in PS1, "install.ps1 未用 py 启动器指定 3.14"
+
+    def test_store_alias_is_skipped(self):
+        """Microsoft Store 的应用执行别名会把安装器卡在「弹商店」。"""
+        assert "WindowsApps" in PS1, "install.ps1 未排除 Store 别名（会弹商店卡住安装）"
+
+    def test_venv_creation_failure_is_detected(self):
+        """建 venv 失败必须当场退出 —— 原生命令非零退出不抛异常。"""
+        body = _code_lines(PS1)
+        venv_at = body.index("-m venv")
+        window = body[venv_at: venv_at + 400]
+        assert "$LASTEXITCODE" in window, "install.ps1 未检查建 venv 的退出码"
+
+    def test_launcher_exports_trade_home(self):
+        """启动器必须带出 TRADE_HOME —— 否则自定义数据目录时服务读的是另一个目录。"""
+        body = _code_lines(PS1)
+        assert "set TRADE_HOME=" in body, "install.ps1 生成的 trade.cmd 未导出 TRADE_HOME"
+
+    def test_launcher_paths_are_ascii_safe(self):
+        """写进 .cmd 的路径必须用环境变量展开，避免中文用户名被 OEM 编码写成 '?'。"""
+        body = _code_lines(PS1)
+        assert "ConvertTo-BatchPath" in body, (
+            "install.ps1 未把用户目录前缀换成环境变量引用（中文用户名会写成 '?'）"
+        )
+        assert "%$envName%" in body and "LOCALAPPDATA" in body and "USERPROFILE" in body, (
+            "install.ps1 未用 %LOCALAPPDATA% / %USERPROFILE% 展开用户目录前缀"
+        )
+
+    def test_hermes_discovery_does_not_rely_on_include_with_recurse(self):
+        """-Include 配 -Recurse 会**整体失效**（返回目录里所有文件），必须用 -Filter。"""
+        body = _code_lines(PS1)
+        assert "-Include" not in body, (
+            "install.ps1 用了 -Include —— 配 -Recurse 时过滤条件会被忽略"
+        )
+        assert '-Filter "hermes.*"' in body, "install.ps1 未用 -Filter 递归找 hermes"
+
+    def test_long_paths_is_warned_not_blocked(self):
+        """长路径未开启要提示（给命令），但**不得阻断安装**。"""
+        assert "LongPathsEnabled" in PS1, "install.ps1 未检测长路径支持"
+        body = _code_lines(PS1)
+        warn_at = body.index("LongPathsEnabled")
+        # 检测块之后不得紧跟 exit（提示不等于拦截）
+        assert "exit 1" not in body[warn_at: warn_at + 500], (
+            "长路径提示不得阻断安装（可用性高于一切）"
+        )
+
+
+class TestReadmeHasNoReleaseSection:
+    """仓库已不再发布 Release —— README 里就不能再教用户「从 Release 装」。
+
+    2026-10-30 起 GitHub 上所有历史 Release 与版本 tag 都已删除（只保留
+    `pre-token-optimization` 这个回滚锚点）。README 里残留的下载链接会 404，
+    而客群是电脑小白 —— 404 等于「装不上」。
+    """
+
+    @pytest.mark.parametrize("name", ["README.md", "README.en.md"])
+    def test_no_releases_link(self, name):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "github.com/chefroger/smart-trade-ai/releases" not in text, (
+            f"{name} 仍指向已删除的 Releases 页面"
+        )
+
+    @pytest.mark.parametrize("name", ["README.md", "README.en.md"])
+    def test_no_pinned_version_clone(self, name):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "git clone --branch v0" not in text, (
+            f"{name} 仍在教用户克隆已删除的版本 tag"
+        )
+
+
 class TestNoBareVarBeforeMultibyte:
     """`$var` 后面**紧跟多字节字符**时必须写成 `${var}`。
 

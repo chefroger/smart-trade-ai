@@ -1,3 +1,4 @@
+#Requires -Version 5.1
 # ==============================================================================
 # Foreign Trade Assistant — 一键安装脚本 (Windows PowerShell)
 # ==============================================================================
@@ -8,6 +9,10 @@
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
+
+# 控制台输出用 UTF-8 —— 否则中文提示在默认 GBK 代码页下是乱码，
+# 用户群是电脑小白，乱码等于「看不懂 = 不敢用」。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 Write-Host ""
 Write-Host "  Foreign Trade Assistant — 安装向导" -ForegroundColor Cyan
@@ -28,14 +33,45 @@ $HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDA
 # 判据：解释器正好是 3.14（不是「>= 3.11」下限）
 $IsPython314 = { param($cmd) & $cmd -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null; $LASTEXITCODE -eq 0 }
 
+# Microsoft Store 的「应用执行别名」是空壳：调它不会返回版本，
+# 而是**弹开 Microsoft Store**（安装器会像卡死一样停在那里）。
+# 所以 PATH 上的候选必须先排除 WindowsApps 目录下的别名。
+function Test-NotStoreAlias {
+    param([string]$Path)
+    if (-not $Path) { return $true }
+    return ($Path -notlike "*\Microsoft\WindowsApps\*")
+}
+
 foreach ($cmd in @("python3.14", "python3", "python")) {
     try {
+        $resolved = $cmd
+        $onPath = Get-Command $cmd -ErrorAction SilentlyContinue
+        if ($onPath) { $resolved = $onPath.Source }
+        # 跳过 Store 别名（会弹商店）
+        if (-not (Test-NotStoreAlias $resolved)) { continue }
         if (& $IsPython314 $cmd) {
             $PythonCmd = $cmd
-            Write-Host "  ✓ Python 3.14 ($(& $PythonCmd -c "import sys; print(sys.executable)"))" -ForegroundColor Green
+            $pyPath = (& $cmd -c "import sys; print(sys.executable)" 2>$null)
+            Write-Host "  ✓ Python 3.14 ($pyPath)" -ForegroundColor Green
             break
         }
     } catch {}
+}
+
+# Windows 自带的 `py` 启动器可以**显式指定版本**（`py -3.14`）。
+# PATH 上的 `python` 常指向 3.11/3.13（用户装过多个版本），
+# 而 `py -3.14` 能精确命中 —— 这是 Windows 独有、PATH 探测覆盖不到的入口。
+if (-not $PythonCmd) {
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        & $pyLauncher.Source -3.14 -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            # 用数组保存「启动器 + 参数」，`& $cmd` 会把它拆成两个参数
+            $PythonCmd = @($pyLauncher.Source, "-3.14")
+            $pyPath = (& $pyLauncher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null)
+            Write-Host "  ✓ Python 3.14 ($pyPath)" -ForegroundColor Green
+        }
+    }
 }
 
 # 退路：Hermes 自带的托管解释器 —— 优先用它：与 Hermes 的运行时 ABI 完全一致。
@@ -89,7 +125,10 @@ $VenvOld  = $null
 # 于是 Hermes 的 pm 激活会把 cp314 的包塞进旧解释器 → 聊天只报「AI Agent 模块未加载」。
 # **重建不会丢任何用户数据**：数据在 $TradeHome 下（数据库、公司目录），不在 venv 里。
 if ((Test-Path "$VenvDir\Scripts\python.exe") -and -not (& $IsPython314 "$VenvDir\Scripts\python.exe")) {
-    Write-Host "  ! 已有的运行环境不是 Python 3.14 —— 正在重建（不会动你的数据）..." -ForegroundColor Yellow
+    # 先把旧版本号取出来写进提示 —— 用户需要知道「现在跑的是几」才能判断要不要处理
+    $oldVer = & "$VenvDir\Scripts\python.exe" -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+    if (-not $oldVer) { $oldVer = "未知" }
+    Write-Host "  ! 已有的运行环境是 Python $oldVer，需要 3.14 —— 正在重建（不会动你的数据）..." -ForegroundColor Yellow
     # 换掉之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
     # 这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
     try {
@@ -109,6 +148,13 @@ if ((Test-Path "$VenvDir\Scripts\python.exe") -and -not (& $IsPython314 "$VenvDi
 if (-not (Test-Path "$VenvDir\Scripts\python.exe")) {
     Write-Host "  → 创建虚拟环境..."
     & $PythonCmd -m venv $VenvDir
+    # 原生命令非零退出**不会抛异常**（本文件后面有多处踩坑记录）——
+    # 不查就是「venv 没建成」却继续往下走，用户最后只看到一句
+    # ModuleNotFoundError，而真正的原因是这里。
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$VenvDir\Scripts\python.exe")) {
+        Write-Host "  ✗ 虚拟环境创建失败（上面的报错见上）。请检查磁盘空间与路径权限后重试。" -ForegroundColor Red
+        exit 1
+    }
 }
 $PipCmd = "$VenvDir\Scripts\pip.exe"
 $PyCmd  = "$VenvDir\Scripts\python.exe"
@@ -187,6 +233,18 @@ if (-not $hermesCmd) {
     $onPath = Get-Command hermes -ErrorAction SilentlyContinue
     if ($onPath) { $hermesCmd = $onPath.Source }
 }
+# 兜底：在 Hermes 根目录里**递归找** hermes.cmd / hermes.exe（限制深度）。
+# **刻意不写死布局** —— 上游换安装布局时，写死的路径会「静默找不到」，
+# 用户看到的只是「未找到 hermes 命令」，而实际上它就在硬盘上。
+if (-not $hermesCmd -and (Test-Path $HermesHome)) {
+    # 用 -Filter 而不是 -Include：后者在 -Recurse 下要求路径以 \* 结尾，
+    # 否则过滤条件会被**整体忽略**（返回目录里所有文件），第一个命中的是随机文件。
+    $found = Get-ChildItem -Path $HermesHome -Filter "hermes.*" `
+        -Recurse -Depth 4 -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -eq ".cmd" -or $_.Extension -eq ".exe" } |
+        Select-Object -First 1
+    if ($found) { $hermesCmd = $found.FullName }
+}
 
 if ($hermesCmd) {
     Write-Host "  ✓ 已找到 hermes 命令（$hermesCmd）" -ForegroundColor Green
@@ -208,6 +266,33 @@ Write-Host "Step 3/5: 安装 Foreign Trade Assistant" -ForegroundColor White
 
 $TradeRepo = "https://github.com/chefroger/smart-trade-ai.git"
 $TradeDir = "$TradeHome\foreign-trade-assistant"
+
+# ── 前置检查：git 与长路径 ────────────────────────────────────────────────
+# git 是下载代码的硬前提。缺了它，用户看到的是 git 自己的英文报错
+# （'git' 不是内部或外部命令），小白完全无从下手 —— 这里直接给出安装命令。
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Host "  ✗ 未找到 git —— 无法下载 Trade 代码。" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  请先安装 Git（任选一种；装完**重开** PowerShell 再运行本脚本）：" -ForegroundColor White
+    Write-Host "    winget install Git.Git"
+    Write-Host "    或手动下载：https://git-scm.com/download/win"
+    exit 1
+}
+
+# 长路径（MAX_PATH）：Windows 默认 260 字符上限，venv 里的 site-packages
+# 路径很深，撞上限时报的是 'Filename too long'。这不是致命问题 ——
+# 能装成就装成，装不成下面这行命令能救，所以只提示、不阻断。
+try {
+    $longPaths = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+        -Name LongPathsEnabled -ErrorAction Stop).LongPathsEnabled
+} catch {
+    $longPaths = 0
+}
+if ($longPaths -ne 1) {
+    Write-Host "  ⚠ 系统未开启长路径支持（Windows 默认 260 字符上限）。" -ForegroundColor Yellow
+    Write-Host "    若安装中途报 'Filename too long'，用**管理员** PowerShell 执行下面这行后重试：" -ForegroundColor Yellow
+    Write-Host "      New-ItemProperty -Path `"HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem`" -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force"
+}
 
 # 记录回滚点（2026-10-16 加，与 install.sh 同步）。重建场景下依赖若装不上，代码必须能
 # 退回升级前 —— 否则「新代码 + 旧 venv」照样起不来，等于把「重建失败」升级成「彻底打不开」。
@@ -362,14 +447,40 @@ try {
 $LocalBin = "$env:LOCALAPPDATA\local\bin"
 New-Item -ItemType Directory -Path $LocalBin -Force | Out-Null
 
+# 把用户目录前缀换成环境变量引用，让写进 .cmd 的内容保持**纯 ASCII**。
+#
+# 与 trade/post_install/win_setup.py 的 to_batch_path 同构：cmd.exe 按系统 OEM
+# 代码页读 .bat，中文用户名（C:\Users\张伟\...）直接写进去，在**英文**系统上
+# 会被替换成 '?'（且不报错）——于是表现为「后台能跑、命令坏了」，最难排查。
+# 用 %LOCALAPPDATA% / %USERPROFILE% 在运行时展开，就完全绕开了编码问题。
+function ConvertTo-BatchPath {
+    param([string]$Path)
+    if (-not $Path) { return $Path }
+    foreach ($envName in @("LOCALAPPDATA", "USERPROFILE")) {
+        $prefix = [Environment]::GetEnvironmentVariable($envName)
+        if ($prefix -and $Path.ToLower().StartsWith($prefix.ToLower())) {
+            return "%$envName%" + $Path.Substring($prefix.Length)
+        }
+    }
+    return $Path
+}
+
+$BatchHermesHome = ConvertTo-BatchPath $HermesHome
+$BatchTradeHome  = ConvertTo-BatchPath $TradeHome
+$BatchPyCmd      = ConvertTo-BatchPath $PyCmd
+$BatchServerPy   = ConvertTo-BatchPath "$TradeDir\server.py"
+
 @"
 @echo off
-set HERMES_HOME=$HermesHome
-REM 禁用 Hermes 懒加载重启：否则 agent 创建时会被 exec 到 Hermes 自带的 store python
-REM （那里没有 trade 包），agent 线程以 RelaunchExit(SystemExit) 静默死亡，
-REM 前端只会看到「Agent 未返回有效响应」。bootstrap.py 里也设了一处，这里是双保险。
+set HERMES_HOME=$BatchHermesHome
+REM Keep TRADE_HOME: a custom data dir must survive the launcher, otherwise the
+REM service reads a different directory than the one the installer populated.
+set TRADE_HOME=$BatchTradeHome
+REM Disable Hermes lazy-install restart: without it the agent thread is re-exec'd
+REM into Hermes' own store python (no trade package there) and dies silently.
+REM bootstrap.py sets it too; this is the belt-and-braces copy.
 set HERMES_DISABLE_LAZY_INSTALLS=1
-"$PyCmd" "$TradeDir\server.py" %*
+"$BatchPyCmd" "$BatchServerPy" %*
 "@ | Out-File -FilePath "$LocalBin\trade.cmd" -Encoding OEM
 
 # 检测 PATH 中是否已包含 $LocalBin

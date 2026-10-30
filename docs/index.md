@@ -530,8 +530,7 @@ sentence-transformers 属可选项，装了更好、不装自动降级）。
 
 <p style="text-align:center; color:#8b949e; margin-top:3rem;">
   Smart Trade AI — 外贸业务员的本地 AI 助手<br>
-  <a href="https://github.com/chefroger/smart-trade-ai">GitHub</a> ·
-  <a href="https://github.com/chefroger/smart-trade-ai/releases">Releases</a>
+  <a href="https://github.com/chefroger/smart-trade-ai">GitHub</a>
 </p>
 
 ---
