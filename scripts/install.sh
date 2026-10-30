@@ -318,25 +318,6 @@ else
     log_warn "sqlite-vec 未安装：客户语义检索将降级为关键词检索（其余功能不受影响）"
 fi
 
-# 高质量 embedding 后端（sentence-transformers）：**默认尝试安装**。
-# 它依赖 torch —— 而 torch 自 2.9 起**不再发布 macOS x86_64 wheel**，
-# 所以 Intel Mac 上装不上（Apple Silicon / Windows / Linux 正常，会拉约
-# 300MB~1GB 的 torch，属预期耗时）。
-# 正因为有装不上的平台，这里**必须**是「失败只警告」：装不上就继续用
-# 内置 TF-IDF 后端，绝不能让整次安装失败（可用性高于一切）。
-if "$PY" -c "import sentence_transformers" 2>/dev/null; then
-    log_ok "sentence-transformers 已安装（语义路由质量更优）"
-else
-    # 装不上是已知情况（Intel Mac：torch 没有 macOS x86_64 wheel）。
-    # 把 pip 的真实报错留两行给用户看 —— 否则「为什么没装上」无从查起。
-    # 用 if 条件包住赋值：set -e 不对 if 条件里的失败生效，装不上才能走到 warn 分支。
-    if _st_log=$("$PIP" install "sentence-transformers>=5,<7" 2>&1); then
-        log_ok "sentence-transformers 安装完成（语义路由质量更优）"
-    else
-        log_warn "sentence-transformers 未安装：语义路由将使用内置 TF-IDF 后端（其余功能不受影响）"
-        log_info "pip 报错（供参考）：$(printf '%s' "${_st_log}" | tail -2 | tr '\n' ' ')"
-    fi
-fi
 cd - >/dev/null
 
 # ─────────────────────────────────────────────────────────────────────────────

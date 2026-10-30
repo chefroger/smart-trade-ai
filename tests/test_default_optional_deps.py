@@ -1,19 +1,15 @@
-"""默认安装的两个依赖：hindsight-client（硬依赖）与 sentence-transformers（软依赖）。
+"""默认安装策略：只装 sqlite-vec 与 holehe，hindsight / sentence-transformers 默认不装。
 
-为什么一个硬一个软 —— 这是 2026-10-30 的实测结论，不是偏好：
+2026-10-30 12:24 Lau 拍板（取代当日上午的「默认安装」结论）：
 
-- **hindsight-client**：纯 Python（aiohttp 系，无 C 扩展），Python 3.14 + 三平台
-  都能解析安装（`pip install --dry-run` 实测通过），版本下限对齐 Hermes 侧
-  catalog 插件的 `hindsight-client>=0.10.1`。所以可以进 `requirements.txt` /
-  `pyproject.toml` 的硬依赖。
-- **sentence-transformers**：依赖 `torch>=2.2`，而 **torch 自 2.9 起不再发布
-  macOS x86_64 wheel**（只剩 arm64）。Trade 强制 Python 3.14，于是 **Intel Mac
-  上根本装不上**（实测 pip 报 "no matching distributions available for your
-  environment: torch"）。若写进硬依赖清单，Intel Mac 的整次安装会直接失败
-  —— 违反「可用性高于一切」。
+- **hindsight-client 默认不装**：Lau 没有 API key，装了也用不上。
+- **sentence-transformers 默认不装**：占空间（依赖 torch，300MB~1GB），
+  安装弊大于利。
 
-  所以它走「默认尝试安装、失败只警告」的路径：安装脚本 + 升级链路都会试装，
-  装不上就继续用内置 TF-IDF 后端（Apple Silicon / Windows / Linux 正常）。
+两条都不是「删掉能力」——代码层的降级守卫原样保留：没装时
+`trade/memory.py` 走会话内记忆、`trade/embeddings.py` 走内置 TF-IDF，
+用户想用时手动 `pip install` 即可。本文件钉住的是**默认安装策略**，
+不是功能可用性。
 """
 
 from __future__ import annotations
@@ -29,6 +25,8 @@ INSTALL_SH = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
 INSTALL_PS1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 UPDATE_PY = (ROOT / "trade" / "post_install" / "update.py").read_text(encoding="utf-8")
 DOCTOR_PY = (ROOT / "trade" / "doctor.py").read_text(encoding="utf-8")
+MEMORY_PY = (ROOT / "trade" / "memory.py").read_text(encoding="utf-8")
+EMBEDDINGS_PY = (ROOT / "trade" / "embeddings.py").read_text(encoding="utf-8")
 
 
 def _code_lines(text: str) -> str:
@@ -38,80 +36,93 @@ def _code_lines(text: str) -> str:
     )
 
 
-class TestHindsightIsHardDependency:
-    """hindsight-client 默认安装 —— 纯 Python，可以进硬依赖清单。"""
-
-    def test_in_requirements(self):
-        assert re.search(r"^hindsight-client", REQUIREMENTS, re.M), (
-            "requirements.txt 未包含 hindsight-client"
-        )
-
-    def test_in_pyproject_dependencies(self):
-        assert re.search(r'"hindsight-client', PYPROJECT), (
-            "pyproject.toml 的 dependencies 未包含 hindsight-client"
-        )
-
-    def test_version_floor_matches_hermes_catalog_plugin(self):
-        """下限与 Hermes catalog 插件声明的 >=0.10.1 对齐，避免装出版本太老。"""
-        assert ">=0.10.1" in REQUIREMENTS, "hindsight-client 的版本下限与 Hermes 侧不一致"
+def _requirement_lines(text: str) -> str:
+    """requirements 的真依赖行（去掉注释与空行）。"""
+    return "\n".join(
+        line for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    )
 
 
-class TestSentenceTransformersIsBestEffort:
-    """sentence-transformers 默认尝试安装，但**不得**进硬依赖清单。"""
+class TestHindsightNotInstalledByDefault:
+    """hindsight-client 默认不装（Lau 没有 API key，装了没用）。"""
 
     def test_not_in_requirements(self):
-        """进了 requirements.txt 就是硬失败路径 —— Intel Mac 会装不上。"""
-        body = "\n".join(
-            line for line in REQUIREMENTS.splitlines()
-            if not line.strip().startswith("#")
-        )
-        assert "sentence-transformers" not in body, (
-            "sentence-transformers 不能进 requirements.txt 的硬依赖 —— "
-            "torch 在 Intel Mac 上无 wheel，会让整次安装失败"
+        assert "hindsight-client" not in _requirement_lines(REQUIREMENTS), (
+            "requirements.txt 仍在默认安装 hindsight-client"
         )
 
-    def test_in_semantic_extra(self):
-        """手动强制安装的路：pip install -e \".[semantic]\"。"""
-        assert '"sentence-transformers' in PYPROJECT, (
-            "pyproject.toml 的 semantic extra 未包含 sentence-transformers"
-        )
-
-    def test_install_sh_attempts_it(self):
-        assert "sentence-transformers" in _code_lines(INSTALL_SH), (
-            "install.sh 未尝试安装 sentence-transformers"
-        )
-
-    def test_install_ps1_attempts_it(self):
-        assert "sentence-transformers" in _code_lines(INSTALL_PS1), (
-            "install.ps1 未尝试安装 sentence-transformers"
-        )
-
-    def test_installers_do_not_abort_on_failure(self):
-        """装不上只能警告，不能 exit —— 可用性高于一切。"""
-        for name, text in (("install.sh", INSTALL_SH), ("install.ps1", INSTALL_PS1)):
-            body = _code_lines(text)
-            idx = body.index("sentence-transformers")
-            window = body[idx: idx + 400]
-            assert "exit 1" not in window, (
-                f"{name} 在 sentence-transformers 安装失败时会阻断整次安装"
-            )
-
-    def test_update_chain_attempts_it(self):
-        """升级链路同样要尝试装（否则老用户永远补不上）。"""
-        assert "sentence-transformers" in UPDATE_PY, (
-            "trade/post_install/update.py 未尝试安装 sentence-transformers"
+    def test_not_in_pyproject_dependencies(self):
+        deps = PYPROJECT.split("[project.optional-dependencies]")[0]
+        assert "hindsight-client" not in deps, (
+            "pyproject.toml 的 dependencies 仍在默认安装 hindsight-client"
         )
 
 
-class TestDoctorReportsBothHonestly:
-    """自检要给三档信息，不给虚假绿灯。"""
+class TestSentenceTransformersNotInstalledByDefault:
+    """sentence-transformers 默认不装（占空间、要拉 torch）。"""
 
-    def test_hindsight_distinguishes_installed_but_unconfigured(self):
-        assert "已安装但未配置 API key" in DOCTOR_PY, (
-            "doctor 未区分「Hindsight 已装但没配 key」"
+    def test_not_in_requirements(self):
+        assert "sentence-transformers" not in _requirement_lines(REQUIREMENTS)
+
+    def test_not_in_semantic_extra(self):
+        """semantic extra 只剩 sqlite-vec。"""
+        extra = PYPROJECT.split("semantic = [")[1].split("]")[0]
+        assert "sentence-transformers" not in extra, (
+            "semantic extra 仍在安装 sentence-transformers"
+        )
+        assert "sqlite-vec" in extra, "semantic extra 不应连 sqlite-vec 一起删掉"
+
+    def test_not_in_install_sh(self):
+        assert "sentence-transformers" not in _code_lines(INSTALL_SH)
+
+    def test_not_in_install_ps1(self):
+        assert "sentence-transformers" not in _code_lines(INSTALL_PS1)
+
+    def test_not_in_update_optional_deps(self):
+        assert "sentence-transformers" not in UPDATE_PY, (
+            "升级链路仍在默认安装 sentence-transformers"
         )
 
-    def test_sentence_transformers_reports_default_backend(self):
-        assert "TRADE_EMBEDDING_BACKEND" in DOCTOR_PY, (
-            "doctor 未说明 sentence-transformers 装了但默认后端仍是 TF-IDF"
+    def test_sqlite_vec_still_installed(self):
+        """只删 ST，sqlite-vec 的默认安装保持现状。"""
+        assert "sqlite-vec" in _code_lines(INSTALL_SH)
+        assert "sqlite-vec" in _code_lines(INSTALL_PS1)
+        assert "sqlite_vec" in UPDATE_PY
+
+
+class TestDoctorTreatsMissingAsNormal:
+    """「未安装」是预期状态，不能报成警告去吓唬用户。"""
+
+    def test_hindsight_section_uses_ok_status(self):
+        section = DOCTOR_PY.split("Hindsight（长期记忆）")[0][-1200:]
+        assert "STATUS_OK" in section, "Hindsight 未安装档仍是警告级别"
+
+    def test_hindsight_wording_says_default_off(self):
+        assert "默认不装" in DOCTOR_PY, "Hindsight 文案未说明默认不装"
+
+    def test_sentence_transformers_branch_uses_ok_for_missing(self):
+        section = DOCTOR_PY.split("sentence-transformers")[-1]
+        assert "STATUS_WARN" not in section.split("return out")[0], (
+            "sentence-transformers 未安装档仍是警告级别"
+        )
+
+    def test_sentence_transformers_wording_says_default_off(self):
+        assert "内置 TF-IDF 后端工作中" in DOCTOR_PY
+
+
+class TestDegradationGuardsStillIntact:
+    """只改安装策略，不改运行时降级逻辑 —— 守卫必须原样存在。"""
+
+    def test_memory_guard_exists(self):
+        assert "except ImportError" in MEMORY_PY
+        assert "hindsight_client" in MEMORY_PY
+
+    def test_embeddings_guard_exists(self):
+        assert "except ImportError" in EMBEDDINGS_PY
+        assert "sentence_transformers" in EMBEDDINGS_PY
+
+    def test_version_is_077(self):
+        assert re.search(r'^version = "0\.7\.7"$', PYPROJECT, re.M), (
+            "版本号应为 0.7.7"
         )

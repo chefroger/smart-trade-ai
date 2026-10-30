@@ -393,20 +393,11 @@ def _exe_lock_hint(trade_dir: Path) -> str:
 
 # 这些依赖**默认要装**，但**装不上也不能阻断**：不装时对应能力自动降级，其余功能零影响。
 #   sqlite-vec          客户语义检索的 SQLite 向量扩展（个别平台无 wheel）
-#   sentence-transformers 高质量 embedding 后端（依赖 torch；torch 自 2.9 起不再发布
-#                       macOS x86_64 wheel → Intel Mac 装不上，属已知限制）
 # 单装、失败只警告 —— 不能让一个可选能力把整次升级搞失败。
 #
-# 每项是 (import 名, pip 规格, 展示名, 超时秒数)。超时给 ST 更长：
-# 它要拉约 300MB~1GB 的 torch，300s 容易踩线（踩线也只是失败，不阻断）。
+# 每项是 (import 名, pip 规格, 展示名, 超时秒数)。
 _OPTIONAL_DEPS = (
     ("sqlite_vec", "sqlite-vec>=0.1.6", "sqlite-vec（客户语义检索）", 300),
-    (
-        "sentence_transformers",
-        "sentence-transformers>=5,<7",
-        "sentence-transformers（语义路由质量）",
-        900,
-    ),
 )
 
 

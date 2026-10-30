@@ -37,19 +37,6 @@ pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 # Trade 侧在子进程里跑它（holehe 用 trio，与 asyncio 不兼容），120s 超时兜底。
 holehe>=1.61,<2.0
 
-# 长期记忆客户端（Hindsight）—— **默认安装**，不是可选。
-# 纯 Python（aiohttp 系，无 C 扩展），Python 3.14 / 三平台均可装（实测解析通过），
-# 版本下限对齐 Hermes 侧 catalog 插件的约束（>=0.10.1）。
-# 装了包 ≠ 生效：还需要用户自己的 Hindsight API key；没配 key 时
-# trade/memory.py 自动降级为「会话内记忆」，不阻断任何功能。
-hindsight-client>=0.10.1,<2.0
-
-# ⚠ sentence-transformers **故意不在本文件里**（虽然它是默认要装的）。
-# 它依赖 torch，而 torch 自 2.9 起**不再发布 macOS x86_64 wheel**（Intel Mac 无解），
-# 写进硬依赖清单会让 Intel Mac 的整次安装直接失败 —— 违反「可用性高于一切」。
-# 改为：安装脚本与升级链路**默认尝试安装**（失败只警告、自动降级 TF-IDF）。
-# 见 scripts/install.sh、scripts/install.ps1、trade/post_install/update.py。
-
 # Document extraction (read_file tool)
 pymupdf>=1.24.0
 openpyxl>=3.1.0
