@@ -92,6 +92,48 @@ class TestResolveSystemPrompt:
         self._assert_composed(result, TRADE_SYSTEM_PROMPT, "GLOBAL_SYSTEM")
 
 
+class TestAccuracyTagsAreBilingual:
+    """置信度标签必须随回复语言切换，不能把中文标签漏进英文回复。
+
+    2026-11-02 实测：英文提问得到的英文报告里夹着 `[推断]` —— 因为准确规则块
+    只定义了中文标签，而 Language Policy 又要求「同一回复不混语言」，自相矛盾。
+    """
+
+    @pytest.fixture(scope="class")
+    def block(self):
+        """每轮常驻的准确规则块（首轮 / 普通轮次都用它）。"""
+        from trade.prompt import TRADE_ACCURACY_BLOCK
+
+        return TRADE_ACCURACY_BLOCK
+
+    @pytest.fixture(scope="class")
+    def full(self):
+        """文档任务的完整协议（R2/R3 在这里）。"""
+        from trade.prompt import TRADE_SYSTEM_PROMPT_FULL
+
+        return TRADE_SYSTEM_PROMPT_FULL
+
+    @pytest.mark.parametrize("tag", [
+        "[exact]", "[inferred]", "[unclear]", "[unit not stated]", "needs verification",
+    ])
+    def test_english_forms_in_accuracy_block(self, block, tag):
+        assert tag in block, f"英文回复可用的标签 {tag} 没定义"
+
+    def test_chinese_forms_kept(self, block):
+        for tag in ("[确切]", "[推断]", "[不确定]", "建议核实"):
+            assert tag in block, f"中文标签 {tag} 被误删"
+
+    def test_accuracy_block_forbids_mixing(self, block):
+        assert "不得混用两种标签" in block
+
+    @pytest.mark.parametrize("tag", [
+        "[calculated]", "[from conversation]", "[unit not stated]",
+        "Never mix the two scripts",
+    ])
+    def test_english_forms_in_document_protocol(self, full, tag):
+        assert tag in full, f"文档协议里缺英文标签 {tag}"
+
+
 class TestReplyLanguageFollowsInput:
     """回复语言跟随**用户这句话**，而不是界面选择框（2026-11-02 Lau 口径）。
 
