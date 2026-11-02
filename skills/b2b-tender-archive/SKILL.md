@@ -85,6 +85,9 @@ injection_prompt: |
 
 ## 处理方式
 
+> **语言**：脚本输出支持中英双语 —— 用户用英文对话时加 `--lang en`
+> （或设 `TRADE_LANG=en`），默认中文。
+
 ```bash
 # 先看规模，不动文件
 python scripts/extract_archives.py --root "<目录>" --dry-run

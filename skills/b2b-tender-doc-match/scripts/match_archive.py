@@ -34,6 +34,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import _i18n_docmatch as _i18n
+
 #: 分隔符与大小写归一时匹配的「非字母数字」字符段。
 _SEP_RE = re.compile(r"[^a-z0-9]+")
 #: 名称分词：英文/数字串，或单个中文字。
@@ -114,7 +116,7 @@ def match_items(items: list[dict], library: list[Path]) -> tuple[list[Match], li
         wanted = [str(n) for n in (item.get("files") or [])]
         hit = [by_name[n] for n in wanted if n in by_name]
         if hit:
-            matches.append(Match(item=item, files=hit, strategy="清单指定"))
+            matches.append(Match(item=item, files=hit, strategy="strategy.specified"))
             remaining = [f for f in remaining if f not in hit]
 
     specified = {id(m.item) for m in matches}
@@ -130,7 +132,7 @@ def match_items(items: list[dict], library: list[Path]) -> tuple[list[Match], li
             ):
                 hit.append(f)
         if hit:
-            matches.append(Match(item=item, files=hit, strategy="编号精确"))
+            matches.append(Match(item=item, files=hit, strategy="strategy.number"))
             remaining = [f for f in remaining if f not in hit]
 
     matched_ids = {id(m.item) for m in matches}
@@ -142,7 +144,7 @@ def match_items(items: list[dict], library: list[Path]) -> tuple[list[Match], li
         target = _norm_name(item.get("name", ""))
         hit = [f for f in remaining if _norm_name(f.stem) == target]
         if hit:
-            matches.append(Match(item=item, files=hit, strategy="名称相等"))
+            matches.append(Match(item=item, files=hit, strategy="strategy.name_equal"))
             remaining = [f for f in remaining if f not in hit]
             matched_ids.add(id(item))
 
@@ -158,7 +160,7 @@ def match_items(items: list[dict], library: list[Path]) -> tuple[list[Match], li
             if target in _norm_name(f.stem) or _norm_name(f.stem) in target
         ]
         if hit:
-            matches.append(Match(item=item, files=hit, strategy="名称互含"))
+            matches.append(Match(item=item, files=hit, strategy="strategy.name_contains"))
             remaining = [f for f in remaining if f not in hit]
             matched_ids.add(id(item))
 
@@ -240,9 +242,11 @@ def verify_archive(dest: Path, plan: list[PlanItem]) -> tuple[bool, str]:
     total_files = [f for f in dest.rglob("*") if f.is_file()]
 
     if len(root_files) != expected_root:
-        return False, f"根目录文件数不符：期望 {expected_root}，实际 {len(root_files)}"
+        return False, _i18n.t("verify_root_count", expected=expected_root,
+                              actual=len(root_files))
     if len(total_files) != expected_total:
-        return False, f"总文件数不符：期望 {expected_total}，实际 {len(total_files)}"
+        return False, _i18n.t("verify_total_count", expected=expected_total,
+                              actual=len(total_files))
     return True, ""
 
 
@@ -265,28 +269,33 @@ def main() -> int:
     parser.add_argument("--dest", required=True, help="归档根目录")
     parser.add_argument("--apply", action="store_true", help="真正执行（默认只出计划）")
     parser.add_argument("--move", action="store_true", help="移动而非复制")
+    parser.add_argument("--lang", choices=("zh", "en"), default=None,
+                        help="Output language (default: TRADE_LANG or zh)")
     args = parser.parse_args()
+    _i18n.set_language(args.lang)
 
     items = load_items(args.items)
     library = library_files(Path(args.library).expanduser())
     matches, unmatched_items, unmatched_files = match_items(items, library)
 
-    print(f"清单 {len(items)} 项；本地 {len(library)} 个文件；"
-          f"匹配 {len(matches)} 项，未匹配清单项 {len(unmatched_items)} 项")
+    print(_i18n.t("summary", items=len(items), files=len(library),
+                  matched=len(matches), unmatched=len(unmatched_items)))
     for m in matches:
-        print(f"  ✓ [{m.strategy}] #{m.item.get('no')} {m.item.get('name')} → "
-              f"{', '.join(f.name for f in m.files)}")
+        print(_i18n.t("match_line", strategy=_i18n.t(m.strategy),
+                      no=m.item.get("no"), name=m.item.get("name"),
+                      files=", ".join(f.name for f in m.files)))
     for i in unmatched_items:
-        print(f"  ? 未匹配：#{i.get('no')} {i.get('name')}（候选文件 {len(unmatched_files)} 个，未擅自归档）")
+        print(_i18n.t("unmatched_line", no=i.get("no"), name=i.get("name"),
+                      candidates=len(unmatched_files)))
 
     if not args.apply:
-        print("（只出计划；确认后加 --apply 执行）")
+        print(_i18n.t("plan_only"))
         return 0
 
     plan = plan_archive(matches)
     apply_archive(plan, Path(args.dest).expanduser(), move=args.move)
     ok, why = verify_archive(Path(args.dest).expanduser(), plan)
-    print("回读验证：通过" if ok else f"回读验证失败：{why}")
+    print(_i18n.t("verify_ok") if ok else _i18n.t("verify_fail", why=why))
     return 0 if ok else 1
 
 

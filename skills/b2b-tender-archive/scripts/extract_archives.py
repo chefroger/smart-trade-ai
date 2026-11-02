@@ -31,6 +31,8 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import _i18n_archive as _i18n
+
 #: 覆盖的压缩包后缀（任务书：7z / rar / zip / gz 都要）。
 ARCHIVE_SUFFIXES = (".zip", ".tar.gz", ".tgz", ".7z", ".rar", ".gz")
 
@@ -90,7 +92,7 @@ def check_stable(root: Path, interval: float = STABILITY_INTERVAL) -> tuple[bool
     time.sleep(interval)
     after = snapshot(root)
     if before != after:
-        return False, f"目录在变化（{before} → {after}），可能有进程正在写入，已停止"
+        return False, _i18n.t("unstable", before=before, after=after)
     return True, ""
 
 
@@ -210,7 +212,8 @@ def extract_one(archive: Path, mode: str = "A") -> Result:
     if mode == "B":
         target = archive.with_name(archive.name[: -len("".join(Path(archive.name).suffixes))])
         if target.is_dir() and any(target.iterdir()):
-            return Result(archive=archive, ok=True, target=target, reason="已存在且非空，跳过")
+            return Result(archive=archive, ok=True, target=target,
+                          reason=_i18n.t("skip_nonempty"))
         target.mkdir(parents=True, exist_ok=True)
     else:
         target = archive.parent
@@ -229,19 +232,19 @@ def extract_one(archive: Path, mode: str = "A") -> Result:
         elif name.endswith(".7z"):
             tool = _find_system_tool("7z", "7za", "7zz")
             if not tool:
-                return Result(archive=archive, ok=False, reason="需要系统已安装 7z（未找到）")
+                return Result(archive=archive, ok=False, reason=_i18n.t("need_7z"))
             _run_tool([tool, "x", "-y", f"-o{target}", str(archive)])
             if _looks_encrypted(archive):
-                return Result(archive=archive, ok=False, reason="包可能加密，需用户提供密码")
+                return Result(archive=archive, ok=False, reason=_i18n.t("encrypted"))
         elif name.endswith(".rar"):
             tool = _find_system_tool("unrar", "rar")
             if not tool:
-                return Result(archive=archive, ok=False, reason="需要系统已安装 unrar（未找到）")
+                return Result(archive=archive, ok=False, reason=_i18n.t("need_unrar"))
             _run_tool([tool, "x", "-y", str(archive), str(target)])
         else:
-            return Result(archive=archive, ok=False, reason="不支持的压缩格式")
+            return Result(archive=archive, ok=False, reason=_i18n.t("unsupported"))
     except Exception as e:  # 损坏包 / 权限问题：不裸崩
-        return Result(archive=archive, ok=False, reason=f"解压失败：{e}")
+        return Result(archive=archive, ok=False, reason=_i18n.t("extract_failed", error=e))
 
     if mode != "A":
         return Result(archive=archive, ok=True, target=target)
@@ -251,7 +254,7 @@ def extract_one(archive: Path, mode: str = "A") -> Result:
     if trashed is None:
         return Result(
             archive=archive, ok=True, target=target,
-            reason="解压成功，但原包未能移入回收站（未删除，请手动处理）",
+            reason=_i18n.t("trash_failed"),
         )
     return Result(archive=archive, ok=True, target=target, trashed=trashed)
 
@@ -287,7 +290,7 @@ def extract_all(root: Path, mode: str = "A", rounds: int = DEFAULT_ROUNDS, *,
                     "stopped": "", "results": []}
 
     if not root.is_dir():
-        report["stopped"] = f"目录不存在：{root}"
+        report["stopped"] = _i18n.t("dir_missing", path=root)
         return report
 
     stable, why = check_stable(root, interval)
@@ -302,7 +305,9 @@ def extract_all(root: Path, mode: str = "A", rounds: int = DEFAULT_ROUNDS, *,
         report["rounds"] = round_no
         for archive in archives:
             if dry_run:
-                report["results"].append(Result(archive=archive, ok=True, reason="dry-run"))
+                report["results"].append(
+                    Result(archive=archive, ok=True, reason=_i18n.t("dry_run"))
+                )
                 continue
             result = extract_one(archive, mode)
             report["results"].append(result)
@@ -314,7 +319,7 @@ def extract_all(root: Path, mode: str = "A", rounds: int = DEFAULT_ROUNDS, *,
                 report["failed"].append((str(archive), result.reason))
 
     if scan(root):
-        report["stopped"] = f"达到上限 {rounds} 轮仍有残留（防止死循环）"
+        report["stopped"] = _i18n.t("rounds_cap", rounds=rounds)
     return report
 
 
@@ -329,10 +334,10 @@ def plan_number_grouping(root: Path) -> list[str]:
     plan: list[str] = []
     for child in sorted(root.iterdir()):
         if child.is_dir() and not child.name.isdigit():
-            plan.append(f"文件夹 `{child.name}` → 改为纯数字编号（冲突时合并）")
+            plan.append(_i18n.t("plan_folder", name=child.name))
     for child in sorted(root.iterdir()):
         if child.is_file():
-            plan.append(f"平放文件 `{child.name}` → 按编号前缀归入对应数字文件夹")
+            plan.append(_i18n.t("plan_file", name=child.name))
     return plan
 
 
@@ -345,27 +350,30 @@ def main() -> int:
     parser.add_argument("--rounds", type=int, default=DEFAULT_ROUNDS, help="嵌套迭代上限")
     parser.add_argument("--dry-run", action="store_true", help="只统计，不动文件")
     parser.add_argument("--plan-grouping", action="store_true", help="只输出编号归组计划")
+    parser.add_argument("--lang", choices=("zh", "en"), default=None,
+                        help="Output language (default: TRADE_LANG or zh)")
     args = parser.parse_args()
+    _i18n.set_language(args.lang)
 
     root = Path(args.root).expanduser()
     if args.plan_grouping:
-        for line in plan_number_grouping(root) or ["（无需归组）"]:
+        for line in plan_number_grouping(root) or [_i18n.t("no_grouping")]:
             print(line)
         return 0
 
     info = stats(root)
-    print(f"摸底：{info['count']} 个压缩包，共 {info['bytes']} 字节，"
-          f"0 字节损坏 {info['zero_byte']} 个")
+    print(_i18n.t("stats", count=info["count"], bytes=info["bytes"],
+                  zero=info["zero_byte"]))
     if info["count"] == 0:
         return 0
 
     report = extract_all(root, args.mode, args.rounds, dry_run=args.dry_run)
     if report["stopped"]:
-        print(f"⚠ {report['stopped']}")
-    print(f"解压成功 {report['extracted']}，失败 {len(report['failed'])}，"
-          f"移入回收站 {report['trashed']}，共 {report['rounds']} 轮")
+        print(_i18n.t("stopped", reason=report["stopped"]))
+    print(_i18n.t("summary", ok=report["extracted"], failed=len(report["failed"]),
+                  trashed=report["trashed"], rounds=report["rounds"]))
     for path, reason in report["failed"]:
-        print(f"  ✗ {path}：{reason}")
+        print(_i18n.t("failed_line", path=path, reason=reason))
     return 0 if not report["failed"] else 1
 
 

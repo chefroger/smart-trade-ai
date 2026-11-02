@@ -20,6 +20,7 @@ from pathlib import Path
 # 允许从任意目录运行（脚本由定时任务调用时 cwd 不确定）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _i18n_mail as _i18n  # noqa: E402
 import tender_mail_core as core  # noqa: E402
 
 
@@ -32,7 +33,8 @@ def run_account(account: core.Account, days: int) -> dict[str, int]:
     try:
         since = datetime.now() - timedelta(days=days)
         uids = core.list_uids(conn, since)
-        core.report_line("信息", f"{account.name}：{since:%Y-%m-%d} 之后共 {len(uids)} 封")
+        core.report_line("label.info", _i18n.t("fetched_since", name=account.name,
+                                               date=f"{since:%Y-%m-%d}", count=len(uids)))
 
         for uid in uids:
             raw = core.fetch_raw(conn, uid)
@@ -43,14 +45,15 @@ def run_account(account: core.Account, days: int) -> dict[str, int]:
             reason = core.should_skip(parsed.sender, parsed.subject, account.blacklist)
             if reason:
                 stats["跳过"] += 1
-                core.report_line("跳过", f"UID {uid}「{parsed.subject}」—— {reason}")
+                core.report_line("label.skip", _i18n.t("skipped_message", uid=uid,
+                                               subject=parsed.subject, reason=reason))
                 continue
 
             saved = core.save_mail(root, parsed, uid, classify=True)
             stats["附件"] += len(parsed.attachments)
             category = core.classify_subject(parsed.subject) or "未分类"
             stats[category] = stats.get(category, 0) + 1
-            core.report_line("落盘", f"{saved}")
+            core.report_line("label.saved", str(saved))
     finally:
         try:
             conn.logout()
@@ -58,10 +61,10 @@ def run_account(account: core.Account, days: int) -> dict[str, int]:
             pass
 
     core.report_line(
-        "统计",
-        f"{account.name}：询价 {stats['询价']} 封、招标 {stats['招标']} 封、"
-        f"未分类 {stats['未分类']} 封、附件 {stats['附件']} 个、跳过 {stats['跳过']} 封；"
-        f"输出目录 {root}",
+        "label.stats",
+        _i18n.t("stats_line", name=account.name, rfq=stats["询价"],
+                tender=stats["招标"], other=stats["未分类"],
+                attachments=stats["附件"], skipped=stats["跳过"], root=root),
     )
     return stats
 
@@ -71,7 +74,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="近 N 天补抓招标/询价邮件")
     parser.add_argument("--config", default="mail_accounts.json", help="正式配置文件路径")
     parser.add_argument("--days", type=int, default=2, help="回看天数（默认 2）")
+    parser.add_argument("--lang", choices=("zh", "en"), default=None,
+                        help="输出语言（默认读 TRADE_LANG，否则中文）")
     args = parser.parse_args()
+    _i18n.set_language(args.lang)
 
     accounts = core.load_config(args.config)
     if not accounts:
@@ -80,17 +86,17 @@ def main() -> int:
 
     runnable, skipped = core.select_runnable(accounts)
     for acc, reason in skipped:
-        core.report_line("跳过账号", f"{acc.name}：{reason}")
+        core.report_line("label.skipped_account", f"{acc.name}：{reason}")
 
     if not runnable:
-        core.report_line("提示", "没有可运行的账号（全部被跳过）")
+        core.report_line("label.notice", _i18n.t("no_runnable"))
         return 1
 
     for account in runnable:
         try:
             run_account(account, args.days)
         except Exception as e:  # 单个账号失败不影响其它账号
-            core.report_line("失败", f"{account.name}：{e}")
+            core.report_line("label.failed", _i18n.t("account_failed", name=account.name, error=e))
     return 0
 
 

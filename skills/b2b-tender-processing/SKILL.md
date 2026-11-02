@@ -128,6 +128,9 @@ injection_prompt: |
 
 ## 处理方式
 
+> **语言**：脚本输出支持中英双语 —— 用户用英文对话时加 `--lang en`
+> （或设 `TRADE_LANG=en`），默认中文。
+
 ```bash
 python scripts/build_inquiry_sheet.py --spec items.json --root "<交付根目录>"
 ```

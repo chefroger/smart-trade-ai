@@ -29,6 +29,8 @@ from email.header import decode_header, make_header
 from email.message import Message
 from pathlib import Path
 
+import _i18n_mail as _i18n
+
 # ── 常量与默认值 ──────────────────────────────────────────────────────────
 
 #: 账号配置里缺省端口。IMAP over SSL 的标准端口。
@@ -479,10 +481,11 @@ def save_mail(
     text_path.write_text(
         "\n".join(
             [
-                f"发件人：{parsed.sender}",
-                f"主题：{parsed.subject}",
-                f"日期：{parsed.date.strftime('%Y-%m-%d %H:%M:%S')}",
-                f"UID：{uid}",
+                f"{_i18n.t('hdr_from')}: {parsed.sender}",
+                f"{_i18n.t('hdr_subject')}: {parsed.subject}",
+                f"{_i18n.t('hdr_date')}: {parsed.date.strftime('%Y-%m-%d %H:%M:%S')}",
+                # UID 行固定用 ASCII 冒号：backfill 要跨语言解析它
+                f"UID:{uid}",
                 "",
                 parsed.body,
             ]
@@ -525,15 +528,11 @@ def state_path_for(account: Account) -> Path:
     return root / ".tender-mail-state" / f"{safe_filename(account.email)}.state.json"
 
 
-def report_line(kind: str, text: str) -> None:
-    """统一的一行报告输出。"""
-    print(f"[{kind}] {text}")
+def report_line(label_key: str, text: str) -> None:
+    """统一的一行报告输出；标签按当前语言本地化（key 形如 ``label.info``）。"""
+    print(f"[{_i18n.t(label_key)}] {text}")
 
 
 def main_hint() -> None:
     """三个入口脚本共用的一句提示。"""
-    print(
-        "配置：把 mail_accounts.example.json 复制成 mail_accounts.json 并填写；"
-        f"落盘根目录可用环境变量 {ENV_OUTPUT_ROOT} 覆盖。",
-        file=sys.stderr,
-    )
+    print(_i18n.t("config_hint"), file=sys.stderr)

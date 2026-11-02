@@ -37,6 +37,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import _i18n_download as _i18n
+
 #: 每个分片的重试次数。
 RETRIES = 3
 
@@ -111,15 +113,16 @@ def verify_file(path: Path, item: Item) -> tuple[bool, str]:
     探针 5：只看「文件存在」不算完成。
     """
     if not path.is_file():
-        return False, "文件不存在"
+        return False, _i18n.t("file_missing")
     actual = path.stat().st_size
     if actual != item.size:
-        return False, f"大小不符：期望 {item.size}，实际 {actual}"
+        return False, _i18n.t("size_mismatch", expected=item.size, actual=actual)
     if item.checksum and item.checksum_type:
         actual_digest = file_digest(path, item.checksum_type)
         if actual_digest != item.checksum:
-            return False, (
-                f"{item.checksum_type} 不符：期望 {item.checksum}，实际 {actual_digest}"
+            return False, _i18n.t(
+                "digest_mismatch",
+                kind=item.checksum_type, expected=item.checksum, actual=actual_digest,
             )
     return True, ""
 
@@ -167,7 +170,7 @@ def acquire_lock(target: Path, pid: int | None = None) -> tuple[bool, str]:
         except (OSError, ValueError):
             holder = 0
         if holder and holder != pid and _pid_alive(holder):
-            return False, f"已有下载器在跑（pid {holder}）：{path.name}"
+            return False, _i18n.t("lock_held", pid=holder, name=path.name)
 
     path.write_text(
         json.dumps({"pid": pid, "started": time.strftime("%Y-%m-%dT%H:%M:%S")},
@@ -215,7 +218,7 @@ def http_fetch(url: str, start: int, end: int) -> bytes:
         status = getattr(resp, "status", resp.getcode())
         data = resp.read()
         if start > 0 and status != 206:
-            raise RangeUnsupportedError(f"服务端未返回 206（status={status}）")
+            raise RangeUnsupportedError(_i18n.t("range_unsupported", status=status))
         return data
 
 
@@ -238,7 +241,7 @@ def _download_chunk(url: str, start: int, end: int, dest: Path, fetch) -> None:
         except Exception as e:  # 网络抖动、超时、5xx 都重试
             last_err = e
             time.sleep(1)
-    raise RuntimeError(f"分片 {start}-{end} 下载失败：{last_err}")
+    raise RuntimeError(_i18n.t("chunk_failed", start=start, end=end, error=last_err))
 
 
 def download(item: Item, target: Path | None = None, *,
@@ -305,22 +308,25 @@ def main() -> int:
     parser.add_argument("--manifest", required=True, help="对象清单 JSON")
     parser.add_argument("--target-dir", default="", help="下载目录（缺省用清单里的 name）")
     parser.add_argument("--pieces", type=int, default=4, help="分块数（默认 4）")
+    parser.add_argument("--lang", choices=("zh", "en"), default=None,
+                        help="Output language (default: TRADE_LANG or zh)")
     args = parser.parse_args()
+    _i18n.set_language(args.lang)
 
     items = load_manifest(args.manifest, args.target_dir or None)
     if not items:
-        print("清单为空或缺必填字段（name/url/size），未下载任何文件。")
+        print(_i18n.t("manifest_empty"))
         return 1
 
     failures = 0
     for item in items:
         result = download(item, pieces=args.pieces)
         if result.ok:
-            print(f"✓ {item.name}（{item.size} 字节）已校验通过")
+            print(_i18n.t("ok_line", name=item.name, size=item.size))
         else:
             failures += 1
-            print(f"✗ {item.name}：{result.reason}")
-    print(f"完成 {len(items) - failures}/{len(items)}")
+            print(_i18n.t("failed_line", name=item.name, reason=result.reason))
+    print(_i18n.t("summary", ok=len(items) - failures, total=len(items)))
     return 0 if failures == 0 else 1
 
 

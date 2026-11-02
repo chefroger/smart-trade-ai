@@ -36,6 +36,7 @@ import sys
 from datetime import date as _date
 from pathlib import Path
 
+import _i18n_processing as _i18n
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
@@ -156,7 +157,7 @@ def build_workbook(spec: dict) -> tuple[Workbook, list[str]]:
         if isinstance(weight, (int, float)) and isinstance(qty, (int, float)):
             ws.cell(row=excel_row, column=7, value=f"=E{excel_row}*F{excel_row}")
         else:
-            warnings.append(f"第 {idx} 行：单重或数量非数值，总重留空（需人工核对）")
+            warnings.append(_i18n.t("row_non_numeric", row=idx))
 
     # 末行汇总：总重与总价用求和公式
     last_data = len(rows) + 1
@@ -199,18 +200,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="生成 11 列询价单")
     parser.add_argument("--spec", required=True, help="行项 JSON 路径")
     parser.add_argument("--root", default="", help="交付根目录（缺省为桌面）")
+    parser.add_argument("--lang", choices=("zh", "en"), default=None,
+                        help="Output language (default: TRADE_LANG or zh)")
     args = parser.parse_args()
+    _i18n.set_language(args.lang)
 
     spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
     root = args.root or str(default_desktop())
     result = build(spec, root)
 
-    print(f"项目文件夹：{result['folder']}")
-    print(f"询价单：{result['sheet']}")
+    print(_i18n.t("project_folder", path=result["folder"]))
+    print(_i18n.t("sheet", path=result["sheet"]))
     if result["skeleton"]:
-        print("提示：缺主文件，本次为骨架询价单（数量标「待确认」，单重/材质标「按图纸」）")
+        print(_i18n.t("skeleton_notice"))
     for w in result["warnings"]:
-        print(f"警告：{w}")
+        print(_i18n.t("warning", text=w))
     return 0
 
 
@@ -224,7 +228,7 @@ def default_desktop() -> Path:
 
     home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
     if not home:
-        raise SystemExit("无法确定桌面路径，请用 --root 指定交付目录")
+        raise SystemExit(_i18n.t("no_desktop"))
     return Path(home) / "Desktop"
 
 

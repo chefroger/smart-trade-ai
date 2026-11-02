@@ -20,9 +20,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _i18n_mail as _i18n  # noqa: E402
 import tender_mail_core as core  # noqa: E402
 
-_UID_RE = re.compile(r"^UID：\s*(\d+)\s*$", re.MULTILINE)
+_UID_RE = re.compile(r"^UID[：:]\s*(\d+)\s*$", re.MULTILINE)
 
 
 def find_missing(day_dir: Path) -> list[tuple[Path, int]]:
@@ -47,14 +48,14 @@ def run_account(account: core.Account, root: Path | None) -> int:
     """补一个账号的附件；返回补成功的邮件数。"""
     base = root or core.resolve_output_root(account)
     if not base.is_dir():
-        core.report_line("提示", f"落盘目录不存在：{base}")
+        core.report_line("label.notice", _i18n.t("root_missing", path=base))
         return 0
 
     targets: list[tuple[Path, int]] = []
     for day_dir in sorted(p for p in base.iterdir() if p.is_dir()):
         targets.extend(find_missing(day_dir))
     if not targets:
-        core.report_line("日志", f"{account.name}：没有缺附件的邮件")
+        core.report_line("label.log", _i18n.t("no_missing_attachments", name=account.name))
         return 0
 
     conn = core.connect(account)
@@ -63,11 +64,11 @@ def run_account(account: core.Account, root: Path | None) -> int:
         for text_file, uid in targets:
             raw = core.fetch_raw(conn, uid)
             if not raw:
-                core.report_line("失败", f"UID {uid} 拉取为空（{text_file.name}）")
+                core.report_line("label.failed", _i18n.t("fetch_empty", uid=uid, file=text_file.name))
                 continue
             parsed = core.parse_message(raw)
             if not parsed.attachments:
-                core.report_line("留档", f"UID {uid} 原邮件本身没有附件（{text_file.name}）")
+                core.report_line("label.kept", _i18n.t("mail_has_no_attachment", uid=uid, file=text_file.name))
                 continue
 
             att_dir = text_file.parent / f"{text_file.stem}_附件"
@@ -84,7 +85,7 @@ def run_account(account: core.Account, root: Path | None) -> int:
                 added += 1
             if added:
                 fixed += 1
-                core.report_line("补附件", f"{att_dir}（新增 {added} 个）")
+                core.report_line("label.attachments", _i18n.t("attachments_added", dir=att_dir, count=added))
     finally:
         try:
             conn.logout()
@@ -98,7 +99,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="补招标邮件的缺失附件")
     parser.add_argument("--config", default="mail_accounts.json", help="正式配置文件路径")
     parser.add_argument("--root", default="", help="落盘根目录（缺省按配置解析）")
+    parser.add_argument("--lang", choices=("zh", "en"), default=None,
+                        help="输出语言（默认读 TRADE_LANG，否则中文）")
     args = parser.parse_args()
+    _i18n.set_language(args.lang)
 
     accounts = core.load_config(args.config)
     if not accounts:
@@ -108,15 +112,15 @@ def main() -> int:
     root = Path(args.root).expanduser() if args.root else None
     runnable, skipped = core.select_runnable(accounts)
     for acc, reason in skipped:
-        core.report_line("跳过账号", f"{acc.name}：{reason}")
+        core.report_line("label.skipped_account", f"{acc.name}：{reason}")
 
     total = 0
     for account in runnable:
         try:
             total += run_account(account, root)
         except Exception as e:  # 单账号失败不影响其它账号
-            core.report_line("失败", f"{account.name}：{e}")
-    core.report_line("统计", f"本次补齐 {total} 封邮件的附件")
+            core.report_line("label.failed", _i18n.t("account_failed", name=account.name, error=e))
+    core.report_line("label.stats", _i18n.t("backfill_stats", count=total))
     return 0
 
 

@@ -785,6 +785,80 @@ class TestProbe8Registration:
                 assert word not in blob, f"{name} 触发词含平台名 {word}"
 
 
+# ── 脚本输出中英双语 ────────────────────────────────────────────────────
+
+class TestScriptI18n:
+    """5 个 skill 的命令行输出都要支持中英（默认中文，`--lang en` 或 TRADE_LANG=en 切英文）。
+
+    为什么每个 skill 各带一份 `_i18n_*.py`：Hermes 按 skill 目录独立同步，
+    跨目录 import 在用户机器上会失败。模块名带 skill 后缀是故意的 ——
+    五个脚本被同一进程导入时不能互相覆盖（测试里就会同时导入）。
+    """
+
+    MODULES = {
+        "mail": MAIL_SCRIPTS / "_i18n_mail.py",
+        "processing": PROCESSING_SCRIPTS / "_i18n_processing.py",
+        "download": DOWNLOAD_SCRIPTS / "_i18n_download.py",
+        "archive": ARCHIVE_SCRIPTS / "_i18n_archive.py",
+        "docmatch": MATCH_SCRIPTS / "_i18n_docmatch.py",
+    }
+
+    @staticmethod
+    def _load(name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(f"_i18n_test_{name}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_each_skill_has_its_own_module(self):
+        for name, path in self.MODULES.items():
+            assert path.is_file(), f"{name} 缺 i18n 模块"
+
+    SAMPLE_KEYS = {
+        "mail": "label.info",
+        "processing": "project_folder",
+        "download": "file_missing",
+        "archive": "no_grouping",
+        "docmatch": "plan_only",
+    }
+
+    def test_switch_to_english(self):
+        """同一 key 在中英下必须给出不同文案（否则等于没翻译）。"""
+        for name, path in self.MODULES.items():
+            mod = self._load(name, path)
+            key = self.SAMPLE_KEYS[name]
+
+            mod.set_language("zh")
+            zh = mod.t(key)
+            mod.set_language("en")
+            en = mod.t(key)
+
+            assert mod.current_language() == "en"
+            assert zh != key and en != key, f"{name}: key {key} 没进翻译表"
+            assert zh != en, f"{name}: {key} 中英文案相同，等于没翻"
+
+    def test_default_is_chinese(self, monkeypatch):
+        monkeypatch.delenv("TRADE_LANG", raising=False)
+
+        mod = self._load("mail", self.MODULES["mail"])
+        mod.set_language(None)
+
+        assert mod.t("label.info") == "信息"
+
+    def test_env_variable_is_honored(self, monkeypatch):
+        monkeypatch.setenv("TRADE_LANG", "en")
+
+        mod = self._load("download", self.MODULES["download"])
+        mod.set_language(None)
+
+        assert "size mismatch" in mod.t("size_mismatch", expected=1, actual=2)
+
+    def test_unknown_key_falls_back_to_key(self):
+        mod = self._load("archive", self.MODULES["archive"])
+
+        assert mod.t("no-such-key") == "no-such-key"
+
+
 # ── 探针 9（本批部分）：通用化自查 ─────────────────────────────────────
 
 class TestProbe9Generalization:

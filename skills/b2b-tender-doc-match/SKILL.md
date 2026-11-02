@@ -88,6 +88,9 @@ injection_prompt: |
 
 ## 处理方式
 
+> **语言**：脚本输出支持中英双语 —— 用户用英文对话时加 `--lang en`
+> （或设 `TRADE_LANG=en`），默认中文。
+
 ```bash
 # 只出计划（默认）
 python scripts/match_archive.py --items items.json --library "<文件库>" --dest "<归档目录>"

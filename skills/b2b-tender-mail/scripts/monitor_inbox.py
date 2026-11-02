@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _i18n_mail as _i18n  # noqa: E402
 import tender_mail_core as core  # noqa: E402
 
 
@@ -37,7 +38,7 @@ def run_account(account: core.Account) -> int:
         since = core.since_date(last_check)
         uids = core.filter_new_uids(core.list_uids(conn, since), last_uid)
         if not uids:
-            core.report_line("日志", f"{account.name}：无新邮件")
+            core.report_line("label.log", _i18n.t("no_new_mail", name=account.name))
             return 0
 
         for uid in uids:
@@ -48,13 +49,14 @@ def run_account(account: core.Account) -> int:
 
             reason = core.should_skip(parsed.sender, parsed.subject, account.blacklist)
             if reason:
-                core.report_line("跳过", f"UID {uid}「{parsed.subject}」—— {reason}")
+                core.report_line("label.skip", _i18n.t("skipped_message", uid=uid,
+                                                       subject=parsed.subject, reason=reason))
                 last_uid = max(last_uid, uid)
                 continue
 
             saved = core.save_mail(root, parsed, uid)
             saved_count += 1
-            core.report_line("落盘", f"{saved}")
+            core.report_line("label.saved", str(saved))
             last_uid = max(last_uid, uid)
 
         core.save_state(state_file, datetime.now(), last_uid)
@@ -80,7 +82,10 @@ def main() -> int:
     """入口：逐账号跑一次增量。"""
     parser = argparse.ArgumentParser(description="增量监控收件箱")
     parser.add_argument("--config", default="mail_accounts.json", help="正式配置文件路径")
+    parser.add_argument("--lang", choices=("zh", "en"), default=None,
+                        help="输出语言（默认读 TRADE_LANG，否则中文）")
     args = parser.parse_args()
+    _i18n.set_language(args.lang)
 
     accounts = core.load_config(args.config)
     if not accounts:
@@ -89,16 +94,16 @@ def main() -> int:
 
     runnable, skipped = core.select_runnable(accounts)
     for acc, reason in skipped:
-        core.report_line("跳过账号", f"{acc.name}：{reason}")
+        core.report_line("label.skipped_account", f"{acc.name}：{reason}")
 
     total = 0
     for account in runnable:
         try:
             total += run_account(account)
         except Exception as e:  # 单账号失败不影响其它账号，也不让定时任务报错退出
-            core.report_line("失败", f"{account.name}：{e}")
+            core.report_line("label.failed", _i18n.t("account_failed", name=account.name, error=e))
     if total:
-        core.report_line("统计", f"本次共落盘 {total} 封")
+        core.report_line("label.stats", _i18n.t("batch_stats", count=total))
     return 0
 
 

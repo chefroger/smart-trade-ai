@@ -84,6 +84,9 @@ injection_prompt: |
 
 ## 处理方式
 
+> **语言**：脚本输出支持中英双语 —— 用户用英文对话时加 `--lang en`
+> （或设 `TRADE_LANG=en`），默认中文。
+
 ```bash
 python scripts/tender_download.py --manifest objects.json --target-dir "<目标目录>"
 ```
