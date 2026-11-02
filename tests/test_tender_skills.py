@@ -699,6 +699,33 @@ class TestProbe8Registration:
             assert expected in hits, f"{query} 没命中 {expected}（实际 {hits}）"
             assert hits[0] == expected, f"{query} 被 {hits[0]} 抢走了"
 
+    def test_natural_phrasings_route_correctly(self):
+        """用户不会照着触发词说话：插入「这个 / 这些 / 帮我」也要能路由。
+
+        路由是**子串**匹配，所以「解压这些压缩包」不会命中「解压压缩包」——
+        这类句子必须靠更短的触发词兜住（2026-11-02 实测发现的真实缺口）。
+        """
+        from trade.skill_router import match_skills
+
+        cases = {
+            "整理这个招标": "b2b-tender-processing",
+            "解压这些压缩包": "b2b-tender-archive",
+            "unzip these archives": "b2b-tender-archive",
+            "archive drawings by list": "b2b-tender-doc-match",
+            "prepare an RFQ sheet": "b2b-tender-processing",
+        }
+        for query, expected in cases.items():
+            hits = [h["skill_name"] for h in match_skills(query)]
+            assert hits and hits[0] == expected, f"{query} → {hits}（期望 {expected}）"
+
+    def test_download_package_still_goes_to_download(self):
+        """G5 加了裸「压缩包」后，不能把「下载压缩包」从 G4 手里抢走。"""
+        from trade.skill_router import match_skills
+
+        hits = [h["skill_name"] for h in match_skills("下载压缩包")]
+
+        assert hits[0] == "b2b-tender-download", hits
+
     def test_tender_discovery_does_not_inject_compliance(self):
         """「找招标」注入的必须是 G1 —— 裸「招标」归合规技能，但注入只看 top1。"""
         from trade.skill_router import augment_query

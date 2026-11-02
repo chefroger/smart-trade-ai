@@ -1453,8 +1453,11 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
             # Chinese — 询价单归本技能，不与单据生成（报价单）混用
             "询价单", "生成询价单", "做个询价单", "整理招标", "处理招标",
             "招标整理", "整理新标", "招标文件整理", "询价表", "生成询价表",
-            # English
+            # 用户常插入「这个 / 一下」：路由是子串匹配，必须枚举这几种自然说法
+            "整理这个招标", "整理一下招标", "处理这个招标", "把这个招标整理",
+            # English（rfq 已被 b2b-lead-generation 占用，用更长的组合词取胜）
             "inquiry sheet", "request for quotation sheet",
+            "rfq sheet", "quotation sheet",
         ],
         "aliases": [],
         "input_fmt": "邮件归档目录或招标编号 + 主文件与附件 + 交付根目录",
@@ -1479,10 +1482,10 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
         "name": "b2b-tender-archive",
         "triggers": [
             # Chinese — 解压类只归本技能
-            "批量解压", "解压压缩包", "解压并删包", "包中包",
+            "解压", "压缩包", "批量解压", "解压压缩包", "解压并删包", "包中包",
             "嵌套压缩包", "归档清理", "解压到所在目录",
             # English
-            "extract archives", "batch unzip",
+            "unzip", "extract archives", "batch unzip",
         ],
         "aliases": [],
         "input_fmt": "压缩包所在目录 + 模式（A 删包归档 / B 就地解压）",
@@ -1511,7 +1514,7 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
             "按清单归档", "文件匹配归档", "图纸匹配", "按编号匹配",
             "招标清单匹配", "成套图纸归档", "文件重命名归档",
             # English
-            "match drawings", "archive by drawing number",
+            "match drawings", "archive drawings", "archive by drawing number",
         ],
         "aliases": [],
         "input_fmt": "招标清单（序号/名称/编号）+ 本地文件库目录 + 归档根目录",
