@@ -1461,6 +1461,34 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
         "output_fmt": "标准项目文件夹（主文件 + 编号附件）+ 11 列询价单 xlsx + 验证报告",
         "augment_prompt": "",
     },
+    {
+        "name": "b2b-tender-download",
+        "triggers": [
+            # Chinese — 只给复合词，避免与「邮件附件下载」抢
+            "大文件下载", "分块下载", "断点续传", "下载招标文件",
+            "下载压缩包", "对象存储下载", "按清单下载",
+            # English
+            "download tender package", "resumable download",
+        ],
+        "aliases": [],
+        "input_fmt": "对象清单（名称/地址/大小/校验值）+ 目标目录 + 凭据（当次提供）",
+        "output_fmt": "完整文件（大小与校验值双对上）+ 失败清单与原因",
+        "augment_prompt": "",
+    },
+    {
+        "name": "b2b-tender-archive",
+        "triggers": [
+            # Chinese — 解压类只归本技能
+            "批量解压", "解压压缩包", "解压并删包", "包中包",
+            "嵌套压缩包", "归档清理", "解压到所在目录",
+            # English
+            "extract archives", "batch unzip",
+        ],
+        "aliases": [],
+        "input_fmt": "压缩包所在目录 + 模式（A 删包归档 / B 就地解压）",
+        "output_fmt": "解压产物 + 报告（成功/失败/进回收站数/残留数）",
+        "augment_prompt": "",
+    },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────

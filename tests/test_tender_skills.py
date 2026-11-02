@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import sys
 from datetime import datetime
@@ -33,7 +34,14 @@ import tender_mail_core as mail  # noqa: E402
 SKILL_DIRS = {
     "b2b-tender-mail": ROOT / "skills" / "b2b-tender-mail",
     "b2b-tender-processing": ROOT / "skills" / "b2b-tender-processing",
+    "b2b-tender-download": ROOT / "skills" / "b2b-tender-download",
+    "b2b-tender-archive": ROOT / "skills" / "b2b-tender-archive",
 }
+
+DOWNLOAD_SCRIPTS = ROOT / "skills" / "b2b-tender-download" / "scripts"
+ARCHIVE_SCRIPTS = ROOT / "skills" / "b2b-tender-archive" / "scripts"
+sys.path.insert(0, str(DOWNLOAD_SCRIPTS))
+sys.path.insert(0, str(ARCHIVE_SCRIPTS))
 
 
 def _load_processing_script():
@@ -332,6 +340,213 @@ def ws_result(module, result, wb):
     return module, result, wb["询价单"]
 
 
+# ── 探针 5：G4 假完成与单实例锁 ─────────────────────────────────────────
+
+class TestProbe5Download:
+    """大小或校验值对不上判未完成；同目标第二个下载器被拦下。"""
+
+    PAYLOAD = b"0123456789" * 100  # 1000 字节
+
+    def _item(self, **over):
+        import hashlib
+
+        import tender_download as td
+
+        data = self.PAYLOAD
+        base = {
+            "name": "pkg.zip",
+            "url": "https://example.com/pkg.zip",
+            "size": len(data),
+            "checksum_type": "sha256",
+            "checksum": hashlib.sha256(data).hexdigest(),
+        }
+        base.update(over)
+        return td, td.Item(**base)
+
+    @staticmethod
+    def _fetch(data):
+        def fetch(url, start, end):
+            return data[start: end + 1]
+        return fetch
+
+    def test_success_when_size_and_checksum_match(self, tmp_path):
+        td, item = self._item()
+        target = tmp_path / "pkg.zip"
+
+        result = td.download(item, target, pieces=2, fetch=self._fetch(self.PAYLOAD))
+
+        assert result.ok, result.reason
+        assert target.read_bytes() == self.PAYLOAD
+
+    def test_size_mismatch_is_not_done(self, tmp_path):
+        td, item = self._item(size=2000)
+        target = tmp_path / "pkg.zip"
+
+        result = td.download(item, target, pieces=2, fetch=self._fetch(self.PAYLOAD))
+
+        assert not result.ok
+        assert "大小不符" in result.reason
+        assert not target.exists(), "校验失败不能留下一个「看起来完整」的文件"
+
+    def test_checksum_mismatch_is_not_done(self, tmp_path):
+        td, item = self._item(checksum="0" * 64)
+        target = tmp_path / "pkg.zip"
+
+        result = td.download(item, target, pieces=2, fetch=self._fetch(self.PAYLOAD))
+
+        assert not result.ok
+        assert "不符" in result.reason
+
+    def test_existing_complete_file_is_reused(self, tmp_path):
+        td, item = self._item()
+        target = tmp_path / "pkg.zip"
+        target.write_bytes(self.PAYLOAD)
+        calls = []
+
+        def fetch(url, start, end):
+            calls.append((start, end))
+            return b""
+
+        result = td.download(item, target, pieces=2, fetch=fetch)
+
+        assert result.ok
+        assert calls == [], "已完整的文件不应重新下载"
+
+    def test_second_downloader_is_blocked(self, tmp_path):
+        td, item = self._item()
+        target = tmp_path / "pkg.zip"
+        assert td.acquire_lock(target, pid=os.getpid())[0]
+
+        ok, reason = td.acquire_lock(target, pid=999999)
+
+        assert not ok
+        assert "已有下载器在跑" in reason
+
+    def test_stale_lock_can_be_taken_over(self, tmp_path):
+        td, item = self._item()
+        target = tmp_path / "pkg.zip"
+        td.lock_path(target).write_text('{"pid": 999999}', encoding="utf-8")
+
+        ok, _reason = td.acquire_lock(target, pid=os.getpid())
+
+        assert ok
+
+    def test_range_unavailable_falls_back_to_single_stream(self, tmp_path):
+        td, item = self._item()
+        target = tmp_path / "pkg.zip"
+        data = self.PAYLOAD
+
+        def fetch(url, start, end):
+            if start > 0:
+                raise td.RangeUnsupportedError("no range")
+            return data[start: end + 1]
+
+        result = td.download(item, target, pieces=2, fetch=fetch)
+
+        assert result.ok, result.reason
+        assert target.read_bytes() == data
+
+
+# ── 探针 6：G5 嵌套与回收站 ─────────────────────────────────────────────
+
+class TestProbe6Archive:
+    """顶层包 + 包中包两层 → 0 残留；删包走回收站；目录变化时停手。"""
+
+    @staticmethod
+    def _make_nested(root: Path) -> None:
+        import zipfile
+
+        inner = root / "inner.zip"
+        with zipfile.ZipFile(inner, "w") as zf:
+            zf.writestr("a.txt", "A")
+        outer = root / "outer.zip"
+        with zipfile.ZipFile(outer, "w") as zf:
+            zf.write(inner, "inner.zip")
+        inner.unlink()  # 顶层只剩 outer.zip
+
+    def test_nested_archives_leave_zero_residue(self, tmp_path, monkeypatch):
+        import extract_archives as ea
+
+        root = tmp_path / "work"
+        root.mkdir()
+        self._make_nested(root)
+        monkeypatch.setenv("TENDER_TRASH_DIR", str(tmp_path / "trash"))
+
+        report = ea.extract_all(root, mode="A", interval=0)
+
+        assert report["failed"] == []
+        assert ea.scan(root) == [], "解压后仍有残留压缩包"
+        assert (root / "a.txt").is_file()
+        assert report["rounds"] >= 2, "包中包应触发第二轮"
+
+    def test_mode_a_moves_original_to_trash(self, tmp_path, monkeypatch):
+        import extract_archives as ea
+
+        root = tmp_path / "work"
+        root.mkdir()
+        trash = tmp_path / "trash"
+        self._make_nested(root)
+        monkeypatch.setenv("TENDER_TRASH_DIR", str(trash))
+
+        report = ea.extract_all(root, mode="A", interval=0)
+
+        assert (trash / "outer.zip").is_file(), "原包没有进回收站"
+        assert not (root / "outer.zip").exists()
+        assert report["trashed"] >= 2, f"回收站计数不对：{report}"
+
+    def test_mode_b_keeps_original(self, tmp_path, monkeypatch):
+        import zipfile
+
+        import extract_archives as ea
+
+        root = tmp_path / "work"
+        root.mkdir()
+        monkeypatch.setenv("TENDER_TRASH_DIR", str(tmp_path / "trash"))
+        archive = root / "one.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("b.txt", "B")
+
+        ea.extract_all(root, mode="B", interval=0)
+
+        assert archive.is_file(), "模式 B 不应删除原包"
+
+    def test_unstable_directory_aborts_before_touching_files(self, tmp_path, monkeypatch):
+        import extract_archives as ea
+
+        root = tmp_path / "work"
+        root.mkdir()
+        self._make_nested(root)
+        before = (root / "outer.zip").read_bytes()
+
+        stamps = iter([(1, 10), (2, 20)])
+        monkeypatch.setattr(ea, "snapshot", lambda _root: next(stamps))
+
+        report = ea.extract_all(root, mode="A", interval=0)
+
+        assert "目录在变化" in report["stopped"]
+        assert report["extracted"] == 0
+        assert (root / "outer.zip").read_bytes() == before, "停手前动了文件"
+
+    def test_trash_unavailable_keeps_file(self, tmp_path, monkeypatch):
+        """回收站不可用时**不删**，只报告 —— 不永久删除用户原始文件。"""
+        import zipfile
+
+        import extract_archives as ea
+
+        root = tmp_path / "work"
+        root.mkdir()
+        archive = root / "one.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("c.txt", "C")
+
+        monkeypatch.setattr(ea, "move_to_trash", lambda _p: None)
+
+        result = ea.extract_one(archive, mode="A")
+
+        assert archive.is_file(), "回收站不可用时删了用户文件"
+        assert "未能移入回收站" in result.reason
+
+
 # ── 探针 8（本批部分）：注册与触发分界 ──────────────────────────────────
 
 class TestProbe8Registration:
@@ -362,6 +577,8 @@ class TestProbe8Registration:
         cases = {
             "抓邮件归档": "b2b-tender-mail",
             "生成询价单": "b2b-tender-processing",
+            "大文件下载": "b2b-tender-download",
+            "批量解压": "b2b-tender-archive",
         }
         for query, expected in cases.items():
             hits = [h["skill_name"] for h in match_skills(query)]
