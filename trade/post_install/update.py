@@ -455,27 +455,85 @@ def _git_head(trade_dir: Path) -> str | None:
     return sha if r.returncode == 0 and len(sha) >= 7 else None
 
 
-def _remote_main_sha_from(remote: str, cwd: Path) -> str | None:
-    """解析 `remote` 的 main 分支当前提交 SHA；解析失败返回 None。
+#: git 子进程的固定环境：禁止任何交互提示。
+#: 私有仓库/凭证过期时，`git` 会在后台服务里静等账号密码，界面永远停在"更新中"。
+_GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
 
-    禁止交互提示（GIT_TERMINAL_PROMPT=0）：私有仓库/凭证过期时会让 `git` 在
-    后台服务里等账号密码，界面永远停在"更新中"。
+
+def _explain_git_error(stderr: str, stdout: str = "") -> str:
+    """把 git 的报错翻成**能照做**的中文提示（而不是笼统的「检查网络」）。
+
+    2026-11-02 客户机实测：界面只显示「无法解析远端 main 的最新提交，请检查网络
+    或代理后重试」，但真实原因可能是 git 没走代理、credential 过期、origin 配置
+    丢了 —— 三种情况的解法完全不同，笼统提示等于没有提示。
+    """
+    text = (stderr or stdout or "").strip()
+    low = text.lower()
+
+    if "could not resolve host" in low or "failed to connect" in low or \
+            "connection timed out" in low or "network is unreachable" in low or \
+            "connection refused" in low or "unable to access" in low:
+        return (
+            "连不上 GitHub（" + _first_line(text) + "）。"
+            "若浏览器能打开 GitHub，说明 git 没走代理："
+            "git config --global http.proxy http://127.0.0.1:<代理端口>"
+        )
+    if "authentication failed" in low or "could not read username" in low or \
+            "permission denied" in low or "invalid username or password" in low:
+        return "GitHub 认证失败（凭证过期或无权限）：到 Git 凭据管理器里删除旧凭据后重试。"
+    if "does not appear to be a git repository" in low or "no such remote" in low or \
+            "not a git repository" in low:
+        return (
+            "安装目录的 git 配置异常（origin 不存在或指向错误）："
+            "在安装目录执行 git remote -v 检查。"
+        )
+    return f"git 读取远端失败：{_first_line(text)}"
+
+
+def _first_line(text: str) -> str:
+    """取报错里第一行有效内容（UI 上只放得下一行）。"""
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()[:160]
+    return "无输出"
+
+
+def _remote_main_sha_diagnose(remote: str, cwd: Path) -> tuple[str | None, str]:
+    """解析远端 main 的 SHA；返回 (sha, 失败原因)。
+
+    sha 为 None 时，第二个值是给用户看的可读原因（调用方直接展示）。
     """
     try:
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         r = subprocess.run(
             ["git", "ls-remote", remote, "refs/heads/main"],
             cwd=str(cwd), capture_output=True, text=True, timeout=60,
-            env=env,
+            env={**os.environ, **_GIT_ENV},
         )
-    except (FileNotFoundError, OSError, subprocess.SubprocessError):
-        return None
+    except FileNotFoundError:
+        return None, "未找到 git 命令 —— 请先安装 Git（winget install Git.Git）后重开 Trade。"
+    except subprocess.TimeoutExpired:
+        return None, (
+            "读取远端超时（60 秒）。网络能连但太慢时可能是 git 没走代理："
+            "git config --global http.proxy http://127.0.0.1:<代理端口>"
+        )
+    except OSError as e:
+        return None, f"无法运行 git：{e}"
+    except subprocess.SubprocessError as e:
+        return None, f"git 执行失败：{e}"
+
     if r.returncode != 0:
-        return None
+        return None, _explain_git_error(r.stderr, r.stdout)
+
     parts = r.stdout.split()
     sha = parts[0].strip().lower() if parts else ""
     if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
-        return None
+        return None, "远端返回的提交号无效（可能是仓库地址指向了非 git 页面）。"
+    return sha, ""
+
+
+def _remote_main_sha_from(remote: str, cwd: Path) -> str | None:
+    """解析 `remote` 的 main 分支当前提交 SHA；解析失败返回 None。"""
+    sha, _reason = _remote_main_sha_diagnose(remote, cwd)
     return sha
 
 
@@ -488,6 +546,11 @@ def _remote_main_sha(trade_dir: Path) -> str | None:
     也不要把一个未经确认的提交装进本机。
     """
     return _remote_main_sha_from("origin", trade_dir)
+
+
+def _remote_main_sha_ex(trade_dir: Path) -> tuple[str | None, str]:
+    """同 `_remote_main_sha`，但失败时返回可读原因（用于界面提示）。"""
+    return _remote_main_sha_diagnose("origin", trade_dir)
 
 
 def _normalize_sha(value: str | None) -> str | None:
@@ -505,12 +568,9 @@ def preview_update_target() -> dict:
     trade_dir = _get_trade_home() / "foreign-trade-assistant"
     if not trade_dir.is_dir():
         return {"ok": False, "error": "安装目录不存在，无法检查更新目标。"}
-    sha = _remote_main_sha(trade_dir)
+    sha, reason = _remote_main_sha_ex(trade_dir)
     if not sha:
-        return {
-            "ok": False,
-            "error": "无法解析远端 main 的最新提交（网络/代理或仓库不可达）。",
-        }
+        return {"ok": False, "error": f"无法解析远端 main 的最新提交：{reason}"}
     return {"ok": True, "sha": sha, "short": sha[:8]}
 
 
@@ -788,13 +848,13 @@ def update_trade(target_sha_request: str | None = None) -> dict:
         _emit(f"  Target: {trade_dir}")
         trade_dir.parent.mkdir(parents=True, exist_ok=True)
         # 首次安装同样钉选：clone 拿到的是 clone 那一刻的分支头，先记下 SHA
-        target_sha = _remote_main_sha_from(_REPO_URL, trade_dir.parent)
+        target_sha, why = _remote_main_sha_diagnose(_REPO_URL, trade_dir.parent)
         if not target_sha:
-            _emit("  ❌ 无法解析远端 main 的最新提交（网络/代理或仓库不可达），已中止安装。")
-            errors.append("cannot resolve remote main commit")
+            _emit(f"  ❌ 无法解析远端 main 的最新提交：{why}，已中止安装。")
+            errors.append(f"cannot resolve remote main commit: {why}")
             return {
                 "ok": False, "version": "",
-                "error": "无法解析远端 main 的最新提交，请检查网络或代理后重试。",
+                "error": f"无法解析远端 main 的最新提交：{why}",
                 "errors": errors, "warnings": warnings, "messages": messages,
             }
         _emit(f"  ℹ️ 本次安装钉选提交：{target_sha[:8]}")
@@ -839,13 +899,13 @@ def update_trade(target_sha_request: str | None = None) -> dict:
             target_sha = requested_sha
             _emit(f"  ℹ️ 本次更新钉选提交（用户确认）：{target_sha[:8]}")
         else:
-            target_sha = _remote_main_sha(trade_dir)
+            target_sha, why = _remote_main_sha_ex(trade_dir)
             if not target_sha:
-                _emit("  ❌ 无法解析远端 main 的最新提交（网络/代理或仓库不可达），已中止升级。")
-                errors.append("cannot resolve remote main commit")
+                _emit(f"  ❌ 无法解析远端 main 的最新提交：{why}，已中止升级。")
+                errors.append(f"cannot resolve remote main commit: {why}")
                 return {
                     "ok": False, "version": "",
-                    "error": "无法解析远端 main 的最新提交，请检查网络或代理后重试。",
+                    "error": f"无法解析远端 main 的最新提交：{why}",
                     "errors": errors, "warnings": warnings, "messages": messages,
                 }
             _emit(f"  ℹ️ 本次更新钉选提交：{target_sha[:8]}")

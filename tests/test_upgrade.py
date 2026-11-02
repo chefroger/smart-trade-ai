@@ -40,6 +40,7 @@ from trade.post_install import update as _update_mod  # noqa: E402
 
 _REAL_REMOTE_MAIN_SHA = _update_mod._remote_main_sha
 _REAL_REMOTE_MAIN_SHA_FROM = _update_mod._remote_main_sha_from
+_REAL_REMOTE_MAIN_SHA_DIAGNOSE = _update_mod._remote_main_sha_diagnose
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +54,9 @@ def _pin_git_commit(monkeypatch):
 
     monkeypatch.setattr(upd, "_remote_main_sha", lambda *a, **k: PIN_SHA)
     monkeypatch.setattr(upd, "_remote_main_sha_from", lambda *a, **k: PIN_SHA)
+    # update_trade 现在走高诊断版本（失败时带可读原因），两个入口都要钉住
+    monkeypatch.setattr(upd, "_remote_main_sha_ex", lambda *a, **k: (PIN_SHA, ""))
+    monkeypatch.setattr(upd, "_remote_main_sha_diagnose", lambda *a, **k: (PIN_SHA, ""))
     monkeypatch.setattr(upd, "_git_head", lambda *a, **k: PIN_SHA)
 
 
@@ -321,6 +325,103 @@ def _classify_subprocess_cmd(cmd) -> str:
     if "pip" in argv[:4]:
         return "pip"
     return "other"
+
+
+class TestRemoteShaDiagnostics:
+    """「无法解析远端 main」必须说清是哪一种失败。
+
+    2026-11-02 客户机实测：界面只显示「请检查网络或代理后重试」，但真实原因可能是
+    git 没走代理、credential 过期、origin 配置丢了 —— 三种解法完全不同。
+    修复前 `_remote_main_sha_from` 把所有异常都吞成 None，用户只能干瞪眼。
+    """
+
+    @staticmethod
+    def _run(monkeypatch, *, returncode=0, stdout="", stderr="", exc=None):
+        from trade.post_install import update as upd
+
+        def fake_run(*_args, **_kwargs):
+            if exc is not None:
+                raise exc
+            return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
+
+        # autouse fixture 默认钉住 diagnose；本类要测真实实现
+        monkeypatch.setattr(upd, "_remote_main_sha_diagnose", _REAL_REMOTE_MAIN_SHA_DIAGNOSE)
+        monkeypatch.setattr(upd.subprocess, "run", fake_run)
+        return upd
+
+    def test_success_returns_sha_and_empty_reason(self, monkeypatch):
+        sha = "a" * 40
+        upd = self._run(monkeypatch, stdout=f"{sha}\trefs/heads/main\n")
+
+        got, reason = upd._remote_main_sha_diagnose("origin", Path("."))
+
+        assert got == sha
+        assert reason == ""
+
+    def test_missing_git_is_actionable(self, monkeypatch):
+        upd = self._run(monkeypatch, exc=FileNotFoundError("git"))
+
+        got, reason = upd._remote_main_sha_diagnose("origin", Path("."))
+
+        assert got is None
+        assert "未找到 git" in reason
+
+    def test_timeout_is_actionable(self, monkeypatch):
+        import subprocess as sp
+
+        upd = self._run(monkeypatch, exc=sp.TimeoutExpired("git", 60))
+
+        _got, reason = upd._remote_main_sha_diagnose("origin", Path("."))
+
+        assert "超时" in reason
+        assert "http.proxy" in reason
+
+    def test_network_error_mentions_proxy(self, monkeypatch):
+        upd = self._run(
+            monkeypatch, returncode=128,
+            stderr="fatal: unable to access 'https://github.com/x/y.git/': "
+                   "Could not resolve host: github.com",
+        )
+
+        _got, reason = upd._remote_main_sha_diagnose("origin", Path("."))
+
+        assert "连不上 GitHub" in reason
+        assert "http.proxy" in reason
+
+    def test_auth_error_is_distinguished(self, monkeypatch):
+        upd = self._run(
+            monkeypatch, returncode=128,
+            stderr="fatal: Authentication failed for 'https://github.com/x/y.git/'",
+        )
+
+        _got, reason = upd._remote_main_sha_diagnose("origin", Path("."))
+
+        assert "认证失败" in reason
+
+    def test_missing_remote_is_distinguished(self, monkeypatch):
+        upd = self._run(
+            monkeypatch, returncode=128,
+            stderr="fatal: 'origin' does not appear to be a git repository",
+        )
+
+        _got, reason = upd._remote_main_sha_diagnose("origin", Path("."))
+
+        assert "git 配置异常" in reason
+
+    def test_preview_surfaces_the_reason(self, monkeypatch, tmp_path):
+        from trade.post_install import update as upd
+
+        (tmp_path / "foreign-trade-assistant").mkdir()
+        monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
+        monkeypatch.setattr(
+            upd, "_remote_main_sha_ex",
+            lambda _d: (None, "连不上 GitHub（Could not resolve host）"),
+        )
+
+        result = upd.preview_update_target()
+
+        assert result["ok"] is False
+        assert "连不上 GitHub" in result["error"], "界面仍只显示笼统的「检查网络」"
 
 
 class TestUpdateStepSeverity:
@@ -1124,6 +1225,7 @@ class TestUpdatePinning:
             stderr = ""
 
         monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(upd, "_remote_main_sha_diagnose", _REAL_REMOTE_MAIN_SHA_DIAGNOSE)
         monkeypatch.setattr(upd, "_remote_main_sha_from", _REAL_REMOTE_MAIN_SHA_FROM)
         assert _REAL_REMOTE_MAIN_SHA(Path("/tmp")) == PIN_SHA
 
@@ -1136,6 +1238,7 @@ class TestUpdatePinning:
             stderr = ""
 
         monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _R())
+        monkeypatch.setattr(upd, "_remote_main_sha_diagnose", _REAL_REMOTE_MAIN_SHA_DIAGNOSE)
         monkeypatch.setattr(upd, "_remote_main_sha_from", _REAL_REMOTE_MAIN_SHA_FROM)
         assert _REAL_REMOTE_MAIN_SHA(Path("/tmp")) is None
 
@@ -1155,7 +1258,7 @@ class TestUpdatePinning:
             return cp
 
         monkeypatch.setattr(upd.subprocess, "run", fake_run)
-        monkeypatch.setattr(upd, "_remote_main_sha", lambda *a, **k: None)
+        monkeypatch.setattr(upd, "_remote_main_sha_ex", lambda *a, **k: (None, "网络不通"))
 
         result = upd.update_trade()
 
@@ -1295,7 +1398,7 @@ class TestUpdatePinning:
         monkeypatch.setattr(upd.subprocess, "run", fake_run)
         monkeypatch.setattr(upd, "install_skills", lambda: None)
         monkeypatch.setattr(upd, "update_skills", lambda: None)
-        monkeypatch.setattr(upd, "_remote_main_sha", lambda *a, **k: "b" * 40)
+        monkeypatch.setattr(upd, "_remote_main_sha_ex", lambda *a, **k: ("b" * 40, ""))
         monkeypatch.setattr(upd, "_git_head", lambda *a, **k: "c" * 40)
 
         result = upd.update_trade()
@@ -1870,7 +1973,7 @@ class TestLaunchdDetection:
         monkeypatch.setattr(upd, "_get_trade_home", lambda: tmp_path)
         pre_sha = "a" * 40
         monkeypatch.setattr(upd, "_git_head", lambda d: pre_sha)
-        monkeypatch.setattr(upd, "_remote_main_sha", lambda d: "b" * 40)
+        monkeypatch.setattr(upd, "_remote_main_sha_ex", lambda d: ("b" * 40, ""))
 
         pulled = {"first": False}
         calls = []
