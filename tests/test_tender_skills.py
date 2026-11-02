@@ -531,6 +531,24 @@ class TestProbe6Archive:
         assert report["extracted"] == 0
         assert (root / "outer.zip").read_bytes() == before, "停手前动了文件"
 
+    def test_prompt_defaults_to_keep_for_generic_unzip(self):
+        """裸「解压」会把普通文件也路由到本技能 —— prompt 必须默认不删原包。
+
+        2026-11-02 实测：`解压这个文件` → b2b-tender-archive，而技能默认模式 A
+        会把用户原包移进回收站。非招标场景默认 B（保留原包），招标批量场景才按 A。
+        """
+        text = (SKILL_DIRS["b2b-tender-archive"] / "SKILL.md").read_text(encoding="utf-8")
+
+        assert "单文件 / 非招标" in text, "缺「非招标场景」的默认模式说明"
+        assert "默认 B" in text, "非招标场景没有默认保留原包"
+        assert "招标批量" in text, "招标批量场景没有保留按 A 的说明"
+
+    def test_script_default_mode_stays_a(self):
+        """脚本默认模式仍是 A —— 任务书 §2 对招标批量包的规定不能改。"""
+        source = (ARCHIVE_SCRIPTS / "extract_archives.py").read_text(encoding="utf-8")
+
+        assert 'choices=("A", "B"), default="A"' in source
+
     def test_trash_unavailable_keeps_file(self, tmp_path, monkeypatch):
         """回收站不可用时**不删**，只报告 —— 不永久删除用户原始文件。"""
         import zipfile
