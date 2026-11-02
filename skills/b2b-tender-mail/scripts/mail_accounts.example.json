@@ -1,0 +1,19 @@
+{
+  "_说明": [
+    "复制本文件为 mail_accounts.json 后填写；mail_accounts.json 已被 .gitignore 忽略，不会被提交。",
+    "auth_code 是邮箱服务商提供的 IMAP 授权码（有的地方叫应用专用密码），不是登录密码。",
+    "output_dir 建议写绝对路径；服务账户下不要留空（默认桌面可能不是你的桌面）。",
+    "blacklist 留空则使用脚本内置的通用黑名单（系统通知 / 验证码 / 退信 / 订阅等）。"
+  ],
+  "accounts": [
+    {
+      "email": "<your-email@example.com>",
+      "imap_host": "<imap.example.com>",
+      "imap_port": 993,
+      "auth_code": "<IMAP 授权码>",
+      "output_dir": "",
+      "state_file": "",
+      "blacklist": []
+    }
+  ]
+}

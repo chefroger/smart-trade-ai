@@ -1432,6 +1432,35 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
 "线索 + 来源链接"，最终确认由人工完成；海关记录反查不到内销为主的竞品（靠展会/平台补）；
 国内贸易商常冒充工厂，判断线索是厂房/产线/招工信息的有无。""",
     },
+    {
+        "name": "b2b-tender-mail",
+        "triggers": [
+            # Chinese — 只给复合词，避免抢 邮箱情报 / 邮件仿写 的触发
+            "抓邮件", "抓取邮件", "邮件归档", "招标邮件", "询价邮件",
+            "邮件抓取", "补附件", "邮件附件下载", "邮箱抓取", "监控邮箱",
+            # English
+            "fetch tender emails", "archive tender emails",
+            "download email attachments",
+        ],
+        "aliases": [],
+        "input_fmt": "邮箱 IMAP 配置（用户按示例文件填写）+ 时间窗口 + 落盘根目录",
+        "output_fmt": "按天归档的邮件正文与附件 + 抓取统计（含跳过原因）",
+        "augment_prompt": "",
+    },
+    {
+        "name": "b2b-tender-processing",
+        "triggers": [
+            # Chinese — 询价单归本技能，不与单据生成（报价单）混用
+            "询价单", "生成询价单", "做个询价单", "整理招标", "处理招标",
+            "招标整理", "整理新标", "招标文件整理", "询价表", "生成询价表",
+            # English
+            "inquiry sheet", "request for quotation sheet",
+        ],
+        "aliases": [],
+        "input_fmt": "邮件归档目录或招标编号 + 主文件与附件 + 交付根目录",
+        "output_fmt": "标准项目文件夹（主文件 + 编号附件）+ 11 列询价单 xlsx + 验证报告",
+        "augment_prompt": "",
+    },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
