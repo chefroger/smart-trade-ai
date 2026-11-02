@@ -32,16 +32,20 @@ sys.path.insert(0, str(PROCESSING_SCRIPTS))
 import tender_mail_core as mail  # noqa: E402
 
 SKILL_DIRS = {
+    "b2b-tender-info": ROOT / "skills" / "b2b-tender-info",
     "b2b-tender-mail": ROOT / "skills" / "b2b-tender-mail",
     "b2b-tender-processing": ROOT / "skills" / "b2b-tender-processing",
     "b2b-tender-download": ROOT / "skills" / "b2b-tender-download",
     "b2b-tender-archive": ROOT / "skills" / "b2b-tender-archive",
+    "b2b-tender-doc-match": ROOT / "skills" / "b2b-tender-doc-match",
 }
 
 DOWNLOAD_SCRIPTS = ROOT / "skills" / "b2b-tender-download" / "scripts"
 ARCHIVE_SCRIPTS = ROOT / "skills" / "b2b-tender-archive" / "scripts"
+MATCH_SCRIPTS = ROOT / "skills" / "b2b-tender-doc-match" / "scripts"
 sys.path.insert(0, str(DOWNLOAD_SCRIPTS))
 sys.path.insert(0, str(ARCHIVE_SCRIPTS))
+sys.path.insert(0, str(MATCH_SCRIPTS))
 
 
 def _load_processing_script():
@@ -547,6 +551,114 @@ class TestProbe6Archive:
         assert "未能移入回收站" in result.reason
 
 
+# ── 探针 7：G6 编号规范化与匹配纪律 ─────────────────────────────────────
+
+class TestProbe7DocMatch:
+    """前导零容差可匹配；不删光分隔符；成套整夹打包；低匹配率不放宽阈值。"""
+
+    @staticmethod
+    def _lib(root: Path, names: list[str]) -> list[Path]:
+        root.mkdir(parents=True, exist_ok=True)
+        files = []
+        for n in names:
+            p = root / n
+            p.write_text("x", encoding="utf-8")
+            files.append(p)
+        return files
+
+    def test_normalize_strips_leading_zeros(self):
+        import match_archive as ma
+
+        assert ma.normalize_number("A-0012-00") == "a-12-0"
+        assert ma.numbers_equal("X-12-00", "x_12_000")
+
+    def test_separators_are_not_deleted(self):
+        """`A-1` 与 `A1` 必须是两个不同编号 —— 删光非字母数字会大面积误报。"""
+        import match_archive as ma
+
+        assert not ma.numbers_equal("A-1", "A1")
+        assert ma.normalize_number("A-1") != ma.normalize_number("A1")
+
+    def test_number_match_requires_related_name(self, tmp_path):
+        """编号相同但名称无关 → 不算匹配（防编号巧合）。"""
+        import match_archive as ma
+
+        # 文件名规范化后与编号**完全相等**，唯一能拦下它的是「名称相关」校验
+        items = [{"no": 1, "name": "轴承座", "number": "X-100"}]
+        library = self._lib(tmp_path / "lib", ["X-100.txt"])
+
+        matches, unmatched, _left = ma.match_items(items, library)
+
+        assert matches == []
+        assert len(unmatched) == 1
+
+    def test_set_item_is_packed_into_folder(self, tmp_path):
+        import match_archive as ma
+
+        lib = tmp_path / "lib"
+        names = ["A-100-总装.txt", "A-100-零件1.txt", "A-100-零件2.txt"]
+        files = self._lib(lib, names)
+        # 成套项在清单里会点名全部文件
+        items = [{"no": 7, "name": "总装", "number": "A-100",
+                  "is_set": True, "files": names}]
+
+        matches, _unmatched, _left = ma.match_items(items, files)
+        plan = ma.plan_archive(matches)
+        dest = tmp_path / "dest"
+        ma.apply_archive(plan, dest)
+
+        assert [p.name for p in (dest / "7").iterdir()], "成套项没有整夹打包"
+        assert (dest / "7").is_dir()
+
+    def test_single_item_is_flat_with_number_prefix(self, tmp_path):
+        import match_archive as ma
+
+        lib = tmp_path / "lib"
+        files = self._lib(lib, ["B-200-法兰.txt"])
+        items = [{"no": 3, "name": "法兰", "number": "B-200"}]
+
+        matches, _u, _l = ma.match_items(items, files)
+        dest = tmp_path / "dest"
+        ma.apply_archive(ma.plan_archive(matches), dest)
+
+        assert (dest / "3-B-200-法兰.txt").is_file()
+
+    def test_low_match_rate_does_not_widen_threshold(self, tmp_path):
+        """1% 匹配率：只归档真匹配的那 1 项，其余原地保留、误报为 0。"""
+        import match_archive as ma
+
+        lib = tmp_path / "lib"
+        files = self._lib(lib, ["C-1-齿轮.txt"] + [f"zz-{i}-无关.txt" for i in range(99)])
+        items = [{"no": 1, "name": "齿轮", "number": "C-1"}]
+
+        matches, unmatched, left = ma.match_items(items, files)
+
+        assert len(matches) == 1
+        assert len(matches[0].files) == 1, "匹配被放宽到多个文件（误报）"
+        assert unmatched == []
+        assert len(left) == 99, "未匹配文件被挪动或吞掉了"
+        for f in left:
+            assert f.is_file(), "未匹配文件应原地保留"
+
+    def test_verify_catches_file_count_drift(self, tmp_path):
+        import match_archive as ma
+
+        lib = tmp_path / "lib"
+        files = self._lib(lib, ["D-1-轴.txt"])
+        items = [{"no": 1, "name": "轴", "number": "D-1"}]
+        matches, _u, _l = ma.match_items(items, files)
+        plan = ma.plan_archive(matches)
+        dest = tmp_path / "dest"
+        ma.apply_archive(plan, dest)
+
+        ok, _why = ma.verify_archive(dest, plan)
+        assert ok
+
+        (dest / "多余.txt").write_text("x", encoding="utf-8")
+        ok2, why2 = ma.verify_archive(dest, plan)
+        assert not ok2 and "根目录文件数不符" in why2
+
+
 # ── 探针 8（本批部分）：注册与触发分界 ──────────────────────────────────
 
 class TestProbe8Registration:
@@ -575,15 +687,38 @@ class TestProbe8Registration:
         from trade.skill_router import match_skills
 
         cases = {
+            "找招标": "b2b-tender-info",
             "抓邮件归档": "b2b-tender-mail",
             "生成询价单": "b2b-tender-processing",
             "大文件下载": "b2b-tender-download",
             "批量解压": "b2b-tender-archive",
+            "按清单归档": "b2b-tender-doc-match",
         }
         for query, expected in cases.items():
             hits = [h["skill_name"] for h in match_skills(query)]
             assert expected in hits, f"{query} 没命中 {expected}（实际 {hits}）"
             assert hits[0] == expected, f"{query} 被 {hits[0]} 抢走了"
+
+    def test_tender_discovery_does_not_inject_compliance(self):
+        """「找招标」注入的必须是 G1 —— 裸「招标」归合规技能，但注入只看 top1。"""
+        from trade.skill_router import augment_query
+
+        injected = augment_query("帮我找招标")
+
+        # 注意：G1 正文里会**提到** b2b-trade-compliance（说明边界），
+        # 所以不能按字符串索敌，要看注入的是谁的提示词。
+        assert "你是 b2b-tender-info 技能" in injected
+        assert "你是 b2b-trade-compliance 技能" not in injected, (
+            "「找招标」被合规技能抢走了注入（G1 的复合触发词没起作用）"
+        )
+
+    def test_tender_discovery_does_not_steal_lead_generation(self):
+        from trade.skill_router import match_skills
+
+        hits = [h["skill_name"] for h in match_skills("找招标")]
+
+        assert "b2b-lead-generation" not in hits
+        assert "b2b-market-analysis" not in hits
 
     def test_mail_triggers_do_not_steal_email_skills(self):
         from trade.skill_router import match_skills

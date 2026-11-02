@@ -1489,6 +1489,35 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
         "output_fmt": "解压产物 + 报告（成功/失败/进回收站数/残留数）",
         "augment_prompt": "",
     },
+    {
+        "name": "b2b-tender-info",
+        "triggers": [
+            # Chinese — **不得使用裸「招标」「投标」**（b2b-trade-compliance 已持有），
+            # 一律用 ≥3 字复合词，靠「最长触发词」在平局时胜出。
+            "找招标", "查招标", "招标信息", "招标机会", "发现招标",
+            "招标公告", "招标动态", "国际招标",
+            # English
+            "find public tenders", "tender opportunities",
+        ],
+        "aliases": [],
+        "input_fmt": "品类/产品（可附 HS 编码）+ 目标国家/区域 + 时间窗口 + 搜索语言",
+        "output_fmt": "概览表 + 逐条 13 字段详情（含来源 URL 与发布日期）+ 机会评估 + 建议行动",
+        "augment_prompt": "",
+    },
+    {
+        "name": "b2b-tender-doc-match",
+        "triggers": [
+            # Chinese — 文件匹配类只归本技能
+            "按清单归档", "文件匹配归档", "图纸匹配", "按编号匹配",
+            "招标清单匹配", "成套图纸归档", "文件重命名归档",
+            # English
+            "match drawings", "archive by drawing number",
+        ],
+        "aliases": [],
+        "input_fmt": "招标清单（序号/名称/编号）+ 本地文件库目录 + 归档根目录",
+        "output_fmt": "归档目录（单文件平放 / 成套项整夹）+ 匹配报告与未匹配清单",
+        "augment_prompt": "",
+    },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
