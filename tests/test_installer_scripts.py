@@ -667,6 +667,50 @@ class TestPowerShell51Compatibility:
         os.name != "nt",
         reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
     )
+    def test_helper_propagates_last_exit_code_on_ps51(self, tmp_path):
+        """helper 返回后，调用方必须还能读到**这条命令**的退出码。
+
+        这是 Install-NativeQuiet 改法的要害：脚本里 13 处原生命令都靠
+        `$LASTEXITCODE` 判断成败（Python 3.14 探测、git rev-parse 判断「是不是
+        有效仓库」等）。若退出码传不回调用方，`$LASTEXITCODE` 读到的是**上一条**
+        命令的旧值 —— 于是「Python 3.14 找不到」「把残缺目录当成有效仓库」，
+        安装在第一步就崩，而且报错完全指不到真正的原因。
+
+        PowerShell 的 `$LASTEXITCODE` 是否跨函数作用域传播，各版本行为不一致，
+        所以必须在真 5.1 上验，而不是靠推断。
+        """
+        script = tmp_path / "exitcode.ps1"
+        script.write_text(
+            self._helper_source() + "\n"
+            '$ErrorActionPreference = "Stop"\n'
+            # 先跑一条成功命令，把 $LASTEXITCODE 置成 0
+            'Invoke-NativeQuiet { & cmd.exe /c "exit 0" }\n'
+            "$afterSuccess = $LASTEXITCODE\n"
+            # 再跑一条失败命令
+            'Invoke-NativeQuiet { & cmd.exe /c "exit 7" }\n'
+            "$afterFail = $LASTEXITCODE\n"
+            'Write-Output ("SUCCESS=" + $afterSuccess + " FAIL=" + $afterFail)\n',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert proc.returncode == 0, (
+            f"脚本本身失败：\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+        )
+        assert "SUCCESS=0 FAIL=7" in proc.stdout, (
+            "helper 没有把退出码传回调用方 —— install.ps1 里 13 处 "
+            "`$LASTEXITCODE` 判断会读到旧值。\n"
+            f"stdout={proc.stdout!r}"
+        )
+
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
+    )
     def test_repro_native_stderr_redirect_aborts_ps51(self, tmp_path):
         """复现根因：5.1 下 Stop + `2>$null` 会中止脚本（PS 7 不会）。"""
         script = tmp_path / "repro.ps1"
