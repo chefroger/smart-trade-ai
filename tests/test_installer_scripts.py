@@ -633,6 +633,40 @@ class TestPowerShell51Compatibility:
         os.name != "nt",
         reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
     )
+    def test_ps51_parses_install_script(self, tmp_path):
+        """用真 PS 5.1 解析整份 install.ps1 —— BOM 要解决的正是「5.1 解析不了」。
+
+        别的测试读的是文本内容；这里让 5.1 自己的解析器读磁盘上的字节，
+        才能证明 BOM 真的让中文注释按 UTF-8 解码、而不是按 GBK 解出语法错误。
+        """
+        target = str((ROOT / "scripts" / "install.ps1").resolve()).replace("'", "''")
+        script = tmp_path / "parse.ps1"
+        script.write_text(
+            "$t = $null; $e = $null\n"
+            f"[void][System.Management.Automation.Language.Parser]::ParseFile('{target}', [ref]$t, [ref]$e)\n"
+            "if ($e -and $e.Count) {\n"
+            "    $e | ForEach-Object { Write-Output (\"line \" + $_.Extent.StartLineNumber + \": \" + $_.Message) }\n"
+            "    exit 1\n"
+            "}\n"
+            'Write-Output "PARSE_OK"\n',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert proc.returncode == 0, (
+            "PS 5.1 解析 install.ps1 失败（BOM 没解决中文解码？）：\n"
+            f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+        )
+        assert "PARSE_OK" in proc.stdout
+
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
+    )
     def test_repro_native_stderr_redirect_aborts_ps51(self, tmp_path):
         """复现根因：5.1 下 Stop + `2>$null` 会中止脚本（PS 7 不会）。"""
         script = tmp_path / "repro.ps1"
