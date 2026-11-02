@@ -128,6 +128,33 @@ class TestFailureIsHonest:
         assert "无权限" in msg
 
 
+class TestSpawnFlags:
+    """Windows 冷启动不能弹黑框。
+
+    2026-11-02 客户机实测：用 DETACHED_PROCESS 时，venv 的 python.exe（240KB 启动器）
+    会再起一个基础解释器子进程，Windows 给那个**孙进程**分配了全新的可见控制台
+    （ConsoleWindowClass，993×519）——桌面快捷方式冷启动弹黑框。
+    改成 CREATE_NO_WINDOW（隐藏控制台，孙进程继承）+ CREATE_NEW_PROCESS_GROUP 后消失。
+    """
+
+    def test_windows_uses_create_no_window(self):
+        flags = opener._creation_flags(windows=True)
+
+        assert flags is not None
+        assert flags & opener.CREATE_NO_WINDOW, "没给隐藏控制台 → 孙进程会弹窗"
+        assert flags & opener.CREATE_NEW_PROCESS_GROUP
+
+    def test_windows_does_not_use_detached(self):
+        flags = opener._creation_flags(windows=True)
+
+        assert not (flags & opener.DETACHED_PROCESS), (
+            "DETACHED_PROCESS 会让孙进程拿到可见控制台 —— 这就是黑框的来源"
+        )
+
+    def test_posix_has_no_creation_flags(self):
+        assert opener._creation_flags(windows=False) is None
+
+
 class TestProbe:
     def test_probe_false_when_nothing_listening(self):
         """真探测：本机 9 端口上没人听时必须返回 False（不抛异常）。"""

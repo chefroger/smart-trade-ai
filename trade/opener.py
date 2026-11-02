@@ -51,19 +51,38 @@ def _server_script_path() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+#: Windows 进程创建标志（提为常量，测试可直接断言，避免被「看起来在防窗口」的写法骗过）。
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NO_WINDOW = 0x08000000
+DETACHED_PROCESS = 0x00000008
+
+
+def _creation_flags(windows: bool | None = None) -> int | None:
+    """Windows 下返回 creationflags；非 Windows 返回 None。
+
+    纯函数，便于在任意平台上断言标志位（直接改 ``os.name`` 会连累 pathlib）。
+    """
+    is_win = (os.name == "nt") if windows is None else windows
+    if not is_win:
+        return None
+    return CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+
+
 def _spawn_detached(cmd: list[str]) -> None:
     """后台启动，且**不显示窗口**（Windows）/ 脱离会话（POSIX）。"""
     kwargs: dict = {}
     if os.name == "nt":
-        # DETACHED_PROCESS(0x8)：子进程**没有控制台** → 不可能出现终端窗口，
-        #   且与父进程解耦（快捷方式那次调用退出后服务仍在）。
-        # CREATE_NEW_PROCESS_GROUP(0x200)：Ctrl+C 等信号不串到子进程。
+        # **不能用 DETACHED_PROCESS(0x8)。** 2026-11-02 客户机实测：
+        # venv 的 python.exe 只是个 240KB 启动器，它会再起一个基础解释器子进程；
+        # DETACHED 让父进程**完全没有控制台**，Windows 就给那个孙进程分配一个
+        # 全新的**可见**控制台窗口（实测 ConsoleWindowClass，993×519）——
+        # 桌面快捷方式冷启动因此弹黑框。
         #
-        # 注意**不要**再加 CREATE_NO_WINDOW(0x08000000)：微软文档明确写着它与
-        # DETACHED_PROCESS 或 CREATE_NEW_CONSOLE 同时使用时会被忽略
-        # （「This flag is ignored if ... used with either CREATE_NEW_CONSOLE or
-        # DETACHED_PROCESS」）。加它只会让代码看起来在防窗口、实际没生效。
-        kwargs["creationflags"] = 0x00000008 | 0x00000200
+        # 正确做法：CREATE_NO_WINDOW 给子进程一个**隐藏**控制台，孙进程继承它，
+        # 整条链都不可见；CREATE_NEW_PROCESS_GROUP 让 Ctrl+C 等信号不串号。
+        # （微软文档里「CREATE_NO_WINDOW 与 DETACHED 同用会被忽略」说的是两者
+        #  同时给出时的优先级，不是「不能用 NO_WINDOW」。）
+        kwargs["creationflags"] = _creation_flags()
     else:
         kwargs["start_new_session"] = True
     kwargs["stdout"] = subprocess.DEVNULL
