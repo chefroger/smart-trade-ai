@@ -31,6 +31,7 @@ from trade.document_task import (
 )
 from trade.helpers import build_query, create_agent
 from trade.hermes_compat import release_read_coverage, snapshot_read_coverage
+from trade.prompt import detect_reply_language
 from trade.read_evidence import ReadEvidenceCollector
 
 _log = logging.getLogger(__name__)
@@ -291,7 +292,10 @@ async def trade_chat(
 
     full_query, skill_hint = build_query(
         cid, payload.library_id, query, customer_id=payload.customer_id,
-        last_skill_name=last_skill, language=payload.language or "zh",
+        last_skill_name=last_skill,
+        # 回复语言跟随**用户这句话**：中文回中文、英文回英文；
+        # 界面语言只作「判不出来时」的兜底（2026-11-02 口径）。
+        language=detect_reply_language(query, payload.language or "zh"),
     )
     # 用户本轮亲手贴出的文件 → 直接只读放行（贴出来即授权，不再二次确认）
     user_paths = _classify_user_paths(query, cid)
@@ -490,7 +494,10 @@ async def trade_chat_stream(
 
     full_query, skill_hint = build_query(
         cid, payload.library_id, query, customer_id=payload.customer_id,
-        last_skill_name=last_skill, language=payload.language or "zh",
+        last_skill_name=last_skill,
+        # 回复语言跟随**用户这句话**：中文回中文、英文回英文；
+        # 界面语言只作「判不出来时」的兜底（2026-11-02 口径）。
+        language=detect_reply_language(query, payload.language or "zh"),
     )
     # 用户本轮亲手贴出的文件 → 直接只读放行（贴出来即授权，不再二次确认）
     user_paths = _classify_user_paths(query, cid)

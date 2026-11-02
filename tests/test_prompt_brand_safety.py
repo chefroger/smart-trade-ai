@@ -92,6 +92,55 @@ class TestResolveSystemPrompt:
         self._assert_composed(result, TRADE_SYSTEM_PROMPT, "GLOBAL_SYSTEM")
 
 
+class TestReplyLanguageFollowsInput:
+    """回复语言跟随**用户这句话**，而不是界面选择框（2026-11-02 Lau 口径）。
+
+    「用户用英文交流 → 返回英文；用中文交流 → 返回中文；给客户的回答用客户语言」。
+    修复前：界面语言是 zh 时，即使用户写英文也回中文。
+    """
+
+    def test_chinese_input_replies_chinese(self):
+        from trade.prompt import detect_reply_language
+
+        assert detect_reply_language("帮我找一下德国的阀门客户") == "zh"
+
+    def test_english_input_replies_english(self):
+        from trade.prompt import detect_reply_language
+
+        assert detect_reply_language("find valve customers in Germany") == "en"
+
+    def test_mixed_input_counts_as_chinese(self):
+        """中英混排说明用户在说中文，按中文回。"""
+        from trade.prompt import detect_reply_language
+
+        assert detect_reply_language("帮我在 Germany 找阀门客户") == "zh"
+
+    def test_ambiguous_input_uses_ui_language(self):
+        from trade.prompt import detect_reply_language
+
+        assert detect_reply_language("OK", fallback="zh") == "zh"
+        assert detect_reply_language("OK", fallback="en") == "en"
+        assert detect_reply_language("12345", fallback="en") == "en"
+
+    def test_single_english_word_is_not_enough(self):
+        """只有一个英文词（如型号）不足以判定为英文提问。"""
+        from trade.prompt import detect_reply_language
+
+        assert detect_reply_language("DN50", fallback="zh") == "zh"
+
+    def test_english_policy_keeps_customer_facing_content(self):
+        """英文提问时，给客户的内容仍按客户语言（通常英文）。"""
+        from trade.prompt import LANGUAGE_POLICY_BLOCK_EN
+
+        assert "language of the target audience" in LANGUAGE_POLICY_BLOCK_EN
+
+    def test_chinese_policy_keeps_customer_facing_english(self):
+        """中文提问时，给客户的内容仍写成英文（外贸客户多为英文买家）。"""
+        from trade.prompt import LANGUAGE_POLICY_BLOCK
+
+        assert "English for international buyers" in LANGUAGE_POLICY_BLOCK
+
+
 class TestAccuracyRulesAlwaysPresent:
     """准确规则（逐个文件扫描 / List Integrity）必须在首轮与后续轮次都在。
 

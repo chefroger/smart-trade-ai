@@ -5,6 +5,32 @@ Kept in a separate module so it can be imported cleanly without
 pulling in FastAPI or route dependencies.
 """
 
+import re
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def detect_reply_language(text: str, fallback: str = "zh") -> str:
+    """按**用户这句话**决定回复语言：中文交流回中文，英文交流回英文。
+
+    为什么按输入判断而不是只看界面语言（2026-11-02 Lau 定的口径）：
+    「用户用英文交流，返回英文；用中文交流，返回中文；给客户的回答用客户语言」。
+    界面语言只决定界面文案，不该把中文提问的回复也翻成英文。
+
+    判据（宁可保守）：
+      - 句子里**有中文** → 中文（中英混排按中文算，说明用户在说中文）；
+      - 没有中文、且至少 3 个英文单词 → 英文；
+      - 其余（纯数字 / 极短 / 只有型号）→ fallback（界面语言，默认中文）。
+    """
+    text = text or ""
+    if _CJK_RE.search(text):
+        return "zh"
+    if len(_LATIN_WORD_RE.findall(text)) >= 3:
+        return "en"
+    return "en" if str(fallback).lower() == "en" else "zh"
+
+
 TRADE_DISCLAIMER_BLOCK = """# Disclaimer — READ BEFORE ANSWERING ANY QUESTION
 You are an AI assistant powered by a large language model. **All responses are for reference only and do not constitute professional advice.** The user is solely responsible for verifying the accuracy and correctness of any information you provide.
 
