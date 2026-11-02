@@ -25,6 +25,18 @@ PS1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8-sig")  # BOM�
 
 
 
+def _last_exit_code_reads(text: str = PS1) -> int:
+    """统计 install.ps1 里真正读取 `$LASTEXITCODE` 的代码行数（不含注释）。
+
+    写死数字会在脚本演进后悄悄过期 —— 这个 helper 让提示语与实际代码保持一致。
+    """
+    return sum(
+        1
+        for line in text.splitlines()
+        if "$LASTEXITCODE" in line and not line.strip().startswith("#")
+    )
+
+
 def _code_lines(text: str) -> str:
     """去掉注释行后的脚本内容。
 
@@ -615,6 +627,25 @@ class TestPowerShell51Compatibility:
             + "\n  ".join(offenders)
         )
 
+    def test_exit_code_is_actually_used_after_every_wrapped_command(self):
+        """包进 helper 的原生命令，后面必须有人读 `$LASTEXITCODE`。
+
+        反例：包了 helper 却不判退出码 —— stderr 不再中断脚本，但失败被静默吞掉，
+        用户看到「✓ 完成」而实际什么都没装（历史上 skills 那步正是这种假成功）。
+        计数比大小而不是写死数字，脚本演进后提示语也不会过期。
+        """
+        wrapped = sum(
+            1
+            for line in _code_lines(PS1).splitlines()
+            if "Invoke-NativeQuiet {" in line and not line.strip().startswith("function")
+        )
+        reads = _last_exit_code_reads()
+
+        assert reads >= wrapped, (
+            f"包进 Invoke-NativeQuiet 的命令有 {wrapped} 处，但只读到 {reads} 处 "
+            "`$LASTEXITCODE` —— 有命令的失败被静默吞掉了"
+        )
+
     @staticmethod
     def _helper_source() -> str:
         """从 install.ps1 抽出 Invoke-NativeQuiet 函数体（按花括号配对）。"""
@@ -670,7 +701,7 @@ class TestPowerShell51Compatibility:
     def test_helper_propagates_last_exit_code_on_ps51(self, tmp_path):
         """helper 返回后，调用方必须还能读到**这条命令**的退出码。
 
-        这是 Install-NativeQuiet 改法的要害：脚本里 13 处原生命令都靠
+        这是 Invoke-NativeQuiet 改法的要害：脚本里十几处都靠
         `$LASTEXITCODE` 判断成败（Python 3.14 探测、git rev-parse 判断「是不是
         有效仓库」等）。若退出码传不回调用方，`$LASTEXITCODE` 读到的是**上一条**
         命令的旧值 —— 于是「Python 3.14 找不到」「把残缺目录当成有效仓库」，
@@ -702,8 +733,8 @@ class TestPowerShell51Compatibility:
             f"脚本本身失败：\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
         )
         assert "SUCCESS=0 FAIL=7" in proc.stdout, (
-            "helper 没有把退出码传回调用方 —— install.ps1 里 13 处 "
-            "`$LASTEXITCODE` 判断会读到旧值。\n"
+            "helper 没有把退出码传回调用方 —— install.ps1 里 "
+            f"{_last_exit_code_reads()} 处 `$LASTEXITCODE` 判断会读到旧值。\n"
             f"stdout={proc.stdout!r}"
         )
 
