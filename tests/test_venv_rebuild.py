@@ -161,7 +161,7 @@ class TestWindowsLauncherPath:
 
     def test_installer_writes_to_the_same_place(self):
         """锁住契约的另一端：install.ps1 必须把 trade.cmd 放进 LOCALAPPDATA\\local\\bin。"""
-        ps1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+        ps1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8-sig")  # BOM：PS 5.1 需要
         assert "$LocalBin = \"$env:LOCALAPPDATA\\local\\bin\"" in ps1, (
             "install.ps1 的 $LocalBin 变了 —— 若确实要改，app.py 的 launcher 必须同步"
         )

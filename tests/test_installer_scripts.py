@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -20,7 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 SH = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-PS1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+PS1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8-sig")  # BOM：PS 5.1 需要
 
 
 
@@ -582,6 +583,106 @@ class TestWindowsInstallerGaps:
         assert "exit 1" not in body[warn_at: warn_at + 500], (
             "长路径提示不得阻断安装（可用性高于一切）"
         )
+
+
+class TestPowerShell51Compatibility:
+    """install.ps1 必须在 **Windows PowerShell 5.1**（客户机的唯一版本）上跑通。
+
+    2026-10-29 Lau 远程装机实测到两个 5.1 独占故障：
+      1. 文件是 UTF-8 **无 BOM** → 5.1 按系统代码页（936/GBK）解码 → 中文注释/字符串
+         处直接语法错误。PS 7 默认按 UTF-8 读，所以开发机看不出来。
+      2. `$ErrorActionPreference="Stop"` 下把**原生命令**的 stderr 重定向
+         （`2>$null` / `2>&1` / `*> $null`）→ 那条 stderr 变成 ErrorRecord 并终止脚本。
+         干净机器上第一次命中是 `import sqlite_vec`（没装 → traceback 进 stderr）。
+    """
+
+    def test_file_has_utf8_bom(self):
+        raw = (ROOT / "scripts" / "install.ps1").read_bytes()
+        assert raw.startswith(b"\xef\xbb\xbf"), (
+            "install.ps1 缺 UTF-8 BOM —— PS 5.1 会按 GBK 解析中文，出现语法错误"
+        )
+
+    def test_no_bare_native_stderr_redirect(self):
+        """每一处 stderr 重定向都必须包在 Invoke-NativeQuiet 里。"""
+        offenders = [
+            line.strip()
+            for line in _code_lines(PS1).splitlines()
+            if any(tok in line for tok in ("2>$null", "2>&1", "*> $null"))
+            and "Invoke-NativeQuiet" not in line
+        ]
+        assert not offenders, (
+            "以下行在 PS 5.1 下会因 stderr 重定向而终止脚本，需包进 Invoke-NativeQuiet：\n  "
+            + "\n  ".join(offenders)
+        )
+
+    @staticmethod
+    def _helper_source() -> str:
+        """从 install.ps1 抽出 Invoke-NativeQuiet 函数体（按花括号配对）。"""
+        start = PS1.index("function Invoke-NativeQuiet")
+        depth = 0
+        for i in range(start, len(PS1)):
+            if PS1[i] == "{":
+                depth += 1
+            elif PS1[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return PS1[start: i + 1]
+        raise AssertionError("install.ps1 里未找到 Invoke-NativeQuiet 的结尾")
+
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
+    )
+    def test_repro_native_stderr_redirect_aborts_ps51(self, tmp_path):
+        """复现根因：5.1 下 Stop + `2>$null` 会中止脚本（PS 7 不会）。"""
+        script = tmp_path / "repro.ps1"
+        script.write_text(
+            '$ErrorActionPreference = "Stop"\n'
+            "try {\n"
+            '    & python -c "import sys; sys.stderr.write(\'boom\')" 2>$null\n'
+            '    Write-Output "SURVIVED"\n'
+            "} catch {\n"
+            '    Write-Output ("ABORTED: " + $_.Exception.GetType().Name)\n'
+            "    exit 7\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert proc.returncode == 7, (
+            "本机 PowerShell 没有复现 NativeCommandError —— 说明根因判断需要重做。\n"
+            f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+        )
+        assert "ABORTED" in proc.stdout
+
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
+    )
+    def test_helper_survives_on_ps51(self, tmp_path):
+        """用脚本里**实际那份** helper，同样的命令不能再炸。"""
+        script = tmp_path / "fixed.ps1"
+        script.write_text(
+            self._helper_source() + "\n"
+            '$ErrorActionPreference = "Stop"\n'
+            'Invoke-NativeQuiet { & python -c "import sys; sys.stderr.write(\'boom\')" 2>$null }\n'
+            'Write-Output "SURVIVED"\n',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert proc.returncode == 0, (
+            f"helper 在 PS 5.1 下仍然失败：\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+        )
+        assert "SURVIVED" in proc.stdout
 
 
 class TestReadmeHasNoReleaseSection:

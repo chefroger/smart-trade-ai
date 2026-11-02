@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # ==============================================================================
 # Foreign Trade Assistant — 一键安装脚本 (Windows PowerShell)
 # ==============================================================================
@@ -28,6 +28,25 @@ trap {
 # 用户群是电脑小白，乱码等于「看不懂 = 不敢用」。
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
+# ── PS 5.1 兼容：原生命令的 stderr 重定向 ─────────────────────────────────
+#
+# Windows PowerShell 5.1 在 `$ErrorActionPreference = "Stop"` 下，只要把**原生命令**
+# （python.exe / pip.exe / git）的 stderr 重定向（`2>$null`、`2>&1`、`*> $null`），
+# 那条 stderr 就会被包成 ErrorRecord 并**终止脚本** —— 哪怕我们本来就打算丢掉它。
+# PS 7 不会。客户机只有 5.1，所以 2026-10-29 的实测表现是：装到 `import sqlite_vec`
+# 那一步（没装 sqlite-vec → Python 往 stderr 打 traceback）整脚本直接中断。
+#
+# 这个 helper 只在**执行这一条命令**期间把 EAP 放宽为 Continue，finally 恢复：
+#   - 5.1 下不再抛 NativeCommandError；
+#   - 7 下行为不变（那条 stderr 本来就被丢弃）；
+#   - `$LASTEXITCODE` 是引擎维护的自动变量，函数返回后调用方照常判断。
+function Invoke-NativeQuiet {
+    param([scriptblock]$Block)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $Block } finally { $ErrorActionPreference = $prev }
+}
+
 Write-Host ""
 Write-Host "  Foreign Trade Assistant — 安装向导" -ForegroundColor Cyan
 Write-Host ""
@@ -45,7 +64,7 @@ $PythonCmd = $null
 $HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
 
 # 判据：解释器正好是 3.14（不是「>= 3.11」下限）
-$IsPython314 = { param($cmd) & $cmd -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null; $LASTEXITCODE -eq 0 }
+$IsPython314 = { param($cmd) Invoke-NativeQuiet { & $cmd -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null }; $LASTEXITCODE -eq 0 }
 
 # Microsoft Store 的「应用执行别名」是空壳：调它不会返回版本，
 # 而是**弹开 Microsoft Store**（安装器会像卡死一样停在那里）。
@@ -65,7 +84,7 @@ foreach ($cmd in @("python3.14", "python3", "python")) {
         if (-not (Test-NotStoreAlias $resolved)) { continue }
         if (& $IsPython314 $cmd) {
             $PythonCmd = $cmd
-            $pyPath = (& $cmd -c "import sys; print(sys.executable)" 2>$null)
+            $pyPath = Invoke-NativeQuiet { & $cmd -c "import sys; print(sys.executable)" 2>$null }
             Write-Host "  ✓ Python 3.14 ($pyPath)" -ForegroundColor Green
             break
         }
@@ -78,11 +97,11 @@ foreach ($cmd in @("python3.14", "python3", "python")) {
 if (-not $PythonCmd) {
     $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
     if ($pyLauncher) {
-        & $pyLauncher.Source -3.14 -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null
+        Invoke-NativeQuiet { & $pyLauncher.Source -3.14 -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null }
         if ($LASTEXITCODE -eq 0) {
             # 用数组保存「启动器 + 参数」，`& $cmd` 会把它拆成两个参数
             $PythonCmd = @($pyLauncher.Source, "-3.14")
-            $pyPath = (& $pyLauncher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null)
+            $pyPath = Invoke-NativeQuiet { & $pyLauncher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null }
             Write-Host "  ✓ Python 3.14 ($pyPath)" -ForegroundColor Green
         }
     }
@@ -140,14 +159,15 @@ $VenvOld  = $null
 # **重建不会丢任何用户数据**：数据在 $TradeHome 下（数据库、公司目录），不在 venv 里。
 if ((Test-Path "$VenvDir\Scripts\python.exe") -and -not (& $IsPython314 "$VenvDir\Scripts\python.exe")) {
     # 先把旧版本号取出来写进提示 —— 用户需要知道「现在跑的是几」才能判断要不要处理
-    $oldVer = & "$VenvDir\Scripts\python.exe" -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+    $oldVer = Invoke-NativeQuiet { & "$VenvDir\Scripts\python.exe" -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null }
     if (-not $oldVer) { $oldVer = "未知" }
     Write-Host "  ! 已有的运行环境是 Python $oldVer，需要 3.14 —— 正在重建（不会动你的数据）..." -ForegroundColor Yellow
     # 换掉之前留一份已装包清单：venv 里可能有用户手动 pip install 的东西，
     # 这份清单是事后唯一的追查线索。失败不影响安装（best-effort）。
     try {
         if (-not (Test-Path $TradeHome)) { New-Item -ItemType Directory -Path $TradeHome -Force | Out-Null }
-        & "$VenvDir\Scripts\pip.exe" freeze 2>$null | Out-File -FilePath "$TradeHome\venv-packages-before-rebuild.txt" -Encoding utf8
+        Invoke-NativeQuiet { & "$VenvDir\Scripts\pip.exe" freeze 2>$null } |
+            Out-File -FilePath "$TradeHome\venv-packages-before-rebuild.txt" -Encoding utf8
         Write-Host "  → 已把重建前的包清单留档：$TradeHome\venv-packages-before-rebuild.txt" -ForegroundColor Cyan
     } catch {}
     # **不在原地重建**（2026-10-16 改，与 install.sh 同步）。原实现是 Remove-Item 后立刻重建，
@@ -189,7 +209,7 @@ function Invoke-CloneOrUpdate {
 
     $isRepo = $false
     if (Test-Path "$Dest\.git") {
-        git -C $Dest rev-parse --verify HEAD 2>&1 | Out-Null
+        Invoke-NativeQuiet { git -C $Dest rev-parse --verify HEAD 2>&1 } | Out-Null
         if ($LASTEXITCODE -eq 0) { $isRepo = $true }
     }
 
@@ -313,14 +333,14 @@ if ($longPaths -ne 1) {
 # 新装用户这里是空的，Invoke-RollbackCode 自然什么都不做。
 $TradeHeadBefore = $null
 if (Test-Path "$TradeDir\.git") {
-    $sha = git -C $TradeDir rev-parse HEAD 2>$null
+    $sha = Invoke-NativeQuiet { git -C $TradeDir rev-parse HEAD 2>$null }
     if ($LASTEXITCODE -eq 0 -and $sha) { $TradeHeadBefore = "$sha".Trim() }
 }
 
 function Invoke-RollbackCode {
     if (-not $TradeHeadBefore) { return }
     Write-Host "  ⚠ 正在把代码回退到升级前的版本（$($TradeHeadBefore.Substring(0,8))）..." -ForegroundColor Yellow
-    git -C $TradeDir reset --hard $TradeHeadBefore 2>&1 | Out-Null
+    Invoke-NativeQuiet { git -C $TradeDir reset --hard $TradeHeadBefore 2>&1 } | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  ✓ 代码已回退，旧版本仍可正常使用" -ForegroundColor Green
     } else {
@@ -356,11 +376,11 @@ if ($LASTEXITCODE -ne 0) {
 # **单独装、失败只警告** —— 不是主链依赖：不装则语义检索自动降级关键词，
 # 其余功能零影响；个别平台（如 Windows ARM）没有对应 wheel，
 # 不能因为一个可选能力让整台机器的安装失败。
-& $PyCmd -c "import sqlite_vec" 2>$null
+Invoke-NativeQuiet { & $PyCmd -c "import sqlite_vec" 2>$null }
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  ✓ sqlite-vec 已安装（客户语义检索可用）" -ForegroundColor Green
 } else {
-    & $PipCmd install "sqlite-vec>=0.1.6" *> $null
+    Invoke-NativeQuiet { & $PipCmd install "sqlite-vec>=0.1.6" *> $null }
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  ✓ sqlite-vec 安装完成（客户语义检索可用）" -ForegroundColor Green
     } else {
@@ -450,7 +470,7 @@ New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 New-Item -ItemType Directory -Path "$TradeHome\companies" -Force | Out-Null
 
 try {
-    & $PyCmd -c "from trade.database import init_db; init_db()" 2>$null
+    Invoke-NativeQuiet { & $PyCmd -c "from trade.database import init_db; init_db()" 2>$null }
     Write-Host "  ✓ 数据库初始化完成 ($DataDir\trade.db)" -ForegroundColor Green
 } catch {
     Write-Host "  → 数据库将在首次启动时自动初始化" -ForegroundColor Cyan
