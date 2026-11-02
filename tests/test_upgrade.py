@@ -424,6 +424,64 @@ class TestRemoteShaDiagnostics:
         assert "连不上 GitHub" in result["error"], "界面仍只显示笼统的「检查网络」"
 
 
+class TestFailureIsAlwaysLogged:
+    """升级失败必须落盘 —— 客户机远程断开后，日志是唯一线索。
+
+    2026-11-02 客户机：界面只留一句「无法解析远端 main」，远程一断就没法复现。
+    此前只有**未捕获异常**才写 update.log，结构化失败（ok=False）完全不写。
+    """
+
+    def test_log_helper_appends_and_returns_path(self, tmp_path, monkeypatch):
+        from trade.app import _log_update_failure
+
+        monkeypatch.setattr(
+            "trade.post_install.skills._get_trade_home", lambda: tmp_path, raising=True
+        )
+
+        path = _log_update_failure("测试失败原因")
+
+        assert path
+        assert Path(path).is_file()
+        assert "测试失败原因" in Path(path).read_text(encoding="utf-8")
+        assert Path(path).parent == tmp_path / "logs"
+
+    def test_endpoint_logs_structured_failure_and_returns_path(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from trade.api import deps
+        from trade.app import _create_system_router
+
+        monkeypatch.setattr(deps, "_SESSION_TOKEN", "test-token")
+        # 端点是从 **包** 里 import 的，必须钉包级名字（不是 trade.post_install.update）
+        monkeypatch.setattr(
+            "trade.post_install.update_trade",
+            lambda _sha=None: {
+                "ok": False, "version": "", "errors": ["cannot resolve remote main"],
+                "warnings": [], "messages": [],
+                "error": "无法解析远端 main 的最新提交：连不上 GitHub",
+            },
+        )
+        app = FastAPI()
+        app.include_router(_create_system_router())
+
+        with TestClient(app) as client:
+            resp = client.post(
+                "/system/update",
+                headers={
+                    "X-Confirm-Update": "yes",
+                    "X-Hermes-Session-Token": "test-token",
+                },
+                json={"target_sha": None},
+            )
+
+        body = resp.json()
+        assert body["ok"] is False
+        assert body.get("log_path"), "失败结果没带日志路径"
+        assert Path(body["log_path"]).is_file()
+        assert "连不上 GitHub" in Path(body["log_path"]).read_text(encoding="utf-8")
+
+
 class TestUpdateStepSeverity:
     """update_trade 的失败分级：只有 git / pip / 数据库算致命，其余只记警告。
 

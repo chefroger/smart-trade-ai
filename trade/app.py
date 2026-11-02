@@ -715,21 +715,25 @@ _SYS_STREAM_MAX = 30
 _update_lock = threading.Lock()
 
 
-def _log_update_failure(message: str) -> None:
-    """把升级失败的异常文本追加到 ~/.trade/logs/update.log（best-effort）。
+def _log_update_failure(message: str) -> str:
+    """把升级失败文本追加到 ~/.trade/logs/update.log（best-effort），返回日志路径。
 
     用户只会转述「更新失败」；没有这份日志，事后无法定位真实原因。
+    2026-11-02 客户机事故：远程断开后完全无法复现，只留下界面上一句提示 ——
+    所以**每一次**失败（不只是未捕获异常）都要落盘。
     """
     try:
         from trade.post_install.skills import _get_trade_home
 
         log_dir = _get_trade_home() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "update.log"
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-        with (log_dir / "update.log").open("a", encoding="utf-8") as fh:
+        with log_file.open("a", encoding="utf-8") as fh:
             fh.write(f"[{stamp}] {message}\n")
+        return str(log_file)
     except OSError:
-        pass
+        return ""
 
 
 def _check_system_rate_limit(
@@ -821,14 +825,27 @@ def _create_system_router() -> APIRouter:
             import traceback
 
             traceback.print_exc()
-            _log_update_failure(str(e))
+            log_path = _log_update_failure(str(e))
             result = {
                 "ok": False, "version": "", "target_sha": "",
                 "error": f"更新过程中出现异常：{e}",
                 "errors": [str(e)], "warnings": [], "messages": [],
+                "log_path": log_path,
             }
         finally:
             _update_lock.release()
+
+        # 失败一律落盘：客户机远程断开后无法复现时，日志是唯一线索。
+        # 结构化失败（如「无法解析远端 main」）此前**不写日志**，只剩界面上一句话。
+        if not result.get("ok"):
+            detail = " | ".join(
+                str(x) for x in (
+                    result.get("error", ""),
+                    result.get("errors", []),
+                    result.get("warnings", []),
+                ) if x
+            )
+            result["log_path"] = _log_update_failure(f"更新失败：{detail}")
 
         # 只更新不重启：让用户在确认结果后自己点「重启」，避免新代码起不来
         # 时连旧服务也没了（audit P1-10 允许的替代方案）。
