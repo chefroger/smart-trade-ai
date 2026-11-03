@@ -2,7 +2,7 @@
 
 > 本规范参考 [Anthropic Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) 与 [agentskills.io/specification](https://agentskills.io/specification) 的目录结构，同时保留 smart-trade-ai 的项目惯例。
 
-**适用范围**：smart-trade-ai 仓库下 `skills/` 目录的 38 个 skill。
+**适用范围**：smart-trade-ai 仓库下 `skills/` 目录的 45 个 skill。
 
 ---
 
@@ -102,7 +102,7 @@ injection_prompt: |
 - ✅ **有**（推荐）：当 skill 需要注入"我是谁 / 怎么做"的长指令到 system prompt 时
 - ✅ **省略**：当 skill 只需在 README 末尾的 body 提供文档 / 输出格式（Agent 自行遵循）即可
 
-> 项目当前状态（2026-09-14 统计）：6 个 skill 省略了 injection_prompt（body 直接是文档，依赖 `skill_registry.py` 的 `augment_prompt` 作运行时注入），32 个有 injection_prompt。两种形态都允许。
+> 项目当前状态（2026-11-03 重审）：39 个 skill 有 injection_prompt，6 个省略（b2b-customer-mgmt / b2b-document / b2b-email-intel / b2b-lead-generation / b2b-onboarding / b2b-social-media —— body 直接是文档，依赖 `skill_registry.py` 的 `augment_prompt` 作运行时注入）。两种形态都允许。
 >
 > ⚠️ 注意：SKILL.md 的 injection_prompt 一旦存在，运行时会**优先于** registry 的 `augment_prompt`（见 `skill_router.load_injection_prompt`）。修改 prompt 规则时必须同步两处，或确认只改生效的那处。
 
@@ -148,18 +148,29 @@ injection_prompt: |
 
 ---
 
-## 7. 当前覆盖率（2026-09-14 统计）
+## 7. 当前覆盖率（2026-11-03 重审）
 
-| 项 | 状态 |
+| 项 | 结果 |
 |----|------|
-| 38 个 skill 目录，全部注册于 `skill_registry.py` | ✅ |
-| 38 个 `SKILL.md` frontmatter 完整 + YAML 可解析 | ✅（2026-09-14 修复 3 个损坏文件：b2b-customs-data / b2b-doc-generation / b2b-osint） |
-| 38 个 `description` 均为单行 | ✅ |
-| 38 个含 `when_to_use`（Anthropic 推荐） | ✅ |
-| 32 个含 `injection_prompt` / 6 个用 registry `augment_prompt` | ✅ |
-| 38 个 skill 至少有一处可注入内容（SKILL.md 或 registry） | ✅ |
-| 38 个含 `scripts/` + `references/` + `assets/` 骨架目录 | ✅（2026-09-14 补齐 4 个：b2b-guarantee-proposal / b2b-inquiry-meeting / b2b-sales-playbook / b2b-tech-drawing） |
-| `category` 值统一到枚举内 | ✅（2026-09-14 修正 9 个零散值；枚举更新为：客户开发 / 客户管理 / 文档管理 / 数据分析 / 平台运营 / 内容营销 / 销售转化 / 履约运营 / 合规风控 / 自动化 / 系统工具） |
+| 45 个 skill 目录，全部注册于 `skill_registry.py` | ✅ 45/45 |
+| `SKILL.md` frontmatter 完整 + YAML 可解析 | ✅ 45/45（含 `name` 与目录名一致） |
+| `description` 均为单行 | ✅ 45/45 |
+| 含 `when_to_use`（Anthropic 推荐） | ✅ 45/45；⚠️ 42/45 条数在 3–10，41/45 含「不要用于」 |
+| `triggers` ≥ 5 | ✅ 45/45 |
+| `category` 命中枚举 | ⚠️ 42/45 |
+| `version` 为 semver、`author` 非空 | ✅ 45/45 |
+| 至少一处可注入内容（SKILL.md 或 registry） | ✅ 45/45（39 个有 `injection_prompt`，6 个用 registry `augment_prompt`） |
+| `scripts/` + `references/` + `assets/` 骨架 | ⚠️ 36/45 |
+| 无 broken 相对路径 | ✅ 0 处 |
+
+**待修偏差（19 项，涉及 11 个 skill）**：
+
+| 类别 | 涉及 skill | 偏差 |
+|---|---|---|
+| 骨架缺失 | b2b-china-leads、b2b-tender-info / mail / processing / download / archive / doc-match | 缺 `scripts/` `references/` `assets/` README 占位（招标技能已有真实脚本，但无 `scripts/README.md`） |
+| 骨架缺失 | b2b-guarantee-proposal、b2b-inquiry-meeting | 缺 `references/README.md` |
+| `category` 非枚举 | b2b-tender-info（市场与客户）、b2b-tender-processing / b2b-tender-doc-match（文档处理） | 改为枚举值（建议：客户开发 / 文档管理） |
+| `when_to_use` 不足 | b2b-guarantee-proposal、b2b-inquiry-meeting、b2b-sales-playbook（各 2 条，且缺「不要用于」）；b2b-tech-drawing（缺「不要用于」） | 补到 3–10 条，并加一条「不要用于」 |
 
 ---
 
@@ -182,3 +193,4 @@ injection_prompt: |
 - 2026-09-14: 全量体检后更新统计；修复 3 个结构损坏的 SKILL.md；补充 injection_prompt 与 augment_prompt 的优先级说明
 - 2026-10-27: 新增质量门（QA）规范；修复 4 个 skill 的悬空 QA 引用（trade-ops / lead-generation / trade-compliance / auto-trade-customer-development，含 registry 兜底提示词）
 - 2026-10-27（B 批）: 为 7 个高风险输出 skill 补交付前自检（doc-generation / guarantee-proposal / cold-outreach / inquiry-training / product-description / email-imitation / tech-drawing）
+- 2026-11-03: 按 45 个 skill 重审（新增 b2b-china-leads + 6 个招标技能）；更新覆盖率，新增 19 项待修偏差清单
