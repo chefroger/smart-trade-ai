@@ -555,6 +555,21 @@ class TestWindowsInstallerGaps:
         assert "Get-Command py" in PS1, "install.ps1 未尝试 Windows 的 py 启动器"
         assert "-3.14" in PS1, "install.ps1 未用 py 启动器指定 3.14"
 
+    def test_py_launcher_args_are_splatted_not_joined(self):
+        """`py -3.14` 的命令与参数必须分开存，否则 `& $PythonCmd` 会把数组拼成命令名。
+
+        2026-11-03 客户机实测：$PythonCmd = @("...py.exe", "-3.14") 再 `& $PythonCmd`
+        → 「无法将 "...py.exe -3.14" 项识别为 cmdlet」，建 venv 一步直接中断。
+        """
+        body = _code_lines(PS1)
+        assert "& $PythonCmd @PyArgs -m venv" in body, (
+            "建 venv 时没有展开 $PyArgs —— py 启动器路径会再次把参数拼进命令名"
+        )
+        assert '$PyArgs = @("-3.14")' in body, "py 启动器的参数没有单独保存"
+        assert "$PythonCmd = @(" not in body, (
+            "不能把命令与参数塞进同一个变量：`& $array` 会拼成一个字符串当命令名"
+        )
+
     def test_store_alias_is_skipped(self):
         """Microsoft Store 的应用执行别名会把安装器卡在「弹商店」。"""
         assert "WindowsApps" in PS1, "install.ps1 未排除 Store 别名（会弹商店卡住安装）"

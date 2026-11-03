@@ -61,6 +61,10 @@ Write-Host "Step 1/5: 检查 Python 环境" -ForegroundColor White
 # 而 Trade 是**进程内**嵌 Hermes 的，解释器必须与 Hermes 的托管环境同 ABI。
 # 在 3.11~3.13 上会变成「装得上、起不来」，所以这里不再接受 3.11~3.13。
 $PythonCmd = $null
+# `py -3.14` 需要额外参数；**必须与命令分开存**，不能塞进 $PythonCmd。
+# 2026-11-03 客户机实测：`$PythonCmd = @("...\py.exe", "-3.14")` 再用 `& $PythonCmd`
+# 会把数组拼成一个字符串当命令名，报「无法将 "...py.exe -3.14" 项识别为 cmdlet」。
+$PyArgs = @()
 $HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
 
 # 判据：解释器正好是 3.14（不是「>= 3.11」下限）
@@ -99,8 +103,10 @@ if (-not $PythonCmd) {
     if ($pyLauncher) {
         Invoke-NativeQuiet { & $pyLauncher.Source -3.14 -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null }
         if ($LASTEXITCODE -eq 0) {
-            # 用数组保存「启动器 + 参数」，`& $cmd` 会把它拆成两个参数
-            $PythonCmd = @($pyLauncher.Source, "-3.14")
+            # 命令与参数分开：调用方用 `& $PythonCmd @PyArgs` 展开，
+            # 不能把两者塞进同一个变量（数组会被拼成一条命令名）。
+            $PythonCmd = $pyLauncher.Source
+            $PyArgs = @("-3.14")
             $pyPath = Invoke-NativeQuiet { & $pyLauncher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null }
             Write-Host "  ✓ Python 3.14 ($pyPath)" -ForegroundColor Green
         }
@@ -181,7 +187,7 @@ if ((Test-Path "$VenvDir\Scripts\python.exe") -and -not (& $IsPython314 "$VenvDi
 }
 if (-not (Test-Path "$VenvDir\Scripts\python.exe")) {
     Write-Host "  → 创建虚拟环境..."
-    & $PythonCmd -m venv $VenvDir
+    & $PythonCmd @PyArgs -m venv $VenvDir
     # 原生命令非零退出**不会抛异常**（本文件后面有多处踩坑记录）——
     # 不查就是「venv 没建成」却继续往下走，用户最后只看到一句
     # ModuleNotFoundError，而真正的原因是这里。
