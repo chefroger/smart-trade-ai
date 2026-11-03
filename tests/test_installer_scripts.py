@@ -25,6 +25,8 @@ SH = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
 PS1 = (ROOT / "scripts" / "install-core.ps1").read_text(encoding="utf-8-sig")
 # 入口引导器：纯 ASCII、无 BOM，供 `irm ... | iex` 使用
 PS1_LAUNCHER = (ROOT / "scripts" / "install.ps1").read_bytes()
+# Hermes 前置软件脚本（不在 Trade 一键安装主链上，但单独运行也要正确）
+PREREQS = (ROOT / "scripts" / "install_prereqs.ps1").read_text(encoding="utf-8-sig")
 
 
 
@@ -581,6 +583,20 @@ class TestWindowsInstallerGaps:
         window = body[venv_at: venv_at + 400]
         assert "$LASTEXITCODE" in window, "install.ps1 未检查建 venv 的退出码"
 
+    def test_db_init_failure_is_not_reported_as_success(self):
+        """init_db 失败不能打印「✓ 完成」—— 原生命令非零退出不会进 catch。"""
+        body = _code_lines(PS1)
+        idx = body.index("init_db; init_db()")
+        window = body[idx: idx + 900]
+        assert "$LASTEXITCODE" in window, "数据库初始化没有检查退出码（会假成功）"
+        assert "数据库初始化未完成" in PS1, "失败分支缺少如实文案"
+
+    def test_launcher_warns_on_non_ascii_path(self):
+        """自定义 TRADE_HOME 含非 ASCII 时，必须明确警告 launcher 可能起不来。"""
+        body = _code_lines(PS1)
+        assert "Test-AsciiBatchPath" in body, "缺少非 ASCII 路径检测"
+        assert "非 ASCII" in PS1 and "D:\\trade" in PS1, "警告文案没有给出可操作的建议"
+
     def test_launcher_exports_trade_home(self):
         """启动器必须带出 TRADE_HOME —— 否则自定义数据目录时服务读的是另一个目录。"""
         body = _code_lines(PS1)
@@ -865,6 +881,59 @@ class TestPowerShellLauncher:
             f"引导器没跑通：\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
         )
         assert "CORE_OK" in proc.stdout
+
+
+class TestPrereqScript:
+    """install_prereqs.ps1 不在 Trade 一键安装主链上，但单独执行也必须正确。"""
+
+    def test_has_bom_for_ps51(self):
+        raw = (ROOT / "scripts" / "install_prereqs.ps1").read_bytes()
+        assert raw.startswith(b"\xef\xbb\xbf"), (
+            "install_prereqs.ps1 缺 UTF-8 BOM —— PS 5.1 用 -File 读中文会解析失败"
+        )
+
+    def test_python_version_matches_runtime_policy(self):
+        body = _code_lines(PREREQS)
+        assert '$PythonVersion = "3.14"' in body
+        assert "3.11" not in body, "前置脚本仍指向 Python 3.11（Hermes 0.21.6+ 需要 3.14）"
+
+    def test_winget_uv_id_is_correct(self):
+        body = _code_lines(PREREQS)
+        assert "--id astral-sh.uv" in body, "winget 官方包 ID 是 astral-sh.uv"
+        assert "--id Astronaut.uv" not in body
+
+    def test_no_backslash_escaped_quotes(self):
+        """PowerShell 用反引号转义；反斜杠+引号会提前结束字符串。"""
+        assert '\\"' not in PREREQS
+
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
+    )
+    def test_ps51_parses_prereqs(self, tmp_path):
+        """用真 PS 5.1 解析整份前置脚本（验证 BOM + 转义修复）。"""
+        target = str((ROOT / "scripts" / "install_prereqs.ps1").resolve()).replace("'", "''")
+        script = tmp_path / "parse_prereqs.ps1"
+        script.write_text(
+            "$t = $null; $e = $null\n"
+            f"[void][System.Management.Automation.Language.Parser]::ParseFile('{target}', [ref]$t, [ref]$e)\n"
+            "if ($e -and $e.Count) {\n"
+            "    $e | ForEach-Object { Write-Output (\"line \" + $_.Extent.StartLineNumber + \": \" + $_.Message) }\n"
+            "    exit 1\n"
+            "}\n"
+            'Write-Output "PARSE_OK"\n',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert proc.returncode == 0, (
+            f"PS 5.1 解析 install_prereqs.ps1 失败：\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+        )
+        assert "PARSE_OK" in proc.stdout
 
 
 class TestReadmeHasNoReleaseSection:

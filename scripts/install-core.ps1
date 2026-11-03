@@ -475,11 +475,20 @@ $DataDir = "$TradeHome\data"
 New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 New-Item -ItemType Directory -Path "$TradeHome\companies" -Force | Out-Null
 
+# 原生命令非零退出**不会抛异常**（见文件前文），必须查退出码 ——
+# 否则 init_db 失败也打印「✓ 完成」，用户拿到的是假成功。
+$dbOk = $false
 try {
     Invoke-NativeQuiet { & $PyCmd -c "from trade.database import init_db; init_db()" 2>$null }
-    Write-Host "  ✓ 数据库初始化完成 ($DataDir\trade.db)" -ForegroundColor Green
+    $dbOk = ($LASTEXITCODE -eq 0) -and (Test-Path "$DataDir\trade.db")
 } catch {
-    Write-Host "  → 数据库将在首次启动时自动初始化" -ForegroundColor Cyan
+    $dbOk = $false
+}
+if ($dbOk) {
+    Write-Host "  ✓ 数据库初始化完成 ($DataDir\trade.db)" -ForegroundColor Green
+} else {
+    # 不是致命项：服务启动时 app.py 会再跑一次 init_db，这里只如实说明
+    Write-Host "  → 数据库初始化未完成，将在首次启动时自动重建" -ForegroundColor Cyan
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -510,6 +519,31 @@ $BatchHermesHome = ConvertTo-BatchPath $HermesHome
 $BatchTradeHome  = ConvertTo-BatchPath $TradeHome
 $BatchPyCmd      = ConvertTo-BatchPath $PyCmd
 $BatchServerPy   = ConvertTo-BatchPath "$TradeDir\server.py"
+
+# cmd.exe 按系统 OEM 代码页读 .cmd：路径里仍有非 ASCII（典型是自定义
+# TRADE_HOME 放在 D:\外贸数据 之类、不在 LOCALAPPDATA/USERPROFILE 下）时，
+# 英文 Windows 会把这些字符写成 '?'，表现为「装完了但 trade 命令起不来」。
+# 不阻断安装（中文 Windows 通常能正常展开），但必须让用户看见风险。
+function Test-AsciiBatchPath {
+    param([string]$Value)
+    if (-not $Value) { return $true }
+    return ($Value -notmatch '[^\x00-\x7F]')
+}
+
+$unsafeBatch = @()
+foreach ($pair in @(
+    @("TRADE_HOME",  $BatchTradeHome),
+    @("HERMES_HOME", $BatchHermesHome),
+    @("Python",      $BatchPyCmd),
+    @("server.py",   $BatchServerPy)
+)) {
+    if (-not (Test-AsciiBatchPath $pair[1])) { $unsafeBatch += "$($pair[0]) = $($pair[1])" }
+}
+if ($unsafeBatch.Count -gt 0) {
+    Write-Host "  ⚠ 启动器路径含非 ASCII 字符，在非中文 Windows 上可能无法运行：" -ForegroundColor Yellow
+    foreach ($item in $unsafeBatch) { Write-Host "      $item" -ForegroundColor Yellow }
+    Write-Host "    建议把 TRADE_HOME 改到纯英文路径（如 D:\trade）后重装；本次安装会继续。" -ForegroundColor Yellow
+}
 
 @"
 @echo off

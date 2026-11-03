@@ -1,4 +1,4 @@
-#Requires -Version 5
+﻿#Requires -Version 5
 # ==============================================================================
 # Hermes Agent 前置软件安装脚本 — Windows (PowerShell)
 # ==============================================================================
@@ -19,7 +19,9 @@ $ErrorActionPreference = 'Stop'
 # ─────────────────────────────────────────────────────────────────────────────
 # 配置
 # ─────────────────────────────────────────────────────────────────────────────
-$PythonVersion = "3.11"
+# Hermes v0.21.6+ 只提供 Python 3.14 的依赖集，Trade 进程内嵌 Hermes，
+# 必须同 ABI —— 这里不能再检查/推荐 3.11。
+$PythonVersion = "3.14"
 $NodeVersion = "22"
 $HermesHome = "$env:LOCALAPPDATA\hermes"
 
@@ -119,7 +121,7 @@ if (-not $pythonFound) {
     $sysPy = Get-Command python -ErrorAction SilentlyContinue
     if ($sysPy) {
         $ver = python --version 2>$null
-        if ($ver -match "Python 3\.(1[0-9]|[1-9][0-9])") {
+        if ($ver -match ("Python " + [regex]::Escape($PythonVersion))) {
             $pythonFound = $true
             $pythonPath = $sysPy.Source
             Write-Success "系统 Python: $ver"
@@ -146,8 +148,10 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
     Write-Warn "uv 未安装"
     if ($hasWinget) {
         Write-Info "通过 winget 安装 uv..."
-        winget install --id Astronaut.uv -e --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
-        if ($?) {
+        # winget 官方包 ID 是 astral-sh.uv（不是 Astronaut.uv）；
+        # 不用 2>&1：PS 5.1 + EAP Stop 下原生命令 stderr 重定向会中止脚本。
+        winget install --id astral-sh.uv -e --silent --accept-package-agreements --accept-source-agreements | Out-Null
+        if ($LASTEXITCODE -eq 0) {
             # 刷新 PATH
             $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
             if (Get-Command uv -ErrorAction SilentlyContinue) {
@@ -157,7 +161,7 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
     }
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         Write-Info "手动安装 uv（PowerShell）:"
-        Write-Info "  powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\""
+        Write-Info '  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
         Write-Info "详细说明: https://docs.astral.sh/uv/getting-started/installation/"
     }
 }
