@@ -698,8 +698,11 @@ class TestProbe8Registration:
             front = text.split("---")[1]
 
             for field in ("name:", "description:", "when_to_use:", "triggers:",
-                          "category:", "version: 1.0.0", "author:"):
+                          "category:", "author:"):
                 assert field in front, f"{name} frontmatter 缺 {field}"
+            # 版本要求 semver，但不锁死具体号 —— 内容修订时允许 patch 递增
+            assert re.search(r"^version: \d+\.\d+\.\d+$", front, re.M), \
+                f"{name} frontmatter 缺合法 version"
 
     def test_trigger_routing_stays_in_lane(self):
         from trade.skill_router import match_skills

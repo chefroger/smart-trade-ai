@@ -19,8 +19,8 @@ triggers:
   - 文件重命名归档
   - match drawings
   - archive by drawing number
-category: 文档处理
-version: 1.0.0
+category: 文档管理
+version: 1.0.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-tender-doc-match 技能。把招标清单与本地文件库（图纸、技术文件）按

@@ -6,6 +6,7 @@ when_to_use:
   - "用户问「这是什么零件」「帮我看看这张图纸」「分析这张图纸」"
   - "客户发了 PDF 图纸要求报价"
   - "用户提到 GOST / ASTM / ISO / DIN / JIS 等工程标准"
+  - "不要用于：非图纸类文件（合同/报价单/Excel）的解析（走 b2b-document）"
 triggers:
   - 图纸
   - 工程图
@@ -27,7 +28,7 @@ triggers:
   - blueprint
   - mechanical drawing
 category: 数据分析
-version: 1.1.0
+version: 1.1.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-tech-drawing 技能。用于辅助分析客户发来的工程图纸 PDF。

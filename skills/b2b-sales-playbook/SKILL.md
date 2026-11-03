@@ -4,6 +4,9 @@ description: 销冠经验封装器 — 将资深业务员的隐性经验转化�
 when_to_use:
   - "用户提到「销冠经验」「销售SOP」「话术库」"
   - "需要将资深业务员经验整理成新人培训材料"
+  - "要把销冠的谈单过程拆成可复用的流程与话术"
+  - "新人上岗需要标准化培训路径与避坑清单"
+  - "不要用于：单个客户的具体开发信撰写（走 b2b-cold-outreach）"
 triggers:
   - 销冠经验
   - 销售知识库
@@ -23,7 +26,7 @@ triggers:
   - objection handling
   - sales training
 category: 销售转化
-version: 1.0.0
+version: 1.0.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-sales-playbook 技能。用于**将资深外贸业务员的隐性销售经验转化为新人可直接复用的标准化知识体系**。

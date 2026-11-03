@@ -20,8 +20,8 @@ triggers:
   - 国际招标
   - find public tenders
   - tender opportunities
-category: 市场与客户
-version: 1.0.0
+category: 客户开发
+version: 1.0.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-tender-info 技能。用于在**公开采购平台**上实时找标、筛标、评估。

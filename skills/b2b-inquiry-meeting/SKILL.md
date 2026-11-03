@@ -4,6 +4,9 @@ description: 询盘分析会主持 — 周度询盘复盘会，输出销售主�
 when_to_use:
   - "用户提到「询盘分析会」「询盘复盘」「业务员复盘」"
   - "需要逐人点评业务员询盘跟进情况"
+  - "销售主管准备周会，要追问要点与责任分工"
+  - "需要输出本周重点询盘分析与下周跟进行动表"
+  - "不要用于：单个询盘的回复撰写或谈判演练（走 b2b-inquiry-training）"
 triggers:
   - 开询盘分析会
   - 准备询盘复盘
@@ -20,7 +23,7 @@ triggers:
   - weekly sales review
   - sales team meeting
 category: 销售转化
-version: 1.0.0
+version: 1.0.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-inquiry-meeting 技能。用于**主持周度询盘复盘会**，输出销售主管可直接用于开会的完整材料。

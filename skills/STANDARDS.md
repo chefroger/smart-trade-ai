@@ -155,22 +155,15 @@ injection_prompt: |
 | 45 个 skill 目录，全部注册于 `skill_registry.py` | ✅ 45/45 |
 | `SKILL.md` frontmatter 完整 + YAML 可解析 | ✅ 45/45（含 `name` 与目录名一致） |
 | `description` 均为单行 | ✅ 45/45 |
-| 含 `when_to_use`（Anthropic 推荐） | ✅ 45/45；⚠️ 42/45 条数在 3–10，41/45 含「不要用于」 |
+| 含 `when_to_use`（Anthropic 推荐） | ✅ 45/45（条数均在 3–10，且都含「不要用于」） |
 | `triggers` ≥ 5 | ✅ 45/45 |
-| `category` 命中枚举 | ⚠️ 42/45 |
+| `category` 命中枚举 | ✅ 45/45 |
 | `version` 为 semver、`author` 非空 | ✅ 45/45 |
 | 至少一处可注入内容（SKILL.md 或 registry） | ✅ 45/45（39 个有 `injection_prompt`，6 个用 registry `augment_prompt`） |
-| `scripts/` + `references/` + `assets/` 骨架 | ⚠️ 36/45 |
+| `scripts/` + `references/` + `assets/` 骨架 | ✅ 45/45 |
 | 无 broken 相对路径 | ✅ 0 处 |
 
-**待修偏差（19 项，涉及 11 个 skill）**：
-
-| 类别 | 涉及 skill | 偏差 |
-|---|---|---|
-| 骨架缺失 | b2b-china-leads、b2b-tender-info / mail / processing / download / archive / doc-match | 缺 `scripts/` `references/` `assets/` README 占位（招标技能已有真实脚本，但无 `scripts/README.md`） |
-| 骨架缺失 | b2b-guarantee-proposal、b2b-inquiry-meeting | 缺 `references/README.md` |
-| `category` 非枚举 | b2b-tender-info（市场与客户）、b2b-tender-processing / b2b-tender-doc-match（文档处理） | 改为枚举值（建议：客户开发 / 文档管理） |
-| `when_to_use` 不足 | b2b-guarantee-proposal、b2b-inquiry-meeting、b2b-sales-playbook（各 2 条，且缺「不要用于」）；b2b-tech-drawing（缺「不要用于」） | 补到 3–10 条，并加一条「不要用于」 |
+**2026-11-03 修复记录**：补齐 9 个 skill 的骨架 README 占位（b2b-china-leads、6 个 b2b-tender-*、b2b-guarantee-proposal、b2b-inquiry-meeting）；3 个招标 skill 的 `category` 改回枚举（b2b-tender-info → 客户开发，b2b-tender-processing / doc-match → 文档管理）；4 个 skill 的 `when_to_use` 补足并加「不要用于」（guarantee-proposal / inquiry-meeting / sales-playbook / tech-drawing）。涉及 skill 的 `version` 均已递增。
 
 ---
 
@@ -193,4 +186,4 @@ injection_prompt: |
 - 2026-09-14: 全量体检后更新统计；修复 3 个结构损坏的 SKILL.md；补充 injection_prompt 与 augment_prompt 的优先级说明
 - 2026-10-27: 新增质量门（QA）规范；修复 4 个 skill 的悬空 QA 引用（trade-ops / lead-generation / trade-compliance / auto-trade-customer-development，含 registry 兜底提示词）
 - 2026-10-27（B 批）: 为 7 个高风险输出 skill 补交付前自检（doc-generation / guarantee-proposal / cold-outreach / inquiry-training / product-description / email-imitation / tech-drawing）
-- 2026-11-03: 按 45 个 skill 重审（新增 b2b-china-leads + 6 个招标技能）；更新覆盖率，新增 19 项待修偏差清单
+- 2026-11-03: 按 45 个 skill 重审（新增 b2b-china-leads + 6 个招标技能）；更新覆盖率，并修复审计发现的 19 项偏差（骨架占位 / category 枚举 / when_to_use）

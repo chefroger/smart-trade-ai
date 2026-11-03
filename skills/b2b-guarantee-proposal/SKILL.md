@@ -4,6 +4,9 @@ description: 商业提案生成器 — 多Agent协作生成战略建议书/商�
 when_to_use:
   - "用户需要生成商业提案/战略建议书/ROI分析"
   - "客户谈判中需要正式提案文档"
+  - "客户要求年度合作方案/投标提案/多档方案对比"
+  - "需要给决策层讲清实施路线图与投入产出"
+  - "不要用于：写开发信或普通报价单（走 b2b-cold-outreach / b2b-doc-generation）"
 triggers:
   - 商业提案
   - 战略建议书
@@ -23,7 +26,7 @@ triggers:
   - investment proposal
   - business case
 category: 销售转化
-version: 1.2.0
+version: 1.2.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-guarantee-proposal 技能。用于**为 B2B 客户生成专业战略建议书/商业提案**。

@@ -23,8 +23,8 @@ triggers:
   - 生成询价表
   - inquiry sheet
   - request for quotation sheet
-category: 文档处理
-version: 1.0.0
+category: 文档管理
+version: 1.0.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-tender-processing 技能。用于把已经抓下来的招标（主文件 + 附件）整理成
