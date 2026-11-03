@@ -104,3 +104,32 @@ class TestEnsureGatewayRunning:
         # 这里只看 gateway 的 spawn，保证三平台断言一致。
         spawns = [args for args, _kwargs in calls if args and args[0] == "/fake/hermes"]
         assert spawns == [["/fake/hermes", "gateway", "run"]]
+
+    def test_never_calls_platform_system(self, monkeypatch):
+        """系统判定只能用 sys.platform，不能碰 platform.system()。
+
+        Windows CPython 3.11 上 platform.system() 首次调用会 spawn `cmd /c ver`
+        （内部就是 subprocess.Popen）。本测试把 Popen 换成返回 None 的桩，
+        若被测代码走 platform.system()，subprocess 的 `with Popen(...)` 会抛
+        TypeError 并被 _ensure_gateway_running 的兜底 except 吞掉 —— gateway
+        静默不启动。实测就是 CI windows/3.11 那个 `calls == []` 的来源。
+        """
+        import platform as _platform
+
+        monkeypatch.setattr(trade_app, "_is_gateway_running", lambda: False)
+        monkeypatch.setattr(trade_app, "_find_hermes_binary", lambda **k: "/fake/hermes")
+        calls = []
+        monkeypatch.setattr(
+            trade_app._sp,
+            "Popen",
+            lambda args, **kwargs: calls.append((args, kwargs)),
+        )
+        monkeypatch.setattr(
+            _platform,
+            "system",
+            lambda: pytest.fail("不要用 platform.system()，改用 sys.platform"),
+        )
+        trade_app._ensure_gateway_running()
+        assert [args for args, _kw in calls if args and args[0] == "/fake/hermes"] == [
+            ["/fake/hermes", "gateway", "run"]
+        ]

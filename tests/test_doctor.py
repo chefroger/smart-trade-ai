@@ -41,8 +41,8 @@ class TestHermesRuntimeCheck:
 
     @pytest.fixture(autouse=True)
     def _provider_configured(self, monkeypatch):
-        from trade import helpers
         import trade.hermes_compat as compat
+        from trade import helpers
 
         monkeypatch.setattr(helpers, "check_provider", lambda: None)
         # 本机若是 <3.14，真实 compat 会 python_too_old 并提前返回，测不到 Agent 构造

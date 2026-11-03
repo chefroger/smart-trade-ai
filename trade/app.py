@@ -179,25 +179,32 @@ def _ensure_gateway_running() -> None:
     try:
         hermes_bin = _find_hermes_binary()
 
-        # 架构检测：Rosetta 下尝试使用原生 arm64 hermes 二进制
-        import platform as _platform
-        if _platform.system() == "Darwin" and _platform.machine() == "x86_64":
+        # 架构检测：Rosetta 下尝试使用原生 arm64 hermes 二进制。
+        # 系统判定用 sys.platform（纯字符串）而不是 platform.system()：
+        # Windows CPython 3.11 的 platform.system() 首次调用会 spawn `cmd /c ver`
+        # （内部就是 subprocess.Popen）。既拖慢启动，也会在测试替换 Popen 后
+        # 抛 TypeError 被下面的 except 吞掉 → gateway 永远起不来（CI windows/3.11 实测）。
+        if sys.platform == "darwin":
+            import platform as _platform
             import subprocess as _sp_arch
-            try:
-                _hw = _sp_arch.run(
-                    ["uname", "-m"], capture_output=True, text=True, timeout=5
-                ).stdout.strip()
-                if _hw == "arm64":
-                    for _candidate in (
-                        "/opt/homebrew/bin/hermes",
-                        "/opt/homebrew/opt/hermes-agent/bin/hermes",
-                    ):
-                        if os.path.isfile(_candidate):
-                            hermes_bin = _candidate
-                            print(f"  ✓ 检测到 Rosetta，使用原生 arm64 hermes: {_candidate}")
-                            break
-            except Exception:
-                pass  # 架构检测失败不阻断 gateway 启动
+
+            # 只有 Rosetta（x86_64 解释器）才需要找原生 arm64 的 hermes
+            if _platform.machine() == "x86_64":
+                try:
+                    _hw = _sp_arch.run(
+                        ["uname", "-m"], capture_output=True, text=True, timeout=5
+                    ).stdout.strip()
+                    if _hw == "arm64":
+                        for _candidate in (
+                            "/opt/homebrew/bin/hermes",
+                            "/opt/homebrew/opt/hermes-agent/bin/hermes",
+                        ):
+                            if os.path.isfile(_candidate):
+                                hermes_bin = _candidate
+                                print(f"  ✓ 检测到 Rosetta，使用原生 arm64 hermes: {_candidate}")
+                                break
+                except Exception:
+                    pass  # 架构检测失败不阻断 gateway 启动
 
         kwargs = {
             "stdout": _sp.DEVNULL,
