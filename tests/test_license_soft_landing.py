@@ -76,6 +76,44 @@ class TestLicenseState:
         assert license_mod.is_read_only() is True
         assert license_mod.status()["status"] == "tampered"
 
+    def test_ensure_license_state_recovers_corrupt_signature(self, lic, monkeypatch):
+        """签名字段损坏但激活码仍在 → 中间件/写门控应能自恢复，不能一直 402。
+
+        模拟升级后签名格式漂移：expires_at/code 完好，仅 signature 字节损坏。
+        """
+        try:
+            import cryptography  # noqa: F401
+        except ImportError:
+            pytest.skip("cryptography 未安装")
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        license_mod, write = lic
+        pk = ed25519.Ed25519PrivateKey.generate()
+        pub_raw = pk.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        monkeypatch.setattr(license_mod, "_PUBLIC_KEY_BYTES", pub_raw)
+        monkeypatch.setattr(license_mod, "_load_private_key", lambda: pk)
+
+        req = license_mod._make_request_code()
+        code = license_mod._encode_activation_code(req, "2099-06-01")
+        ok, _msg = license_mod.activate(code)
+        assert ok is True
+
+        # 只污染 signature，保留 code / expires_at —— 与「格式漂移」同构
+        data = json.loads(license_mod._license_file_path().read_text(encoding="utf-8"))
+        data["signature"] = "AAAA" + data["signature"][4:]
+        write(data)
+
+        assert license_mod.license_state()[0] == "tampered"
+        state, _ = license_mod.ensure_license_state()
+        assert state == "active", "自恢复后应回到 active，写接口才能放行"
+        assert license_mod.is_read_only() is False
+        assert license_mod.check_license()[0] is True
+
 
 class TestTrialSummary:
     def test_summary_counts_real_events(self, lic, tmp_path, monkeypatch):
@@ -159,3 +197,5 @@ class TestWriteOnlyGateSource:
         assert 'request.method in {"POST", "PUT", "PATCH", "DELETE"}' in src
         assert '"/api/trade/license/"' in src
         assert 'path.endswith("/switch")' in src
+        # 必须走自恢复入口，不能只调只读的 license_state（会假 tampered 挡写入）
+        assert "ensure_license_state" in src

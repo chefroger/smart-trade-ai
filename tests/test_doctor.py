@@ -42,8 +42,14 @@ class TestHermesRuntimeCheck:
     @pytest.fixture(autouse=True)
     def _provider_configured(self, monkeypatch):
         from trade import helpers
+        import trade.hermes_compat as compat
 
         monkeypatch.setattr(helpers, "check_provider", lambda: None)
+        # 本机若是 <3.14，真实 compat 会 python_too_old 并提前返回，测不到 Agent 构造
+        monkeypatch.setattr(compat, "hermes_python_compat", lambda: {
+            "verdict": "ok", "version": "0.22.0", "python": "3.14.7",
+            "reason": "ok", "checkout": None, "fix": "none",
+        })
 
     def test_success(self):
         class _FakeAgent:
@@ -52,6 +58,29 @@ class TestHermesRuntimeCheck:
         results = doctor.check_hermes_runtime(agent_factory=lambda: _FakeAgent())
 
         assert any(r.name == "Agent 构造" and r.status == doctor.STATUS_OK for r in results)
+
+    def test_python_too_old_is_fail_with_rebuild_hint(self, monkeypatch):
+        """Hermes 够新但 Trade 解释器 <3.14 → 必须 FAIL，并指向重建 venv（不能报 OK）。"""
+        import trade.hermes_compat as compat
+
+        monkeypatch.setattr(compat, "hermes_python_compat", lambda: {
+            "verdict": "python_too_old",
+            "version": "0.22.0",
+            "python": "3.13.5",
+            "reason": "Hermes 0.22.0 需要 Python 3.14 运行时，而 Trade 当前的解释器是 3.13.5",
+            "checkout": None,
+            "fix": "rebuild_trade_venv",
+        })
+
+        results = doctor.check_hermes_runtime(
+            agent_factory=lambda: pytest.fail("python_too_old 时不应依赖 agent 构造来暴露问题")
+        )
+
+        item = next(r for r in results if r.name == "Hermes 版本")
+        assert item.status == doctor.STATUS_FAIL
+        assert item.fatal is True
+        assert "重建" in item.detail or "安装脚本" in item.detail
+        assert "不要只升级 Hermes" in item.detail
 
     def test_base_exception_is_caught(self):
         """RelaunchExit 继承 SystemExit —— 自检必须能报出它，而不是自己崩掉。"""

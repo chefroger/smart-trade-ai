@@ -246,6 +246,30 @@ def license_state(company_id: int | None = None) -> tuple[str, str]:
     return "expired", _SOFT_EXPIRED_TRIAL
 
 
+def ensure_license_state(company_id: int | None = None) -> tuple[str, str]:
+    """返回当前许可证状态；若签名异常则先尝试从激活码自恢复。
+
+    `license_state` 保持只读、不写盘，供纯观察场景。
+    本函数供中间件 / status / is_read_only / check_license 共用：升级后签名
+    格式漂移时，不能出现「聊天能恢复、建客户却一直 402」的分裂。
+    """
+    state, message = license_state(company_id)
+    # 未激活或正常试用/到期：无需恢复
+    if state != "tampered":
+        return state, message
+    data = _get_license_data(company_id)
+    # 没有原始激活码就无法自恢复，只能要求用户重新激活
+    if not data.get("code"):
+        return state, message
+    try:
+        if _recover_signature_from_code(data):
+            return license_state(company_id)
+    except Exception:
+        # 恢复过程异常 → 仍按篡改处理，不因恢复失败再抛错阻断浏览
+        pass
+    return state, message
+
+
 def check_license(company_id: int | None = None) -> tuple[bool, str]:
     """检查是否允许**起草/新查询**（到期后返回 False + 软着陆文案）。
 
@@ -264,25 +288,17 @@ def check_license(company_id: int | None = None) -> tuple[bool, str]:
             return False, "License 状态持久化失败，请检查 ~/.trade/ 目录权限"
         return True, ""
 
-    state, message = license_state(company_id)
+    # 与中间件共用自恢复路径，避免写接口与聊天门控结论不一致
+    state, message = ensure_license_state(company_id)
     if state in ("active", "trial"):
         return True, ""
-
-    # 激活数据签名异常时，尝试从原始激活码自恢复（升级后签名格式可能不匹配）
-    if state == "tampered" and data.get("code"):
-        try:
-            if _recover_signature_from_code(data):
-                if license_state(company_id)[0] in ("active", "trial"):
-                    return True, ""
-        except Exception:
-            pass
-
     return False, message
 
 
 def is_read_only(company_id: int | None = None) -> bool:
     """到期/篡改时进入只读模式（浏览可用，写入被中间件挡住）。"""
-    return license_state(company_id)[0] in ("expired", "tampered")
+    # 与中间件一致：先尝试自恢复，再判定只读
+    return ensure_license_state(company_id)[0] in ("expired", "tampered")
 
 
 def days_remaining(company_id: int | None = None) -> int:
@@ -316,7 +332,8 @@ def status(company_id: int | None = None) -> dict:
     """返回许可证状态，供前端展示。到期时自动包含 request_code。"""
     data = _get_license_data(company_id)
     now = datetime.now(UTC)
-    state, _message = license_state(company_id)
+    # 与写门控一致：展示前先尝试自恢复，避免 UI 长期显示「异常」而聊天已恢复
+    state, _message = ensure_license_state(company_id)
 
     result: dict = {
         "days_remaining": days_remaining(company_id),

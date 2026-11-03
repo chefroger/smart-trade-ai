@@ -65,10 +65,13 @@ class CheckResult:
 # ── 检查 1：Hermes 运行环境 ───────────────────────────────────────────────
 
 def check_hermes_runtime(*, agent_factory=None) -> list[CheckResult]:
-    """Hermes 版本在窗口内，且 agent 真的能构造出来。
+    """Hermes 最低版本 + Python 共存判定，且 agent 真的能构造出来。
 
     构造 agent 是这里最关键的检查 —— 客户机上的 RelaunchExit 事故就发生在这一步，
     而任何"只看 import"的检查都发现不了。
+
+    `python_too_old` 与 `too_old` 必须分开报：前者要重建 Trade venv，后者要升 Hermes；
+    混进 else→OK 会让小白走错补救方向。
     """
     out: list[CheckResult] = []
 
@@ -89,7 +92,20 @@ def check_hermes_runtime(*, agent_factory=None) -> list[CheckResult]:
                 f"请升级到 Hermes >= {_MIN_HERMES_VERSION}",
                 fatal=True,
             ))
-        elif verdict == "unknown":
+            # 版本已不可用：继续构造 agent 只会触发 pm 激活/天书 ImportError，帮不了小白
+            return out
+        if verdict == "python_too_old":
+            # 问题在 Trade 解释器太老，只升 Hermes 没用 —— 文案必须指向重装/重建 venv
+            reason = state.get("reason") or (
+                f"Hermes {label} 需要 Python 3.14，当前是 {state.get('python')}"
+            )
+            out.append(CheckResult(
+                "Hermes 版本", STATUS_FAIL,
+                f"{reason}；请重跑 Trade 安装脚本重建运行环境（不要只升级 Hermes）",
+                fatal=True,
+            ))
+            return out
+        if verdict == "unknown":
             out.append(CheckResult(
                 "Hermes 版本", STATUS_WARN,
                 f"无法确定版本（{state.get('reason')}），跳过检查",

@@ -1076,9 +1076,11 @@ def create_app() -> FastAPI:
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             path = request.url.path
             if path.startswith("/api/trade/") and not _write_allowed_when_read_only(path):
-                from trade.license import license_state
+                # 与 check_license 共用自恢复：假 tampered（升级签名格式漂移）
+                # 不能只挡写接口，否则小白只会觉得「建客户全失败」。
+                from trade.license import ensure_license_state
 
-                state, message = license_state()
+                state, message = ensure_license_state()
                 if state in ("expired", "tampered"):
                     return JSONResponse(
                         status_code=402,
