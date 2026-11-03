@@ -106,7 +106,7 @@ Hermes will handle cloning, installing dependencies, and registering skills auto
 curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh | bash
 ```
 
-The script handles: Python check → Hermes Agent → Smart Trade AI → 39 skills → database init.
+The script handles: Python check → Hermes Agent → Smart Trade AI → 45 skills → database init.
 
 > **Prefer to review before running?**
 > ```bash
@@ -191,7 +191,7 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 
 ---
 
-## 38 Professional Skills
+## 45 Professional Skills
 
 | Skill | Description |
 |------|------|
@@ -232,6 +232,12 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 | Business Proposal | 3-tier proposal comparison + ROI analysis + implementation roadmap for clients |
 | Skill Generator | Describe what you need, auto-generates a new B2B skill + registers it |
 | Tech Drawing Analysis | Extract part name / material / dimensions / tolerances from customer engineering-drawing PDFs (experimental — verify manually) |
+| Tender Monitoring | Scheduled keyword search of tender notices, produces a filterable lead sheet |
+| Tender Mail Archive | Pulls tender emails and attachments from the mailbox into per-project archives without marking them read |
+| Inquiry Sheet Generation | Converts tender documents into a fixed 11-column Excel inquiry sheet |
+| Tender Package Download | Batch-downloads tender attachments with resumable chunks and size/checksum verification |
+| Extract & Archive | Batch-extract 7z/rar/zip/gz, unwrap nested archives, send originals to the recycle bin |
+| List-Based Filing | Matches files to tender lists by number and name, packages complete sets |
 | Auto Customer Dev | One-click end-to-end pipeline: search → vet → score → email → save → log |
 | ~~Auto SMTP Email~~ | ~~Preview-then-send via SMTP — disabled, AI does not send emails on behalf of users~~ |
 
@@ -273,13 +279,13 @@ trade/                     B2B business layer
 ├── api/                   FastAPI routes (10 business domains)
 ├── osint/                 Client due diligence module (6-layer verification)
 ├── skill_router.py        Skill auto-matching engine
-├── skill_registry.py      39 skill registry (pure data)
+├── skill_registry.py      45 skill registry (pure data)
 ├── bootstrap.py            Startup bootstrap (Hermes version check, env loading, skills sync)
 ├── app.py                  FastAPI app factory
 └── ... + 22 business modules
 
-skills/                    39 B2B skills (Markdown-driven)
-tests/                     Python tests (28 files) + end-to-end document-reading rule tests
+skills/                    45 B2B skills (Markdown-driven)
+tests/                     Python tests (75 files) + end-to-end document-reading rule tests
 tests_js/                  Frontend utility tests (node:test, zero dependencies; run by CI)
 server.py                  FastAPI entry point
 ```
@@ -299,7 +305,7 @@ ruff check trade/ server.py                 # Lint
 
 ## Documentation
 
-- [User Guide (zh)](TRADE-GUIDE.md) — getting started, all 38 skills explained, FAQ
+- [User Guide (zh)](TRADE-GUIDE.md) — getting started, skill quick reference, FAQ
 - [Windows Installation Guide (zh)](docs/index.md) — 20-minute setup for beginners
 - [LinkedIn Guide (zh)](docs/linkedin-guide.md) — Free / Premium / Sales Navigator (Core · Advanced · Advanced Plus) feature tiers
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Hermes version compatibility

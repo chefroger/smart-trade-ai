@@ -84,7 +84,7 @@ const I18N = {
         'modal.upgrade.p2':'等待执行完毕，看到「重启完成」提示后，刷新浏览器页面（<kbd>Ctrl+Shift+R</kbd>）即可。',
         'modal.upgrade.p3':'如果 <code>hermes</code> 命令找不到，说明 Hermes Agent 未安装。请先参考安装说明安装 Hermes。',
         // modals - skills help
-        'modal.skills.title':'📖 全部 39 个技能速查',
+        'modal.skills.title':'📖 全部 45 个技能速查',
         'modal.skills.desc':'在聊天框输入关键词，Trade 自动匹配合适的技能。点击复制图标可复制快速启动提示词。',
         // common
         'btn.close':'关闭','btn.cancel':'取消','btn.save':'保存','btn.ok':'确定',
@@ -285,7 +285,7 @@ const I18N = {
         'modal.upgrade.cmd':'Help me update Trade and restart it. Repo: https://github.com/chefroger/smart-trade-ai',
         'modal.upgrade.p2':'Wait for completion, then refresh the page (<kbd>Ctrl+Shift+R</kbd>).',
         'modal.upgrade.p3':'If <code>hermes</code> is not found, Hermes Agent is not installed. See install guide first.',
-        'modal.skills.title':'📖 All 39 Skills Reference',
+        'modal.skills.title':'📖 All 45 Skills Reference',
         'modal.skills.desc':'Type keywords in chat — Trade auto-matches the right skill. Click copy icon for quick prompts.',
         'btn.close':'Close','btn.cancel':'Cancel','btn.save':'Save','btn.ok':'OK',
         'license.expired':'Expired',
@@ -1361,6 +1361,13 @@ const _ALL_SKILLS = [
         {n:"b2b-doc-generation",d:"生成报价/合同/提案/PPT（DOCX/XLSX/PPTX）",t:"生成报价单、生成合同、做 PPT、generate doc"},
         {n:"b2b-tech-drawing",d:"工程图纸分析（实验性）— 从 PDF 图纸提取材料/尺寸/公差",t:"图纸、工程图、铸件图、技术图纸、blueprint"},
         {n:"b2b-data-directory",d:"数据目录结构管理与初始化",t:"数据目录、数据结构、我的数据存在哪"},
+    ]},{g:"招投标",items:[
+        {n:"b2b-tender-info",d:"招标信息抓取与筛选 — 按关键词定时搜招标公告",t:"找招标、查招标、招标信息、招标公告、tender opportunities"},
+        {n:"b2b-tender-mail",d:"招标邮件与附件归档 — 从邮箱拉取，全程不置已读",t:"招标邮件、邮件归档、抓邮件、补附件、监控邮箱"},
+        {n:"b2b-tender-processing",d:"招标文件转询价单 — 生成固定 11 列 Excel",t:"询价单、生成询价单、整理招标、招标文件整理"},
+        {n:"b2b-tender-download",d:"招标附件批量下载 — 分块续传 + 大小/校验双验",t:"下载招标文件、断点续传、分块下载、按清单下载"},
+        {n:"b2b-tender-archive",d:"压缩包批量解压归档 — 嵌套包多轮展开，原包进回收站",t:"解压、压缩包、批量解压、包中包、归档清理"},
+        {n:"b2b-tender-doc-match",d:"按清单匹配归档文件 — 编号+名称匹配，成套打包",t:"按清单归档、按编号匹配、图纸匹配、招标清单匹配"},
     ]},{g:"平台与数据",items:[
         {n:"b2b-platform",d:"B2B 平台店铺诊断优化（阿里/MIC/独立站）",t:"平台诊断、阿里国际站、关键词优化、店铺诊断"},
         {n:"b2b-customs-data",d:"海关数据分析找采购商与市场趋势",t:"海关数据、进出口记录、找买家、customs data"},

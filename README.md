@@ -6,19 +6,7 @@
 
 [中文](README.md) | [English](README.en.md)
 
-> **重要提示**  
-> 本工具依赖 GitHub 和 Python 包索引（PyPI）进行安装和更新，安装和使用过程中**需要稳定的科学上网环境**。  
-> Smart Trade AI 基于大语言模型（LLM）生成回复。受限于当前技术，大模型可能出现幻觉（hallucination），**所有输出内容仅供参考，不构成任何商业建议或法律依据**。涉及合同条款、报价金额、合规判断、客户背调等关键业务决策时，请务必自行核实。使用本工具所产生的任何风险由用户自行承担。
-
-> ### 🚫 禁止用 workbuddy 等国产 AI 助手安装 Trade
->
-> **已有多位用户这样装，结果都是同一个：助手回报「安装成功」，实际完全不能用。**
->
-> 更麻烦的是它还会**生成错误的公司文件夹**，残留下来后很难清理干净。
->
-> 原因：这类助手不了解本项目的安装依赖（Hermes 必须是指定来源的可编辑检出、Trade 必须用 `--no-deps` 安装、装完还要同步 skills 与初始化数据库），步骤做错了却照样报告成功，所以表面看不出问题。
->
-> **要 AI 代装，建议用 Hermes**（就是下面「3 分钟上手」里的**方式 1**）。换其它 AI 助手前，请先确认它愿意严格按本页的步骤执行 —— 上面那类问题，都是助手自己发挥了、做错了还照样报成功造成的。若不想让 AI 装，请用方式 2 的一键脚本或方式 3 手动安装。
+> 本地运行 · 数据不出电脑。安装需稳定访问 GitHub；AI 生成内容仅供参考，关键决策请自行核实（详见[安装前须知](#安装前须知)）。
 
 <div align="center">
   <h3>外贸业务员的 AI 助手</h3>
@@ -30,10 +18,31 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-2.png" alt="Customer & Cron Panel" width="75%">
+  <img src="docs/screenshot-1.png" alt="AI Chat Interface" width="75%">
   <br>
-  <em>客户管理 + 定时任务面板</em>
+  <em>AI 对话界面 — 自动调用 web_search / read_file / database 工具</em>
 </p>
+
+---
+
+## 3 分钟上手
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh | bash
+```
+
+**Windows（PowerShell）**
+
+```powershell
+irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
+```
+
+脚本会自动装好 Hermes、Python 3.14 环境、Trade 本体和 45 个技能。装完在终端输入 `trade`，浏览器自动打开聊天界面。
+
+> 首次使用需要一个大模型 API Key（推荐 DeepSeek）。想手动安装、让 Hermes 代装，或先看注意事项：
+> [安装步骤](#安装步骤三种方式) · [安装前须知](#安装前须知)
 
 ---
 
@@ -51,18 +60,18 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-1.png" alt="AI Chat Interface" width="75%">
+  <img src="docs/screenshot-2.png" alt="Customer & Cron Panel" width="75%">
   <br>
-  <em>AI 对话界面 — 自动调用 web_search / read_file / database 工具</em>
+  <em>客户管理 + 定时任务面板</em>
 </p>
 
 ---
 
-## 前置条件：LLM API Key
+## 安装前须知
+
+### 大模型 API Key（必需）
 
 > Smart Trade AI 使用 Hermes Agent 作为底层 AI 驱动。你需要去模型厂商那里注册并获取 API Key。
-
-推荐方案：
 
 | 方案 | 模型 | 适合场景 | 注册地址 |
 |------|------|---------|---------|
@@ -71,10 +80,6 @@
 > 本项目全部测试均在 DeepSeek 上完成，因此只推荐 DeepSeek。工具本身兼容其它 OpenAI 接口的模型（见下方技术栈），但未在其它模型上验证过。
 
 获取 API Key 后在终端运行 `hermes setup`，选择对应的 provider 并填入 Key 即可。
-
----
-
-## 特别说明
 
 ### 网络环境要求
 
@@ -97,6 +102,18 @@ Trade 的搜索和客户尽职调查功能依赖 Tavily 的 AI 搜索引擎。�
 
 > 不注册不影响对话功能，但搜索和客户背调质量会受到明显影响。
 
+### AI 输出仅供参考
+
+Smart Trade AI 基于大语言模型（LLM）生成回复。受限于当前技术，大模型可能出现幻觉（hallucination），**所有输出内容仅供参考，不构成任何商业建议或法律依据**。涉及合同条款、报价金额、合规判断、客户背调等关键业务决策时，请务必自行核实。使用本工具所产生的任何风险由用户自行承担。
+
+### 🚫 不要用 workbuddy 等国产 AI 助手安装 Trade
+
+**已有多位用户这样装，结果都是同一个：助手回报「安装成功」，实际完全不能用。** 更麻烦的是它还会**生成错误的公司文件夹**，残留下来后很难清理干净。
+
+原因：这类助手不了解本项目的安装依赖（Hermes 必须是指定来源的可编辑检出、Trade 必须用 `--no-deps` 安装、装完还要同步 skills 与初始化数据库），步骤做错了却照样报告成功，所以表面看不出问题。
+
+**要 AI 代装，建议用 Hermes**（见下方「方式 1」）。换其它 AI 助手前，请先确认它愿意严格按本页的步骤执行 —— 上面那类问题，都是助手自己发挥了、做错了还照样报成功造成的。若不想让 AI 装，请用方式 2 的一键脚本或方式 3 手动安装。
+
 ### 如果 Trade 安装失败
 
 手动安装 Trade 涉及 `git clone` + `pip install` + `install-trade-skills` 三个步骤，网络波动可能导致某一步失败。如果你已经成功安装了 **Hermes Agent 并配置好了 LLM**，但 Trade 安装遇到困难，可以直接把 Trade 的仓库地址告诉 Hermes，让它帮你完成安装：
@@ -108,7 +125,7 @@ Hermes 会自动完成 clone、安装依赖、注册 skills 等全部步骤，�
 
 ---
 
-## 3 分钟上手
+## 安装步骤（三种方式）
 
 提供三种安装方式，按你的场景挑一种即可：
 
@@ -171,7 +188,7 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
 ```
 
-脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 39 个 skills → 数据库初始化 → 开机自启 + 桌面快捷方式（Windows）。
+脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 45 个 skills → 数据库初始化 → 开机自启 + 桌面快捷方式（Windows）。
 
 > **如果你希望安装前先审查脚本**：
 > ```bash
@@ -270,7 +287,7 @@ $TradeHome\venv\Scripts\python.exe server.py
 
 ---
 
-## 38 项专业能力
+## 45 项专业能力
 
 | 场景 | 能力 |
 |------|------|
@@ -312,6 +329,12 @@ $TradeHome\venv\Scripts\python.exe server.py
 | 销冠经验库 | 将资深销售的隐性经验转化为SOP/话术库/新人培训体系 |
 | 商业提案生成 | 三档方案对比 + ROI分析 + 实施路线图，支持客户提案 |
 | 工程图纸分析 | 分析客户发来的 PDF 工程图纸，提取零件名/材料/尺寸/公差（实验性，结果需人工核实） |
+| 招标信息监控 | 按关键词定时抓取招标公告，生成可筛选的线索表 |
+| 招标邮件归档 | 从邮箱拉取招标邮件与附件并按项目归档，全程不置已读 |
+| 询价单生成 | 把招标文件整理成固定 11 列的 Excel 询价单 |
+| 招标包下载 | 批量下载招标附件：分块续传、大小与校验双验、失败可重试 |
+| 解压与归档 | 7z/rar/zip/gz 批量解压、嵌套包多轮展开，原包进回收站 |
+| 清单匹配归档 | 按招标清单的编号与名称匹配文件，成套打包归档 |
 | Skill 生成器 | 用自然语言描述需求，自动生成新 skill 并注册到系统 |
 
 ---
@@ -356,13 +379,13 @@ trade/                     B2B 业务层
 ├── api/                   FastAPI 路由（10 个业务域）
 ├── osint/                 客户背调模块（6 层检测）
 ├── skill_router.py        Skill 自动匹配引擎
-├── skill_registry.py      39 个 skill 注册表（纯数据）
+├── skill_registry.py      45 个 skill 注册表（纯数据）
 ├── bootstrap.py            启动引导（Hermes 版本检查、env 加载、Skills 同步）
 ├── app.py                  FastAPI app factory
 └── ... + 22 个业务模块
 
-skills/                    39 个 B2B skills（Markdown 驱动）
-tests/                     Python 测试（28 个文件）＋ 文档读取规则端到端实测
+skills/                    45 个 B2B skills（Markdown 驱动）
+tests/                     Python 测试（75 个文件）＋ 文档读取规则端到端实测
 tests_js/                  前端工具函数测试（node:test，零依赖；CI 会执行）
 server.py                  FastAPI 入口
 ```
@@ -382,7 +405,7 @@ ruff check trade/ server.py                 # 代码检查
 
 ## 文档
 
-- [使用说明书](TRADE-GUIDE.md) — 从零上手：界面认知、38 个可用技能全解、日常用法、常见问题
+- [使用说明书](TRADE-GUIDE.md) — 从零上手：界面认知、技能速查、日常用法、常见问题
 - [Windows 安装教程](docs/index.md) — 零基础用户 20 分钟快速安装指南
 - [LinkedIn 获客功能使用说明](docs/linkedin-guide.md) — 免费 / Premium / Sales Navigator（Core·Advanced·Advanced Plus）功能分级与使用示例
 - [COMPATIBILITY.md](COMPATIBILITY.md) — Hermes 版本兼容性记录
