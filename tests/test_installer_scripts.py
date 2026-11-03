@@ -21,7 +21,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 SH = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-PS1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8-sig")  # BOM：PS 5.1 需要
+# 真正的安装逻辑（BOM：PS 5.1 用 -File 读时要按 UTF-8 解码中文）
+PS1 = (ROOT / "scripts" / "install-core.ps1").read_text(encoding="utf-8-sig")
+# 入口引导器：纯 ASCII、无 BOM，供 `irm ... | iex` 使用
+PS1_LAUNCHER = (ROOT / "scripts" / "install.ps1").read_bytes()
 
 
 
@@ -608,10 +611,10 @@ class TestPowerShell51Compatibility:
          干净机器上第一次命中是 `import sqlite_vec`（没装 → traceback 进 stderr）。
     """
 
-    def test_file_has_utf8_bom(self):
-        raw = (ROOT / "scripts" / "install.ps1").read_bytes()
+    def test_core_has_utf8_bom(self):
+        raw = (ROOT / "scripts" / "install-core.ps1").read_bytes()
         assert raw.startswith(b"\xef\xbb\xbf"), (
-            "install.ps1 缺 UTF-8 BOM —— PS 5.1 会按 GBK 解析中文，出现语法错误"
+            "install-core.ps1 缺 UTF-8 BOM —— PS 5.1 用 -File 时会按 GBK 解析中文，出现语法错误"
         )
 
     def test_no_bare_native_stderr_redirect(self):
@@ -670,7 +673,7 @@ class TestPowerShell51Compatibility:
         别的测试读的是文本内容；这里让 5.1 自己的解析器读磁盘上的字节，
         才能证明 BOM 真的让中文注释按 UTF-8 解码、而不是按 GBK 解出语法错误。
         """
-        target = str((ROOT / "scripts" / "install.ps1").resolve()).replace("'", "''")
+        target = str((ROOT / "scripts" / "install-core.ps1").resolve()).replace("'", "''")
         script = tmp_path / "parse.ps1"
         script.write_text(
             "$t = $null; $e = $null\n"
@@ -792,6 +795,61 @@ class TestPowerShell51Compatibility:
             f"helper 在 PS 5.1 下仍然失败：\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
         )
         assert "SURVIVED" in proc.stdout
+
+
+class TestPowerShellLauncher:
+    """install.ps1 是纯 ASCII 引导器 —— 同时喂 `irm | iex` 和 `-File` 两条路。
+
+    背景（2026-11-03 客户机）：core 带 BOM，才能被 PS 5.1 的 `-File` 正确解码中文；
+    但同一个 BOM 经过 `irm | iex` 会变成字符串首字符 U+FEFF，5.1 把 `﻿#Requires`
+    当成命令名，报「无法将"﻿#Requires"项识别为 ...」。引导器必须无 BOM、纯 ASCII，
+    再把 core 按 UTF-8 解码并剥掉 BOM。
+    """
+
+    def test_launcher_is_ascii_without_bom(self):
+        assert not PS1_LAUNCHER.startswith(b"\xef\xbb\xbf"), "引导器不能带 BOM"
+        assert all(b < 0x80 for b in PS1_LAUNCHER), (
+            "引导器必须是纯 ASCII，否则 PS 5.1 解码中文时又会出现语法错误"
+        )
+
+    def test_launcher_loads_and_deboms_core(self):
+        text = PS1_LAUNCHER.decode("ascii")
+        assert "install-core.ps1" in text, "引导器没指向 core"
+        assert "0xFEFF" in text, "引导器没有剥 BOM"
+        assert "Invoke-Expression" in text
+
+    def test_launcher_prefers_local_core(self):
+        """本地克隆时直接跑同目录 core，避免再走一次网络。"""
+        text = PS1_LAUNCHER.decode("ascii")
+        assert "$PSScriptRoot" in text and "Test-Path" in text
+
+    @pytest.mark.skipif(
+        os.name != "nt",
+        reason="需要 Windows PowerShell 5.1 —— 只有 Windows runner 才有",
+    )
+    def test_launcher_runs_bom_core_on_ps51(self, tmp_path):
+        """引导器 + 带 BOM 的 core 放同目录，用 -File 真跑一遍。
+
+        证明 5.1 下「读 core → 剥 U+FEFF → iex」这条链成立；假 core 只打印一行，
+        不会真的安装任何东西。
+        """
+        (tmp_path / "install.ps1").write_bytes(PS1_LAUNCHER)
+        (tmp_path / "install-core.ps1").write_bytes(
+            b"\xef\xbb\xbf" + b'Write-Output "CORE_OK"\n'
+        )
+
+        proc = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(tmp_path / "install.ps1"),
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert proc.returncode == 0, (
+            f"引导器没跑通：\nstdout={proc.stdout!r}\nstderr={proc.stderr!r}"
+        )
+        assert "CORE_OK" in proc.stdout
 
 
 class TestReadmeHasNoReleaseSection:

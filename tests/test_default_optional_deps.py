@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 REQUIREMENTS = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 INSTALL_SH = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-INSTALL_PS1 = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8-sig")  # BOM：PS 5.1 需要
+INSTALL_PS1 = (ROOT / "scripts" / "install-core.ps1").read_text(encoding="utf-8-sig")  # BOM：PS 5.1 需要
 UPDATE_PY = (ROOT / "trade" / "post_install" / "update.py").read_text(encoding="utf-8")
 DOCTOR_PY = (ROOT / "trade" / "doctor.py").read_text(encoding="utf-8")
 MEMORY_PY = (ROOT / "trade" / "memory.py").read_text(encoding="utf-8")

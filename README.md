@@ -197,8 +197,10 @@ irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/inst
 > bash install.sh
 > ```
 > ```powershell
+> # install.ps1 只是纯 ASCII 引导器；真正的安装逻辑在同目录的 install-core.ps1
+> irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install-core.ps1 -OutFile install-core.ps1
+> notepad install-core.ps1  # 审查后
 > irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 -OutFile install.ps1
-> notepad install.ps1  # 审查后
 > .\install.ps1
 > ```
 
