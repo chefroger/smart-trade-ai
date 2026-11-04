@@ -166,6 +166,15 @@ def permission_guide() -> dict:
     }
 
 
+def active_app_name() -> str:
+    """当前前台应用名（拒读名单用；不截图）。"""
+    quartz = _quartz()
+    if quartz is None:
+        return ""
+    info = _frontmost_window(quartz)
+    return info[1] if info else ""
+
+
 def capture_active_window() -> WindowCapture:
     """按窗口 ID 截取当前前台聊天窗口（内存 PNG）。"""
     quartz = _quartz()

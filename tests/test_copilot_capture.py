@@ -1,8 +1,8 @@
 """聊天副驾 capture 测试（平台无关部分 + 平台桩）。
 
 覆盖任务书 §7 的自动化项：
-    - 剪贴板通道判定（对话特征、指纹新鲜度）
-    - 剪贴板保存/恢复（铁律 5）
+    - 剪贴板通道判定（对话特征、指纹新鲜度、默认关、3000 上限）
+    - 拒读名单（内置类别 + 自定义条目）
     - 级联顺序与降级（剪贴板 → 截图 → 结构化报错）
 真机截图/权限验证在交付记录里单独做，这里不触碰真实屏幕。
 """
@@ -24,13 +24,17 @@ class FakePlatform:
     """平台适配模块的桩：记录调用次数，返回预设结果。"""
 
     def __init__(self, *, available: bool = True, reason: str = "",
-                 window: WindowCapture | None = None):
+                 window: WindowCapture | None = None, app_name: str = "WeChat"):
         self._available = available
         self._reason = reason
         self._window = window or WindowCapture(
             image_png=b"\x89PNG-fake", app_name="WeChat", window_title="John",
         )
+        self._app_name = app_name
         self.calls = 0
+
+    def active_app_name(self) -> str:
+        return self._app_name
 
     def available(self) -> tuple[bool, str]:
         return self._available, self._reason
@@ -97,31 +101,82 @@ class TestClipboardFreshness:
         assert capture_mod.claim_fresh_clipboard(DIALOG) is True
 
 
-# ── 剪贴板保存/恢复（铁律 5）──────────────────────────────────────────────
+# ── 拒读名单 / 剪贴板上限 ──────────────────────────────────────────────────
 
 
-class TestClipboardPreserved:
-    def test_restores_original_after_temporary_write(self, monkeypatch):
-        class FakeClipboard:
-            def __init__(self):
-                self.text = "original"
-                self.copies: list[str] = []
+class TestRefusalAndClipboardLimits:
+    def test_refused_app_blocks_before_reading(self, monkeypatch):
+        calls = {"clipboard": 0}
+        monkeypatch.setattr(
+            capture_mod, "read_clipboard",
+            lambda: calls.__setitem__("clipboard", calls["clipboard"] + 1) or DIALOG,
+        )
+        platform = FakePlatform(app_name="1Password")
+        result = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
 
-            def paste(self):
-                return self.text
+        assert not result.ok
+        assert result.error_kind == "refused"
+        assert calls["clipboard"] == 0, "拒读名单命中时不许读剪贴板"
+        assert platform.calls == 0, "拒读名单命中时不许截图"
 
-            def copy(self, value):
-                self.text = value
-                self.copies.append(value)
+    def test_custom_refused_entry(self):
+        assert capture_mod.is_refused_app("Acme Bank Pro", ["acme bank"]) is True
+        assert capture_mod.is_refused_app("WeChat", ["acme bank"]) is False
 
-        fake = FakeClipboard()
-        monkeypatch.setattr(capture_mod, "_import_pyperclip", lambda: fake)
+    def test_builtin_banking_and_password_managers(self):
+        assert capture_mod.is_refused_app("Bitwarden") is True
+        assert capture_mod.is_refused_app("招商银行") is True
+        assert capture_mod.is_refused_app("WeChat") is False
 
-        with capture_mod.clipboard_preserved():
-            fake.copy("changed")
+    def test_clipboard_disabled_by_default(self, monkeypatch):
+        calls = {"clipboard": 0}
+        monkeypatch.setattr(
+            capture_mod, "read_clipboard",
+            lambda: calls.__setitem__("clipboard", calls["clipboard"] + 1) or DIALOG,
+        )
+        platform = FakePlatform()
+        result = capture_mod.capture_conversation(platform=platform)
 
-        assert fake.copies[-1] == "original"
-        assert fake.text == "original"
+        assert result.channel == "screenshot"
+        assert calls["clipboard"] == 0
+
+    def test_clipboard_at_limit_is_sent(self, monkeypatch):
+        text = ("客户: " + "a" * 2996)  # 恰好 3000 字符
+        assert len(text) == 3000
+        monkeypatch.setattr(capture_mod, "read_clipboard", lambda: text)
+        platform = FakePlatform()
+        result = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
+
+        assert result.channel == "clipboard"
+        assert result.text == text
+        assert platform.calls == 0
+
+    def test_clipboard_over_limit_switches_to_screenshot(self, monkeypatch):
+        text = ("客户: " + "a" * 2997)  # 3001 字符
+        assert len(text) == 3001
+        monkeypatch.setattr(capture_mod, "read_clipboard", lambda: text)
+        platform = FakePlatform()
+        result = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
+
+        assert result.channel == "screenshot"
+        assert result.notice == capture_mod.CLIPBOARD_TOO_LONG_NOTICE
+        assert platform.calls == 1
+
+    def test_limit_can_be_configured(self, monkeypatch):
+        monkeypatch.setenv("TRADE_COPILOT_CLIPBOARD_MAX_CHARS", "10")
+        monkeypatch.setattr(capture_mod, "read_clipboard", lambda: DIALOG)
+        platform = FakePlatform()
+        result = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
+        assert result.channel == "screenshot"
+        assert result.notice == capture_mod.CLIPBOARD_TOO_LONG_NOTICE
 
 
 # ── 级联与降级 ──────────────────────────────────────────────────────────────
@@ -131,7 +186,9 @@ class TestCaptureCascade:
     def test_clipboard_dialog_wins_without_screenshot(self, monkeypatch):
         monkeypatch.setattr(capture_mod, "read_clipboard", lambda: DIALOG)
         platform = FakePlatform()
-        result = capture_mod.capture_conversation(platform=platform)
+        result = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
 
         assert result.ok
         assert result.channel == "clipboard"
@@ -143,8 +200,12 @@ class TestCaptureCascade:
         monkeypatch.setattr(capture_mod, "read_clipboard", lambda: DIALOG)
         platform = FakePlatform()
 
-        first = capture_mod.capture_conversation(platform=platform)
-        second = capture_mod.capture_conversation(platform=platform)
+        first = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
+        second = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
 
         assert first.channel == "clipboard"
         assert second.channel == "screenshot"
@@ -156,19 +217,12 @@ class TestCaptureCascade:
     def test_non_dialog_clipboard_falls_back_to_screenshot(self, monkeypatch):
         monkeypatch.setattr(capture_mod, "read_clipboard", lambda: "def f(): pass")
         platform = FakePlatform()
-        result = capture_mod.capture_conversation(platform=platform)
+        result = capture_mod.capture_conversation(
+            platform=platform, use_clipboard=True,
+        )
 
         assert result.channel == "screenshot"
         assert result.ok
-        assert platform.calls == 1
-
-    def test_clipboard_can_be_disabled(self, monkeypatch):
-        monkeypatch.setattr(capture_mod, "read_clipboard", lambda: DIALOG)
-        platform = FakePlatform()
-        result = capture_mod.capture_conversation(
-            platform=platform, use_clipboard=False
-        )
-        assert result.channel == "screenshot"
         assert platform.calls == 1
 
     def test_screenshot_is_base64_data_url(self, monkeypatch):

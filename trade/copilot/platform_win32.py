@@ -164,6 +164,15 @@ def permission_guide() -> dict:
     return {}
 
 
+def active_app_name() -> str:
+    """当前前台进程名（拒读名单用；不截图、不需要额外权限）。"""
+    user32, _gdi32, kernel32 = _dlls()
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return ""
+    return _process_name(user32, kernel32, hwnd)
+
+
 def capture_active_window() -> WindowCapture:
     """截取当前前台窗口（内存 PNG + 应用名 + 标题）。"""
     user32, gdi32, kernel32 = _dlls()

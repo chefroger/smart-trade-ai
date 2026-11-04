@@ -44,8 +44,10 @@ class CapturedWindow:
     # 读取失败时的原因与分类（给 UI 展示；成功时为空）
     error: str = ""
     # "permission"（macOS 屏幕录制未授权）/ "missing_dependency" / "unsupported_platform"
-    # / "capture_failed" / "no_window" / "minimized"
+    # / "capture_failed" / "no_window" / "minimized" / "refused"
     error_kind: str = ""
+    # 非致命提示（如"剪贴板内容过长，已改为读取屏幕"），UI 原样展示
+    notice: str = ""
 
     def has_image(self) -> bool:
         return bool(self.image_data_url)

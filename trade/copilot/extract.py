@@ -15,8 +15,10 @@ Hermes 这条通道（`tools/vision_tools.py` 的 vision_analyze 用的是同一
     - 接受标准 OpenAI messages，图片以 `image_url` 的 base64 data URL 内联；
     - 自带超时、温度与错误分类。
 
-**默认跟随主模型**（决策 2026-10-22）：用户可在副驾设置里单独指定抽取模型；
-指定了就传给 call_llm 的 provider/model 参数，不指定就让它自己解析。
+**抽取模型固定为 DeepSeek 视觉模型，且必须显式传入**（2026-11-04 Lau 定）：
+从 Hermes 配置的 `auxiliary.vision` 解析 provider/model（当前为
+`custom:deepseek-vl` / `deepseek-flash`），解析不到就报错；
+**绝不把 provider/model 留空交给 Hermes auto chain**，也绝不自动换到其他服务商。
 
 ## 两类错误必须分开（任务书 §3）
 
@@ -41,6 +43,56 @@ from trade.copilot.types import (
 )
 
 _log = logging.getLogger(__name__)
+
+# 副驾固定抽取模型（对外文案）；实际 provider/model 从 Hermes 配置解析。
+EXTRACT_MODEL_LABEL = "DeepSeek V4.1-Flash"
+NO_VISION_MESSAGE = f"当前模型不支持看图，请使用 {EXTRACT_MODEL_LABEL}"
+
+
+def _load_hermes_config() -> dict:
+    """读取 Hermes 配置（单独抽出便于测试替换）。"""
+    from hermes_cli.config import load_config
+
+    return load_config() or {}
+
+
+def resolve_extract_model() -> tuple[str, str] | None:
+    """解析副驾抽取模型的 (provider, model)；只接受 DeepSeek。
+
+    优先 `auxiliary.vision`（当前是 custom:deepseek-vl / deepseek-flash），
+    缺失时回退主模型（同样必须显式传）。解析不到或不是 DeepSeek → None，
+    调用方据此报错，**不交给 Hermes auto chain**。
+    """
+    try:
+        cfg = _load_hermes_config()
+    except Exception as exc:
+        _log.warning("读取 Hermes 配置失败，副驾拒绝自动选模型：%s", exc)
+        return None
+
+    def _accept(provider: str, model: str) -> tuple[str, str] | None:
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        if not provider or not model:
+            return None
+        if "deepseek" not in provider.lower() and "deepseek" not in model.lower():
+            return None
+        return provider, model
+
+    aux = (cfg.get("auxiliary") or {}).get("vision") or {}
+    resolved = _accept(aux.get("provider", ""), aux.get("model", ""))
+    if resolved:
+        return resolved
+
+    main = cfg.get("model")
+    if isinstance(main, dict):
+        return _accept(
+            main.get("provider", ""),
+            main.get("default") or main.get("model") or "",
+        )
+    if isinstance(main, str) and ":" in main:
+        provider, _, model = main.partition(":")
+        return _accept(provider, model)
+    return None
 
 # 抽取结果的 JSON 契约（提示词与解析都以此为准）
 _EXTRACT_PROMPT = """\
@@ -113,10 +165,7 @@ def _classify_error(exc: Exception) -> tuple[str, str]:
             "如果其它功能都正常，再检查副驾的视觉模型配置。"
         )
     if any(h in text for h in _NO_VISION_HINTS):
-        return "no_vision", (
-            "当前模型不支持看图，或服务端不接受图片输入。"
-            "请在副驾设置里为抽取指定一个支持视觉的模型。"
-        )
+        return "no_vision", NO_VISION_MESSAGE
     return "other", f"抽取调用失败：{type(exc).__name__}: {exc}"
 
 
@@ -235,9 +284,16 @@ async def extract_dialog(
     blocked = _license_block_reason()
     if blocked:
         return ExtractedDialog(error=blocked, error_kind="license")
+    if not provider or not model:
+        resolved = resolve_extract_model()
+        if resolved is None:
+            return ExtractedDialog(error=NO_VISION_MESSAGE, error_kind="no_vision")
+        provider, model = resolved
     if not captured.has_image():
         # 剪贴板通道没有图像 —— 走纯文本抽取
-        return await extract_dialog_from_text(captured.text or "", timeout=timeout)
+        return await extract_dialog_from_text(
+            captured.text or "", provider=provider, model=model, timeout=timeout,
+        )
 
     messages = [
         {"role": "user", "content": [
@@ -256,6 +312,11 @@ async def extract_dialog_from_text(
     blocked = _license_block_reason()
     if blocked:
         return ExtractedDialog(error=blocked, error_kind="license")
+    if not provider or not model:
+        resolved = resolve_extract_model()
+        if resolved is None:
+            return ExtractedDialog(error=NO_VISION_MESSAGE, error_kind="no_vision")
+        provider, model = resolved
     if not text.strip():
         return ExtractedDialog(error="没有可抽取的文本", error_kind="empty")
     messages = [
@@ -269,7 +330,13 @@ async def extract_dialog_from_text(
 async def _call_extract(
     messages: list, *, provider: str | None, model: str | None, timeout: float,
 ) -> ExtractedDialog:
-    """调 Hermes 的 vision 通道并解析结果。"""
+    """调 Hermes 的 vision 通道并解析结果。
+
+    隐私路由铁律：provider/model 必须显式给出；缺失时直接报错，
+    不把请求交给 Hermes auto chain，也不换其他服务商重试。
+    """
+    if not provider or not model:
+        return ExtractedDialog(error=NO_VISION_MESSAGE, error_kind="no_vision")
     try:
         from agent.auxiliary_client import async_call_llm
     except ImportError as exc:
@@ -284,11 +351,9 @@ async def _call_extract(
         "temperature": 0.1,
         "timeout": timeout,
         "max_tokens": 2000,
+        "provider": provider,
+        "model": model,
     }
-    if provider:
-        kwargs["provider"] = provider
-    if model:
-        kwargs["model"] = model
 
     try:
         response = await async_call_llm(**kwargs)
@@ -299,11 +364,7 @@ async def _call_extract(
 
     raw = _extract_text(response)
     if not raw:
-        return ExtractedDialog(
-            error="视觉模型没有返回内容（可能被服务商拒绝）。"
-                  "请在副驾设置里为抽取指定一个支持视觉的模型。",
-            error_kind="no_vision",
-        )
+        return ExtractedDialog(error=NO_VISION_MESSAGE, error_kind="no_vision")
     return parse_extraction(raw)
 
 

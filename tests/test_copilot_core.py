@@ -100,7 +100,8 @@ class TestErrorClassification:
             RuntimeError("model does not support image input")
         )
         assert kind == "no_vision"
-        assert "视觉" in reason
+        assert "不支持看图" in reason
+        assert "DeepSeek V4.1-Flash" in reason
 
     def test_protocol_kind(self):
         kind, reason = extract_mod._classify_error(
@@ -1186,3 +1187,104 @@ class TestShortNameOverlap:
         )
         result = ctx_mod.match_customer("Li", company_id=1)
         assert result.matched is False
+
+
+# ── 隐私路由：抽取只发 DeepSeek 视觉模型，且显式传参 ─────────────────────
+
+
+class TestPrivacyRouting:
+    def _cfg(self, provider="custom:deepseek-vl", model="deepseek-flash"):
+        return {"auxiliary": {"vision": {"provider": provider, "model": model}}}
+
+    def test_resolver_reads_auxiliary_vision(self, monkeypatch):
+        monkeypatch.setattr(extract_mod, "_load_hermes_config", lambda: self._cfg())
+        assert extract_mod.resolve_extract_model() == (
+            "custom:deepseek-vl", "deepseek-flash",
+        )
+
+    def test_resolver_rejects_other_providers(self, monkeypatch):
+        monkeypatch.setattr(
+            extract_mod, "_load_hermes_config",
+            lambda: self._cfg("openai", "gpt-4o"),
+        )
+        assert extract_mod.resolve_extract_model() is None
+
+    def test_resolver_falls_back_to_deepseek_main(self, monkeypatch):
+        monkeypatch.setattr(
+            extract_mod, "_load_hermes_config",
+            lambda: {"model": {"provider": "deepseek", "default": "deepseek-flash"}},
+        )
+        assert extract_mod.resolve_extract_model() == ("deepseek", "deepseek-flash")
+
+    async def test_extract_passes_explicit_model(self, monkeypatch):
+        import sys
+        from types import ModuleType
+
+        from trade.copilot.types import CapturedWindow
+
+        seen: dict = {}
+
+        async def fake_call_llm(**kwargs):
+            seen.update(kwargs)
+            return '{"contact":"A","messages":[],"confidence":0.9}'
+
+        module = ModuleType("agent.auxiliary_client")
+        module.async_call_llm = fake_call_llm
+        monkeypatch.setitem(sys.modules, "agent.auxiliary_client", module)
+        monkeypatch.setattr(extract_mod, "_license_block_reason", lambda: "")
+        monkeypatch.setattr(
+            extract_mod, "resolve_extract_model",
+            lambda: ("custom:deepseek-vl", "deepseek-flash"),
+        )
+
+        result = await extract_mod.extract_dialog(
+            CapturedWindow(image_data_url="data:image/png;base64,xx")
+        )
+        assert result.ok
+        assert seen["provider"] == "custom:deepseek-vl"
+        assert seen["model"] == "deepseek-flash"
+
+    async def test_unresolvable_model_does_not_call(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from trade.copilot.types import CapturedWindow
+
+        calls = []
+        monkeypatch.setattr(extract_mod, "_license_block_reason", lambda: "")
+        monkeypatch.setattr(extract_mod, "resolve_extract_model", lambda: None)
+        monkeypatch.setattr(
+            extract_mod, "_call_extract",
+            lambda *a, **k: calls.append(1) or SimpleNamespace(),
+        )
+
+        result = await extract_mod.extract_dialog(
+            CapturedWindow(image_data_url="data:image/png;base64,xx")
+        )
+        assert result.error_kind == "no_vision"
+        assert "DeepSeek V4.1-Flash" in result.error
+        assert calls == []
+
+
+class TestDraftHasNoTools:
+    def test_agent_is_created_with_empty_toolsets(self, monkeypatch):
+        import trade.company as company_mod
+        import trade.helpers as helpers_mod
+        import trade.prompts as prompts_mod
+
+        captured: dict = {}
+
+        class FakeAgent:
+            def chat(self, prompt):
+                return "ok"
+
+        def fake_create_agent(**kwargs):
+            captured.update(kwargs)
+            return FakeAgent()
+
+        monkeypatch.setattr(helpers_mod, "create_agent", fake_create_agent)
+        monkeypatch.setattr(prompts_mod, "resolve_system_prompt", lambda **k: "sys")
+        monkeypatch.setattr(company_mod, "get_trade_company", lambda cid: {})
+        monkeypatch.setattr(company_mod, "slug_from_id", lambda cid: None)
+
+        assert draft_mod._run_via_existing_chat("hi", company_id=1) == "ok"
+        assert captured["enabled_toolsets"] == []

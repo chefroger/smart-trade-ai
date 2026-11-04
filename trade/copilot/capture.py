@@ -21,7 +21,8 @@
 
 - 触发式：本模块不启动任何线程/定时器，只在被调用时读一次。
 - 截图不落盘：只返回 base64 data URL，所有中间字节都在内存里。
-- 剪贴板无损：读操作不改剪贴板；`clipboard_preserved()` 供将来任何临时写入使用。
+- 剪贴板无损：副驾只读剪贴板，代码里没有写剪贴板的路径（"复制草稿"是 UI 行为）。
+- 剪贴板通道默认关，且单次发送有字符上限（默认 3000，超限改走截图）。
 """
 
 from __future__ import annotations
@@ -29,16 +30,54 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
 import re
 import sys
 import threading
 import time
-from contextlib import contextmanager
 
 from trade.copilot.platform_base import WindowCapture
 from trade.copilot.types import CapturedWindow
 
 _log = logging.getLogger(__name__)
+
+# 剪贴板单次发送上限：一屏聊天通常远短于此，防误发长合同等无关内容。
+DEFAULT_CLIPBOARD_MAX_CHARS = 3000
+CLIPBOARD_TOO_LONG_NOTICE = "剪贴板内容过长，已改为读取屏幕"
+
+# 拒读名单：内置类别只写通用条目，不按国家/具体银行写死。
+# 用户自定义条目由调用方通过 `refused_apps` 传入。
+_REFUSED_APP_PATTERNS = (
+    # 密码管理器
+    "1password", "bitwarden", "lastpass", "dashlane", "keeper",
+    "keepass", "enpass", "password manager", "密码管理",
+    # 网银 / 支付
+    "bank", "banking", "网银", "银行", "alipay", "支付宝",
+    "paypal", "wallet", "支付",
+)
+
+
+def is_refused_app(app_name: str, extra: tuple[str, ...] | list[str] = ()) -> bool:
+    """前台应用是否命中拒读名单（纯函数，便于测试）。
+
+    匹配规则：应用标识的小写子串命中任一内置/自定义条目。宁可误拒（用户
+    切回聊天窗口即可），也不把密码管理器/网银内容送进模型。
+    """
+    name = (app_name or "").strip().lower()
+    if not name:
+        return False
+    patterns = tuple(str(x).strip().lower() for x in extra if str(x).strip())
+    return any(p in name for p in (*_REFUSED_APP_PATTERNS, *patterns))
+
+
+def _default_clipboard_max_chars() -> int:
+    """剪贴板字符上限（设置可改；当前先支持环境变量）。"""
+    raw = os.environ.get("TRADE_COPILOT_CLIPBOARD_MAX_CHARS", "").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_CLIPBOARD_MAX_CHARS
+    return value if value > 0 else DEFAULT_CLIPBOARD_MAX_CHARS
 
 # 对话文本特征（任务书 §3 "多行、含发言人/时间特征"）
 _SPEAKER_RE = re.compile(
@@ -128,30 +167,6 @@ def read_clipboard() -> str:
         return ""
 
 
-@contextmanager
-def clipboard_preserved():
-    """临时改写剪贴板时保存并恢复用户原内容（铁律 5）。
-
-    当前读取路径不会写剪贴板，所以这里不需要包住 `read_clipboard()`；
-    它是给任何"临时占用剪贴板"的操作准备的（测试见 tests/test_copilot_capture.py）。
-    """
-    module = _import_pyperclip()
-    original: str | None = None
-    if module is not None:
-        try:
-            original = module.paste()
-        except Exception:
-            original = None
-    try:
-        yield
-    finally:
-        if module is not None and original is not None:
-            try:
-                module.copy(original)
-            except Exception as exc:
-                _log.warning("恢复剪贴板失败：%s", exc)
-
-
 def load_platform():
     """按运行平台加载适配模块；不支持的平台返回 None。"""
     if sys.platform == "win32":
@@ -198,40 +213,68 @@ def ensure_screen_permission() -> bool:
 def capture_conversation(
     *,
     platform=None,
-    use_clipboard: bool = True,
+    use_clipboard: bool = False,
+    max_clipboard_chars: int | None = None,
+    refused_apps: tuple[str, ...] | list[str] = (),
 ) -> CapturedWindow:
-    """执行一次触发式读取（剪贴板优先，失败回退截图）。
+    """执行一次触发式读取（剪贴板可选，失败回退截图）。
 
     Args:
         platform: 平台适配模块（测试注入用；None = 按 `sys.platform` 自动加载）。
-        use_clipboard: 是否尝试剪贴板通道（设置里可关）。
+        use_clipboard: 是否尝试剪贴板通道（任务书 §6：默认关）。
+        max_clipboard_chars: 剪贴板单次发送上限（None = 默认 3000，可被环境变量覆盖）。
+        refused_apps: 用户自定义拒读条目（内置类别见 `_REFUSED_APP_PATTERNS`）。
 
     Returns:
         CapturedWindow。成功时 `channel` + (`text` 或 `image_data_url`) 有值；
         失败时 `error` / `error_kind` 有值，**不返回空成功**。
     """
     started = time.monotonic()
+    module = platform if platform is not None else load_platform()
 
+    # 拒读名单必须在读剪贴板/截图之前判断：密码管理器、网银等前台应用一律不碰。
+    app_name = ""
+    if module is not None:
+        try:
+            getter = getattr(module, "active_app_name", None)
+            app_name = str(getter() or "") if callable(getter) else ""
+        except Exception as exc:
+            _log.debug("读取前台应用失败：%s", exc)
+            app_name = ""
+        if is_refused_app(app_name, refused_apps):
+            return _failure(
+                "该应用在拒读名单内，未读取。",
+                "refused",
+                started,
+                app_name=app_name,
+            )
+
+    notice = ""
     if use_clipboard:
         text = read_clipboard()
-        if text and looks_like_conversation(text) and claim_fresh_clipboard(text):
+        limit = max_clipboard_chars or _default_clipboard_max_chars()
+        if text and len(text) > limit:
+            # 不截断、不发送，改走截图；提示由 UI 原样展示。
+            notice = CLIPBOARD_TOO_LONG_NOTICE
+        elif text and looks_like_conversation(text) and claim_fresh_clipboard(text):
             return CapturedWindow(
+                app_name=app_name,
                 channel="clipboard",
                 text=text,
                 elapsed_ms=_elapsed_ms(started),
             )
 
-    module = platform if platform is not None else load_platform()
     if module is None:
         return _failure(
             "当前平台不支持副驾截图（仅 Windows / macOS）。",
             "unsupported_platform",
             started,
+            notice=notice,
         )
 
     available, reason = module.available()
     if not available:
-        return _failure(reason, "missing_dependency", started)
+        return _failure(reason, "missing_dependency", started, notice=notice)
 
     window: WindowCapture = module.capture_active_window()
     if not window.ok:
@@ -245,6 +288,7 @@ def capture_conversation(
             started,
             app_name=window.app_name,
             window_title=window.window_title,
+            notice=notice,
         )
 
     return CapturedWindow(
@@ -253,6 +297,7 @@ def capture_conversation(
         channel="screenshot",
         image_data_url=_png_data_url(window.image_png),
         elapsed_ms=_elapsed_ms(started),
+        notice=notice,
     )
 
 
@@ -283,6 +328,7 @@ def _failure(
     *,
     app_name: str = "",
     window_title: str = "",
+    notice: str = "",
 ) -> CapturedWindow:
     return CapturedWindow(
         app_name=app_name,
@@ -291,4 +337,5 @@ def _failure(
         elapsed_ms=_elapsed_ms(started),
         error=error,
         error_kind=error_kind,
+        notice=notice,
     )
