@@ -20,6 +20,7 @@
     - `hotkey`    全局热键（pynput 惰性加载，缺失降级）
     - `ui`        悬浮窗（pywebview 惰性加载，无外发入口）
     - `service`   编排层（默认关闭；不负责启动 Trade）
+    - `tray`      托盘/菜单栏（pystray 惰性加载，缺失降级）
 
 平台相关（隔离在独立模块，lazy import）：
     - `platform_win32`   PrintWindow → mss 回退
@@ -28,8 +29,7 @@
 
 尚未接线：
     - 启动流程挂载（等副驾功能完工；在此之前 Trade 启动不加载本包的任何模块）
-    - 设置页/隐私说明同意 UI
-    - 托盘图标与暂停/恢复菜单
+    - 真机联调（热键权限、托盘、截图/剪贴板全链路）
 
 ## 视觉抽取为什么走 Hermes 的 auxiliary client
 

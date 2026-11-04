@@ -173,6 +173,14 @@ class FloatingWindow:
         window.load_html(content)
         self._show_nonactivating(window)
 
+    def show_status(self, text: str) -> None:
+        """显示状态（如"正在读取"、"该应用在拒读名单内"）。"""
+        self.show_html(render_panel_html(status=text))
+
+    def show_error(self, text: str) -> None:
+        """显示失败原因（不弹空草稿）。"""
+        self.show_html(render_panel_html(status=text))
+
     def show_result(self, *, draft: str = "", summary: str = "",
                     sources: Iterable[Any] = (), notice: str = "",
                     confirmation: str = "") -> None:

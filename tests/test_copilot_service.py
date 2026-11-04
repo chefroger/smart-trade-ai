@@ -212,3 +212,71 @@ class TestService:
         event = await svc.trigger()
         assert event.ok is False
         assert "暂停" in event.error
+
+
+class TestTray:
+    def test_missing_dependency_degrades(self, monkeypatch):
+        import sys as _sys
+
+        from trade.copilot import tray as tray_mod
+
+        monkeypatch.setitem(_sys.modules, "pystray", None)
+        ok, reason = tray_mod.available()
+        assert ok is False and "pystray" in reason
+        icon = tray_mod.TrayIcon(
+            on_toggle=lambda: None, on_pause=lambda: None, on_quit=lambda: None
+        )
+        ok, _ = icon.start()
+        assert ok is False and icon.running is False
+
+    def test_service_start_and_stop_tray(self):
+        calls = []
+
+        class FakeTray:
+            def start(self):
+                calls.append("start")
+                return True, ""
+
+            def stop(self):
+                calls.append("stop")
+
+        svc = _service(tray_factory=lambda: FakeTray())
+        assert svc.start_tray() == (True, "")
+        assert svc.start_tray() == (True, "")
+        svc.stop_tray()
+        assert calls == ["start", "stop"]
+
+
+class TestReadingIndicator:
+    async def test_status_sequence_on_success(self):
+        statuses = []
+
+        class FakeUi:
+            def show_status(self, text):
+                statuses.append(text)
+
+            def show_result(self, **kwargs):
+                statuses.append("result")
+
+        svc = _service(ui=FakeUi())
+        event = await svc.trigger()
+        assert event.ok is True
+        assert statuses[:3] == ["正在读取…", "正在识别…", "正在生成草稿…"]
+        assert statuses[-1] == "result"
+
+    async def test_error_is_shown(self):
+        shown = []
+
+        class FakeUi:
+            def show_error(self, text):
+                shown.append(text)
+
+        svc = _service(
+            ui=FakeUi(),
+            capture_fn=lambda **kw: CapturedWindow(
+                error="该应用在拒读名单内，未读取。", error_kind="refused"
+            ),
+        )
+        event = await svc.trigger()
+        assert event.stage == "capture"
+        assert shown == ["该应用在拒读名单内，未读取。"]

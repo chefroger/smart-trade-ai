@@ -52,6 +52,7 @@ class CopilotService:
         draft_fn: Callable[..., Any] | None = None,
         ui=None,
         hotkey_factory: Callable[..., Any] | None = None,
+        tray_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.company_id = company_id
         self.settings = settings or load_settings(settings_path)
@@ -62,7 +63,9 @@ class CopilotService:
         self._draft_fn = draft_fn
         self.ui = ui
         self._hotkey_factory = hotkey_factory
+        self._tray_factory = tray_factory
         self._hotkey = None
+        self._tray = None
         self._paused = False
         self._lock = threading.Lock()
 
@@ -126,6 +129,51 @@ class CopilotService:
             except Exception:
                 pass
 
+    def start_tray(self) -> tuple[bool, str]:
+        """启动托盘/菜单栏图标；失败只返回原因（可用设置页控制）。"""
+        if self._tray is not None:
+            return True, ""
+        try:
+            if self._tray_factory is not None:
+                tray = self._tray_factory()
+            else:
+                from trade.copilot.tray import TrayIcon
+
+                tray = TrayIcon(
+                    on_toggle=self._tray_toggle,
+                    on_pause=self._tray_pause,
+                    on_quit=self._tray_quit,
+                    is_enabled=lambda: self.enabled,
+                    is_paused=lambda: self.paused,
+                )
+            ok, reason = tray.start()
+        except Exception as exc:
+            return False, f"托盘初始化失败：{exc}"
+        if ok:
+            self._tray = tray
+        return ok, reason
+
+    def stop_tray(self) -> None:
+        tray, self._tray = self._tray, None
+        if tray is not None:
+            try:
+                tray.stop()
+            except Exception:
+                pass
+
+    def _tray_toggle(self) -> None:
+        if self.enabled:
+            self.disable()
+        else:
+            self.enable()
+
+    def _tray_pause(self) -> None:
+        self.resume() if self._paused else self.pause()
+
+    def _tray_quit(self) -> None:
+        self.stop_hotkey()
+        self.stop_tray()
+
     def _trigger_from_hotkey(self) -> None:
         """热键线程 → 独立线程跑一次异步流程。"""
         threading.Thread(target=lambda: asyncio.run(self.trigger()), daemon=True).start()
@@ -138,8 +186,10 @@ class CopilotService:
         if self._paused:
             return CopilotEvent(stage="gate", error="副驾已暂停。")
 
+        self._status("正在读取…")
         captured = await asyncio.to_thread(self._capture)
         if not captured.ok:
+            self._error(captured.error or "读取失败。")
             return CopilotEvent(
                 stage="capture",
                 error=captured.error or "读取失败。",
@@ -147,8 +197,10 @@ class CopilotService:
                 captured=captured,
             )
 
+        self._status("正在识别…")
         extracted = await self._extract(captured)
         if not extracted.ok:
+            self._error(extracted.error or "识别失败。")
             return CopilotEvent(
                 stage="extract",
                 error=extracted.error or "识别失败。",
@@ -167,6 +219,10 @@ class CopilotService:
 
         ctx = await asyncio.to_thread(self._build_context, extracted)
         if getattr(ctx, "needs_confirmation", False):
+            question = (
+                getattr(ctx, "confirmation_question", "") or "请先确认客户身份。"
+            )
+            self._status(question)
             return CopilotEvent(
                 ok=False,
                 stage="confirm",
@@ -177,8 +233,10 @@ class CopilotService:
                 context=ctx,
             )
 
+        self._status("正在生成草稿…")
         draft = await asyncio.to_thread(self._draft, message.text, ctx)
         if not draft.ok:
+            self._error(draft.error or "草稿生成失败。")
             return CopilotEvent(
                 stage="draft",
                 error=draft.error or "草稿生成失败。",
@@ -243,6 +301,31 @@ class CopilotService:
         from trade.copilot.draft import generate_draft
 
         return generate_draft(message_text, ctx, company_id=self.company_id)
+
+    def _status(self, text: str) -> None:
+        """UI 状态提示（"正在读取"等）；UI 缺失/异常不影响主流程。"""
+        if self.ui is None:
+            return
+        fn = getattr(self.ui, "show_status", None)
+        if not callable(fn):
+            return
+        try:
+            fn(text)
+        except Exception as exc:
+            _log.warning("副驾状态提示失败：%s", exc)
+
+    def _error(self, text: str) -> None:
+        if self.ui is None:
+            return
+        fn = getattr(self.ui, "show_error", None) or getattr(
+            self.ui, "show_status", None
+        )
+        if not callable(fn):
+            return
+        try:
+            fn(text)
+        except Exception as exc:
+            _log.warning("副驾错误提示失败：%s", exc)
 
     def _show(self, event: CopilotEvent) -> None:
         if self.ui is None:
