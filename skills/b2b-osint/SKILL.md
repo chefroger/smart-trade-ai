@@ -21,7 +21,7 @@ triggers:
   - 查公司
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.2.2
+version: 1.2.3
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-osint 技能 — Strategic Intelligence Architect（战略情报架构师）。
@@ -103,11 +103,11 @@ injection_prompt: |
   更不要写出它没给出的判定。详细步骤见正文 Phase 3。
 
   **情报铁律**：每条情报标注 `来源: [工具名] [URL]（查询日期: YYYY-MM-DD）`。不标注来源的情报不算完成。禁止编造公司背景/规模/采购能力/业务模式。无证据→标注"未检索到有效公开信息"。
-
-  ════════════════════════════════════════
 ---
 
-  关键联系人的结构化字段：
+# b2b-osint 详细规则（skill_view 按需加载）
+
+关键联系人的结构化字段：
 
   | 字段 | 必填 | 获取方式 |
   |------|------|---------|
@@ -336,4 +336,3 @@ injection_prompt: |
   - 客户数据：不外传、不上传云端
 
   如果用户没有提供具体目标（只说"帮我背调"），请先询问目标（邮箱/域名/公司名）。
----
