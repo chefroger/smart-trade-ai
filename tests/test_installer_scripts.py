@@ -591,11 +591,21 @@ class TestWindowsInstallerGaps:
         assert "$LASTEXITCODE" in window, "数据库初始化没有检查退出码（会假成功）"
         assert "数据库初始化未完成" in PS1, "失败分支缺少如实文案"
 
-    def test_launcher_warns_on_non_ascii_path(self):
-        """自定义 TRADE_HOME 含非 ASCII 时，必须明确警告 launcher 可能起不来。"""
+    def test_non_ascii_launcher_uses_ps1_fallback(self):
+        """自定义非 ASCII 路径不能只警告 —— 改用 UTF-8 启动器，保证 trade 能跑。"""
         body = _code_lines(PS1)
         assert "Test-AsciiBatchPath" in body, "缺少非 ASCII 路径检测"
-        assert "非 ASCII" in PS1 and "D:\\trade" in PS1, "警告文案没有给出可操作的建议"
+        assert "trade-launcher.ps1" in body, "没有生成 PowerShell 启动器兜底"
+        assert "UTF8Encoding($true)" in body, "启动器不是带 BOM 的 UTF-8"
+        assert "%~dp0trade-launcher.ps1" in body, ".cmd 没有调用兜底启动器"
+        # 常规路径（含中文用户名）仍走纯 ASCII 的 .cmd 快速路径
+        assert "set HERMES_HOME=$BatchHermesHome" in body
+
+    def test_child_python_forced_to_utf8(self):
+        """中文用户名下，Python 输出被捕获回来不能是 ??????。"""
+        body = _code_lines(PS1)
+        assert '$env:PYTHONUTF8 = "1"' in body
+        assert '$env:PYTHONIOENCODING = "utf-8"' in body
 
     def test_git_uses_system_proxy_when_env_unset(self):
         """git/pip 不读 Windows 系统代理 —— 必须转成进程级 HTTP(S)_PROXY。

@@ -28,6 +28,12 @@ trap {
 # 用户群是电脑小白，乱码等于「看不懂 = 不敢用」。
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
+# 子进程 Python 也强制 UTF-8：Python 在 Windows 上默认按 ANSI 代码页处理
+# 控制台 I/O，中文用户名/路径被捕获回来会变成 ??????，既难排查又难看懂。
+# 只影响本次安装进程及其子进程，不写入系统设置。
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 # ── PS 5.1 兼容：原生命令的 stderr 重定向 ─────────────────────────────────
 #
 # Windows PowerShell 5.1 在 `$ErrorActionPreference = "Stop"` 下，只要把**原生命令**
@@ -547,10 +553,10 @@ $BatchTradeHome  = ConvertTo-BatchPath $TradeHome
 $BatchPyCmd      = ConvertTo-BatchPath $PyCmd
 $BatchServerPy   = ConvertTo-BatchPath "$TradeDir\server.py"
 
-# cmd.exe 按系统 OEM 代码页读 .cmd：路径里仍有非 ASCII（典型是自定义
-# TRADE_HOME 放在 D:\外贸数据 之类、不在 LOCALAPPDATA/USERPROFILE 下）时，
-# 英文 Windows 会把这些字符写成 '?'，表现为「装完了但 trade 命令起不来」。
-# 不阻断安装（中文 Windows 通常能正常展开），但必须让用户看见风险。
+# 中文用户名本身已经被 ConvertTo-BatchPath 处理掉（默认路径 → %LOCALAPPDATA%），
+# 启动器保持纯 ASCII。只有**自定义 TRADE_HOME 落在用户目录之外且含中文**时，
+# 才会留下非 ASCII 字符；那种情况下 .cmd 的 OEM 编码在英文 Windows 上会写成 '?'。
+# 检测结果决定生成哪种启动器（见下方）。
 function Test-AsciiBatchPath {
     param([string]$Value)
     if (-not $Value) { return $true }
@@ -566,13 +572,10 @@ foreach ($pair in @(
 )) {
     if (-not (Test-AsciiBatchPath $pair[1])) { $unsafeBatch += "$($pair[0]) = $($pair[1])" }
 }
-if ($unsafeBatch.Count -gt 0) {
-    Write-Host "  ⚠ 启动器路径含非 ASCII 字符，在非中文 Windows 上可能无法运行：" -ForegroundColor Yellow
-    foreach ($item in $unsafeBatch) { Write-Host "      $item" -ForegroundColor Yellow }
-    Write-Host "    建议把 TRADE_HOME 改到纯英文路径（如 D:\trade）后重装；本次安装会继续。" -ForegroundColor Yellow
-}
 
-@"
+if ($unsafeBatch.Count -eq 0) {
+    # 常规路径（含中文用户名）：启动器内容全 ASCII，OEM 编码无风险。
+    @"
 @echo off
 set HERMES_HOME=$BatchHermesHome
 REM Keep TRADE_HOME: a custom data dir must survive the launcher, otherwise the
@@ -584,6 +587,34 @@ REM bootstrap.py sets it too; this is the belt-and-braces copy.
 set HERMES_DISABLE_LAZY_INSTALLS=1
 "$BatchPyCmd" "$BatchServerPy" %*
 "@ | Out-File -FilePath "$LocalBin\trade.cmd" -Encoding OEM
+} else {
+    # 自定义路径含非 ASCII：改成 ASCII 的 .cmd + UTF-8(BOM) 的 PowerShell 启动器。
+    # PowerShell 读 BOM 文件不受系统代码页影响，路径怎么写都不会变成 '?'。
+    # 用户不需要改路径，安装照常完成。
+    Write-Host "  → 检测到非 ASCII 安装路径，已改用 PowerShell 启动器（自动处理编码）" -ForegroundColor Cyan
+
+    # 单引号字符串里路径中的 ' 要写成 ''（极少见，但路径可能来自用户输入）
+    $psHermesHome = $HermesHome.Replace("'", "''")
+    $psTradeHome  = $TradeHome.Replace("'", "''")
+    $psPyCmd      = $PyCmd.Replace("'", "''")
+    $psServerPy   = "$TradeDir\server.py".Replace("'", "''")
+
+    $launcherPs1 = "$LocalBin\trade-launcher.ps1"
+    $ps1Content = @"
+`$env:HERMES_HOME = '$psHermesHome'
+`$env:TRADE_HOME = '$psTradeHome'
+`$env:HERMES_DISABLE_LAZY_INSTALLS = '1'
+& '$psPyCmd' '$psServerPy' @args
+exit `$LASTEXITCODE
+"@
+    $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+    [System.IO.File]::WriteAllText($launcherPs1, $ps1Content, $utf8Bom)
+
+    @"
+@echo off
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0trade-launcher.ps1" %*
+"@ | Out-File -FilePath "$LocalBin\trade.cmd" -Encoding OEM
+}
 
 # 检测 PATH 中是否已包含 $LocalBin
 $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
