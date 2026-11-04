@@ -21,7 +21,7 @@ triggers:
   - 查公司
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.2.1
+version: 1.2.2
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-osint 技能 — Strategic Intelligence Architect（战略情报架构师）。
@@ -106,7 +106,11 @@ injection_prompt: |
 
   ════════════════════════════════════════
 ---
----|------|---------|
+
+  关键联系人的结构化字段：
+
+  | 字段 | 必填 | 获取方式 |
+  |------|------|---------|
   | name | ✅ | 官网 Team 页 / LinkedIn Employees / About 页 |
   | title | ✅ | 同上 |
   | email | ✅ | 官网 / LinkedIn 联系方式 / 邮箱推测（见下） |

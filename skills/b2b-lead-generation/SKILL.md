@@ -33,10 +33,76 @@ triggers:
   - price too high
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.3.1
+version: 1.3.2
 author: Foreign Trade Assistant
 ---
----|-----------|------|
+
+  ## Phase 0 — 三通道并行潜客搜索（找客户专用）
+
+  当用户说「找客户」「找潜客」「找买家」时，启用三通道并行搜索。单通道搜索会漏掉大量优质客户，必须三通道并行。
+
+  ### 通道 A — Google Maps（本地分销商/批发商）
+
+  适合找有实体店/仓库的本地买家。这类客户决策快、订单稳定。
+
+  搜索 query 模板（按目标市场语言生成）：
+  - `{product} distributor in {country/city}`
+  - `{product} wholesaler near {city}`
+  - `{product} supplier {country}`
+
+  执行方式：
+  1. `web_search` 搜索上述 query
+  2. 对前 10 条结果用 `browser_navigate` 访问 Google Maps 页面，提取商家名/官网/电话/地址
+  3. 注意：Google Maps 数据受地区限制，必要时用 `https://www.google.com/maps/search/{query}` 直接访问
+
+  ### 通道 B — Google Search（B2B 买家站点）
+
+  适合找品牌方/工厂/连锁超市的采购负责人。
+
+  搜索 query 模板：
+  - `{product} buyer OR importer OR purchasing {country}`
+  - `site:linkedin.com/in {product} procurement {country}`
+  - `site:linkedin.com/company {product} {country}`
+  - `{product} "purchasing manager" OR "procurement lead" {country}`
+  - `{product} trade shows {country} 2026` → 拿到展会参展商名单
+
+  执行方式：
+  1. 每个 query 用 `web_search` 取前 20 条
+  2. 用 `browser_navigate` 访问linkedin.com/company 页面，提取官网域名 + 员工规模
+  3. 对站点结果，从首页和 About/Contact 页面提取邮箱/电话
+
+  ### 通道 C — Facebook Pages / LinkedIn 公司页
+
+  适合找活跃在线的中小买家（FB）+ 中大型企业（LinkedIn）。
+
+  搜索 query 模板：
+  - Facebook: `site:facebook.com {product} {country}`
+  - Facebook: `site:facebook.com "{product brand}" {country}`
+  - LinkedIn: `site:linkedin.com/company {product} {country} "1-10 employees" OR "11-50 employees"`
+
+  执行方式：
+  1. `web_search` 搜索上述 query
+  2. 对前 10 条 FB 结果用 `browser_navigate` 访问，提取 Page 名/官网/联系方式（About 栏）
+  3. 对前 10 条 LinkedIn 结果，提取公司名/官网/员工数/关键人
+
+  ### 跨通道去重规则
+
+  **域名级去重**（关键）：
+  1. 对每条结果提取 `company_website`（去掉 www. / http:// 前缀，统一为 `domain.com` 形式）
+  2. 同一域名出现多次只保留信息最全的一条（首选有邮箱 + LinkedIn + 电话的）
+  3. 没有 `company_website` 的（仅有 FB Page）按 `facebook.com/{page-id}` 去重
+
+  **去重后排序**：
+  - 优先级 1：同时命中 3 通道的（信号最强）
+  - 优先级 2：命中 2 通道
+  - 优先级 3：仅命中 1 通道但信息完整（有邮箱+电话+LinkedIn）
+
+  ### 黑名单过滤
+
+  命中以下任一特征的条目直接剔除：
+
+  | 类别 | 黑名单特征 | 示例 |
+  |------|-----------|------|
   | 平台目录页 | URL 含 alibaba.com / made-in-china.com / tradekey.com / globalsources.com | 阿里产品页本身不是买家 |
   | 聚合页 | URL 含 yellowpages.com / yelp.com / opencorporates.com | 这类是目录不是客户 |
   | 竞争对手 | 同行业供应商官网（你卖他卖的同一类产品） | 用产品名+manufacturer 搜出的同行 |

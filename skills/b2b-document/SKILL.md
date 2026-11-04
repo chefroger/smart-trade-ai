@@ -19,10 +19,12 @@ triggers:
   - quotation comparison
   # ... (see skill_registry.py for full list)
 category: 文档管理
-version: 1.0.1
+version: 1.0.2
 author: Foreign Trade Assistant
 ---
----|------|-------------|-----|------|---------|------|
+
+  | 品名 | 规格 | 单价 [置信度] | MOQ | 交期 | 付款条件 | 来源 |
+  |------|------|-------------|-----|------|---------|------|
   | [确切] | [确切] | $3.50/pc [确切] | 1000 pcs [确切] | 30天 [确切] | T/T 30/70 [确切] | 📄 报价单.xlsx R12 |
 
   每个单元格后标注置信度标签

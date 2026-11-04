@@ -120,6 +120,17 @@ class TestNoUnauthorizedNames:
         assert not hits, f"技能里仍有示例公司/人名：{hits}"
 
 
+class TestMarkdownIntegrity:
+    def test_no_orphaned_table_separator(self):
+        """表头被删后会留下 `---|------|` 这样的悬空分隔行。"""
+        hits = []
+        for path, text in _all_skill_texts():
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if line.lstrip().startswith("---|"):
+                    hits.append((path, lineno, line.strip()))
+        assert not hits, f"技能里仍有悬空表格分隔行：{hits}"
+
+
 class TestNoHardcodedNumbers:
     def test_pipeline_has_no_fixed_amounts_or_stats(self):
         text = _text("b2b-sales-pipeline") + (SKILLS / "b2b-sales-pipeline" / "references" / "qa_pairs.md").read_text(encoding="utf-8")
