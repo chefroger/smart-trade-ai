@@ -33,7 +33,7 @@ triggers:
   - price too high
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.3.0
+version: 1.3.1
 author: Foreign Trade Assistant
 ---
 ---|-----------|------|
@@ -706,7 +706,7 @@ Mit freundlichen Grüßen,
 
 1. **Product-first mentality** 🔴 **最致命**: 开发信第一句就介绍公司和产品。正确做法：先谈客户的难处 → 你能怎么帮 → 最后才一句话带过产品
 2. **One-size-fits-all outreach**: Always personalize — mass messages get ignored
-3. **Giving up too early**: 80% of customers are closed after the 4th follow-up
+3. **Giving up too early**: multiple follow-ups usually outperform a single touch; conversion varies by industry and client (no fixed percentage)
 4. **空洞话术**: 不说"质量好价格优服务好"，具体说"每批货附 X 项检测数据""从下单到出货最快 Y 天""欧美 CE/FDA 认证我们在行"
 5. **Ignoring time zones**: Respect the prospect's working hours
 6. **Weak subject lines**: The subject line determines if your email gets opened
@@ -815,7 +815,7 @@ Mit freundlichen Grüßen,
 ### 2. 询盘回复 (Inquiry Reply)
 - [ ] 是否**先确认客户需求**（规格、数量、认证）再报价？
 - [ ] 是否问了至少 2 个澄清问题？
-- [ ] 是否在 30 分钟内回复？（标注回复时效期望）
+- [ ] 是否在工作时间内 30 分钟内回复？（非工作时间次日前；2 小时内给实质进展）
 - [ ] 是否附上了产品目录 / 报价单 / 规格书？
 
 ### 3. 报价函 (Quotation)

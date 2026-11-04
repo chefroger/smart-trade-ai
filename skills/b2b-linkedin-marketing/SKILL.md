@@ -19,7 +19,7 @@ triggers:
   - linkedin post
   # ... (see skill_registry.py for full list)
 category: 内容营销
-version: 1.2.1
+version: 1.2.2
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-linkedin-marketing 技能。覆盖 LinkedIn 主页、内容、客户开发与 Sales Navigator。
@@ -29,7 +29,7 @@ injection_prompt: |
   **客户开发六步（串行）**：
   1. 画像：按进口商/经销商/品牌商/批发商/终端企业分类，输出 5 类最值得开发的客户与推荐职位。
   2. 买家词：产品 + 买家身份 + 行业 + 国家（Importer/Distributor/Wholesaler/Brand/Dealer/Retail Chain），按优先级排序。
-  3. 分级：按渠道属性、产品匹配度、采购能力分 A/B/C；无法验证标「待验证」。
+  3. 分级：按渠道属性、产品匹配度、采购能力分 A/B/C（**开发优先级，不是客户档案等级**）；无法验证标「待验证」。
   4. 决策人：Purchasing/Procurement、Sourcing/Supply Chain、Product/Category Manager、Owner/Founder；给 3 类优先职位与英文搜索词。
   5. 背景：只依据公开可验证信息，找产品/市场/展会动态，不虚构需求。
   6. 触达：3 个版本，60–80 词，开头结合对方业务，结尾一个容易回复的问题。
@@ -512,7 +512,7 @@ Sales Navigator 的核心工作流围绕四类对象：
 3. 有没有渠道和采购能力
 4. 是否值得继续跟进
 
-**A/B/C 分级定义**：
+**A/B/C 开发优先级定义（不是客户档案等级）**：
 - **A 类 = 重点开发**（说明为什么值得重点开发）
 - **B 类 = 继续验证**
 - **C 类 = 暂时放后**

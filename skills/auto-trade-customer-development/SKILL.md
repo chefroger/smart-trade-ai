@@ -21,7 +21,7 @@ triggers:
   - 帮我跑一轮客户开发
   - 跑一批客户
 category: 自动化
-version: 1.2.1
+version: 1.2.2
 author: Trade
 injection_prompt: |
   你是 auto-trade-customer-development 技能 — 外贸客户开发端到端编排器。
@@ -67,7 +67,7 @@ injection_prompt: |
   - 数字足迹成熟度（20）：官网年龄 / LinkedIn 员工数 / 技术栈
   - 风险反向分（15）：100 - risk_score
   - 渠道多元性（10）：可触达渠道数（邮箱/LinkedIn/WhatsApp/电话）
-  - 输出：ranked_list[]，标注 A/B/C 等级（A≥75 / B 50-74 / C <50）
+  - 输出：ranked_list[]，标注**开发优先级** A/B/C（按评分：A≥75 / B 50-74 / C <50；不是客户档案等级）
 
   【Phase 4 — 写信】对 A/B 级客户调用 b2b-lead-generation 生成开发信
   - 必须基于 Phase 2 背调的具体细节（不能是泛泛模板）

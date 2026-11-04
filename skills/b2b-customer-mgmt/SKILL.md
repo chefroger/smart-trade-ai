@@ -20,7 +20,7 @@ triggers:
   - 订单管理
   # ... (see skill_registry.py for full list)
 category: 客户管理
-version: 1.0.0
+version: 1.0.1
 author: Foreign Trade Assistant
 ---
 
@@ -80,6 +80,8 @@ CUSTOMER: [Company Name]
 | **B - Regular** | Regular orders, stable relationship | Standard | Bi-weekly |
 | **C - Developing** | Growing potential, occasional orders | Growing | Monthly |
 | **D - At Risk** | Declining orders, issues | Urgent attention | As needed |
+
+> 这套 A/B/C/D 是**客户档案等级的唯一口径**（按营收/战略价值/生命周期）。其它技能里的 A/B/C 若指“开发优先级”“展会意向”“关键词分层”，必须写明维度，不得当作客户等级。
 
 ## Phase 2: Contact Management
 

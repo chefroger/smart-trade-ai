@@ -27,7 +27,7 @@ triggers:
   - show preparation
   - post-show follow-up
 category: 销售转化
-version: 1.0.0
+version: 1.0.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-exhibition 技能。用于**展会全流程管理**——从展前邀约到展后转化的完整支持。
@@ -70,8 +70,8 @@ injection_prompt: |
   展后跟进策略：
 
   1. **48 小时黄金窗口**：发送展后跟进邮件，提及在展会的交流内容
-  2. **客户分级**：按意向 A/B/C 分级
-  3. **后续计划**：A 级客户一周内安排视频会议，B 级两周内发送资料，C 级纳入季度培育
+  2. **展会意向分级**：高 / 中 / 低（与客户档案 A/B/C 是不同维度，不要混用）
+  3. **后续计划**：高意向一周内安排视频会议，中意向两周内发送资料，低意向纳入季度培育
 
   ## 输出格式
   ```

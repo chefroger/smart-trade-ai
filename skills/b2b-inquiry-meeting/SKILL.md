@@ -23,7 +23,7 @@ triggers:
   - weekly sales review
   - sales team meeting
 category: 销售转化
-version: 1.0.1
+version: 1.0.2
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-inquiry-meeting 技能。用于**主持周度询盘复盘会**，输出销售主管可直接用于开会的完整材料。

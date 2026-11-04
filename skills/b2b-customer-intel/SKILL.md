@@ -35,7 +35,7 @@ triggers:
   - what do we know about
   - customer insight
 category: 客户管理
-version: 1.0.1
+version: 1.0.2
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-customer-intel 技能。为单一外部客户建立业务相关画像，不做私人信息收集。
