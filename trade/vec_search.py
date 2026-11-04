@@ -14,6 +14,8 @@ Smart Trade AI — 客户/文档语义检索（优化路线 P0-2）。
   文档：标题+摘要），本模块只管存取。
 
 环境变量：
+    TRADE_SEMANTIC         总开关（默认 off）。on/1/true/yes 才启用；
+                           关闭时不导入 sqlite_vec、不写/不查向量。
     TRADE_VEC_TOP_K        默认返回条数（默认 10）
     TRADE_VEC_MIN_SCORE    最低分（默认 0.42，score=1/(1+distance)）。
                            **别凭感觉调**：L2 归一化下无关向量的距离恒为 √2，
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -33,9 +36,27 @@ logger = logging.getLogger(__name__)
 _vec_available: bool | None = None
 _vec_lock = threading.Lock()
 
+_TRUE_VALUES = {"1", "true", "on", "yes"}
+
+
+def semantic_enabled() -> bool:
+    """客户语义检索（向量）总开关，默认关闭（opt-in）。
+
+    默认 **off** 是 2026-11-04 审计决定：少一个原生扩展、少一类静默失效面。
+    开启方式：`TRADE_SEMANTIC=on`。关闭时本模块不导入 sqlite_vec、
+    不写/不查向量，客户搜索只走关键词。
+    """
+    return os.environ.get("TRADE_SEMANTIC", "").strip().lower() in _TRUE_VALUES
+
 
 def vec_available() -> bool:
-    """sqlite-vec 是否可用（带缓存的探测）。"""
+    """sqlite-vec 是否可用（带缓存的探测）。
+
+    总开关关闭时直接返回 False，且**不缓存** —— 用户随后设
+    `TRADE_SEMANTIC=on` 无需重启进程即可重新探测。
+    """
+    if not semantic_enabled():
+        return False
     global _vec_available
     with _vec_lock:
         if _vec_available is not None:
@@ -85,6 +106,43 @@ def _load_vec(conn: sqlite3.Connection) -> bool:
             conn.enable_load_extension(False)  # 只需打开一瞬间；查询不受影响
         except Exception:
             pass
+
+
+def _load_vec_for_maintenance(conn: sqlite3.Connection) -> bool:
+    """维护用途加载 vec0：**不受 TRADE_SEMANTIC 开关限制**。
+
+    用户关闭语义检索后仍会删客户/清公司；向量表若残留就破坏了
+    "物理删除所有数据"的承诺。这里只要求 sqlite-vec 能导入并加载，
+    不要求功能开启。没装 sqlite-vec 时返回 False（表也不可能存在）。
+    """
+    try:
+        import sqlite_vec
+    except ImportError:
+        return False
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        return True
+    except Exception as e:
+        logger.warning("vec0 扩展加载失败（维护清理跳过）: %s", e)
+        return False
+    finally:
+        try:
+            conn.enable_load_extension(False)
+        except Exception:
+            pass
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """表/虚表是否存在（vec0 虚表也记录在 sqlite_master）。"""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
 
 
 def _serialize(vec: list[float]) -> bytes:
@@ -328,9 +386,26 @@ def index_customer(conn: sqlite3.Connection, cust: dict) -> bool:
         from trade.embeddings import get_backend
 
         backend = get_backend(scope="vec_search")
-        if getattr(backend, "needs_fit", False) and not load_backend_state(conn, backend):
-            return rebuild_all_customers(conn) > 0  # 自举：按全量语料 fit 一次
-        return upsert_customer_vector(conn, int(cid), int(company_id), customer_index_text(cust))
+        if getattr(backend, "needs_fit", False):
+            if not load_backend_state(conn, backend):
+                return rebuild_all_customers(conn) > 0  # 自举：按全量语料 fit 一次
+            # 小库每次写入都全量重建：TF-IDF 词表是全局的，单条写入遇到新词
+            # 会让新内容不可见（P2-12 词表冻结）。几十到几百条重建是毫秒级；
+            # 超过阈值保留单条写入，由 `trade vec rebuild` 显式重建。
+            try:
+                total = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
+            except Exception:
+                total = 0
+            if total <= 500:
+                return rebuild_all_customers(conn) > 0
+        ok = upsert_customer_vector(
+            conn, int(cid), int(company_id), customer_index_text(cust)
+        )
+        if ok:
+            return True
+        # 单条写入失败常见于词表冻结：新文本全是 OOV → 零向量（P2-12）。
+        # 用全量重建自愈一次，否则新客户/新备注永远搜不到。
+        return rebuild_all_customers(conn) > 0
     except Exception as e:
         logger.debug("客户索引写入跳过: %s", e)
         return False
@@ -375,12 +450,83 @@ def _row_dict(cols: list[str], row) -> dict:
 
 
 def delete_customer_vector(conn: sqlite3.Connection, customer_id: int) -> None:
+    """删除单条客户向量。走维护加载器：关闭语义检索后仍能清干净。"""
     try:
-        if _load_vec(conn):
-            conn.execute("DELETE FROM vec_customers WHERE customer_id = ?", (customer_id,))
-            conn.commit()
+        if not _table_exists(conn, "vec_customers"):
+            return
+        if not _load_vec_for_maintenance(conn):
+            return
+        conn.execute("DELETE FROM vec_customers WHERE customer_id = ?", (customer_id,))
+        conn.commit()
     except Exception:
         pass
+
+
+def purge_company_vectors(conn: sqlite3.Connection, company_id: int) -> int:
+    """物理删除某公司的全部向量；表清空后连同词表一起清掉。
+
+    返回删除的向量行数。这个函数必须能在开关关闭时工作 ——
+    关闭只是不写/不查，不是把历史数据留在库里。
+    """
+    try:
+        if not _table_exists(conn, "vec_customers"):
+            return 0
+        if not _load_vec_for_maintenance(conn):
+            return 0
+        n = conn.execute(
+            "DELETE FROM vec_customers WHERE company_id = ?", (company_id,)
+        ).rowcount
+        left = conn.execute("SELECT COUNT(*) FROM vec_customers").fetchone()[0]
+        conn.commit()
+        if left == 0:
+            clear_all_vectors(conn)
+        return n
+    except Exception as e:
+        logger.warning("清理公司向量失败: %s", e)
+        return 0
+
+
+def index_status(conn: sqlite3.Connection) -> dict:
+    """索引概况（供 `trade vec status` / doctor 使用）。
+
+    计数必须加载 vec0：虚表未加载时 COUNT 可能返回 0（静默误报）。
+    """
+    rows = 0
+    meta = None
+    if _table_exists(conn, "vec_customers") and _load_vec_for_maintenance(conn):
+        try:
+            rows = conn.execute("SELECT COUNT(*) FROM vec_customers").fetchone()[0]
+        except Exception:
+            rows = 0
+    if _table_exists(conn, "vec_meta"):
+        try:
+            meta = conn.execute(
+                "SELECT dim, model, updated_at FROM vec_meta WHERE id = 1"
+            ).fetchone()
+        except Exception:
+            meta = None
+    return {
+        "rows": rows,
+        "dim": meta[0] if meta else None,
+        "model": (meta[1] or "tfidf") if meta else None,
+        "updated_at": meta[2] if meta else None,
+    }
+
+
+def clear_all_vectors(conn: sqlite3.Connection) -> bool:
+    """清空全部客户向量与词表（`trade vec clear` / 表已空时调用）。"""
+    try:
+        if _table_exists(conn, "vec_customers"):
+            if not _load_vec_for_maintenance(conn):
+                return False
+            conn.execute("DROP TABLE IF EXISTS vec_customers")
+        if _table_exists(conn, "vec_meta"):
+            conn.execute("DELETE FROM vec_meta")
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("清空向量索引失败: %s", e)
+        return False
 
 
 # ── 检索 ──────────────────────────────────────────────────────────────────

@@ -460,15 +460,25 @@ def check_post_install() -> list[CheckResult]:
     except Exception as e:
         out.append(CheckResult("Hindsight（长期记忆）", STATUS_WARN, f"检查失败：{e}"))
 
-    # sqlite-vec：语义检索（优化路线 P0-2）。缺失时自动降级关键词检索。
+    # sqlite-vec：语义检索（默认关闭，opt-in）。关闭是正常状态，不报 WARN。
     try:
-        from trade.vec_search import vec_available
-        ok = bool(vec_available())
-        out.append(CheckResult(
-            "sqlite-vec（语义检索）",
-            STATUS_OK if ok else STATUS_WARN,
-            "可用：客户/文档支持语义搜索" if ok else "未安装：已降级为关键词检索（pip install sqlite-vec 可启用）",
-        ))
+        from trade.vec_search import semantic_enabled, vec_available
+
+        if not semantic_enabled():
+            out.append(CheckResult(
+                "sqlite-vec（语义检索）", STATUS_OK,
+                "默认关闭（opt-in）：如需启用，设 TRADE_SEMANTIC=on 并安装 sqlite-vec",
+            ))
+        elif vec_available():
+            out.append(CheckResult(
+                "sqlite-vec（语义检索）", STATUS_OK,
+                "已启用：客户/文档支持语义搜索",
+            ))
+        else:
+            out.append(CheckResult(
+                "sqlite-vec（语义检索）", STATUS_WARN,
+                "已开启但 sqlite-vec 不可用：已降级为关键词检索（pip install sqlite-vec）",
+            ))
     except Exception as e:
         out.append(CheckResult("sqlite-vec（语义检索）", STATUS_WARN, f"检查失败：{e}"))
 

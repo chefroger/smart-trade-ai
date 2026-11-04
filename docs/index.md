@@ -480,7 +480,7 @@ trade doctor
   ✓ 急停状态（ESTOP）: 未处于急停状态，定时任务正常调度
   ✓ holehe（邮箱注册检测）: 已安装，Layer 1 可用
   ✓ Hindsight（长期记忆）: 未安装（默认不装；如需跨会话长期记忆，手动 pip install hindsight-client 并配置 HINDSIGHT_API_KEY）
-  ✓ sqlite-vec（语义检索）: 可用：客户/文档支持语义搜索
+  ✓ sqlite-vec（语义检索）: 默认关闭（opt-in；TRADE_SEMANTIC=on 启用）
   ✓ sentence-transformers: 未安装（默认不装；内置 TF-IDF 后端工作中）
   ✓ vision 工具在场: vision_analyze 在工具表中
   ✓ vision 读图: deepseek-flash 正确读出探测文字
@@ -495,12 +495,15 @@ trade doctor
 模型、看它能否读出来；对话那项会真的走一次问答。所以它能发现"配置看着都对但实际调不
 通"的问题（例如搜索被网络拦截、所选模型其实不支持看图）。
 
-标 `⚠` 的是**可选能力层**，缺了不影响主流程。默认只装 sqlite-vec 与 holehe；
-sentence-transformers 与 Hindsight 客户端**默认不装**（前者占空间且要拉 torch，
-后者需要你自己的 API key），需要时手动安装：sentence-transformers 用
+标 `⚠` 的是**可选能力层**，缺了不影响主流程。默认只装 holehe；
+sqlite-vec 语义检索、sentence-transformers 与 Hindsight 客户端**默认不装**
+（语义检索默认关闭、后者需要你自己的 API key），需要时手动开启：
+sqlite-vec 用 `pip install sqlite-vec` 后再设 `TRADE_SEMANTIC=on`，
+sentence-transformers 用
 `pip install sentence-transformers` 后再设 `TRADE_EMBEDDING_BACKEND=auto`，
 Hindsight 用 `pip install hindsight-client` 并配置 `HINDSIGHT_API_KEY`。
-不装时分别自动使用内置 TF-IDF 后端与会话内记忆。
+不开启时分别自动使用关键词检索、内置 TF-IDF 后端与会话内记忆。
+语义检索为什么默认关闭、数据存在哪里、如何清理，见 [豁免说明](EXEMPTIONS.md)。
 
 自检**只在首次启动跑**；没通过则每次启动重试，直到修好为止（所以改完配置重启即可自动
 恢复）。跑一次约花极少量 token 和一次 Tavily 配额。

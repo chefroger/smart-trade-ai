@@ -306,17 +306,10 @@ if ! "$PIP" install -e "." --no-deps; then
     exit 1
 fi
 
-# 可选依赖：客户语义检索用的向量扩展（sqlite-vec）。
-# **单独装、失败只警告** —— 它不是主链依赖：不装则语义检索自动降级关键词，
-# 其余功能零影响；而个别平台（如 Windows ARM）没有对应 wheel，
-# 不能因为一个可选能力让整台机器的安装失败。
-if "$PY" -c "import sqlite_vec" 2>/dev/null; then
-    log_ok "sqlite-vec 已安装（客户语义检索可用）"
-elif "$PIP" install "sqlite-vec>=0.1.6" >/dev/null 2>&1; then
-    log_ok "sqlite-vec 安装完成（客户语义检索可用）"
-else
-    log_warn "sqlite-vec 未安装：客户语义检索将降级为关键词检索（其余功能不受影响）"
-fi
+# 客户语义检索（sqlite-vec）**默认关闭**，安装器不再默认安装它。
+# 需要时由用户显式开启：pip install sqlite-vec，并设 TRADE_SEMANTIC=on。
+# 这样安装链路少一个原生扩展依赖，也与「默认不干预」的可用性要求一致。
+log_info "客户语义检索默认关闭（opt-in）；如需启用：pip install sqlite-vec 并设 TRADE_SEMANTIC=on"
 
 cd - >/dev/null
 

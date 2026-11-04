@@ -391,14 +391,13 @@ def _exe_lock_hint(trade_dir: Path) -> str:
 
 # ── 可选依赖（best-effort）───────────────────────────────────────────────
 
-# 这些依赖**默认要装**，但**装不上也不能阻断**：不装时对应能力自动降级，其余功能零影响。
-#   sqlite-vec          客户语义检索的 SQLite 向量扩展（个别平台无 wheel）
-# 单装、失败只警告 —— 不能让一个可选能力把整次升级搞失败。
+# 客户语义检索默认关闭（opt-in），升级链路不再默认安装 sqlite-vec。
+# 需要时用户显式开启：pip install sqlite-vec + TRADE_SEMANTIC=on
+# （见 docs/EXEMPTIONS.md）。保留空元组是为了让 _install_optional_deps
+# 的结构不变，未来有真正默认安装的可选依赖时直接加回来。
 #
 # 每项是 (import 名, pip 规格, 展示名, 超时秒数)。
-_OPTIONAL_DEPS = (
-    ("sqlite_vec", "sqlite-vec>=0.1.6", "sqlite-vec（客户语义检索）", 300),
-)
+_OPTIONAL_DEPS = ()
 
 
 def _install_optional_deps(emit, warnings: list[str]) -> None:

@@ -401,6 +401,14 @@ def purge(company_id: int) -> bool:
         ).rowcount
         conn.commit()
         if n > 0:
+            # 向量表没有外键，客户级联删除不会带走向量；
+            # 这里显式清理，保证「物理删除公司及所有数据」的承诺成立。
+            try:
+                from trade.vec_search import purge_company_vectors
+
+                purge_company_vectors(conn, company_id)
+            except Exception:
+                pass  # 向量清理失败不阻断公司删除（best-effort）
             # 清理文件系统：trade_companies.data_dir（仅当目录在 TRADE_HOME 下）
             if data_dir_str:
                 data_path = Path(data_dir_str)

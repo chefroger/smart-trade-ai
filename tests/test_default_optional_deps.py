@@ -1,14 +1,15 @@
-"""默认安装策略：只装 sqlite-vec 与 holehe，hindsight / sentence-transformers 默认不装。
+"""默认安装策略：holehe 默认装；sqlite-vec / hindsight / sentence-transformers 默认不装。
 
-2026-10-30 12:24 Lau 拍板（取代当日上午的「默认安装」结论）：
+2026-11-04 审计后更新（取代 2026-10-30 的「默认装 sqlite-vec」结论）：
 
-- **hindsight-client 默认不装**：Lau 没有 API key，装了也用不上。
-- **sentence-transformers 默认不装**：占空间（依赖 torch，300MB~1GB），
-  安装弊大于利。
+- **sqlite-vec 默认不装**：客户语义检索默认关闭（opt-in），需要时显式
+  `pip install sqlite-vec` + `TRADE_SEMANTIC=on`（见 docs/EXEMPTIONS.md）。
+- **hindsight-client 默认不装**：没有 API key 时装了也用不上。
+- **sentence-transformers 默认不装**：占空间（依赖 torch，300MB~1GB）。
 
-两条都不是「删掉能力」——代码层的降级守卫原样保留：没装时
-`trade/memory.py` 走会话内记忆、`trade/embeddings.py` 走内置 TF-IDF，
-用户想用时手动 `pip install` 即可。本文件钉住的是**默认安装策略**，
+这些都不是「删掉能力」——代码层的降级守卫原样保留：没装时
+`trade/memory.py` 走会话内记忆、`trade/embeddings.py` 走内置 TF-IDF、
+`trade/vec_search.py` 走关键词检索。本文件钉住的是**默认安装策略**，
 不是功能可用性。
 """
 
@@ -84,11 +85,14 @@ class TestSentenceTransformersNotInstalledByDefault:
             "升级链路仍在默认安装 sentence-transformers"
         )
 
-    def test_sqlite_vec_still_installed(self):
-        """只删 ST，sqlite-vec 的默认安装保持现状。"""
-        assert "sqlite-vec" in _code_lines(INSTALL_SH)
-        assert "sqlite-vec" in _code_lines(INSTALL_PS1)
-        assert "sqlite_vec" in UPDATE_PY
+    def test_sqlite_vec_not_installed_by_default(self):
+        """语义检索默认关闭：安装器/升级链路都不再主动装 sqlite-vec。"""
+        assert 'pip install "sqlite-vec' not in _code_lines(INSTALL_SH)
+        assert "sqlite-vec>=0.1.6" not in _code_lines(INSTALL_PS1)
+        assert "sqlite_vec" not in UPDATE_PY
+        # 仍然要告诉用户怎么开启
+        assert "TRADE_SEMANTIC=on" in _code_lines(INSTALL_SH)
+        assert "TRADE_SEMANTIC=on" in _code_lines(INSTALL_PS1)
 
 
 class TestDoctorTreatsMissingAsNormal:

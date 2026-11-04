@@ -5,12 +5,12 @@ Smart Trade AI — 本地 Embedding 后端抽象（优化路线 P0-1 / P0-2 共�
 1. 零依赖默认可用：TfidfBackend 纯标准库实现，字符 n-gram 同时支持
    中英文（无需分词），离线可用，符合项目 local-first 定位。
 2. 可插拔：TRADE_EMBEDDING_BACKEND=st 时使用 sentence-transformers
-  （需另装，质量更高）；=tfidf 强制使用默认实现；=auto（默认）
+  （需另装，质量更高）；=tfidf（默认）强制使用内置实现；=auto
    优先 st、不可用时回退 tfidf。
 3. 线程安全：fit 之后只读；get_backend() 单例加锁。
 
 环境变量：
-    TRADE_EMBEDDING_BACKEND   tfidf | st | auto（默认 auto）
+    TRADE_EMBEDDING_BACKEND   tfidf（默认）| st | auto
     TRADE_ST_MODEL            sentence-transformers 模型名
                               （默认 paraphrase-multilingual-MiniLM-L12-v2，
                                中英双语）

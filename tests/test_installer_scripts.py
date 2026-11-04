@@ -380,8 +380,8 @@ class TestPowerShellChecksPipExitCodes:
             )
             checked += 1
 
-        # 脚本里共 3 处 pip 调用：Hermes 装 1 处 + Trade 依赖/自身 2 处
-        assert checked >= 3, f"应覆盖全部 3 处 pip 调用（Hermes 1 + Trade 2），实际 {checked}"
+        # 脚本里共 2 处 pip 调用：requirements + Trade 自身（sqlite-vec 已改为可选）
+        assert checked >= 2, f"应覆盖全部 2 处 pip 调用，实际 {checked}"
 
     def test_failure_exits_nonzero(self):
         """失败分支必须真的中止脚本，而不是只打印一行。"""

@@ -14,14 +14,33 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from trade import vec_search  # noqa: E402
 from trade.embeddings import TfidfBackend  # noqa: E402
 
-try:
-    import sqlite_vec  # noqa: F401
 
-    HAS_VEC = vec_search.vec_available()
-except ImportError:
-    HAS_VEC = False
+def _sqlite_vec_usable() -> bool:
+    """独立探测扩展是否真的能加载（不受 TRADE_SEMANTIC 默认关闭影响）。"""
+    try:
+        import sqlite_vec
+
+        c = sqlite3.connect(":memory:")
+        c.enable_load_extension(True)
+        sqlite_vec.load(c)
+        c.close()
+        return True
+    except Exception:
+        return False
+
+
+HAS_VEC = _sqlite_vec_usable()
 
 needs_vec = pytest.mark.skipif(not HAS_VEC, reason="sqlite-vec 未安装")
+
+
+@pytest.fixture(autouse=True)
+def _enable_semantic_for_vec_tests(monkeypatch):
+    """本文件测的是向量能力本身；默认开关是 off，这里显式开启。"""
+    if HAS_VEC:
+        monkeypatch.setenv("TRADE_SEMANTIC", "on")
+        # 其他测试可能把探测缓存成 False，这里强制重新探测
+        monkeypatch.setattr(vec_search, "_vec_available", None)
 
 
 @pytest.fixture()
@@ -221,6 +240,25 @@ class TestCustomerIndexHooks:
         try:
             hits = vec_search.search_customers(conn, "德国汉堡的灯具买家", company_id=cid)
             assert all(h["customer_id"] != created["id"] for h in hits), "删掉的客户仍能从索引搜出来"
+        finally:
+            conn.close()
+
+    def test_update_customer_refreshes_vector(self, env):
+        """改客户后必须重算向量，否则旧索引会把新信息藏起来。"""
+        from trade import customer as cust_mod
+        from trade.company import create as create_company
+        from trade.database import get_connection
+
+        company = create_company(name="更新公司", slug="update-co")
+        cid = company["id"]
+        created = cust_mod.create("宁波五金厂", company_id=cid, note="美国紧固件批发商")
+        cust_mod.update(created["id"], company_id=cid, note="德国汉堡灯具买家")
+
+        conn = get_connection()
+        try:
+            # 原 note 里没有这个短语 → 有命中只可能来自更新后的向量
+            hits = vec_search.search_customers(conn, "德国汉堡的灯具买家", company_id=cid)
+            assert any(h["customer_id"] == created["id"] for h in hits), "更新后向量没同步"
         finally:
             conn.close()
 
