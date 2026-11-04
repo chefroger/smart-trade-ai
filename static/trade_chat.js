@@ -4264,6 +4264,8 @@ async function createCompany() {
             toast('公司创建成功，桌面工作目录已就绪');
         }
         ['co-name','co-slug','co-contact-name','co-contact-email','co-website'].forEach(id=>$(id).value='');
+        // 创建成功即关闭弹窗 —— 不需要用户再点一次「关闭」
+        hideModal('company-modal');
         await loadCompanies();
         onCompanyChange(r.id);
     } else toast(r?.detail||'创建失败');
