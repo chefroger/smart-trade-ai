@@ -75,6 +75,51 @@ class TestCustomerGrading:
         assert "展会意向分级" in text and "高 / 中 / 低" in text
 
 
+class TestNoUnauthorizedNames:
+    """外贸业务文档均未取得授权，技能里不得出现文档中的公司名与人名。"""
+
+    TEACHERS = (
+        "王辛",
+        "太阳老师",
+        "沈腾",
+        "刘沅臻",
+        "Holly",
+        "跨境侠客",
+        "合君",
+        "福友",
+        "fuyoutools",
+        "Sammy",
+        "智囊团",
+        "老师",
+    )
+    CASES = (
+        "Walmart",
+        "Bunnings",
+        "Lowe's",
+        "EuroPack",
+        "ABC GmbH",
+        "XYZ Hydraulics",
+        "John",
+        "Smith",
+    )
+
+    def test_no_teacher_or_course_names(self):
+        hits = []
+        for path, text in _all_skill_texts():
+            for token in self.TEACHERS:
+                if token in text:
+                    hits.append((path, token))
+        assert not hits, f"技能里仍有未获授权的讲师/课程名：{hits}"
+
+    def test_no_case_company_or_person_names(self):
+        hits = []
+        for path, text in _all_skill_texts():
+            for token in self.CASES:
+                if token in text:
+                    hits.append((path, token))
+        assert not hits, f"技能里仍有示例公司/人名：{hits}"
+
+
 class TestNoHardcodedNumbers:
     def test_pipeline_has_no_fixed_amounts_or_stats(self):
         text = _text("b2b-sales-pipeline") + (SKILLS / "b2b-sales-pipeline" / "references" / "qa_pairs.md").read_text(encoding="utf-8")

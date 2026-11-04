@@ -26,7 +26,7 @@ triggers:
   - find customers quickly
   - help me find customers
 category: 客户开发
-version: 1.0.0
+version: 1.0.1
 author: Trade
 injection_prompt: |
   你是 b2b-customer-finder，一个傻瓜式客户开发向导。
@@ -89,7 +89,7 @@ injection_prompt: |
   **客户表格**（最重要，放最前面）：
   | 序号 | 公司名 | 国家 | 网站 | 能找到的联系方式 |
   |------|--------|------|------|------------------|
-  | 1 | ABC GmbH | 德国 | abc.de | info@abc.de / +49... |
+  | 1 | [客户公司名] | 德国 | [客户域名] | [联系邮箱] / [电话] |
 
   **开发信**（紧随表格之后，选最好的 1-3 个客户写）：
 

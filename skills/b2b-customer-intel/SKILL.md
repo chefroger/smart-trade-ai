@@ -35,7 +35,7 @@ triggers:
   - what do we know about
   - customer insight
 category: 客户管理
-version: 1.0.2
+version: 1.0.3
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-customer-intel 技能。为单一外部客户建立业务相关画像，不做私人信息收集。
@@ -116,7 +116,7 @@ injection_prompt: |
 - 联系频率偏好：每周 / 双周 / 每月 / 仅有事时
 - 语言偏好：English / 中文 / 西班牙语 / ...
 - 语气偏好：Professional / Casual / Warm / Direct
-- 称呼偏好：Hi John / Dear Mr. Smith / John-san
+- 称呼偏好：Hi [First Name] / Dear Mr. [Last Name] / [Name]-san
 - **交流禁忌**：
   - 不喜欢被催促
   - 不要提竞品

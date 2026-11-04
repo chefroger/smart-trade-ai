@@ -607,14 +607,14 @@ Generate 3-5 variants for every email. Apply to any email template above.
 
 **Example — For a hydraulic tool OEM reaching out to a distributor:**
 
-- Strategy A — Personalized Reference: `XYZ Hydraulics | Streamlining Tooling Supply`
+- Strategy A — Personalized Reference: `[客户公司名] | Streamlining Tooling Supply`
 - Strategy B — Question/Curiosity: `Quick question about your tooling lead times`
 - Strategy C — Trigger Event: `Re: Hannover Messe — hydraulic solutions for your lineup`
-- Strategy D — Value-First: `30% faster tooling delivery for XYZ Hydraulics`
+- Strategy D — Value-First: `30% faster tooling delivery for [客户公司名]`
 
 **Example — For a food packaging buyer in Germany:**
 
-- Strategy A — Personalized Reference: `EuroPack GmbH | Sustainable tray solutions`
+- Strategy A — Personalized Reference: `[客户公司名] | Sustainable tray solutions`
 - Strategy B — Question/Curiosity: `Still struggling with moisture in meat packaging?`
 - Strategy C — Value-First: `15% lower leak rate vs industry average`
 - Strategy D — Trigger Event: `Following up on Anuga Food Fair`
