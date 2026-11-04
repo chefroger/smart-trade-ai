@@ -84,7 +84,7 @@ const I18N = {
         'modal.upgrade.p2':'等待执行完毕，看到「重启完成」提示后，刷新浏览器页面（<kbd>Ctrl+Shift+R</kbd>）即可。',
         'modal.upgrade.p3':'如果 <code>hermes</code> 命令找不到，说明 Hermes Agent 未安装。请先参考安装说明安装 Hermes。',
         // modals - skills help
-        'modal.skills.title':'📖 全部 45 个技能速查',
+        'modal.skills.title':'📖 全部 48 个技能速查',
         'modal.skills.desc':'在聊天框输入关键词，Trade 自动匹配合适的技能。点击复制图标可复制快速启动提示词。',
         // common
         'btn.close':'关闭','btn.cancel':'取消','btn.save':'保存','btn.ok':'确定',
@@ -285,7 +285,7 @@ const I18N = {
         'modal.upgrade.cmd':'Help me update Trade and restart it. Repo: https://github.com/chefroger/smart-trade-ai',
         'modal.upgrade.p2':'Wait for completion, then refresh the page (<kbd>Ctrl+Shift+R</kbd>).',
         'modal.upgrade.p3':'If <code>hermes</code> is not found, Hermes Agent is not installed. See install guide first.',
-        'modal.skills.title':'📖 All 45 Skills Reference',
+        'modal.skills.title':'📖 All 48 Skills Reference',
         'modal.skills.desc':'Type keywords in chat — Trade auto-matches the right skill. Click copy icon for quick prompts.',
         'btn.close':'Close','btn.cancel':'Cancel','btn.save':'Save','btn.ok':'OK',
         'license.expired':'Expired',
@@ -1382,6 +1382,10 @@ const _ALL_SKILLS = [
         {n:"b2b-inquiry-meeting",d:"询盘分析会主持 — 周度复盘/逐人点评/重点询盘/跟进行动表",t:"询盘分析会、询盘复盘、周会、业务员复盘"},
         {n:"b2b-sales-playbook",d:"销冠经验封装器 — SOP/话术库/新人路线/避坑清单/钩子武器库",t:"销冠经验、销售SOP、话术库、新人培训"},
         {n:"b2b-guarantee-proposal",d:"商业提案生成器 — 三档方案/ROI分析/实施路线图",t:"商业提案、战略建议书、ROI分析、方案建议书"},
+    ]},{g:"成交转化",items:[
+        {n:"b2b-inquiry-reply",d:"询盘首响生成 — 判断类型，五段式首封 + 24/48/72h 跟进",t:"回复询盘、询盘怎么回、首封回复、询盘首响"},
+        {n:"b2b-quote-negotiation",d:"报价与价格异议 — 三问诊断、有条件让步",t:"客户嫌贵、客户压价、价格谈判、价格异议"},
+        {n:"b2b-closing-pi",d:"逼单决策与 PI 检查 — 四前提、推进动作、PI 红线",t:"怎么逼单、客户拖着不下单、PI检查"},
     ]},{g:"合规与支持",items:[
         {n:"b2b-trade-compliance",d:"外贸合规检查 — 文化禁忌/缩写/Incoterms/翻译二审/投标",t:"文化禁忌、Incoterms、翻译二审、Amazon上架检查"},
         {n:"b2b-onboarding",d:"新公司全套部署方案（公司介绍/产品/营销/竞品分析）",t:"新公司、部署、全套方案、怎么开始、首次设置"},

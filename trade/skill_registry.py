@@ -1521,6 +1521,53 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
         "output_fmt": "归档目录（单文件平放 / 成套项整夹）+ 匹配报告与未匹配清单",
         "augment_prompt": "",
     },
+    {
+        "name": "b2b-inquiry-reply",
+        "triggers": [
+            # Chinese — 首封回复类只归本技能（避开 b2b-inquiry-training 的「询盘回复」）
+            "回复询盘", "询盘怎么回", "怎么回复询盘", "回复客户询盘",
+            "首封回复", "询盘首响", "客户来询盘", "首次回复客户",
+            "询盘怎么回复", "回一封询盘", "回这封询盘", "回一下询盘",
+            # English
+            "reply to inquiry", "inquiry reply", "first response", "respond to inquiry",
+        ],
+        "aliases": [],
+        "input_fmt": "一条询盘原文（邮件/平台消息/WhatsApp）+ 可选产品资料与价格区间",
+        "output_fmt": "询盘类型判断 + 首封回复草稿 + 待确认信息 + 24/48/72h 跟进计划 + 风险提示",
+        "augment_prompt": "",
+    },
+    {
+        "name": "b2b-quote-negotiation",
+        "triggers": [
+            # Chinese — 价格异议类只归本技能；不抢 doc-generation 的「报价单」
+            "客户嫌贵", "客户说贵", "价格太高", "客户压价",
+            "报价怎么谈", "价格怎么谈", "怎么跟客户谈价", "报价策略", "跟客户议价",
+            "客户砍价", "让价策略", "价格异议", "客户比价",
+            "同行报价更低", "报价被拒",
+            # English
+            "price objection", "too expensive", "negotiate price", "customer says expensive",
+        ],
+        "aliases": [],
+        "input_fmt": "客户异议原话 + 产品/价格/条款（可选，缺了会先问）+ 客户所处阶段",
+        "output_fmt": "异议诊断 + 可直接发送的回复 + 有条件让步方案表 + 待确认信息 + 风险提示",
+        "augment_prompt": "",
+    },
+    {
+        "name": "b2b-closing-pi",
+        "triggers": [
+            # Chinese — 成交推进与 PI 检查；不抢 sales-playbook 的「逼单技巧」
+            "怎么逼单", "逼单话术", "客户拖着不下单", "客户一直不下单",
+            "客户说要考虑", "已读不回怎么办", "客户不回消息", "怎么推进成交",
+            "临门一脚", "催客户下单", "客户不签单", "定金没付",
+            "催定金", "PI检查", "形式发票检查",
+            # English
+            "close the deal", "closing follow up", "customer not responding", "PI checklist",
+        ],
+        "aliases": [],
+        "input_fmt": "客户当前状态与最近对话 + 可选 PI 草稿 + 决策链/时间节点/付款条件",
+        "output_fmt": "四前提判断 + 下一步动作与话术 + PI 逐项检查 + 风险提示",
+        "augment_prompt": "",
+    },
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
