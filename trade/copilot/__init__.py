@@ -16,16 +16,20 @@
     - `context`   客户匹配 + 上下文组装
     - `draft`     草稿生成
     - `capture`   读取级联的调度层（判定 / 新鲜度 / 降级）
+    - `settings`  用户设置（默认关闭；未同意隐私说明不得开启）
+    - `hotkey`    全局热键（pynput 惰性加载，缺失降级）
+    - `ui`        悬浮窗（pywebview 惰性加载，无外发入口）
+    - `service`   编排层（默认关闭；不负责启动 Trade）
 
 平台相关（隔离在独立模块，lazy import）：
     - `platform_win32`   PrintWindow → mss 回退
     - `platform_darwin`  Quartz 按窗口截图 + 屏幕录制权限链路
     - `platform_base`    两边共用的返回值契约
 
-尚未实现（§11 第 3 段）：
-    - `hotkey`    全局热键
-    - `ui`        悬浮窗
-    - `service`   托盘与总开关
+尚未接线：
+    - 启动流程挂载（等副驾功能完工；在此之前 Trade 启动不加载本包的任何模块）
+    - 设置页/隐私说明同意 UI
+    - 托盘图标与暂停/恢复菜单
 
 ## 视觉抽取为什么走 Hermes 的 auxiliary client
 
