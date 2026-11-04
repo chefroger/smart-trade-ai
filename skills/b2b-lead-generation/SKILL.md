@@ -1,9 +1,11 @@
 ---
 name: b2b-lead-generation
-description: 多通道客户开发 — Google Maps + LinkedIn + Facebook 搜索、开发信生成、询盘回复、报价谈判
+description: 多通道客户开发 — Google Maps + LinkedIn + Facebook 搜索、开发信生成、询盘首响、报价异议与谈判
 when_to_use:
   - "用户提到「找客户」「开发客户」「开发信」"
   - "需要多通道搜索客户（Google Maps / LinkedIn / Facebook / 海关数据）"
+  - "收到一条询盘，需要首封回复（不是训练/复盘）"
+  - "客户嫌贵、压价、比价，需要价格异议应对"
   - "生成询盘回复 / 报价谈判 / 跟进邮件"
   - "分析 B2B 平台（阿里国际站 / 中国制造网）的潜在客户"
   - "用户粘贴产品 / 公司资料要求找潜在买家"
@@ -19,9 +21,17 @@ triggers:
   - 客户分析
   - 报价
   - 谈判
+  - 回复询盘
+  - 询盘怎么回
+  - 首封回复
+  - 询盘首响
+  - 客户嫌贵
+  - 客户压价
+  - 价格太高
+  - 价格异议
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.2.0
+version: 1.3.0
 author: Foreign Trade Assistant
 ---
 ---|-----------|------|

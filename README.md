@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
 ```
 
-脚本会自动装好 Hermes、Python 3.14 环境、Trade 本体和 48 个技能。装完在终端输入 `trade`，浏览器自动打开聊天界面。
+脚本会自动装好 Hermes、Python 3.14 环境、Trade 本体和 45 个技能。装完在终端输入 `trade`，浏览器自动打开聊天界面。
 
 > 首次使用需要一个大模型 API Key（推荐 DeepSeek）。想手动安装、让 Hermes 代装，或先看注意事项：
 > [安装步骤](#安装步骤三种方式) · [安装前须知](#安装前须知)
@@ -188,7 +188,7 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
 ```
 
-脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 48 个 skills → 数据库初始化 → 开机自启 + 桌面快捷方式（Windows）。
+脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 45 个 skills → 数据库初始化 → 开机自启 + 桌面快捷方式（Windows）。
 
 > **如果你希望安装前先审查脚本**：
 > ```bash
@@ -289,7 +289,7 @@ $TradeHome\venv\Scripts\python.exe server.py
 
 ---
 
-## 48 项专业能力
+## 45 项专业能力
 
 | 场景 | 能力 |
 |------|------|
@@ -337,9 +337,6 @@ $TradeHome\venv\Scripts\python.exe server.py
 | 招标包下载 | 批量下载招标附件：分块续传、大小与校验双验、失败可重试 |
 | 解压与归档 | 7z/rar/zip/gz 批量解压、嵌套包多轮展开，原包进回收站 |
 | 清单匹配归档 | 按招标清单的编号与名称匹配文件，成套打包归档 |
-| 询盘首响 | 判断询盘类型，生成五段式首封回复与 24/48/72h 跟进计划 |
-| 报价与异议 | 报价前检查、价格异议三问、有条件让步方案 |
-| 逼单与 PI 检查 | 四前提判断、按状态推进、PI 必填项与红线检查 |
 | Skill 生成器 | 用自然语言描述需求，自动生成新 skill 并注册到系统 |
 
 ---
@@ -384,12 +381,12 @@ trade/                     B2B 业务层
 ├── api/                   FastAPI 路由（10 个业务域）
 ├── osint/                 客户背调模块（6 层检测）
 ├── skill_router.py        Skill 自动匹配引擎
-├── skill_registry.py      48 个 skill 注册表（纯数据）
+├── skill_registry.py      45 个 skill 注册表（纯数据）
 ├── bootstrap.py            启动引导（Hermes 版本检查、env 加载、Skills 同步）
 ├── app.py                  FastAPI app factory
 └── ... + 22 个业务模块
 
-skills/                    48 个 B2B skills（Markdown 驱动）
+skills/                    45 个 B2B skills（Markdown 驱动）
 tests/                     Python 测试（75 个文件）＋ 文档读取规则端到端实测
 tests_js/                  前端工具函数测试（node:test，零依赖；CI 会执行）
 server.py                  FastAPI 入口

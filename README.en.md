@@ -106,7 +106,7 @@ Hermes will handle cloning, installing dependencies, and registering skills auto
 curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh | bash
 ```
 
-The script handles: Python check → Hermes Agent → Smart Trade AI → 48 skills → database init.
+The script handles: Python check → Hermes Agent → Smart Trade AI → 45 skills → database init.
 
 > **Prefer to review before running?**
 > ```bash
@@ -191,7 +191,7 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 
 ---
 
-## 48 Professional Skills
+## 45 Professional Skills
 
 | Skill | Description |
 |------|------|
@@ -238,9 +238,6 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 | Tender Package Download | Batch-downloads tender attachments with resumable chunks and size/checksum verification |
 | Extract & Archive | Batch-extract 7z/rar/zip/gz, unwrap nested archives, send originals to the recycle bin |
 | List-Based Filing | Matches files to tender lists by number and name, packages complete sets |
-| Inquiry First Reply | Classifies the inquiry and drafts a five-part first reply plus a 24/48/72h follow-up plan |
-| Quote & Objection Coach | Pre-quote checklist, three diagnostic questions, conditional concessions |
-| Closing & PI Check | Four-gate closing readiness, stage-specific next actions, PI required fields and red lines |
 | Auto Customer Dev | One-click end-to-end pipeline: search → vet → score → email → save → log |
 | ~~Auto SMTP Email~~ | ~~Preview-then-send via SMTP — disabled, AI does not send emails on behalf of users~~ |
 
@@ -282,12 +279,12 @@ trade/                     B2B business layer
 ├── api/                   FastAPI routes (10 business domains)
 ├── osint/                 Client due diligence module (6-layer verification)
 ├── skill_router.py        Skill auto-matching engine
-├── skill_registry.py      48 skill registry (pure data)
+├── skill_registry.py      45 skill registry (pure data)
 ├── bootstrap.py            Startup bootstrap (Hermes version check, env loading, skills sync)
 ├── app.py                  FastAPI app factory
 └── ... + 22 business modules
 
-skills/                    48 B2B skills (Markdown-driven)
+skills/                    45 B2B skills (Markdown-driven)
 tests/                     Python tests (75 files) + end-to-end document-reading rule tests
 tests_js/                  Frontend utility tests (node:test, zero dependencies; run by CI)
 server.py                  FastAPI entry point

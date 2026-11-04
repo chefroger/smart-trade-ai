@@ -2,7 +2,7 @@
 
 > 本规范参考 [Anthropic Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) 与 [agentskills.io/specification](https://agentskills.io/specification) 的目录结构，同时保留 smart-trade-ai 的项目惯例。
 
-**适用范围**：smart-trade-ai 仓库下 `skills/` 目录的 48 个 skill。
+**适用范围**：smart-trade-ai 仓库下 `skills/` 目录的 45 个 skill。
 
 ---
 
@@ -102,7 +102,7 @@ injection_prompt: |
 - ✅ **有**（推荐）：当 skill 需要注入"我是谁 / 怎么做"的长指令到 system prompt 时
 - ✅ **省略**：当 skill 只需在 README 末尾的 body 提供文档 / 输出格式（Agent 自行遵循）即可
 
-> 项目当前状态（2026-11-04）：42 个 skill 有 injection_prompt，6 个省略（b2b-customer-mgmt / b2b-document / b2b-email-intel / b2b-lead-generation / b2b-onboarding / b2b-social-media —— body 直接是文档，依赖 `skill_registry.py` 的 `augment_prompt` 作运行时注入）。两种形态都允许。
+> 项目当前状态（2026-11-04）：39 个 skill 有 injection_prompt，6 个省略（b2b-customer-mgmt / b2b-document / b2b-email-intel / b2b-lead-generation / b2b-onboarding / b2b-social-media —— body 直接是文档，依赖 `skill_registry.py` 的 `augment_prompt` 作运行时注入）。两种形态都允许。
 >
 > ⚠️ 注意：SKILL.md 的 injection_prompt 一旦存在，运行时会**优先于** registry 的 `augment_prompt`（见 `skill_router.load_injection_prompt`）。修改 prompt 规则时必须同步两处，或确认只改生效的那处。
 
@@ -152,15 +152,15 @@ injection_prompt: |
 
 | 项 | 结果 |
 |----|------|
-| 48 个 skill 目录，全部注册于 `skill_registry.py` | ✅ 48/48 |
-| `SKILL.md` frontmatter 完整 + YAML 可解析 | ✅ 48/48（含 `name` 与目录名一致） |
-| `description` 均为单行 | ✅ 48/48 |
-| 含 `when_to_use`（Anthropic 推荐） | ✅ 48/48（条数均在 3–10，且都含「不要用于」） |
-| `triggers` ≥ 5 | ✅ 48/48 |
-| `category` 命中枚举 | ✅ 48/48 |
-| `version` 为 semver、`author` 非空 | ✅ 48/48 |
-| 至少一处可注入内容（SKILL.md 或 registry） | ✅ 48/48（42 个有 `injection_prompt`，6 个用 registry `augment_prompt`） |
-| `scripts/` + `references/` + `assets/` 骨架 | ✅ 48/48 |
+| 45 个 skill 目录，全部注册于 `skill_registry.py` | ✅ 45/45 |
+| `SKILL.md` frontmatter 完整 + YAML 可解析 | ✅ 45/45（含 `name` 与目录名一致） |
+| `description` 均为单行 | ✅ 45/45 |
+| 含 `when_to_use`（Anthropic 推荐） | ✅ 45/45（条数均在 3–10，且都含「不要用于」） |
+| `triggers` ≥ 5 | ✅ 45/45 |
+| `category` 命中枚举 | ✅ 45/45 |
+| `version` 为 semver、`author` 非空 | ✅ 45/45 |
+| 至少一处可注入内容（SKILL.md 或 registry） | ✅ 45/45（39 个有 `injection_prompt`，6 个用 registry `augment_prompt`） |
+| `scripts/` + `references/` + `assets/` 骨架 | ✅ 45/45 |
 | 无 broken 相对路径 | ✅ 0 处 |
 
 **2026-11-03 修复记录**：补齐 9 个 skill 的骨架 README 占位（b2b-china-leads、6 个 b2b-tender-*、b2b-guarantee-proposal、b2b-inquiry-meeting）；3 个招标 skill 的 `category` 改回枚举（b2b-tender-info → 客户开发，b2b-tender-processing / doc-match → 文档管理）；4 个 skill 的 `when_to_use` 补足并加「不要用于」（guarantee-proposal / inquiry-meeting / sales-playbook / tech-drawing）。涉及 skill 的 `version` 均已递增。
@@ -190,13 +190,16 @@ injection_prompt: |
 3. **通用化审计**：平台专有规则（阿里国际站后台、星等级、广告预算等）不得进入通用 skill；只允许写在“用户明确选择该平台”时才启用的内容里。
 4. **来源与验证状态**：方法若来自培训课程 / 第三方资料，SKILL.md 的注入文本与正文都要标注来源与“未经实战验证”；不得把讲师经验写成已验证结论。
 
-**2026-11-04 已批准例外：成交三件套**
+**2026-11-04 合并记录：成交三件套按阶段并入现有技能**
 
-| 新技能 | 重叠的现有技能 | 保留理由 |
+| 模块 | 并入 | 保留内容 |
 |---|---|---|
-| `b2b-inquiry-reply` | `b2b-lead-generation`（询盘回复） | lead-generation 偏开发与生成；本技能只处理“已收到的一条询盘”的首响与跟进 |
-| `b2b-quote-negotiation` | `b2b-lead-generation`（报价谈判）、`b2b-sales-playbook`（异议话术） | 前两者分别偏生成与知识沉淀；本技能是单次异议的实时教练 |
-| `b2b-closing-pi` | `b2b-sales-playbook`（逼单技巧）、`b2b-doc-generation`（PI） | 本技能只做单客户四前提判断与 PI 检查，不生成文件、不沉淀通用话术 |
+| 询盘首响 | `b2b-lead-generation` | 询盘类型判断、五段式首封、24/48/72h 跟进 |
+| 报价与价格异议 | `b2b-lead-generation` | 报价前检查、异议三问、让步梯度 5%→3%→1% |
+| 单客户逼单决策 | `b2b-sales-playbook` | 四前提、按状态推进、逼单红线 |
+| PI 必填项检查 | `b2b-doc-generation` | PI 字段、银行信息双渠道核验 |
+
+三处注入文本均标注来源与“未经实战验证”；总数保持 45。
 
 ---
 
@@ -206,5 +209,5 @@ injection_prompt: |
 - 2026-10-27: 新增质量门（QA）规范；修复 4 个 skill 的悬空 QA 引用（trade-ops / lead-generation / trade-compliance / auto-trade-customer-development，含 registry 兜底提示词）
 - 2026-10-27（B 批）: 为 7 个高风险输出 skill 补交付前自检（doc-generation / guarantee-proposal / cold-outreach / inquiry-training / product-description / email-imitation / tech-drawing）
 - 2026-11-03: 按 45 个 skill 重审（新增 b2b-china-leads + 6 个招标技能）；更新覆盖率，并修复审计发现的 19 项偏差（骨架占位 / category 枚举 / when_to_use）
-- 2026-11-04: 新增成交三件套（b2b-inquiry-reply / b2b-quote-negotiation / b2b-closing-pi），总数 48；按规范补骨架与回归
-- 2026-11-04: 新增「新技能准入规则」；补三件套的来源标注、重叠度表与负责人确认的让步梯度/红线
+- 2026-11-04: 成交三件套按阶段并入 `b2b-lead-generation` / `b2b-sales-playbook` / `b2b-doc-generation`（不新增 skill，总数保持 45）；补来源标注与负责人确认的让步梯度/红线
+- 2026-11-04: 新增「新技能准入规则」（先出重叠度表、触发词不得撞车、通用化审计、来源标注）
