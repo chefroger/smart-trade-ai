@@ -40,6 +40,7 @@ const I18N = {
         'footer.update':'更新系统','footer.restart':'重启',
         'footer.skills':'技能帮助','footer.skills_update':'更新技能',
         'footer.upgrade':'升级说明','footer.onboarding':'新手引导',
+        'footer.copilot':'聊天副驾',
         // modals - company
         'modal.co.title':'🏢 公司设置','modal.co.tab_list':'公司列表','modal.co.tab_identity':'Agent 身份',
         'modal.co.add_title':'添加新公司','modal.co.name':'公司名称 *','modal.co.name_ph':'例如：我的外贸公司',
@@ -246,6 +247,7 @@ const I18N = {
         'footer.update':'Update','footer.restart':'Restart',
         'footer.skills':'Skills Help','footer.skills_update':'Update Skills',
         'footer.upgrade':'Upgrade Guide','footer.onboarding':'Tutorial',
+        'footer.copilot':'Chat Copilot',
         'modal.co.title':'🏢 Company Settings','modal.co.tab_list':'Companies','modal.co.tab_identity':'Agent Identity',
         'modal.co.add_title':'Add Company','modal.co.name':'Company Name *','modal.co.name_ph':'e.g. My Trading Co.',
         'modal.co.slug_ph':'Auto-generated','modal.co.slug_tt':'Auto-generated from company name',
@@ -443,6 +445,7 @@ function _applyLanguage() {
     //    现在翻译只管文字。
     var map = {
         'system-update-btn': 'footer.update', 'system-restart-btn': 'footer.restart',
+        'copilot-settings-btn': 'footer.copilot',
         'skills-help-btn': 'footer.skills', 'skills-update-btn': 'footer.skills_update',
         'upgrade-help-btn': 'footer.upgrade',
         'onboarding-btn': 'footer.onboarding',
@@ -1441,6 +1444,61 @@ async function updateSkills(e) {
 function $(id) { return document.getElementById(id); }
 function showModal(id) { $(id).classList.remove('hidden'); }
 function hideModal(id) { $(id).classList.add('hidden'); }
+
+// ── 聊天副驾设置（默认关闭；未同意隐私说明不能开启）────────────────────────
+async function showCopilotSettings() {
+    const resp = await api('GET', '/copilot/settings');
+    if (!resp || !resp.settings) return;
+    const s = resp.settings;
+    const required = resp.required_consent_version || 1;
+    $('copilot-required-version').textContent = required;
+    $('copilot-consent').checked = (s.consent_version || 0) >= required;
+    $('copilot-enabled').checked = !!s.enabled;
+    $('copilot-enabled').disabled = !$('copilot-consent').checked;
+    $('copilot-use-clipboard').checked = !!s.use_clipboard;
+    $('copilot-max-chars').value = s.clipboard_max_chars || 3000;
+    $('copilot-refused-apps').value = (s.refused_apps || []).join('\n');
+    $('copilot-hotkey').value = s.hotkey || '';
+    $('copilot-write-memory').checked = !!s.write_memory;
+
+    const av = resp.availability || {};
+    const lines = [];
+    if (av.hotkey) lines.push('全局热键：' + (av.hotkey.available ? '可用' : '不可用（' + (av.hotkey.reason || '') + '）'));
+    if (av.ui) lines.push('悬浮窗：' + (av.ui.available ? '可用' : '不可用（' + (av.ui.reason || '') + '）'));
+    $('copilot-availability').textContent = lines.join('；');
+    showModal('copilot-settings-modal');
+}
+
+function onCopilotConsentChange() {
+    const ok = $('copilot-consent').checked;
+    $('copilot-enabled').disabled = !ok;
+    if (!ok) $('copilot-enabled').checked = false;
+}
+
+async function saveCopilotSettings() {
+    const consent = $('copilot-consent').checked
+        ? Number($('copilot-required-version').textContent) : 0;
+    const enabled = $('copilot-enabled').checked;
+    if (enabled && !consent) {
+        toast('请先勾选同意隐私说明');
+        return;
+    }
+    const isMac = /Mac/.test(navigator.platform || '');
+    const body = {
+        consent_version: consent,
+        enabled,
+        use_clipboard: $('copilot-use-clipboard').checked,
+        clipboard_max_chars: Math.max(1, parseInt($('copilot-max-chars').value, 10) || 3000),
+        refused_apps: $('copilot-refused-apps').value.split('\n').map(x => x.trim()).filter(Boolean),
+        hotkey: $('copilot-hotkey').value.trim() || (isMac ? 'cmd+shift+space' : 'ctrl+shift+space'),
+        write_memory: $('copilot-write-memory').checked,
+    };
+    const resp = await api('PUT', '/copilot/settings', body);
+    if (resp && resp.settings) {
+        hideModal('copilot-settings-modal');
+        toast('副驾设置已保存（默认仍不会读取屏幕，接入启动流程后才生效）');
+    }
+}
 function toast(msg, opts) {
     // sticky：不自动消失，带 × 关闭按钮。升级失败/警告这类必须看清的提示用它 ——
     // 3 秒自动消失的 toast 对小白用户等于没提示（2026-10-29 反馈「一闪而过」）。
@@ -1482,7 +1540,7 @@ function escJs(s) {
 // #region modal-utils —— 这段被 tests_js/modal.test.js 按标记整体抽取测试，勿删标记
 // 静态模版弹窗白名单：它们在 trade_chat.html 里写死，动态清理时必须跳过。
 // 新增静态弹窗要同步加进来，否则会被 _removeDynamicModals 当作动态弹窗删掉。
-const _STATIC_MODAL_IDS = new Set(['company-modal','customer-modal','library-modal','upgrade-help-modal','skills-help-modal']);
+const _STATIC_MODAL_IDS = new Set(['company-modal','customer-modal','library-modal','upgrade-help-modal','skills-help-modal','copilot-settings-modal']);
 // 安全移除动态弹窗（跳过静态模版弹窗避免误删 HTML 中的 modal-backdrop 骨架）
 function _removeDynamicModals() {
     document.querySelectorAll('.modal-backdrop').forEach(function(e) {

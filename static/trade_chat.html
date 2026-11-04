@@ -111,6 +111,7 @@
         <button id="skills-update-btn" onclick="updateSkills(event)" data-tip="更新技能" hidden>📚</button>
         <button id="upgrade-help-btn" onclick="showUpgradeHelp()" data-tip="升级说明">ℹ️</button>
         <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导">🎓</button>
+        <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾">⚙️</button>
     </div>
 
 </aside>
@@ -121,6 +122,48 @@
 </main>
 
 <!-- ═════════════════════ MODALS ═════════════════════ -->
+
+<!-- Copilot Settings Modal（默认关闭；未同意隐私说明不能开启） -->
+<div class="modal-backdrop hidden" id="copilot-settings-modal">
+    <div class="modal">
+        <h3>🪟 聊天副驾</h3>
+        <p style="font-size:12px;color:var(--text-muted);line-height:1.7;margin-bottom:12px;">
+            按热键读取当前聊天窗口的可见内容，生成回复草稿供你复制。副驾不会外发消息，
+            也不会操作微信/WhatsApp。<b>截图与剪贴板文本只发给 DeepSeek 视觉模型，不自动转给其他服务商。</b>
+            密码管理器、网银/支付类应用在拒读名单内；剪贴板通道默认关闭。
+        </p>
+        <div class="form-group">
+            <label><input type="checkbox" id="copilot-consent" onchange="onCopilotConsentChange()">
+                我已阅读并同意上面的说明（隐私说明版本 <span id="copilot-required-version">1</span>）</label>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="copilot-enabled" disabled> 开启聊天副驾（默认关闭）</label>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="copilot-use-clipboard"> 允许读取剪贴板（默认关闭）</label>
+        </div>
+        <div class="form-group">
+            <label for="copilot-max-chars">剪贴板单次上限（字符，默认 3000）</label>
+            <input type="number" id="copilot-max-chars" min="1" value="3000">
+        </div>
+        <div class="form-group">
+            <label for="copilot-refused-apps">额外拒读应用（每行一个，可留空）</label>
+            <textarea id="copilot-refused-apps" rows="2" placeholder="例如：Acme Bank"></textarea>
+        </div>
+        <div class="form-group">
+            <label for="copilot-hotkey">全局热键</label>
+            <input type="text" id="copilot-hotkey" placeholder="ctrl+shift+space">
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" id="copilot-write-memory"> 采用草稿后写入客户记忆（默认关闭）</label>
+        </div>
+        <p id="copilot-availability" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;"></p>
+        <div class="form-actions">
+            <button class="btn" onclick="hideModal('copilot-settings-modal')">取消</button>
+            <button class="btn btn-primary" onclick="saveCopilotSettings()">保存</button>
+        </div>
+    </div>
+</div>
 
 <!-- Company Modal -->
 <div class="modal-backdrop hidden" id="company-modal">
