@@ -107,3 +107,18 @@ class TestGuardrails:
     def test_closing_skill_forbids_private_commission(self):
         prompt = _frontmatter("b2b-closing-pi")["injection_prompt"]
         assert "回扣" in prompt and "双渠道" in prompt
+
+    def test_source_and_verification_declared(self):
+        """培训课程整理的方法必须标注来源与未验证状态，不能写成已验证结论。"""
+        for name in SKILL_DIRS:
+            text = (SKILL_DIRS[name] / "SKILL.md").read_text(encoding="utf-8")
+            assert "来源" in text and "未经" in text and "实战验证" in text
+
+    def test_quote_ladder_is_owner_confirmed(self):
+        prompt = _frontmatter("b2b-quote-negotiation")["injection_prompt"]
+        assert "5% → 3% → 1%" in prompt
+        assert "负责人确认" in prompt
+
+    def test_closing_red_lines_are_owner_confirmed(self):
+        prompt = _frontmatter("b2b-closing-pi")["injection_prompt"]
+        assert "负责人确认" in prompt and "硬红线" in prompt

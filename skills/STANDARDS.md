@@ -181,6 +181,25 @@ injection_prompt: |
 
 ---
 
+## 9. 新技能准入规则（2026-11-04 起）
+
+新增 skill 前，必须按顺序满足：
+
+1. **先出重叠度表**：逐个对比现有 skill 的 `input_fmt` / `output_fmt` / `triggers`。重叠度高的**只许扩展现有 skill**；确需新建的，逐个报负责人批准并在提交说明写明理由。
+2. **触发词不得撞车**：不得与现有触发词完全相同；也不得用裸词包围现有复合触发词（如现有 `询盘`、`报价` 时，新技能只加更长、更具体的复合词）。触发词清单随提交附上；`tests/test_skill_router_logic.py::TestTriggerMutualExclusivity` 必须通过。
+3. **通用化审计**：平台专有规则（阿里国际站后台、星等级、广告预算等）不得进入通用 skill；只允许写在“用户明确选择该平台”时才启用的内容里。
+4. **来源与验证状态**：方法若来自培训课程 / 第三方资料，SKILL.md 的注入文本与正文都要标注来源与“未经实战验证”；不得把讲师经验写成已验证结论。
+
+**2026-11-04 已批准例外：成交三件套**
+
+| 新技能 | 重叠的现有技能 | 保留理由 |
+|---|---|---|
+| `b2b-inquiry-reply` | `b2b-lead-generation`（询盘回复） | lead-generation 偏开发与生成；本技能只处理“已收到的一条询盘”的首响与跟进 |
+| `b2b-quote-negotiation` | `b2b-lead-generation`（报价谈判）、`b2b-sales-playbook`（异议话术） | 前两者分别偏生成与知识沉淀；本技能是单次异议的实时教练 |
+| `b2b-closing-pi` | `b2b-sales-playbook`（逼单技巧）、`b2b-doc-generation`（PI） | 本技能只做单客户四前提判断与 PI 检查，不生成文件、不沉淀通用话术 |
+
+---
+
 **修订历史**
 - 2026-07-27: 首次发布（v0.6.8）
 - 2026-09-14: 全量体检后更新统计；修复 3 个结构损坏的 SKILL.md；补充 injection_prompt 与 augment_prompt 的优先级说明
@@ -188,3 +207,4 @@ injection_prompt: |
 - 2026-10-27（B 批）: 为 7 个高风险输出 skill 补交付前自检（doc-generation / guarantee-proposal / cold-outreach / inquiry-training / product-description / email-imitation / tech-drawing）
 - 2026-11-03: 按 45 个 skill 重审（新增 b2b-china-leads + 6 个招标技能）；更新覆盖率，并修复审计发现的 19 项偏差（骨架占位 / category 枚举 / when_to_use）
 - 2026-11-04: 新增成交三件套（b2b-inquiry-reply / b2b-quote-negotiation / b2b-closing-pi），总数 48；按规范补骨架与回归
+- 2026-11-04: 新增「新技能准入规则」；补三件套的来源标注、重叠度表与负责人确认的让步梯度/红线
