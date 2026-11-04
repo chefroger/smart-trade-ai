@@ -29,6 +29,8 @@ triggers:
   - 客户压价
   - 价格太高
   - 价格异议
+  - price is too high
+  - price too high
   # ... (see skill_registry.py for full list)
 category: 客户开发
 version: 1.3.0

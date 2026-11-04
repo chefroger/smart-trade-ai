@@ -16,9 +16,12 @@ triggers:
   - 晚间总结
   - 周报
   - 日报
+  - 每天早上
+  - 发简报
+  - daily brief
   # ... (see skill_registry.py for full list)
 category: 自动化
-version: 1.2.0
+version: 1.2.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-daily-automation 技能。用于生成每日简报、定时任务等自动化内容。
