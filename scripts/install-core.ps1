@@ -67,6 +67,30 @@ $PythonCmd = $null
 $PyArgs = @()
 $HermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
 
+# ── 系统代理转进程环境变量（git / pip 不会读 Windows 系统代理）──────────────
+#
+# 客户机实测（2026-11-04）：`irm` 能下载（走 WinINET 系统代理），但 `git clone`
+# 直连 github.com 超时 21s —— 表现为「浏览器能上网，安装器却连不上」。
+# git 和 pip 只认 HTTP(S)_PROXY 环境变量，不读 IE/系统代理设置。
+# 这里**只设置当前进程的环境变量**（子进程 git/pip 继承），不碰全局 git config。
+# 用户已经显式设置过代理时不覆盖。
+if (-not $env:HTTPS_PROXY -and -not $env:HTTP_PROXY) {
+    try {
+        $ieProxy = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+        if ($ieProxy.ProxyEnable -eq 1 -and $ieProxy.ProxyServer) {
+            $proxyServer = [string]$ieProxy.ProxyServer
+            $proxyUrl = $proxyServer
+            # 兼容 "http=127.0.0.1:7890;https=127.0.0.1:7890" 这种按协议分开的写法
+            if ($proxyServer -match 'https=([^;]+)') { $proxyUrl = $Matches[1] }
+            elseif ($proxyServer -match 'http=([^;]+)') { $proxyUrl = $Matches[1] }
+            if ($proxyUrl -notmatch '^[A-Za-z]+://') { $proxyUrl = "http://$proxyUrl" }
+            $env:HTTPS_PROXY = $proxyUrl
+            $env:HTTP_PROXY  = $proxyUrl
+            Write-Host "  → 检测到系统代理，git/pip 将使用：$proxyUrl" -ForegroundColor Cyan
+        }
+    } catch {}
+}
+
 # 判据：解释器正好是 3.14（不是「>= 3.11」下限）
 $IsPython314 = { param($cmd) Invoke-NativeQuiet { & $cmd -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" 2>$null }; $LASTEXITCODE -eq 0 }
 
@@ -243,6 +267,9 @@ function Invoke-CloneOrUpdate {
     git clone --depth 1 --branch $Ref $Repo $Dest
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  ✗ 无法克隆 $Name（git 的报错见上）。请确认网络后重新运行本脚本。" -ForegroundColor Red
+        Write-Host "    如果浏览器能上网、这里却连不上，多半是 git 没走代理。先设置再重跑：" -ForegroundColor Yellow
+        Write-Host "      `$env:HTTPS_PROXY = 'http://127.0.0.1:你的代理端口'" -ForegroundColor Yellow
+        Write-Host "      `$env:HTTP_PROXY  = `$env:HTTPS_PROXY" -ForegroundColor Yellow
         return $false
     }
     return $true

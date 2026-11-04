@@ -597,6 +597,20 @@ class TestWindowsInstallerGaps:
         assert "Test-AsciiBatchPath" in body, "缺少非 ASCII 路径检测"
         assert "非 ASCII" in PS1 and "D:\\trade" in PS1, "警告文案没有给出可操作的建议"
 
+    def test_git_uses_system_proxy_when_env_unset(self):
+        """git/pip 不读 Windows 系统代理 —— 必须转成进程级 HTTP(S)_PROXY。
+
+        2026-11-04 客户机：irm 能下载（WinINET 代理），git clone 直连超时 21s。
+        """
+        body = _code_lines(PS1)
+        assert "Internet Settings" in body and "ProxyServer" in body, "没有读取系统代理"
+        assert "$env:HTTPS_PROXY = $proxyUrl" in body
+        assert "$env:HTTP_PROXY  = $proxyUrl" in body
+        assert "-not $env:HTTPS_PROXY" in body, "不能覆盖用户已显式设置的代理"
+
+    def test_clone_failure_mentions_proxy_hint(self):
+        assert "git 没走代理" in PS1, "克隆失败时没有给出代理排查提示"
+
     def test_launcher_exports_trade_home(self):
         """启动器必须带出 TRADE_HOME —— 否则自定义数据目录时服务读的是另一个目录。"""
         body = _code_lines(PS1)
