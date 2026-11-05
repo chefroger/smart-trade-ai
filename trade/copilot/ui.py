@@ -173,6 +173,10 @@ class FloatingWindow:
         window.load_html(content)
         self._show_nonactivating(window)
 
+    def prepare(self) -> None:
+        """提前创建窗口（用于启动时暴露依赖缺失，不显示）。"""
+        self._ensure_window()
+
     def show_status(self, text: str) -> None:
         """显示状态（如"正在读取"、"该应用在拒读名单内"）。"""
         self.show_html(render_panel_html(status=text))

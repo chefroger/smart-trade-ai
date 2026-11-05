@@ -19,8 +19,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture(autouse=True)
 def _isolated_settings_home(tmp_path, monkeypatch):
-    """设置文件落在临时 TRADE_HOME，不碰真实 ~/.trade。"""
+    """设置文件落在临时 TRADE_HOME；不真的拉起副驾进程。"""
     monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+    import trade.api.copilot as api_mod
+
+    monkeypatch.setattr(api_mod, "_ensure_copilot_running", lambda cid: (True, ""))
+    monkeypatch.setattr(api_mod, "_stop_copilot", lambda: None)
     yield
 
 
@@ -34,28 +38,50 @@ class TestCopilotSettingsApi:
 
     def test_enable_without_consent_is_rejected(self):
         with pytest.raises(HTTPException) as exc:
-            update_copilot_settings(CopilotSettingsPayload(enabled=True))
+            update_copilot_settings(
+                CopilotSettingsPayload(enabled=True), cid=1
+            )
         assert exc.value.status_code == 400
         assert load_settings().enabled is False
 
     def test_enable_with_consent_persists(self):
         payload = update_copilot_settings(
-            CopilotSettingsPayload(enabled=True, consent_version=1)
+            CopilotSettingsPayload(enabled=True, consent_version=1), cid=1
         )
         assert payload["settings"]["enabled"] is True
+        assert payload["runtime"]["running"] is True
         assert load_settings().enabled is True
 
-    def test_saving_does_not_start_anything(self, monkeypatch):
-        """设置 API 只写文件；不得 import/启动 service、hotkey、ui。"""
+    def test_enable_starts_and_disable_stops_process(self, monkeypatch):
         import trade.api.copilot as api_mod
 
-        for name in ("service", "hotkey", "ui"):
-            assert name not in vars(api_mod), "设置 API 不得加载副驾运行模块"
+        calls = []
+        monkeypatch.setattr(
+            api_mod, "_ensure_copilot_running",
+            lambda cid: calls.append(("start", cid)) or (True, ""),
+        )
+        monkeypatch.setattr(
+            api_mod, "_stop_copilot", lambda: calls.append(("stop",))
+        )
+        update_copilot_settings(
+            CopilotSettingsPayload(enabled=True, consent_version=1), cid=7
+        )
+        update_copilot_settings(CopilotSettingsPayload(enabled=False), cid=7)
+        assert calls == [("start", 7), ("stop",)]
 
+    def test_save_without_enabling_does_not_spawn(self, monkeypatch):
+        import trade.api.copilot as api_mod
+
+        spawned = []
+        monkeypatch.setattr(
+            api_mod, "_ensure_copilot_running",
+            lambda cid: spawned.append(cid) or (True, ""),
+        )
         payload = update_copilot_settings(
-            CopilotSettingsPayload(consent_version=1, use_clipboard=True)
+            CopilotSettingsPayload(consent_version=1, use_clipboard=True), cid=1
         )
         assert payload["settings"]["use_clipboard"] is True
+        assert spawned == []
 
 
 class TestCopilotSettingsUi:
@@ -86,3 +112,16 @@ class TestCopilotSettingsUi:
         js = (ROOT / "static" / "trade_chat.js").read_text(encoding="utf-8")
         assert "/api/trade/copilot/settings" in js
         assert "'/copilot/settings'" not in js
+
+
+class TestCopilotMainGate:
+    def test_exits_when_not_enabled(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        from trade.copilot_main import main
+
+        assert main([]) == 2
+
+    def test_bootstrap_dispatches_copilot(self):
+        src = (ROOT / "trade" / "bootstrap.py").read_text(encoding="utf-8")
+        assert '"copilot"' in src
+        assert "copilot_main" in src

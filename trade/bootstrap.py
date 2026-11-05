@@ -102,7 +102,7 @@ _MIN_HERMES_VERSION = "0.21.6"
 
 
 def dispatch_subcommands() -> bool:
-    """处理子命令（update/backup/skills-update/open/doctor/company/osint/vec），无需启动服务器。
+    """处理子命令（update/backup/skills-update/open/doctor/company/osint/vec/copilot），无需启动服务器。
 
     `open` 是桌面快捷方式的目标：确保服务在跑，然后打开界面。
     `doctor` 是安装后自检：验 Hermes 运行环境 / vision / Tavily / Trade 自身。
@@ -110,11 +110,12 @@ def dispatch_subcommands() -> bool:
     `osint` 是 6 层背调的机器判定入口（skill 提示词也指向同一个命令，
     等价的跨平台写法是 `python -m trade.osint <目标>`）：见 trade.osint.cli。
     `vec` 是客户语义检索索引维护（默认关闭，TRADE_SEMANTIC=on 启用）：见 trade.vec_cli。
+    `copilot` 是聊天副驾独立进程（默认关闭；设置页开启后才启动）：见 trade.copilot_main。
 
     Returns True 表示已处理子命令并应退出进程。
     """
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    if cmd not in ("update", "backup", "skills-update", "open", "doctor", "company", "osint", "vec"):
+    if cmd not in ("update", "backup", "skills-update", "open", "doctor", "company", "osint", "vec", "copilot"):
         return False
 
     if cmd == "update":
@@ -135,6 +136,10 @@ def dispatch_subcommands() -> bool:
     elif cmd == "vec":
         from trade.vec_cli import main as vec_main
         sys.exit(vec_main(sys.argv[2:]))
+    elif cmd == "copilot":
+        from trade.copilot_main import main as copilot_main
+
+        sys.exit(copilot_main(sys.argv[2:]))
     elif cmd == "doctor":
         from trade.doctor import format_report, has_fatal_failure, run_doctor, save_doctor_result
 

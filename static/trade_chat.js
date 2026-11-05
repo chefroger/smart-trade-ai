@@ -1462,7 +1462,9 @@ async function showCopilotSettings() {
     $('copilot-write-memory').checked = !!s.write_memory;
 
     const av = resp.availability || {};
+    const rt = resp.runtime || {};
     const lines = [];
+    lines.push('副驾进程：' + (rt.running ? '运行中' : '未运行'));
     if (av.hotkey) lines.push('全局热键：' + (av.hotkey.available ? '可用' : '不可用（' + (av.hotkey.reason || '') + '）'));
     if (av.ui) lines.push('悬浮窗：' + (av.ui.available ? '可用' : '不可用（' + (av.ui.reason || '') + '）'));
     $('copilot-availability').textContent = lines.join('；');
@@ -1496,7 +1498,14 @@ async function saveCopilotSettings() {
     const resp = await api('PUT', '/api/trade/copilot/settings', body);
     if (resp && resp.settings) {
         hideModal('copilot-settings-modal');
-        toast('副驾设置已保存（默认仍不会读取屏幕，接入启动流程后才生效）');
+        const rt = resp.runtime || {};
+        if (resp.settings.enabled && rt.running === false) {
+            toast('副驾设置已保存，但进程启动失败：' + (rt.error || '未知原因'), {sticky: true});
+        } else if (resp.settings.enabled) {
+            toast('副驾已开启，进程运行中；按热键触发');
+        } else {
+            toast('副驾已关闭');
+        }
     }
 }
 function toast(msg, opts) {
