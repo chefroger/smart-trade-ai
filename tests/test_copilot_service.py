@@ -280,3 +280,65 @@ class TestReadingIndicator:
         event = await svc.trigger()
         assert event.stage == "capture"
         assert shown == ["该应用在拒读名单内，未读取。"]
+
+
+class TestHotkeyToggle:
+    async def test_close_when_popup_visible(self):
+        hidden = []
+
+        class FakeUi:
+            def is_visible(self):
+                return True
+
+            def hide(self):
+                hidden.append(True)
+
+        calls = []
+        svc = _service(
+            ui=FakeUi(),
+            capture_fn=lambda **kw: calls.append(1) or CapturedWindow(text="x"),
+        )
+        event = await svc.trigger()
+        assert event.ok is True
+        assert event.stage == "closed"
+        assert hidden == [True]
+        assert calls == [], "弹窗已存在时不应再次读取"
+
+    async def test_close_cancels_in_flight_run(self):
+        import asyncio
+        import threading
+
+        gate = threading.Event()
+        hidden = []
+
+        class FakeUi:
+            def __init__(self):
+                self.visible = False
+
+            def is_visible(self):
+                return self.visible
+
+            def show_status(self, text):
+                self.visible = True
+
+            def hide(self):
+                self.visible = False
+                hidden.append(True)
+
+            def show_result(self, **kwargs):
+                raise AssertionError("取消后不应再弹结果")
+
+        def slow_capture(**kwargs):
+            gate.wait(2)
+            return CapturedWindow(text="客户: hi")
+
+        ui = FakeUi()
+        svc = _service(ui=ui, capture_fn=slow_capture)
+        task = asyncio.create_task(svc.trigger())
+        await asyncio.sleep(0.05)  # 让第一轮进入 capture 并显示"正在读取"
+        second = await svc.trigger()  # 第二次按键：关闭
+        assert second.stage == "closed"
+        gate.set()
+        first = await task
+        assert first.stage == "cancelled"
+        assert hidden == [True]

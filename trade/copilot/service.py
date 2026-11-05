@@ -67,6 +67,7 @@ class CopilotService:
         self._hotkey = None
         self._tray = None
         self._paused = False
+        self._run_seq = 0
         self._lock = threading.Lock()
 
     # ── 开关 / 生命周期 ────────────────────────────────────────────────
@@ -186,8 +187,18 @@ class CopilotService:
         if self._paused:
             return CopilotEvent(stage="gate", error="副驾已暂停。")
 
+        # 弹窗已存在：再次按热键 = 关闭，不再重新读取/生成。
+        if self._ui_visible():
+            self._run_seq += 1  # 取消可能还在跑的上一轮，避免它稍后又把窗口弹出来
+            self._hide_ui()
+            return CopilotEvent(ok=True, stage="closed")
+
+        self._run_seq += 1
+        run_id = self._run_seq
         self._status("正在读取…")
         captured = await asyncio.to_thread(self._capture)
+        if not self._active(run_id):
+            return CopilotEvent(stage="cancelled")
         if not captured.ok:
             self._error(captured.error or "读取失败。")
             return CopilotEvent(
@@ -199,6 +210,8 @@ class CopilotService:
 
         self._status("正在识别…")
         extracted = await self._extract(captured)
+        if not self._active(run_id):
+            return CopilotEvent(stage="cancelled")
         if not extracted.ok:
             self._error(extracted.error or "识别失败。")
             return CopilotEvent(
@@ -218,6 +231,8 @@ class CopilotService:
             )
 
         ctx = await asyncio.to_thread(self._build_context, extracted)
+        if not self._active(run_id):
+            return CopilotEvent(stage="cancelled")
         if getattr(ctx, "needs_confirmation", False):
             question = (
                 getattr(ctx, "confirmation_question", "") or "请先确认客户身份。"
@@ -235,6 +250,8 @@ class CopilotService:
 
         self._status("正在生成草稿…")
         draft = await asyncio.to_thread(self._draft, message.text, ctx)
+        if not self._active(run_id):
+            return CopilotEvent(stage="cancelled")
         if not draft.ok:
             self._error(draft.error or "草稿生成失败。")
             return CopilotEvent(
@@ -246,6 +263,8 @@ class CopilotService:
                 draft=draft,
             )
 
+        if not self._active(run_id):
+            return CopilotEvent(stage="cancelled")
         event = CopilotEvent(
             ok=True,
             stage="done",
@@ -301,6 +320,30 @@ class CopilotService:
         from trade.copilot.draft import generate_draft
 
         return generate_draft(message_text, ctx, company_id=self.company_id)
+
+    def _active(self, run_id: int) -> bool:
+        """本轮是否仍是当前轮（按键关闭会递增 _run_seq，作废旧轮）。"""
+        return run_id == self._run_seq
+
+    def _ui_visible(self) -> bool:
+        if self.ui is None:
+            return False
+        fn = getattr(self.ui, "is_visible", None)
+        try:
+            return bool(fn()) if callable(fn) else False
+        except Exception:
+            return False
+
+    def _hide_ui(self) -> None:
+        if self.ui is None:
+            return
+        fn = getattr(self.ui, "hide", None)
+        if not callable(fn):
+            return
+        try:
+            fn()
+        except Exception as exc:
+            _log.warning("收起副驾弹窗失败：%s", exc)
 
     def _status(self, text: str) -> None:
         """UI 状态提示（"正在读取"等）；UI 缺失/异常不影响主流程。"""

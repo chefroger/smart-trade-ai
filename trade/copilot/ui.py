@@ -144,6 +144,10 @@ class FloatingWindow:
         self._bridge = _Bridge(**callbacks)
         self._window = None
         self._webview = None
+        self._visible = False
+
+    def is_visible(self) -> bool:
+        return self._visible
 
     def _ensure_window(self):
         if self._window is not None:
@@ -172,6 +176,17 @@ class FloatingWindow:
         window = self._ensure_window()
         window.load_html(content)
         self._show_nonactivating(window)
+        self._visible = True
+
+    def hide(self) -> None:
+        """收起悬浮窗（不销毁，热键再次触发时复用）。"""
+        self._visible = False
+        if self._window is None:
+            return
+        try:
+            self._window.hide()
+        except Exception as exc:
+            _log.warning("收起悬浮窗失败：%s", exc)
 
     def prepare(self) -> None:
         """提前创建窗口（用于启动时暴露依赖缺失，不显示）。"""
@@ -231,6 +246,7 @@ class FloatingWindow:
         self._webview.start(gui="cocoa" if sys.platform == "darwin" else None)
 
     def close(self) -> None:
+        self._visible = False
         if self._window is None:
             return
         try:
