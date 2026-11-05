@@ -101,6 +101,11 @@ class TestCopilotSettingsUi:
         modal = self._modal()
         assert "发送" not in modal
 
+    def test_privacy_copy_is_provider_neutral(self):
+        modal = self._modal()
+        assert "只发给你配置的视觉模型" in modal
+        assert "只发给 DeepSeek" not in modal
+
     def test_js_functions_exist(self):
         js = (ROOT / "static" / "trade_chat.js").read_text(encoding="utf-8")
         assert "function showCopilotSettings()" in js

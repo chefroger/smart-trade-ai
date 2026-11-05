@@ -3,13 +3,13 @@
 ## 铁律 3：数字只从库里取
 
 草稿里的价格、MOQ、规格、交期**必须**来自产品库检索结果并标注出处；检索不到的
-数字**不许出现**，也**不写"（待确认）"占位符**（2026-11-05：占位符对用户是噪音），
-而是把相关表述改成不含数字的说法。
+数字**不许出现**，统一写成空括号"（）"（2026-11-05 Lau 定：不写"（待确认）"，
+也不直接删掉 —— 空括号既提醒业务员这里要补，又不显得啰嗦）。
 
 两道防线：
-    ① 提示词侧：明确告诉模型"只能用给定条目里的数字，没有就换一种不含数字的说法"
-    ② 组装侧：把草稿里出现的数字与产品条目做核对，**库里没有的数字直接删掉**
-       （宁可删掉一个数字，也不让它带着假出处留在草稿里）
+    ① 提示词侧：明确告诉模型"只能用给定条目里的数字，不知道的写（）"
+    ② 组装侧：把草稿里出现的数字与产品条目做核对，**库里没有的数字替换成（）**
+       （宁可留一个空括号，也不让它带着假出处留在草稿里）
 
 ## 复用哪条执行路径
 
@@ -60,8 +60,8 @@ _DRAFT_PROMPT = """\
 ## 硬性要求
 
 1. **只用给定材料里的事实**。产品库条目里没有的数字（价格、MOQ、规格、交期、认证），
-   **绝对不许自己填一个看起来合理的数字**；把相关句子改写成不含数字的说法
-   （例如"具体价格我确认后回复您"），**不要写"（待确认）"之类的占位符**。
+   **绝对不许自己填一个看起来合理的数字**；不知道的数字统一写空括号"（）"，
+   不要写"（待确认）"之类的文字占位符，也不要直接删掉。
 2. **语种与客户一致**：客户用什么语言写，就用什么语言回（英文客户 → 英文草稿）。
 3. **一版就够**，不要给多个方案、不要罗列一堆选项。
 4. 语气专业、简短、像真人写的：先回应客户关心的问题，再给下一步动作。
@@ -117,30 +117,30 @@ def _allowed_numbers(ctx: CustomerContext) -> set[str]:
 
 
 def _tidy_after_removal(text: str) -> str:
-    """删掉无出处数字后清理空白/孤立标点，避免出现 "Price ." 这类碎屑。"""
+    """替换无出处数字后清理空白/孤立标点；**必须保留"（）"占位符**。"""
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\s+([,.;:!?，。；：！？])", r"\1", text)
-    # 删数字后常出现 "piece,." / "offer:."，把前置分隔符一起收掉
+    # 替换后常出现 "piece,." / "offer:."，把前置分隔符一起收掉
     text = re.sub(r"[,;:，；：]\s*([.。!?！？])", r"\1", text)
-    text = re.sub(r"[（(]\s*[)）]", "", text)
+    # 注意：这里**不能**删空括号 —— "（）"就是无出处数字的占位符。
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
 def strip_unbacked_numbers(draft: str, ctx: CustomerContext) -> tuple[str, bool]:
-    """剔除草稿里**产品库没有**支撑的数字。
+    """把草稿里**产品库没有**支撑的数字替换成空括号"（）"。
 
     Returns:
-        (清理后的草稿, 是否动过)。无出处的数字直接删掉，**不写"（待确认）"**
-        —— 占位符会让用户觉得碍眼；同时仍然保证草稿里不出现没有出处的数字。
+        (清理后的草稿, 是否动过)。不写"（待确认）"，也不删掉数字位置，
+        让业务员一眼看到哪里需要补真实数据。
     """
     allowed = _allowed_numbers(ctx)
     if not allowed:
         # 产品库一条都没有 → 任何数字都不许出现在草稿里
         if not _extract_numbers(draft):
             return draft, False
-        return _tidy_after_removal(_NUMBER_RE.sub("", draft)), True
+        return _tidy_after_removal(_NUMBER_RE.sub("（）", draft)), True
 
     changed = False
 
@@ -152,7 +152,7 @@ def strip_unbacked_numbers(draft: str, ctx: CustomerContext) -> tuple[str, bool]
         if key is not None and key in allowed:
             return raw
         changed = True
-        return ""
+        return "（）"
 
     return _tidy_after_removal(NUMBER_RE.sub(_replace, draft)), changed
 
@@ -167,7 +167,7 @@ def build_prompt(
     history_lines = ctx.history or []
     history = "\n".join(f"- {h}" for h in history_lines) if history_lines else "（无）"
 
-    products = "（产品库没有可用条目 —— 草稿里不许出现任何数字，也不要写占位符；请用不含数字的说法）"
+    products = "（产品库没有可用条目 —— 草稿里不许出现任何数字，不知道的数字写「（）」）"
     if ctx.product_entries:
         lines = []
         for entry in ctx.product_entries:
@@ -283,8 +283,8 @@ def generate_draft(
     # 铁律 3 的第二道防线：剔除没有出处的数字
     cleaned, changed = strip_unbacked_numbers(result.draft, ctx)
     result.draft = cleaned
-    # 2026-11-05 起不再生成占位符；字段保留兼容，恒为 False。
-    result.has_placeholder = False
+    # 是否含"（）"占位符（UI/调用方可据此提示用户补充数据）
+    result.has_placeholder = "（）" in cleaned
     if changed:
         # 数字被剔掉后，原来声称支撑它的出处也不能再留着（复审 P2）——
         # 否则 UI 会展示"出处：报价单 $3.50"，而草稿里那个 $3.50 已变成占位符。
