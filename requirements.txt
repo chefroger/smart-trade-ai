@@ -29,6 +29,9 @@ dnspython>=2.6.0,<3.0
 # 聊天副驾 capture（任务书 §10 批准清单）——全部懒加载，缺失只降级副驾
 mss>=9.0,<11
 pyperclip>=1.8,<2
+# 全局热键 / 托盘（2026-11-05 负责人决定：默认安装；运行时惰性加载）
+pynput>=1.7,<2
+pystray>=0.19,<1
 # macOS 窗口截图（Quartz / ImageIO）
 pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 # 邮箱注册检测（OSINT Layer 1：122 个平台的注册痕迹）—— required，不是可选。

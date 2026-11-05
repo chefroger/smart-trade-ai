@@ -63,6 +63,10 @@ dependencies = [
   # 显示"不可用（缺依赖）"，trade 主功能照常运行。
   "mss>=9.0,<11",
   "pyperclip>=1.8,<2",
+  # 全局热键 / 托盘（2026-11-05 负责人决定：默认安装；运行时仍惰性加载，
+  # 导入失败只降级对应能力，不阻断 Trade）。
+  "pynput>=1.7,<2",
+  "pystray>=0.19,<1",
   # macOS 窗口截图（Quartz / ImageIO）。只装 darwin，避免拉进 Windows/Linux。
   "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
   # Email-registration checks (OSINT Layer 1: 122 platforms) — REQUIRED.

@@ -95,6 +95,20 @@ class TestSentenceTransformersNotInstalledByDefault:
         assert "TRADE_SEMANTIC=on" in _code_lines(INSTALL_PS1)
 
 
+class TestCopilotDepsInstalledByDefault:
+    """2026-11-05 负责人决定：热键/托盘依赖默认安装（运行时仍惰性加载）。"""
+
+    def test_in_requirements(self):
+        deps = _requirement_lines(REQUIREMENTS)
+        assert "pynput" in deps
+        assert "pystray" in deps
+
+    def test_in_pyproject_dependencies(self):
+        deps = PYPROJECT.split("[project.optional-dependencies]")[0]
+        assert '"pynput' in deps
+        assert '"pystray' in deps
+
+
 class TestDoctorTreatsMissingAsNormal:
     """「未安装」是预期状态，不能报成警告去吓唬用户。"""
 
