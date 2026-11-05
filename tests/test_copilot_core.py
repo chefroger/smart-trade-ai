@@ -1194,13 +1194,30 @@ class TestShortNameOverlap:
 
 class TestPrivacyRouting:
     def _cfg(self, provider="custom:deepseek-vl", model="deepseek-flash"):
-        return {"auxiliary": {"vision": {"provider": provider, "model": model}}}
+        return {
+            "auxiliary": {"vision": {"provider": provider, "model": model}},
+            "custom_providers": [{"name": "deepseek-vl"}],
+        }
 
-    def test_resolver_reads_auxiliary_vision(self, monkeypatch):
+    def test_resolver_prefers_main_deepseek(self, monkeypatch):
+        """主模型 deepseek-flash 已验证可看图，优先于旧 custom:deepseek-vl。"""
+        cfg = self._cfg()
+        cfg["model"] = {"provider": "deepseek", "default": "deepseek-flash"}
+        monkeypatch.setattr(extract_mod, "_load_hermes_config", lambda: cfg)
+        assert extract_mod.resolve_extract_model() == ("deepseek", "deepseek-flash")
+
+    def test_resolver_reads_auxiliary_when_main_missing(self, monkeypatch):
         monkeypatch.setattr(extract_mod, "_load_hermes_config", lambda: self._cfg())
         assert extract_mod.resolve_extract_model() == (
             "custom:deepseek-vl", "deepseek-flash",
         )
+
+    def test_resolver_skips_unconfigured_custom_provider(self, monkeypatch):
+        cfg = self._cfg()
+        cfg["custom_providers"] = []
+        cfg["model"] = {"provider": "deepseek", "default": "deepseek-flash"}
+        monkeypatch.setattr(extract_mod, "_load_hermes_config", lambda: cfg)
+        assert extract_mod.resolve_extract_model() == ("deepseek", "deepseek-flash")
 
     def test_resolver_rejects_other_providers(self, monkeypatch):
         monkeypatch.setattr(

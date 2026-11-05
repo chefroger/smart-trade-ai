@@ -34,10 +34,10 @@
 ## 视觉抽取为什么走 Hermes 的 auxiliary client
 
 `extract` 需要一个"能看图的模型调用"。裸直调（openai SDK + base64）在这个部署形态下
-走不通：客户视觉模型配在 `auxiliary.vision`（本机是 `custom:deepseek-vl`），而那个
-provider 名**不在 Hermes 的 PROVIDER_REGISTRY、也不在 config 的 custom_providers**
-（实跑 `_get_named_custom_provider("deepseek-vl")` → None）—— 裸直调拿不到它的
-base_url 与 key。
+走不通：视觉配置来自 `auxiliary.vision`（2026-11-05 起统一为主模型
+`deepseek / deepseek-flash`），旧名 `custom:deepseek-vl` 已废用。裸直调要自己
+解析 base_url 与 key，且 custom provider 在部分机器上取不到 —— 统一走 Hermes
+的 `async_call_llm`，由 Trade 显式传 provider/model。
 
 Hermes 的 `async_call_llm(task="vision", messages=[...])` 则：
     - 自己解析 `auxiliary.vision` / 主模型，走它那套 auto chain（主 provider →

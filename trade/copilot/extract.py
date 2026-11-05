@@ -3,22 +3,21 @@
 ## 走哪条模型通道
 
 用 **Hermes 的 `async_call_llm(task="vision", ...)`**，不裸直调 openai SDK。
-理由（2026-10-22 实测）：客户视觉模型配在 `auxiliary.vision`（本机是
-`custom:deepseek-vl`），而那个 provider 名**不在 Hermes 的 PROVIDER_REGISTRY、
-也不在 config 的 custom_providers**（实跑 `_get_named_custom_provider("deepseek-vl")`
-→ None）—— 裸直调拿不到它的 base_url 与 key。
+理由：视觉配置来自 `auxiliary.vision`（2026-11-05 起统一为主模型
+`deepseek / deepseek-flash`；旧名 `custom:deepseek-vl` 已废用且未在
+custom_providers 配置），裸直调要自己解析 base_url/key，还会踩到不可用的
+custom provider。
 
 Hermes 这条通道（`tools/vision_tools.py` 的 vision_analyze 用的是同一条）：
-    - 自己解析 provider/model，走 auto chain（主 provider → OpenRouter → Nous →
-      Anthropic → custom），与 trade 现有视觉能力**同源**（doctor 的「vision 读图」
-      实测通过，用主模型 deepseek-flash）；
     - 接受标准 OpenAI messages，图片以 `image_url` 的 base64 data URL 内联；
-    - 自带超时、温度与错误分类。
+    - 自带超时、温度与错误分类；
+    - 注意：provider 不可用时 Hermes 会**内部回落到 auto chain** —— 所以
+      Trade 必须先筛掉不可用的 custom provider。
 
-**抽取模型固定为 DeepSeek 视觉模型，且必须显式传入**（2026-11-04 Lau 定）：
-从 Hermes 配置的 `auxiliary.vision` 解析 provider/model（当前为
-`custom:deepseek-vl` / `deepseek-flash`），解析不到就报错；
-**绝不把 provider/model 留空交给 Hermes auto chain**，也绝不自动换到其他服务商。
+**抽取模型固定为 DeepSeek，且必须显式传入**（2026-11-04 Lau 定；
+2026-11-05 更正：视觉走主模型 deepseek-flash，不是已废用的 deepseek-vl）：
+优先主模型，其次 `auxiliary.vision`；解析不到就报错；
+**绝不把 provider/model 留空交给 Hermes auto chain**。
 
 ## 两类错误必须分开（任务书 §3）
 
@@ -32,11 +31,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
 from trade.copilot.types import (
-    DEFAULT_TIMEOUT,
     CapturedWindow,
     DialogMessage,
     ExtractedDialog,
@@ -48,6 +47,19 @@ _log = logging.getLogger(__name__)
 EXTRACT_MODEL_LABEL = "DeepSeek V4.1-Flash"
 NO_VISION_MESSAGE = f"当前模型不支持看图，请使用 {EXTRACT_MODEL_LABEL}"
 
+# 视觉抽取超时：截图 base64 较大，15s 在真实网络下偏紧（2026-11-05 实测超时）。
+# 默认 30s，可用 TRADE_COPILOT_EXTRACT_TIMEOUT 覆盖。
+DEFAULT_EXTRACT_TIMEOUT = 30.0
+
+
+def _extract_timeout() -> float:
+    raw = os.environ.get("TRADE_COPILOT_EXTRACT_TIMEOUT", "").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_EXTRACT_TIMEOUT
+    return value if value > 0 else DEFAULT_EXTRACT_TIMEOUT
+
 
 def _load_hermes_config() -> dict:
     """读取 Hermes 配置（单独抽出便于测试替换）。"""
@@ -56,12 +68,25 @@ def _load_hermes_config() -> dict:
     return load_config() or {}
 
 
+def _custom_provider_configured(cfg: dict, provider: str) -> bool:
+    """custom:<name> 是否真的在 config.custom_providers 里。"""
+    if not provider.lower().startswith("custom:"):
+        return True
+    name = provider.split(":", 1)[1].strip().lower()
+    for item in cfg.get("custom_providers") or []:
+        if str(item.get("name", "")).strip().lower() == name:
+            return True
+    return False
+
+
 def resolve_extract_model() -> tuple[str, str] | None:
     """解析副驾抽取模型的 (provider, model)；只接受 DeepSeek。
 
-    优先 `auxiliary.vision`（当前是 custom:deepseek-vl / deepseek-flash），
-    缺失时回退主模型（同样必须显式传）。解析不到或不是 DeepSeek → None，
-    调用方据此报错，**不交给 Hermes auto chain**。
+    优先使用**主模型**（DeepSeek V4.1-Flash，已验证可接收图片），
+    其次才看 `auxiliary.vision`；后者若是未配置的 `custom:*` 则跳过。
+    这样避免把不可用的 custom provider 交给 Hermes —— 它会在内部偷偷
+    回落 auto chain，把图片发给我们没选的服务商。
+    解析不到或不是 DeepSeek → None，调用方据此报错。
     """
     try:
         cfg = _load_hermes_config()
@@ -74,25 +99,28 @@ def resolve_extract_model() -> tuple[str, str] | None:
         model = (model or "").strip()
         if not provider or not model:
             return None
+        if not _custom_provider_configured(cfg, provider):
+            return None
         if "deepseek" not in provider.lower() and "deepseek" not in model.lower():
             return None
         return provider, model
 
-    aux = (cfg.get("auxiliary") or {}).get("vision") or {}
-    resolved = _accept(aux.get("provider", ""), aux.get("model", ""))
-    if resolved:
-        return resolved
-
     main = cfg.get("model")
     if isinstance(main, dict):
-        return _accept(
+        resolved = _accept(
             main.get("provider", ""),
             main.get("default") or main.get("model") or "",
         )
-    if isinstance(main, str) and ":" in main:
+        if resolved:
+            return resolved
+    elif isinstance(main, str) and ":" in main:
         provider, _, model = main.partition(":")
-        return _accept(provider, model)
-    return None
+        resolved = _accept(provider, model)
+        if resolved:
+            return resolved
+
+    aux = (cfg.get("auxiliary") or {}).get("vision") or {}
+    return _accept(aux.get("provider", ""), aux.get("model", ""))
 
 # 抽取结果的 JSON 契约（提示词与解析都以此为准）
 _EXTRACT_PROMPT = """\
@@ -154,6 +182,12 @@ def _classify_error(exc: Exception) -> tuple[str, str]:
     "模型不支持看图"，把用户引到错误的修复方向。
     """
     text = f"{type(exc).__name__}: {exc}".lower()
+    # 超时先说清楚：截图 base64 较大时 30s 也可能不够，别让用户以为配置坏了。
+    if "timed out" in text or "timeout" in text:
+        return "network", (
+            "模型响应超时（截图较大或网络较慢）。请重试；"
+            "若持续失败，再检查网络/代理。"
+        )
     if any(h in text for h in _PROTOCOL_HINTS):
         return "protocol", (
             "当前服务商与副驾的识别方式不兼容（需要 OpenAI 兼容的视觉端点）。"
@@ -268,19 +302,20 @@ async def extract_dialog(
     *,
     provider: str | None = None,
     model: str | None = None,
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: float | None = None,
 ) -> ExtractedDialog:
     """把一次窗口读取转成结构化对话。
 
     Args:
         captured: capture 的结果（带 base64 图像）。
-        provider: 抽取模型的服务商（None = 跟随 Hermes 自动解析 = 主模型）。
-        model: 抽取模型名（None = 跟随）。
-        timeout: 单次调用超时（秒）。
+        provider: 抽取模型的服务商（None = 解析 DeepSeek 主模型/视觉配置）。
+        model: 抽取模型名（None = 同上）。
+        timeout: 单次调用超时（秒；None = 默认 30s）。
 
     Returns:
         ExtractedDialog。失败时 error/error_kind 有值，**不返回空草稿式结果**。
     """
+    timeout = timeout or _extract_timeout()
     blocked = _license_block_reason()
     if blocked:
         return ExtractedDialog(error=blocked, error_kind="license")
@@ -306,9 +341,10 @@ async def extract_dialog(
 
 async def extract_dialog_from_text(
     text: str, *, provider: str | None = None, model: str | None = None,
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: float | None = None,
 ) -> ExtractedDialog:
     """纯文本抽取（剪贴板通道）。同样只转录、不回答。"""
+    timeout = timeout or _extract_timeout()
     blocked = _license_block_reason()
     if blocked:
         return ExtractedDialog(error=blocked, error_kind="license")
