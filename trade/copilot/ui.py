@@ -52,11 +52,14 @@ def render_panel_html(
     confirmation: str = "",
     notice: str = "",
 ) -> str:
-    """渲染悬浮窗 HTML（纯函数，便于测试"无外发入口"与转义）。"""
+    """渲染悬浮窗 HTML（纯函数，便于测试"无外发入口"与转义）。
+
+    没有草稿时（读取中/识别中/失败/待确认）只显示状态，不渲染空文本框和
+    一排点不动的按钮 —— 那会让窗口显得又空又怪。
+    """
+    has_draft = bool((draft or "").strip())
     button_html = "".join(
-        f'<button data-action="{action}"'
-        f'{" disabled" if action == "copy" and not draft else ""}>'
-        f"{html.escape(label)}</button>"
+        f'<button data-action="{action}">{html.escape(label)}</button>'
         for action, label in _BUTTONS
     )
     parts = [
@@ -84,25 +87,26 @@ def render_panel_html(
         parts.append(f"<p class='muted'>{html.escape(summary)}</p>")
     if confirmation:
         parts.append(f"<p><b>{html.escape(confirmation)}</b></p>")
-    parts.append(
-        "<textarea id='draft' aria-label='草稿'>"
-        f"{html.escape(draft or '')}</textarea>"
-    )
-    if sources:
-        parts.append(f"<ul class='muted'>{_source_lines(sources)}</ul>")
-    parts.append(f"<div class='row'>{button_html}</div>")
-    parts.append("<div id='action-status' class='muted'></div>")
+    if has_draft:
+        parts.append(
+            "<textarea id='draft' aria-label='草稿'>"
+            f"{html.escape(draft)}</textarea>"
+        )
+        if sources:
+            parts.append(f"<ul class='muted'>{_source_lines(sources)}</ul>")
+        parts.append(f"<div class='row'>{button_html}</div>")
+        parts.append("<div id='action-status' class='muted'></div>")
     parts.append(
         "<script>"
         "document.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{"
-        "const a=b.dataset.action;const t=document.getElementById('draft').value;"
-        "const s=document.getElementById('action-status');"
+        "const a=b.dataset.action;const d=document.getElementById('draft');"
+        "const t=d?d.value:'';const s=document.getElementById('action-status');"
         "if(!(window.pywebview&&window.pywebview.api)){"
         "if(a==='close'){window.close();}else{s.textContent='界面桥未就绪，请重开弹窗';}return;}"
         "Promise.resolve(window.pywebview.api.action(a,t)).then(r=>{"
-        "if(!r){return;} if(r.ok){s.textContent=r.message||'已完成';}"
+        "if(!r||!s){return;} if(r.ok){s.textContent=r.message||'已完成';}"
         "else{s.textContent='失败：'+(r.error||'未知原因');}"
-        "}).catch(e=>{s.textContent='失败：'+e;});"
+        "}).catch(e=>{if(s){s.textContent='失败：'+e;}});"
         "}));"
         "</script></body></html>"
     )
@@ -229,17 +233,28 @@ class FloatingWindow:
         """提前创建窗口（用于启动时暴露依赖缺失，不显示）。"""
         self._ensure_window()
 
+    def _resize(self, height: int) -> None:
+        if self._window is None:
+            return
+        try:
+            self._window.resize(390, height)
+        except Exception:
+            pass
+
     def show_status(self, text: str) -> None:
         """显示状态（如"正在读取"、"该应用在拒读名单内"）。"""
+        self._resize(180)
         self.show_html(render_panel_html(status=text))
 
     def show_error(self, text: str) -> None:
         """显示失败原因（不弹空草稿）。"""
+        self._resize(200)
         self.show_html(render_panel_html(status=text))
 
     def show_result(self, *, draft: str = "", summary: str = "",
                     sources: Iterable[Any] = (), notice: str = "",
                     confirmation: str = "") -> None:
+        self._resize(520 if (draft or "").strip() else 200)
         self.show_html(
             render_panel_html(
                 draft=draft,

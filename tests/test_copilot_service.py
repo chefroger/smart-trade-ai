@@ -101,10 +101,21 @@ class TestUiHtml:
 
     def test_sources_are_rendered(self):
         html = ui_mod.render_panel_html(
+            draft="ok",
             sources=[SourceRef(label="报价单.xlsx", value="$3.50")],
         )
         assert "报价单.xlsx" in html
         assert "$3.50" in html
+
+    def test_loading_panel_has_no_empty_draft_or_actions(self):
+        html = ui_mod.render_panel_html(status="正在识别…")
+        assert "正在识别" in html
+        assert "<textarea" not in html
+        assert "data-action='copy'" not in html
+        assert "data-action='regenerate'" not in html
+        assert "data-action='deepen'" not in html
+        assert "data-action='close'" in html
+        assert html.count("<button") == 1
 
 
 def _service(**overrides):
@@ -346,10 +357,11 @@ class TestHotkeyToggle:
 
 
 class TestCopyButton:
-    def test_copy_disabled_without_draft(self):
-        html = ui_mod.render_panel_html(draft="")
-        assert 'data-action="copy" disabled' in html
-        assert "action-status" in html
+    def test_error_panel_has_no_actions(self):
+        html = ui_mod.render_panel_html(status="无法连接到模型服务")
+        assert "无法连接到模型服务" in html
+        assert "复制草稿" not in html
+        assert "<textarea" not in html
 
     def test_copy_returns_clear_error_for_empty_text(self):
         bridge = ui_mod._Bridge()
