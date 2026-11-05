@@ -172,8 +172,22 @@ class CopilotService:
         self.resume() if self._paused else self.pause()
 
     def _tray_quit(self) -> None:
+        """退出托盘 = 结束本副驾进程（停热键/托盘并关掉悬浮窗主循环）。"""
         self.stop_hotkey()
         self.stop_tray()
+        self.dismiss()
+        if self.ui is not None:
+            close = getattr(self.ui, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    def dismiss(self) -> None:
+        """关闭弹窗并取消在途任务（热键再按 / × 按钮共用）。"""
+        self._run_seq += 1
+        self._hide_ui()
 
     def _trigger_from_hotkey(self) -> None:
         """热键线程 → 独立线程跑一次异步流程。"""
@@ -189,8 +203,7 @@ class CopilotService:
 
         # 弹窗已存在：再次按热键 = 关闭，不再重新读取/生成。
         if self._ui_visible():
-            self._run_seq += 1  # 取消可能还在跑的上一轮，避免它稍后又把窗口弹出来
-            self._hide_ui()
+            self.dismiss()
             return CopilotEvent(ok=True, stage="closed")
 
         self._run_seq += 1
@@ -223,9 +236,11 @@ class CopilotService:
 
         message = extracted.latest_from_customer()
         if message is None or not (message.text or "").strip():
+            err = "没有识别到客户消息。"
+            self._error(err)
             return CopilotEvent(
                 stage="extract",
-                error="没有识别到客户消息。",
+                error=err,
                 captured=captured,
                 extracted=extracted,
             )
@@ -237,12 +252,14 @@ class CopilotService:
             question = (
                 getattr(ctx, "confirmation_question", "") or "请先确认客户身份。"
             )
-            self._status(question)
+            # 悬浮窗尚无确认交互：明确告诉用户下一步，避免卡在「待确认」空窗。
+            tip = f"{question}（请到 Trade 确认客户后重试。）"
+            self._error(tip)
             return CopilotEvent(
                 ok=False,
                 stage="confirm",
-                confirmation=getattr(ctx, "confirmation_question", "")
-                or "请先确认客户身份。",
+                confirmation=question,
+                error=tip,
                 captured=captured,
                 extracted=extracted,
                 context=ctx,

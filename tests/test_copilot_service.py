@@ -85,14 +85,15 @@ class TestHotkey:
 
 
 class TestUiHtml:
-    def test_has_three_actions_plus_close_and_no_send(self):
+    def test_has_copy_plus_close_and_no_send(self):
         html = ui_mod.render_panel_html(draft="hello")
         assert "复制草稿" in html
-        assert "换一种说法" in html
-        assert "打开 trade 深处理" in html
+        # 未接线动作不渲染空壳按钮
+        assert "换一种说法" not in html
+        assert "打开 trade 深处理" not in html
         assert "data-action='close'" in html
         assert "发送" not in html
-        assert html.count("<button") == 4
+        assert html.count("<button") == 2
 
     def test_escapes_draft(self):
         html = ui_mod.render_panel_html(draft="<script>alert(1)</script>")
@@ -293,6 +294,27 @@ class TestReadingIndicator:
         assert event.stage == "capture"
         assert shown == ["该应用在拒读名单内，未读取。"]
 
+    async def test_no_customer_message_shows_error(self):
+        shown = []
+
+        class FakeUi:
+            def show_status(self, text):
+                pass
+
+            def show_error(self, text):
+                shown.append(text)
+
+        svc = _service(
+            ui=FakeUi(),
+            extract_fn=lambda captured: ExtractedDialog(
+                messages=[DialogMessage(who="me", text="我刚发的")],
+            ),
+        )
+        event = await svc.trigger()
+        assert event.stage == "extract"
+        assert "没有识别到客户消息" in event.error
+        assert shown == ["没有识别到客户消息。"]
+
 
 class TestHotkeyToggle:
     async def test_close_when_popup_visible(self):
@@ -354,6 +376,42 @@ class TestHotkeyToggle:
         first = await task
         assert first.stage == "cancelled"
         assert hidden == [True]
+
+    async def test_dismiss_cancels_in_flight_like_hotkey(self):
+        """× 关闭必须取消在途任务，否则生成完会再把窗口弹回来。"""
+        import asyncio
+        import threading
+
+        gate = threading.Event()
+
+        class FakeUi:
+            def __init__(self):
+                self.visible = False
+
+            def is_visible(self):
+                return self.visible
+
+            def show_status(self, text):
+                self.visible = True
+
+            def hide(self):
+                self.visible = False
+
+            def show_result(self, **kwargs):
+                raise AssertionError("dismiss 后不应再弹结果")
+
+        def slow_capture(**kwargs):
+            gate.wait(2)
+            return CapturedWindow(text="客户: hi")
+
+        ui = FakeUi()
+        svc = _service(ui=ui, capture_fn=slow_capture)
+        task = asyncio.create_task(svc.trigger())
+        await asyncio.sleep(0.05)
+        svc.dismiss()
+        gate.set()
+        first = await task
+        assert first.stage == "cancelled"
 
 
 class TestCopyButton:

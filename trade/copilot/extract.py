@@ -301,7 +301,7 @@ async def extract_dialog(
 
     Args:
         captured: capture 的结果（带 base64 图像）。
-        provider: 抽取模型的服务商（None = 解析 DeepSeek 主模型/视觉配置）。
+        provider: 抽取模型的服务商（None = 解析用户视觉配置 / 主模型）。
         model: 抽取模型名（None = 同上）。
         timeout: 单次调用超时（秒；None = 默认 30s）。
 

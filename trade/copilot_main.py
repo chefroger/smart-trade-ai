@@ -10,6 +10,7 @@ uvicorn，不能把悬浮窗塞进后台线程。副驾进程只负责热键/托
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 
@@ -75,11 +76,15 @@ def main(argv: list[str] | None = None) -> int:
         print("没有可用的公司，副驾无法启动。")
         return 2
 
-    # 草稿生成会 import Hermes；必须先准备好路径（与 Trade 主进程一致）。
+    # 草稿生成会 import Hermes；路径/宿主标记与 Trade 主进程对齐。
     try:
         from trade.bootstrap import prepare_hermes_import_paths
 
         prepare_hermes_import_paths()
+        # 副驾不跑完整 setup()，但草稿走 create_agent，需与主聊天同环境。
+        os.environ["TRADE_HOST"] = "1"
+        os.environ["HERMES_YOLO_MODE"] = "true"
+        os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
     except Exception as exc:
         print(f"准备 Hermes 运行环境失败：{exc}")
         return 2
@@ -95,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     service = CopilotService(company_id, settings=settings, ui=ui)
+    # × 关闭与热键关闭一样：取消在途任务，避免稍后又把窗口弹回来。
+    ui.set_dismiss_handler(service.dismiss)
     hotkey_ok, hotkey_reason = service.start_hotkey()
     tray_ok, tray_reason = service.start_tray()
     print(f"副驾已启动：公司 {company_id}")

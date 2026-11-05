@@ -1459,12 +1459,12 @@ async function showCopilotSettings() {
     $('copilot-max-chars').value = s.clipboard_max_chars || 3000;
     $('copilot-refused-apps').value = (s.refused_apps || []).join('\n');
     $('copilot-hotkey').value = s.hotkey || '';
-    $('copilot-write-memory').checked = !!s.write_memory;
 
     const av = resp.availability || {};
     const rt = resp.runtime || {};
     const lines = [];
     lines.push('副驾进程：' + (rt.running ? '运行中' : '未运行'));
+    if (rt.error) lines.push('上次启动：' + rt.error);
     if (av.hotkey) lines.push('全局热键：' + (av.hotkey.available ? '可用' : '不可用（' + (av.hotkey.reason || '') + '）'));
     if (av.ui) lines.push('悬浮窗：' + (av.ui.available ? '可用' : '不可用（' + (av.ui.reason || '') + '）'));
     $('copilot-availability').textContent = lines.join('；');
@@ -1493,7 +1493,6 @@ async function saveCopilotSettings() {
         clipboard_max_chars: Math.max(1, parseInt($('copilot-max-chars').value, 10) || 3000),
         refused_apps: $('copilot-refused-apps').value.split('\n').map(x => x.trim()).filter(Boolean),
         hotkey: $('copilot-hotkey').value.trim() || (isMac ? 'cmd+shift+space' : 'ctrl+shift+space'),
-        write_memory: $('copilot-write-memory').checked,
     };
     const resp = await api('PUT', '/api/trade/copilot/settings', body);
     if (resp && resp.settings) {

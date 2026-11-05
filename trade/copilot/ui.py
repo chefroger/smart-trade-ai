@@ -1,7 +1,7 @@
 """聊天副驾悬浮窗（pywebview，惰性加载）。
 
-铁律：界面上**没有外发入口**，也不提供任何外发/注入路径。按钮只有三个：
-复制草稿、换一种说法、打开 trade 深处理。
+铁律：界面上**没有外发入口**，也不提供任何外发/注入路径。已接线按钮只有：
+复制草稿（换说法 / 深处理尚未接入，不渲染）。
 
 焦点：macOS 上按 2026-11-04 spike 验证过的方式显示 —— pywebview 窗口
 `hidden=True`，不调用 `show()`（它会 activateIgnoringOtherApps），改为原生
@@ -18,10 +18,9 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+# 只暴露已接线动作。换说法 / 深处理尚未接入，不渲染空壳按钮。
 _BUTTONS = (
     ("copy", "复制草稿"),
-    ("regenerate", "换一种说法"),
-    ("deepen", "打开 trade 深处理"),
 )
 
 
@@ -182,10 +181,16 @@ class FloatingWindow:
 
     def __init__(self, **callbacks: Any) -> None:
         self._bridge = _Bridge(**callbacks)
-        self._bridge.on_close = self.hide
+        # 未显式传入 on_close 时默认只收起；service 可再绑 dismiss（取消在途）。
+        if self._bridge.on_close is None:
+            self._bridge.on_close = self.hide
         self._window = None
         self._webview = None
         self._visible = False
+
+    def set_dismiss_handler(self, fn: Callable[[], None]) -> None:
+        """把 × / 关闭接到编排层（取消在途任务后再收起）。"""
+        self._bridge.on_close = fn
 
     def is_visible(self) -> bool:
         return self._visible
