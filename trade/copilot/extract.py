@@ -42,7 +42,9 @@ from trade.copilot.types import (
 _log = logging.getLogger(__name__)
 
 # 对外文案不写死服务商/型号：配置会变，用户也可能换成别的视觉模型。
-NO_VISION_MESSAGE = "当前模型不支持看图，请在副驾设置中配置可用的视觉模型。"
+NO_VISION_MESSAGE = (
+    "当前模型不支持看图，请检查 Hermes 的视觉模型配置（README 推荐 DeepSeek Flash）。"
+)
 
 # 视觉抽取超时：截图 base64 较大，15s 在真实网络下偏紧（2026-11-05 实测超时）。
 # 默认 30s，可用 TRADE_COPILOT_EXTRACT_TIMEOUT 覆盖。

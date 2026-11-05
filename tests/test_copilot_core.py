@@ -101,7 +101,7 @@ class TestErrorClassification:
         )
         assert kind == "no_vision"
         assert "不支持看图" in reason
-        assert "配置可用的视觉模型" in reason
+        assert "Hermes 的视觉模型配置" in reason
 
     def test_protocol_kind(self):
         kind, reason = extract_mod._classify_error(
@@ -1283,7 +1283,7 @@ class TestPrivacyRouting:
             CapturedWindow(image_data_url="data:image/png;base64,xx")
         )
         assert result.error_kind == "no_vision"
-        assert "配置可用的视觉模型" in result.error
+        assert "Hermes 的视觉模型配置" in result.error
         assert calls == []
 
 
