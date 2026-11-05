@@ -419,15 +419,15 @@ class TestStripUnbackedNumbers:
         assert changed is False
         assert "$3.50" in draft
 
-    def test_unbacked_number_replaced_with_placeholder(self):
-        """库里没有的数字必须被剔除，换成（待确认）——不许带着假出处留在草稿里。"""
+    def test_unbacked_number_removed_without_placeholder(self):
+        """库里没有的数字直接删掉，不再生成（待确认）占位符。"""
         ctx = self._ctx()
         draft, changed = draft_mod.strip_unbacked_numbers(
             "Our price is $99.99 per piece, MOQ 100 pcs.", ctx
         )
         assert changed is True
         assert "$99.99" not in draft
-        assert "（待确认）" in draft
+        assert "（待确认）" not in draft
         # 有出处的 $3.50 仍在
         ctx2 = self._ctx()
         draft2, _ = draft_mod.strip_unbacked_numbers(
@@ -510,7 +510,7 @@ class TestNumberCoverage:
             f"Our offer: {form}.", ctx
         )
         assert changed is True, f"漏掉了数字形态：{form!r}"
-        assert "（待确认）" in cleaned
+        assert "（待确认）" not in cleaned
 
     def test_p0_whole_sentence_with_empty_library(self):
         """空产品库时，这整句必须被清理 —— 之前原样放行（changed=False）。"""
@@ -732,7 +732,7 @@ class TestDraftRobustness:
     def test_sources_dropped_when_their_number_is_stripped(self):
         kept = draft_mod._reconcile_sources(
             [SourceRef(label="报价单", value="$99.99"), SourceRef(label="客户档案", value="Acme")],
-            "Price （待确认）.",
+            "Price .",
         )
         assert kept == [SourceRef(label="客户档案", value="Acme")]
 
@@ -773,7 +773,7 @@ class TestGluedSpecNumbers:
         cleaned, changed = draft_mod.strip_unbacked_numbers(f"Spec {form}.", ctx)
         assert changed is True, form
         assert form not in cleaned
-        assert cleaned == "Spec （待确认）."
+        assert cleaned == "Spec."
 
     @pytest.mark.parametrize("form", _GLUED_SPECS)
     def test_backed_glued_spec_is_kept(self, form):
@@ -791,7 +791,7 @@ class TestGluedSpecNumbers:
         ctx = CustomerContext(new_contact=True)
         cleaned, changed = draft_mod.strip_unbacked_numbers("40W的灯", ctx)
         assert changed is True
-        assert cleaned == "（待确认）的灯"
+        assert cleaned == "的灯"
 
     def test_spec_unit_keeps_its_identity(self):
         """40W 与 40 pcs 不是同一个数字，不能互相背书。"""
@@ -1080,7 +1080,7 @@ class TestVolumeUnits:
     def test_no_space_form_is_visible_and_stripped(self):
         assert draft_mod.strip_unbacked_numbers(
             "Volume 5L", CustomerContext(new_contact=True)
-        ) == ("Volume （待确认）", True)
+        ) == ("Volume", True)
 
 
 # ── 2026-10-25 全面审计：中文量级 / 年份 / 短名匹配 ───────────────────────
@@ -1158,7 +1158,7 @@ class TestBareNumberForms:
         for draft in ("报价五千", "报价 1.5M", "总价十万"):
             cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
             assert changed is True, cleaned
-            assert "待确认" in cleaned, cleaned
+            assert "待确认" not in cleaned, cleaned
 
 
 class TestShortNameOverlap:

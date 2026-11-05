@@ -166,7 +166,7 @@ class DraftResult:
     sources: list[SourceRef] = field(default_factory=list)
     # 生成失败时的原因（给 UI 展示）
     error: str = ""
-    # 是否用了"（待确认）"占位（库里查不到该数字）
+    # 历史字段：2026-11-05 起不再生成"（待确认）"占位符，恒为 False。
     has_placeholder: bool = False
     # 短名命中疑似客户：需要 UI 先确认身份，尚未生成草稿（不是失败）
     needs_confirmation: bool = False
