@@ -3,10 +3,8 @@
 ## 走哪条模型通道
 
 用 **Hermes 的 `async_call_llm(task="vision", ...)`**，不裸直调 openai SDK。
-理由：视觉配置来自 `auxiliary.vision`（2026-11-05 起统一为主模型
-`deepseek / deepseek-flash`；旧名 `custom:deepseek-vl` 已废用且未在
-custom_providers 配置），裸直调要自己解析 base_url/key，还会踩到不可用的
-custom provider。
+理由：视觉配置来自 `auxiliary.vision`，裸直调要自己解析 base_url/key，
+还会踩到不可用的 custom provider。
 
 Hermes 这条通道（`tools/vision_tools.py` 的 vision_analyze 用的是同一条）：
     - 接受标准 OpenAI messages，图片以 `image_url` 的 base64 data URL 内联；
@@ -14,10 +12,10 @@ Hermes 这条通道（`tools/vision_tools.py` 的 vision_analyze 用的是同一
     - 注意：provider 不可用时 Hermes 会**内部回落到 auto chain** —— 所以
       Trade 必须先筛掉不可用的 custom provider。
 
-**抽取模型固定为 DeepSeek，且必须显式传入**（2026-11-04 Lau 定；
-2026-11-05 更正：视觉走主模型 deepseek-flash，不是已废用的 deepseek-vl）：
-优先主模型，其次 `auxiliary.vision`；解析不到就报错；
-**绝不把 provider/model 留空交给 Hermes auto chain**。
+**抽取模型使用用户配置的视觉模型，且必须显式传入**（2026-11-05 口径）：
+优先 `auxiliary.vision`，缺失时回退主模型；解析不到就报错；
+**绝不把 provider/model 留空交给 Hermes auto chain**，也不写死某家服务商/
+型号 —— 具体名字以后会变。
 
 ## 两类错误必须分开（任务书 §3）
 
@@ -43,9 +41,8 @@ from trade.copilot.types import (
 
 _log = logging.getLogger(__name__)
 
-# 副驾固定抽取模型（对外文案）；实际 provider/model 从 Hermes 配置解析。
-EXTRACT_MODEL_LABEL = "DeepSeek V4.1-Flash"
-NO_VISION_MESSAGE = f"当前模型不支持看图，请使用 {EXTRACT_MODEL_LABEL}"
+# 对外文案不写死服务商/型号：配置会变，用户也可能换成别的视觉模型。
+NO_VISION_MESSAGE = "当前模型不支持看图，请在副驾设置中配置可用的视觉模型。"
 
 # 视觉抽取超时：截图 base64 较大，15s 在真实网络下偏紧（2026-11-05 实测超时）。
 # 默认 30s，可用 TRADE_COPILOT_EXTRACT_TIMEOUT 覆盖。
@@ -80,13 +77,12 @@ def _custom_provider_configured(cfg: dict, provider: str) -> bool:
 
 
 def resolve_extract_model() -> tuple[str, str] | None:
-    """解析副驾抽取模型的 (provider, model)；只接受 DeepSeek。
+    """解析副驾抽取模型的 (provider, model)。
 
-    优先使用**主模型**（DeepSeek V4.1-Flash，已验证可接收图片），
-    其次才看 `auxiliary.vision`；后者若是未配置的 `custom:*` 则跳过。
-    这样避免把不可用的 custom provider 交给 Hermes —— 它会在内部偷偷
-    回落 auto chain，把图片发给我们没选的服务商。
-    解析不到或不是 DeepSeek → None，调用方据此报错。
+    2026-11-05 口径：**使用用户配置的视觉模型**，不写死服务商/型号。
+    优先 `auxiliary.vision`（真正的视觉配置），缺失时回退主模型；
+    若是未配置的 `custom:*` 则跳过（否则 Hermes 会内部回落 auto chain，
+    把图片发给用户没选的服务商）。解析不到 → None，调用方报错。
     """
     try:
         cfg = _load_hermes_config()
@@ -101,26 +97,23 @@ def resolve_extract_model() -> tuple[str, str] | None:
             return None
         if not _custom_provider_configured(cfg, provider):
             return None
-        if "deepseek" not in provider.lower() and "deepseek" not in model.lower():
-            return None
         return provider, model
+
+    aux = (cfg.get("auxiliary") or {}).get("vision") or {}
+    resolved = _accept(aux.get("provider", ""), aux.get("model", ""))
+    if resolved:
+        return resolved
 
     main = cfg.get("model")
     if isinstance(main, dict):
-        resolved = _accept(
+        return _accept(
             main.get("provider", ""),
             main.get("default") or main.get("model") or "",
         )
-        if resolved:
-            return resolved
-    elif isinstance(main, str) and ":" in main:
+    if isinstance(main, str) and ":" in main:
         provider, _, model = main.partition(":")
-        resolved = _accept(provider, model)
-        if resolved:
-            return resolved
-
-    aux = (cfg.get("auxiliary") or {}).get("vision") or {}
-    return _accept(aux.get("provider", ""), aux.get("model", ""))
+        return _accept(provider, model)
+    return None
 
 # 抽取结果的 JSON 契约（提示词与解析都以此为准）
 _EXTRACT_PROMPT = """\

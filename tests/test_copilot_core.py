@@ -101,7 +101,7 @@ class TestErrorClassification:
         )
         assert kind == "no_vision"
         assert "不支持看图" in reason
-        assert "DeepSeek V4.1-Flash" in reason
+        assert "配置可用的视觉模型" in reason
 
     def test_protocol_kind(self):
         kind, reason = extract_mod._classify_error(
@@ -420,14 +420,14 @@ class TestStripUnbackedNumbers:
         assert "$3.50" in draft
 
     def test_unbacked_number_replaced_with_empty_parens(self):
-        """库里没有的数字替换成"（）"，不写（待确认）、也不直接删掉。"""
+        """库里没有的数字替换成"?"，不写（待确认）、也不直接删掉。"""
         ctx = self._ctx()
         draft, changed = draft_mod.strip_unbacked_numbers(
             "Our price is $99.99 per piece, MOQ 100 pcs.", ctx
         )
         assert changed is True
         assert "$99.99" not in draft
-        assert "（）" in draft
+        assert "?" in draft
         assert "（待确认）" not in draft
         # 有出处的 $3.50 仍在
         ctx2 = self._ctx()
@@ -511,7 +511,7 @@ class TestNumberCoverage:
             f"Our offer: {form}.", ctx
         )
         assert changed is True, f"漏掉了数字形态：{form!r}"
-        assert "（）" in cleaned
+        assert "?" in cleaned
         assert "（待确认）" not in cleaned
 
     def test_p0_whole_sentence_with_empty_library(self):
@@ -775,7 +775,7 @@ class TestGluedSpecNumbers:
         cleaned, changed = draft_mod.strip_unbacked_numbers(f"Spec {form}.", ctx)
         assert changed is True, form
         assert form not in cleaned
-        assert cleaned == "Spec （）."
+        assert cleaned == "Spec ?."
 
     @pytest.mark.parametrize("form", _GLUED_SPECS)
     def test_backed_glued_spec_is_kept(self, form):
@@ -793,7 +793,7 @@ class TestGluedSpecNumbers:
         ctx = CustomerContext(new_contact=True)
         cleaned, changed = draft_mod.strip_unbacked_numbers("40W的灯", ctx)
         assert changed is True
-        assert cleaned == "（）的灯"
+        assert cleaned == "?的灯"
 
     def test_spec_unit_keeps_its_identity(self):
         """40W 与 40 pcs 不是同一个数字，不能互相背书。"""
@@ -1082,7 +1082,7 @@ class TestVolumeUnits:
     def test_no_space_form_is_visible_and_stripped(self):
         assert draft_mod.strip_unbacked_numbers(
             "Volume 5L", CustomerContext(new_contact=True)
-        ) == ("Volume （）", True)
+        ) == ("Volume ?", True)
 
 
 # ── 2026-10-25 全面审计：中文量级 / 年份 / 短名匹配 ───────────────────────
@@ -1160,7 +1160,7 @@ class TestBareNumberForms:
         for draft in ("报价五千", "报价 1.5M", "总价十万"):
             cleaned, changed = draft_mod.strip_unbacked_numbers(draft, ctx)
             assert changed is True, cleaned
-            assert "（）" in cleaned, cleaned
+            assert "?" in cleaned, cleaned
 
 
 class TestShortNameOverlap:
@@ -1201,12 +1201,14 @@ class TestPrivacyRouting:
             "custom_providers": [{"name": "deepseek-vl"}],
         }
 
-    def test_resolver_prefers_main_deepseek(self, monkeypatch):
-        """主模型 deepseek-flash 已验证可看图，优先于旧 custom:deepseek-vl。"""
+    def test_resolver_prefers_configured_vision_model(self, monkeypatch):
+        """使用用户配置的 auxiliary.vision，而不是写死某个主模型。"""
         cfg = self._cfg()
         cfg["model"] = {"provider": "deepseek", "default": "deepseek-flash"}
         monkeypatch.setattr(extract_mod, "_load_hermes_config", lambda: cfg)
-        assert extract_mod.resolve_extract_model() == ("deepseek", "deepseek-flash")
+        assert extract_mod.resolve_extract_model() == (
+            "custom:deepseek-vl", "deepseek-flash",
+        )
 
     def test_resolver_reads_auxiliary_when_main_missing(self, monkeypatch):
         monkeypatch.setattr(extract_mod, "_load_hermes_config", lambda: self._cfg())
@@ -1221,12 +1223,13 @@ class TestPrivacyRouting:
         monkeypatch.setattr(extract_mod, "_load_hermes_config", lambda: cfg)
         assert extract_mod.resolve_extract_model() == ("deepseek", "deepseek-flash")
 
-    def test_resolver_rejects_other_providers(self, monkeypatch):
+    def test_resolver_accepts_user_configured_provider(self, monkeypatch):
+        """用户配置了别的视觉模型也照用（隐私仍由显式传参保证）。"""
         monkeypatch.setattr(
             extract_mod, "_load_hermes_config",
             lambda: self._cfg("openai", "gpt-4o"),
         )
-        assert extract_mod.resolve_extract_model() is None
+        assert extract_mod.resolve_extract_model() == ("openai", "gpt-4o")
 
     def test_resolver_falls_back_to_deepseek_main(self, monkeypatch):
         monkeypatch.setattr(
@@ -1280,7 +1283,7 @@ class TestPrivacyRouting:
             CapturedWindow(image_data_url="data:image/png;base64,xx")
         )
         assert result.error_kind == "no_vision"
-        assert "DeepSeek V4.1-Flash" in result.error
+        assert "配置可用的视觉模型" in result.error
         assert calls == []
 
 

@@ -166,7 +166,7 @@ class DraftResult:
     sources: list[SourceRef] = field(default_factory=list)
     # 生成失败时的原因（给 UI 展示）
     error: str = ""
-    # 草稿是否含"（）"占位符（无出处数字被替换成空括号）
+    # 是否发生过无出处数字替换（草稿里对应位置是 "?" 占位）
     has_placeholder: bool = False
     # 短名命中疑似客户：需要 UI 先确认身份，尚未生成草稿（不是失败）
     needs_confirmation: bool = False
