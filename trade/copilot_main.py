@@ -13,6 +13,33 @@ import argparse
 import sys
 
 
+def _accessibility_trusted() -> bool | None:
+    """macOS 辅助功能权限（热键监听需要）；非 macOS 返回 None。"""
+    if sys.platform != "darwin":
+        return None
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+
+        return bool(AXIsProcessTrusted())
+    except Exception:
+        return None
+
+
+def _request_accessibility() -> None:
+    """弹一次系统辅助功能授权对话框（已授权/非 macOS 时无副作用）。"""
+    if sys.platform != "darwin":
+        return
+    try:
+        from ApplicationServices import (  # type: ignore
+            AXIsProcessTrustedWithOptions,
+            kAXTrustedCheckOptionPrompt,
+        )
+
+        AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+    except Exception:
+        pass
+
+
 def _first_active_company_id() -> int | None:
     try:
         from trade.company import list_all
@@ -26,6 +53,12 @@ def _first_active_company_id() -> int | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 输出重定向到 copilot.log 时默认块缓冲，崩溃/被杀会丢日志。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(prog="trade copilot", description="聊天副驾")
     parser.add_argument("--company-id", type=int, default=0, help="绑定公司 ID")
     args = parser.parse_args(argv)
@@ -65,6 +98,14 @@ def main(argv: list[str] | None = None) -> int:
     hotkey_ok, hotkey_reason = service.start_hotkey()
     tray_ok, tray_reason = service.start_tray()
     print(f"副驾已启动：公司 {company_id}")
+    if _accessibility_trusted() is False:
+        _request_accessibility()
+        print(
+            "  ⚠ macOS 辅助功能权限未授予：热键不会触发。请到 系统设置 → "
+            "隐私与安全性 → 辅助功能，勾选运行 Trade 的 Python（"
+            f"{sys.executable}），然后重启 Trade/副驾。",
+            flush=True,
+        )
     if not hotkey_ok:
         print(f"  热键不可用：{hotkey_reason}")
     if not tray_ok:

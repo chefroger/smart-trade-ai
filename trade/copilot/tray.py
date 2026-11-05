@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections.abc import Callable
 
@@ -16,6 +17,12 @@ _log = logging.getLogger(__name__)
 
 
 def available() -> tuple[bool, str]:
+    if sys.platform == "darwin":
+        # 2026-11-05 实测：pystray 的 macOS 后端必须在主线程初始化 AppKit，
+        # 而悬浮窗（pywebview）同样占用主线程；在后台线程跑托盘会 SIGILL
+        # （NSUpdateCycleInitialize() is called off the main thread）。
+        # 先不启用 macOS 托盘，用设置页控制；后续用原生 NSStatusBar 实现。
+        return False, "macOS 暂不启用 pystray 托盘（需主线程，与悬浮窗冲突）；请用设置页控制"
     try:
         import pystray  # noqa: F401
     except Exception as exc:
