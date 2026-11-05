@@ -85,13 +85,14 @@ class TestHotkey:
 
 
 class TestUiHtml:
-    def test_has_exactly_three_buttons_and_no_send(self):
+    def test_has_three_actions_plus_close_and_no_send(self):
         html = ui_mod.render_panel_html(draft="hello")
         assert "复制草稿" in html
         assert "换一种说法" in html
         assert "打开 trade 深处理" in html
+        assert "data-action='close'" in html
         assert "发送" not in html
-        assert html.count("<button") == 3
+        assert html.count("<button") == 4
 
     def test_escapes_draft(self):
         html = ui_mod.render_panel_html(draft="<script>alert(1)</script>")
@@ -373,3 +374,10 @@ class TestCopyButton:
         result = ui_mod._Bridge().action("regenerate", "hello")
         assert result["ok"] is False
         assert "尚未接入" in result["error"]
+
+    def test_close_calls_callback(self):
+        closed = []
+        bridge = ui_mod._Bridge(on_close=lambda: closed.append(True))
+        result = bridge.action("close")
+        assert result["ok"] is True
+        assert closed == [True]
