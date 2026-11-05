@@ -187,9 +187,24 @@ def _ensure_copilot_running(company_id: int, *, restart: bool = False) -> tuple[
                 pass
 
 
+def _pid_is_copilot(pid: int) -> bool:
+    """PID 是否确实是副驾进程（防 PID 复用/文件被改时误杀）。"""
+    try:
+        import psutil
+
+        cmdline = psutil.Process(pid).cmdline()
+    except Exception:
+        return False
+    return "copilot_main" in " ".join(cmdline).lower()
+
+
 def _stop_copilot() -> None:
     pid = _read_pid()
     if pid and _pid_alive(pid):
+        if not _pid_is_copilot(pid):
+            # 宁可留下一个孤儿进程，也不误杀无关进程。
+            _clear_pid_file()
+            return
         try:
             import psutil
 
@@ -199,6 +214,10 @@ def _stop_copilot() -> None:
                 proc.wait(timeout=_STOP_WAIT_SECONDS)
             except Exception:
                 proc.kill()
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
         except Exception:
             try:
                 os.kill(pid, 15)
@@ -258,18 +277,26 @@ def update_copilot_settings(
     开启状态下每次保存都重启副驾，保证热键/公司/剪贴板改动生效。
     """
     current = load_settings()
+    # 只有这些字段变化才需要重启副驾进程；纯文案/同意版本不影响运行。
+    before = {
+        key: getattr(current, key)
+        for key in ("hotkey", "use_clipboard", "clipboard_max_chars", "refused_apps")
+    }
     data = body.model_dump(exclude_none=True)
     for key, value in data.items():
         setattr(current, key, value)
     current = current.sanitized()
+    # 记忆回写尚未实现：UI 已隐藏该开关，后端也强制关闭，避免"没开过却已开启"。
+    current.write_memory = False
     if data.get("enabled") and not current.consent_ok():
         raise HTTPException(status_code=400, detail="请先阅读并同意副驾隐私说明。")
     if not save_settings(current):
         raise HTTPException(status_code=500, detail="保存副驾设置失败。")
 
+    changed = any(getattr(current, key) != value for key, value in before.items())
     runtime: dict = {"running": False, "pid": None}
     if current.enabled:
-        ok, reason = _ensure_copilot_running(cid, restart=True)
+        ok, reason = _ensure_copilot_running(cid, restart=changed)
         runtime = {"running": ok, "pid": _read_pid() or None}
         if not ok:
             runtime["error"] = reason

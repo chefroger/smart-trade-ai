@@ -185,8 +185,13 @@ class CopilotService:
                     pass
 
     def dismiss(self) -> None:
-        """关闭弹窗并取消在途任务（热键再按 / × 按钮共用）。"""
-        self._run_seq += 1
+        """关闭弹窗并作废在途结果（热键再按 / × 按钮共用）。
+
+        注意：作废的是"结果展示"，已经在跑的模型调用/线程不会真正中断，
+        仍可能跑完（并消耗 token），只是不会再弹窗。
+        """
+        with self._lock:
+            self._run_seq += 1
         self._hide_ui()
 
     def _trigger_from_hotkey(self) -> None:
@@ -206,8 +211,9 @@ class CopilotService:
             self.dismiss()
             return CopilotEvent(ok=True, stage="closed")
 
-        self._run_seq += 1
-        run_id = self._run_seq
+        with self._lock:
+            self._run_seq += 1
+            run_id = self._run_seq
         self._status("正在读取…")
         captured = await asyncio.to_thread(self._capture)
         if not self._active(run_id):
@@ -340,7 +346,8 @@ class CopilotService:
 
     def _active(self, run_id: int) -> bool:
         """本轮是否仍是当前轮（按键关闭会递增 _run_seq，作废旧轮）。"""
-        return run_id == self._run_seq
+        with self._lock:
+            return run_id == self._run_seq
 
     def _ui_visible(self) -> bool:
         if self.ui is None:

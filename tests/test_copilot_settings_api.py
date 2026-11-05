@@ -18,6 +18,7 @@ from trade.copilot.settings import load_settings
 ROOT = Path(__file__).resolve().parent.parent
 # 真实实现留底：个别用例要测 spawn settle，需临时撤掉下方成功桩。
 _REAL_ENSURE_COPILOT = api_mod._ensure_copilot_running
+_REAL_STOP_COPILOT = api_mod._stop_copilot
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +73,7 @@ class TestCopilotSettingsApi:
             CopilotSettingsPayload(enabled=True, consent_version=1), cid=7
         )
         update_copilot_settings(CopilotSettingsPayload(enabled=False), cid=7)
-        assert calls == [("start", 7, True), ("stop",)]
+        assert calls == [("start", 7, False), ("stop",)]
 
     def test_resave_while_enabled_restarts_process(self, monkeypatch):
         """开启状态下再保存必须 restart，否则热键/公司改动不生效。"""
@@ -91,7 +92,48 @@ class TestCopilotSettingsApi:
         update_copilot_settings(
             CopilotSettingsPayload(hotkey="ctrl+shift+a"), cid=3
         )
-        assert calls == [(3, True), (3, True)]
+        # 首次开启只需启动；第二次热键变了才重启。
+        assert calls == [(3, False), (3, True)]
+
+    def test_irrelevant_field_does_not_restart(self, monkeypatch):
+        """纯文案/未接线字段变化不应重启副驾（正在生成时会被打断）。"""
+        import trade.api.copilot as api_mod
+
+        calls = []
+
+        def _ensure(cid, *, restart=False):
+            calls.append(restart)
+            return True, ""
+
+        monkeypatch.setattr(api_mod, "_ensure_copilot_running", _ensure)
+        update_copilot_settings(
+            CopilotSettingsPayload(enabled=True, consent_version=1), cid=1
+        )
+        update_copilot_settings(
+            CopilotSettingsPayload(write_memory=True), cid=1
+        )
+        assert calls == [False, False]
+
+    def test_write_memory_is_forced_off(self):
+        payload = update_copilot_settings(
+            CopilotSettingsPayload(consent_version=1, write_memory=True), cid=1
+        )
+        assert payload["settings"]["write_memory"] is False
+
+    def test_stop_skips_foreign_pid(self, monkeypatch, tmp_path):
+        """PID 文件指向非副驾进程时不得误杀。"""
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        monkeypatch.setattr(api_mod, "_stop_copilot", _REAL_STOP_COPILOT)
+        api_mod._pid_path().parent.mkdir(parents=True, exist_ok=True)
+        api_mod._pid_path().write_text("4242", encoding="utf-8")
+        monkeypatch.setattr(api_mod, "_pid_alive", lambda pid: True)
+        monkeypatch.setattr(api_mod, "_pid_is_copilot", lambda pid: False)
+        killed = []
+        monkeypatch.setattr(api_mod.os, "kill", lambda pid, sig: killed.append(pid))
+
+        api_mod._stop_copilot()
+        assert killed == []
+        assert not api_mod._pid_path().exists()
 
     def test_save_without_enabling_does_not_spawn(self, monkeypatch):
         import trade.api.copilot as api_mod
@@ -131,6 +173,7 @@ class TestCopilotSettingsUi:
         modal = self._modal()
         assert "视觉模型" in modal
         assert "对话模型" in modal
+        assert "剪贴板文本" in modal
         assert "只发给 DeepSeek" not in modal
 
     def test_write_memory_checkbox_hidden_until_wired(self):
@@ -162,11 +205,14 @@ class TestCopilotMainGate:
         assert '"copilot"' in src
         assert "copilot_main" in src
 
-    def test_main_sets_trade_host_and_yolo(self):
+    def test_main_sets_trade_host_and_yolo_before_hermes(self):
         src = (ROOT / "trade" / "copilot_main.py").read_text(encoding="utf-8")
         assert 'TRADE_HOST' in src
         assert 'HERMES_YOLO_MODE' in src
         assert "set_dismiss_handler" in src
+        assert src.index('TRADE_HOST') < src.index(
+            "from trade.bootstrap import prepare_hermes_import_paths"
+        )
 
 
 class TestCopilotSpawnSettle:

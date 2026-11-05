@@ -189,7 +189,7 @@ class FloatingWindow:
         self._visible = False
 
     def set_dismiss_handler(self, fn: Callable[[], None]) -> None:
-        """把 × / 关闭接到编排层（取消在途任务后再收起）。"""
+        """把 × / 关闭接到编排层（作废在途结果后再收起）。"""
         self._bridge.on_close = fn
 
     def is_visible(self) -> bool:
