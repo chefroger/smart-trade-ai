@@ -1447,7 +1447,7 @@ function hideModal(id) { $(id).classList.add('hidden'); }
 
 // ── 聊天副驾设置（默认关闭；未同意隐私说明不能开启）────────────────────────
 async function showCopilotSettings() {
-    const resp = await api('GET', '/copilot/settings');
+    const resp = await api('GET', '/api/trade/copilot/settings');
     if (!resp || !resp.settings) return;
     const s = resp.settings;
     const required = resp.required_consent_version || 1;
@@ -1493,7 +1493,7 @@ async function saveCopilotSettings() {
         hotkey: $('copilot-hotkey').value.trim() || (isMac ? 'cmd+shift+space' : 'ctrl+shift+space'),
         write_memory: $('copilot-write-memory').checked,
     };
-    const resp = await api('PUT', '/copilot/settings', body);
+    const resp = await api('PUT', '/api/trade/copilot/settings', body);
     if (resp && resp.settings) {
         hideModal('copilot-settings-modal');
         toast('副驾设置已保存（默认仍不会读取屏幕，接入启动流程后才生效）');

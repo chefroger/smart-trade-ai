@@ -80,3 +80,9 @@ class TestCopilotSettingsUi:
         assert "function showCopilotSettings()" in js
         assert "function saveCopilotSettings()" in js
         assert "function onCopilotConsentChange()" in js
+
+    def test_api_paths_use_trade_prefix(self):
+        """api() 直接用传入路径；漏掉 /api/trade 会 404（2026-11-05 实测）。"""
+        js = (ROOT / "static" / "trade_chat.js").read_text(encoding="utf-8")
+        assert "/api/trade/copilot/settings" in js
+        assert "'/copilot/settings'" not in js
