@@ -342,3 +342,34 @@ class TestHotkeyToggle:
         first = await task
         assert first.stage == "cancelled"
         assert hidden == [True]
+
+
+class TestCopyButton:
+    def test_copy_disabled_without_draft(self):
+        html = ui_mod.render_panel_html(draft="")
+        assert 'data-action="copy" disabled' in html
+        assert "action-status" in html
+
+    def test_copy_returns_clear_error_for_empty_text(self):
+        bridge = ui_mod._Bridge()
+        result = bridge.action("copy", "   ")
+        assert result["ok"] is False
+        assert "没有草稿" in result["error"]
+
+    def test_copy_writes_clipboard_when_clicked(self, monkeypatch):
+        import sys
+        from types import ModuleType
+
+        copied = []
+        fake = ModuleType("pyperclip")
+        fake.copy = lambda text: copied.append(text)
+        monkeypatch.setitem(sys.modules, "pyperclip", fake)
+
+        result = ui_mod._Bridge().action("copy", "hello")
+        assert result["ok"] is True
+        assert copied == ["hello"]
+
+    def test_unwired_button_reports_not_connected(self):
+        result = ui_mod._Bridge().action("regenerate", "hello")
+        assert result["ok"] is False
+        assert "尚未接入" in result["error"]

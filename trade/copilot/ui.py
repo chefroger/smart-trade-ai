@@ -54,7 +54,9 @@ def render_panel_html(
 ) -> str:
     """渲染悬浮窗 HTML（纯函数，便于测试"无外发入口"与转义）。"""
     button_html = "".join(
-        f'<button data-action="{action}">{html.escape(label)}</button>'
+        f'<button data-action="{action}"'
+        f'{" disabled" if action == "copy" and not draft else ""}>'
+        f"{html.escape(label)}</button>"
         for action, label in _BUTTONS
     )
     parts = [
@@ -85,11 +87,17 @@ def render_panel_html(
     if sources:
         parts.append(f"<ul class='muted'>{_source_lines(sources)}</ul>")
     parts.append(f"<div class='row'>{button_html}</div>")
+    parts.append("<div id='action-status' class='muted'></div>")
     parts.append(
         "<script>"
         "document.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{"
         "const a=b.dataset.action;const t=document.getElementById('draft').value;"
-        "if(window.pywebview&&window.pywebview.api){window.pywebview.api.action(a,t);}"
+        "const s=document.getElementById('action-status');"
+        "if(!(window.pywebview&&window.pywebview.api)){s.textContent='界面桥未就绪，请重开弹窗';return;}"
+        "Promise.resolve(window.pywebview.api.action(a,t)).then(r=>{"
+        "if(!r){return;} if(r.ok){s.textContent=r.message||'已完成';}"
+        "else{s.textContent='失败：'+(r.error||'未知原因');}"
+        "}).catch(e=>{s.textContent='失败：'+e;});"
         "}));"
         "</script></body></html>"
     )
@@ -110,31 +118,40 @@ class _Bridge:
         self.on_regenerate = on_regenerate
         self.on_deepen = on_deepen
 
-    def action(self, action: str, text: str = "") -> None:
+    def action(self, action: str, text: str = "") -> dict:
+        """执行按钮动作；返回给 JS 展示的状态（ok/message/error）。"""
         if action == "copy":
-            self._copy(text)
-        elif action == "regenerate":
-            self._call(self.on_regenerate, text)
-        elif action == "deepen":
-            self._call(self.on_deepen, text)
+            return self._copy(text)
+        if action == "regenerate":
+            return self._call(self.on_regenerate, text, "已重新生成")
+        if action == "deepen":
+            return self._call(self.on_deepen, text, "已打开 trade")
+        return {"ok": False, "error": "未知操作"}
 
-    def _copy(self, text: str) -> None:
+    def _copy(self, text: str) -> dict:
         # 只有用户点"复制草稿"才会写剪贴板（任务书 §2 铁律 5）。
+        if not (text or "").strip():
+            return {"ok": False, "error": "没有草稿可复制"}
         try:
             import pyperclip
 
-            pyperclip.copy(text or "")
+            pyperclip.copy(text)
+            return {"ok": True, "message": "已复制到剪贴板"}
         except Exception as exc:
             _log.warning("复制草稿失败：%s", exc)
+            return {"ok": False, "error": f"复制失败：{exc}"}
 
-    @staticmethod
-    def _call(fn: Callable[[str], None] | None, text: str) -> None:
+    def _call(
+        self, fn: Callable[[str], None] | None, text: str, message: str
+    ) -> dict:
         if fn is None:
-            return
+            return {"ok": False, "error": "该功能尚未接入"}
         try:
             fn(text)
-        except Exception:
+        except Exception as exc:
             _log.exception("副驾按钮回调失败")
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "message": message}
 
 
 class FloatingWindow:
