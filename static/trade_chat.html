@@ -111,7 +111,8 @@
         <button id="skills-update-btn" onclick="updateSkills(event)" data-tip="更新技能" hidden>📚</button>
         <button id="upgrade-help-btn" onclick="showUpgradeHelp()" data-tip="升级说明">ℹ️</button>
         <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导">🎓</button>
-        <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾">⚙️</button>
+        <!-- 聊天副驾设置入口暂时隐藏（2026-11-06）；弹窗与接口保留，改回可见只需删掉 hidden。 -->
+        <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾" hidden>⚙️</button>
     </div>
 
 </aside>
