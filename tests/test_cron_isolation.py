@@ -116,6 +116,26 @@ class TestOutputByJobId:
     def test_missing_job_dir_returns_none(self, env):
         assert env["cron"]._find_cron_output("X", "2026-10-26", job_id="nope") is None
 
+    def test_wrong_date_returns_none(self, env):
+        today = "2026-10-26"
+        d = env["output_dir"] / "job-a"
+        d.mkdir()
+        (d / "2020-01-01_09-00-00.md").write_text("A 输出", encoding="utf-8")
+
+        assert env["cron"]._find_cron_output("A 的任务", today, job_id="job-a") is None
+
+    def test_decoy_without_job_id_returns_none(self, env):
+        """没有 job_id（内置任务）时不许按正文子串猜完成。"""
+        today = "2026-10-26"
+        d = env["output_dir"] / "job-b"
+        d.mkdir()
+        (d / f"{today}_09-00-00.md").write_text(
+            "B 输出提到 A 的任务", encoding="utf-8"
+        )
+
+        assert env["cron"]._find_cron_output("A 的任务", today) is None
+        assert env["cron"]._find_cron_output("A 的任务", today, job_id="job-a") is None
+
 
 class TestHooks:
     def test_create_binds_job_to_current_company(self, env, monkeypatch):

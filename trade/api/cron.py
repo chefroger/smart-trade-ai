@@ -352,32 +352,23 @@ def _job_visible(job_id: str, company_id: int | None) -> bool:
 
 
 def _find_cron_output(task_name: str, today: str, job_id: str = "") -> str | None:
-    """按 job_id 精确读取今天的输出；无 job_id（内置任务）才回退到按名称扫描。
+    """只读任务自己的产出：cron/output/<job_id>/<YYYY-MM-DD_HH-MM-SS>.md。
 
-    旧实现按"任务名出现在文件内容里"匹配 —— 别家任务的输出提到这个名字就会
-    串回来（审计 P1-17）。
+    任务身份用 job 目录（job_id）精确判定，日期取文件名前 10 位并精确相等。
+    旧实现按「任务名出现在正文里」匹配 —— 别家任务的输出提到这个名字就会
+    串回来（审计 P1-17）。没有 job_id 时不猜：宁可显示待执行，也不做正文
+    子串匹配。
     """
-    if not _CRON_OUTPUT.is_dir():
+    if not job_id or not _CRON_OUTPUT.is_dir():
         return None
-    if job_id:
-        job_dir = _CRON_OUTPUT / job_id
-        if not job_dir.is_dir():
-            return None
-        for output_file in sorted(job_dir.glob("*.md"), reverse=True):
-            if today in output_file.stem[:10]:
-                try:
-                    return output_file.read_text(encoding="utf-8")
-                except Exception:
-                    continue
+    job_dir = _CRON_OUTPUT / job_id
+    if not job_dir.is_dir():
         return None
-    for job_dir in sorted(_CRON_OUTPUT.iterdir(), reverse=True):
-        if not job_dir.is_dir():
+    for output_file in sorted(job_dir.glob("*.md"), reverse=True):
+        if output_file.stem[:10] != today:
             continue
-        for output_file in sorted(job_dir.glob("*.md"), reverse=True):
-            try:
-                content = output_file.read_text(encoding="utf-8")
-                if task_name in content and today in output_file.stem[:10]:
-                    return content
-            except Exception:
-                continue
+        try:
+            return output_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
     return None
