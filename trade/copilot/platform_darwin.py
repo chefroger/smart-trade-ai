@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 
+from trade.copilot.host import own_window_pids
 from trade.copilot.platform_base import WindowCapture
 
 _log = logging.getLogger(__name__)
@@ -199,7 +200,14 @@ def capture_active_window() -> WindowCapture:
         return WindowCapture(
             error="没有找到可读取的前台窗口。", error_kind="no_window",
         )
-    window_id, owner, title = window_info
+    window_id, owner, title, owner_pid = window_info
+    # 前台是 Trade 自己（主窗口/设置页）→ 不读，也不退回去读后面的窗口。
+    if owner_pid in own_window_pids():
+        return WindowCapture(
+            app_name=owner, window_title=title,
+            error="当前前台窗口是 Trade，请先切到聊天窗口再按热键。",
+            error_kind="host_frontmost",
+        )
 
     image = quartz.CGWindowListCreateImage(
         quartz.CGRectNull,
@@ -226,11 +234,14 @@ def capture_active_window() -> WindowCapture:
 
 # ── 内部实现 ────────────────────────────────────────────────────────────────
 
-def _frontmost_window(quartz) -> tuple[int, str, str] | None:
+def _frontmost_window(quartz) -> tuple[int, str, str, int] | None:
     """窗口列表是前到后排序的：取第一个正常的应用窗口。
 
     排除：非 0 层（菜单栏/Dock/桌面）、自己的进程（副驾悬浮窗）、系统进程、
     过小的窗口（图标/工具提示）。bounds 的键在 PyObjC 里是字符串。
+
+    Trade 主进程的窗口**不在这里排除**：调用方要区分"前台是 Trade"（提示用户
+    切窗口）和"没有窗口可读"，所以连同 owner_pid 一起返回。
     """
     try:
         windows = quartz.CGWindowListCopyWindowInfo(
@@ -263,7 +274,12 @@ def _frontmost_window(quartz) -> tuple[int, str, str] | None:
             if window_id is None:
                 continue
             title = str(info.get(quartz.kCGWindowName) or "")
-            return int(window_id), owner, title
+            return (
+                int(window_id),
+                owner,
+                title,
+                int(info.get(quartz.kCGWindowOwnerPID, 0) or 0),
+            )
         except Exception:
             continue
     return None

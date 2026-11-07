@@ -136,11 +136,15 @@ def _ensure_copilot_running(company_id: int, *, restart: bool = False) -> tuple[
         _runtime_dir().mkdir(parents=True, exist_ok=True)
         # 故意不 with-close：子进程继承句柄后父进程关掉会让 Windows 丢日志。
         log_handle = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
+        child_env = os.environ.copy()
+        # 告诉副驾"哪个进程是 Trade 自己"，按热键时前台是 Trade 就提示切窗口，
+        # 而不是把 Trade 的界面文字当成聊天内容去识别。
+        child_env["TRADE_HOST_PID"] = str(os.getpid())
         kwargs: dict = {
             "stdin": subprocess.DEVNULL,
             "stdout": log_handle,
             "stderr": log_handle,
-            "env": os.environ.copy(),
+            "env": child_env,
         }
         if os.name == "nt":
             kwargs["creationflags"] = _WINDOWS_NEW_PROCESS_GROUP

@@ -135,6 +135,16 @@ def test_invisible_window(monkeypatch):
     assert result.error_kind == "no_window"
 
 
+def test_trade_own_window_is_rejected(monkeypatch):
+    """前台是 Trade 自己时不能把 Trade 界面当聊天内容读，也不回退读后面的窗口。"""
+    monkeypatch.setenv("TRADE_HOST_PID", "4242")
+    _patch_dlls(monkeypatch)
+    result = pw.capture_active_window()
+    assert not result.ok
+    assert result.error_kind == "host_frontmost"
+    assert "Trade" in result.error
+
+
 # ── 截图路径 ────────────────────────────────────────────────────────────────
 
 

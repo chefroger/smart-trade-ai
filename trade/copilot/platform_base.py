@@ -28,6 +28,7 @@ class WindowCapture:
     # 失败原因（成功时为空）
     error: str = ""
     # "permission" / "no_window" / "minimized" / "capture_failed"
+    # / "host_frontmost"（前台是 Trade 自己，提示用户切到聊天窗口）
     error_kind: str = ""
 
     @property

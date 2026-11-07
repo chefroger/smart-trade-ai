@@ -408,3 +408,39 @@ def test_ensure_permission_stops_when_granted(monkeypatch):
 
     assert platform_darwin.ensure_screen_recording_permission() is True
     assert calls == {"request": 1, "open": 0}
+
+
+# ── Trade 自身窗口的 PID 判定（前台是 Trade 时不读取）────────────────────────
+
+
+class TestHostPids:
+    def test_includes_own_pid_and_env_override(self, monkeypatch):
+        import os
+
+        from trade.copilot import host
+
+        monkeypatch.setenv("TRADE_HOST_PID", "4321")
+        pids = host.own_window_pids()
+        assert 4321 in pids
+        assert os.getpid() in pids
+
+    def test_reads_trade_pid_file(self, tmp_path, monkeypatch):
+        from trade.copilot import host
+
+        monkeypatch.delenv("TRADE_HOST_PID", raising=False)
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "trade.pid").write_text("2468", encoding="utf-8")
+        assert 2468 in host.own_window_pids()
+
+    def test_bad_values_are_ignored(self, tmp_path, monkeypatch):
+        import os
+
+        from trade.copilot import host
+
+        monkeypatch.setenv("TRADE_HOST_PID", "not-a-pid")
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "trade.pid").write_text("oops", encoding="utf-8")
+        # 读不到就只排除副驾自己，不让读取失败
+        assert host.own_window_pids() == {os.getpid()}

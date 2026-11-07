@@ -45,6 +45,7 @@ class CapturedWindow:
     error: str = ""
     # "permission"（macOS 屏幕录制未授权）/ "missing_dependency" / "unsupported_platform"
     # / "capture_failed" / "no_window" / "minimized" / "refused"
+    # / "host_frontmost"（前台是 Trade 自己）
     error_kind: str = ""
     # 非致命提示（如"剪贴板内容过长，已改为读取屏幕"），UI 原样展示
     notice: str = ""

@@ -18,6 +18,7 @@ import ntpath
 import sys
 from ctypes import wintypes
 
+from trade.copilot.host import own_window_pids
 from trade.copilot.platform_base import WindowCapture
 
 _log = logging.getLogger(__name__)
@@ -185,6 +186,14 @@ def capture_active_window() -> WindowCapture:
     title = _window_title(user32, hwnd)
     app_name = _process_name(user32, kernel32, hwnd)
 
+    # 前台是 Trade 自己（主窗口/设置页）→ 不读，也不退回去读后面的窗口。
+    if _window_pid(user32, hwnd) in own_window_pids():
+        return WindowCapture(
+            app_name=app_name, window_title=title,
+            error="当前前台窗口是 Trade，请先切到聊天窗口再按热键。",
+            error_kind="host_frontmost",
+        )
+
     if not user32.IsWindowVisible(hwnd):
         return WindowCapture(
             app_name=app_name, window_title=title,
@@ -280,6 +289,16 @@ def _window_title(user32, hwnd) -> str:
     buffer = ctypes.create_unicode_buffer(length + 1)
     user32.GetWindowTextW(hwnd, buffer, length + 1)
     return buffer.value
+
+
+def _window_pid(user32, hwnd) -> int:
+    """取窗口所属进程 PID（拿不到返回 0）。"""
+    pid = wintypes.DWORD()
+    try:
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    except Exception:
+        return 0
+    return int(pid.value or 0)
 
 
 def _process_name(user32, kernel32, hwnd) -> str:
