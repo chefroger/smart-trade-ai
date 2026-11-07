@@ -1,0 +1,228 @@
+"""文档解析与提取测试（模型调用全部 mock，不联网、不读真实数据）。"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from trade import doc_cache, doc_extract
+
+# 提取器版本 → 提示词/分类规则指纹。
+# 改提示词或分类规则：必须递增 doc_cache.EXTRACTOR_VERSION 并补一条新映射；
+# 只改文本不改版本会直接失败（旧版本号对不上新指纹）。
+TRADE_EXTRACTOR_FINGERPRINTS = {
+    "1": "550a2009fccfeca8cb71985a5a9edc16ee63b957b8dfba826b6cf4744906cf9f",
+}
+
+
+def _patch_model(monkeypatch, payload: str, calls: list | None = None):
+    async def fake(messages, *, provider, model, timeout):
+        if calls is not None:
+            calls.append((provider, model, timeout))
+        return payload
+
+    monkeypatch.setattr(doc_extract, "_call_model", fake)
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("provider", "model", "provider:model")
+    )
+
+
+@pytest.fixture
+def txt_file(tmp_path):
+    path = tmp_path / "quote.txt"
+    path.write_text("报价单\n产品A：USD 3.50", encoding="utf-8")
+    return path
+
+
+class TestParsing:
+    def test_text(self, txt_file):
+        parsed = doc_extract.parse_document(txt_file)
+        assert "USD 3.50" in parsed.text
+        assert parsed.unsupported is False
+
+    def test_xlsx_five_tuple_and_subtotal(self, tmp_path):
+        import openpyxl
+
+        path = tmp_path / "price.xlsx"
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "报价"
+        sheet.append(["产品", "价格", "MOQ"])
+        sheet.append(["A", "USD 3.50", 100])
+        sheet.append(["合计", "USD 7.00", 200])
+        workbook.save(path)
+
+        parsed = doc_extract.parse_document(path)
+        assert parsed.truncated is False
+        assert "报价" in parsed.text
+        first = parsed.facts[0]
+        assert first["sheet"] == "报价"
+        assert first["row"] == "A"
+        assert first["column"] == "价格"
+        assert first["value"] == "3.50"
+        assert first["unit"] == "USD"
+        assert first["location"] == {"sheet": "报价", "row": 2, "column": 2}
+        assert first["subtotal"] is False
+        assert any(f["subtotal"] for f in parsed.facts if f["row"] == "合计")
+
+    def test_docx_table(self, tmp_path):
+        import docx
+
+        path = tmp_path / "report.docx"
+        document = docx.Document()
+        document.add_paragraph("合格率报告")
+        table = document.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "指标"
+        table.cell(0, 1).text = "数值"
+        table.cell(1, 0).text = "合格率"
+        table.cell(1, 1).text = "98%"
+        document.save(path)
+
+        parsed = doc_extract.parse_document(path)
+        assert "合格率报告" in parsed.text
+        fact = next(f for f in parsed.facts if f["row"] == "合格率")
+        assert fact["value"] == "98"
+        assert fact["unit"] == "%"
+        assert fact["sheet"] == "表格 1"
+
+    def test_pdf_pages_and_scanned(self, tmp_path):
+        import fitz
+
+        text_path = tmp_path / "doc.pdf"
+        document = fitz.open()
+        page = document.new_page()
+        page.insert_text((72, 72), "hello pdf")
+        document.save(text_path)
+        document.close()
+
+        parsed = doc_extract.parse_document(text_path)
+        assert "[第 1 页]" in parsed.text
+        assert "hello pdf" in parsed.text
+
+        scanned_path = tmp_path / "scan.pdf"
+        scanned = fitz.open()
+        scanned.new_page()
+        scanned.save(scanned_path)
+        scanned.close()
+        assert doc_extract.parse_document(scanned_path).needs_ocr is True
+
+    def test_unsupported_type(self, tmp_path):
+        path = tmp_path / "raw.bin"
+        path.write_bytes(b"\x00\x01")
+        assert doc_extract.parse_document(path).unsupported is True
+
+    def test_value_unit_split(self):
+        assert doc_extract._split_value_unit("USD 3.50") == ("3.50", "USD")
+        assert doc_extract._split_value_unit("3.50 USD") == ("3.50", "USD")
+        assert doc_extract._split_value_unit("12%") == ("12", "%")
+        assert doc_extract._split_value_unit("abc") == ("abc", "")
+
+
+class TestExtraction:
+    async def test_money_extraction(self, monkeypatch, txt_file):
+        payload = json.dumps({
+            "doc_kind": "money",
+            "kind_reason": "含价格",
+            "summary": "报价单",
+            "facts": [{"name": "价格", "value": "3.50", "unit": "USD",
+                       "location": {"page": 1}}],
+        }, ensure_ascii=False)
+        calls = []
+        _patch_model(monkeypatch, payload, calls)
+
+        result = await doc_extract.extract_document(txt_file)
+
+        assert result.status == doc_cache.STATUS_COMPLETE
+        assert result.doc_kind == doc_cache.KIND_MONEY
+        assert result.summary == "报价单"
+        assert result.facts[0]["value"] == "3.50"
+        assert calls and calls[0][:2] == ("provider", "model")
+
+    async def test_unknown_kind_is_unclassified(self, monkeypatch, txt_file):
+        _patch_model(monkeypatch, json.dumps({"doc_kind": "unknown", "summary": "x"}))
+        result = await doc_extract.extract_document(txt_file)
+        assert result.status == doc_cache.STATUS_UNCLASSIFIED
+        assert result.doc_kind == doc_cache.KIND_UNKNOWN
+
+    async def test_invalid_kind_falls_back_to_unknown(self, monkeypatch, txt_file):
+        _patch_model(monkeypatch, json.dumps({"doc_kind": "weird", "summary": "x"}))
+        result = await doc_extract.extract_document(txt_file)
+        assert result.doc_kind == doc_cache.KIND_UNKNOWN
+        assert result.status == doc_cache.STATUS_UNCLASSIFIED
+
+    async def test_invalid_json_is_failed(self, monkeypatch, txt_file):
+        _patch_model(monkeypatch, "not json at all")
+        result = await doc_extract.extract_document(txt_file)
+        assert result.status == doc_cache.STATUS_FAILED
+        assert result.error_code == "parse_error"
+
+    async def test_model_error_is_failed(self, monkeypatch, txt_file):
+        async def boom(*_args, **_kwargs):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr(doc_extract, "_call_model", boom)
+        monkeypatch.setattr(
+            doc_extract, "resolve_extraction_model",
+            lambda: ("provider", "model", "provider:model"),
+        )
+        result = await doc_extract.extract_document(txt_file)
+        assert result.status == doc_cache.STATUS_FAILED
+        assert result.error_code == "model_error"
+
+    async def test_truncated_input_never_caches(self, monkeypatch, txt_file):
+        monkeypatch.setattr(doc_extract, "_MAX_TEXT_CHARS", 4)
+        calls = []
+        _patch_model(monkeypatch, json.dumps({"doc_kind": "info"}), calls)
+        result = await doc_extract.extract_document(txt_file)
+        assert result.status == doc_cache.STATUS_FAILED
+        assert result.error_code == "truncated"
+        assert calls == [], "截断文件不得调用提取模型"
+
+    async def test_unsupported_never_calls_model(self, monkeypatch, tmp_path):
+        path = tmp_path / "raw.bin"
+        path.write_bytes(b"\x00")
+        calls = []
+        _patch_model(monkeypatch, "{}", calls)
+        result = await doc_extract.extract_document(path)
+        assert result.error_code == "unsupported_type"
+        assert calls == []
+
+
+class TestCacheEntry:
+    def test_complete_entry_keeps_facts(self):
+        result = doc_extract.ExtractionResult(
+            status=doc_cache.STATUS_COMPLETE,
+            doc_kind=doc_cache.KIND_INFO,
+            summary="介绍",
+            facts=[{"name": "x", "value": "1"}],
+        )
+        entry = doc_extract.to_cache_entry(
+            result, tenant_id=1, sha256="a" * 64, model=" Provider : Model ",
+        )
+        assert entry.model == "provider:model"
+        assert entry.facts()["facts"] == [{"name": "x", "value": "1"}]
+        assert entry.cacheable_info is True
+
+    def test_failed_entry_has_no_content(self):
+        result = doc_extract.ExtractionResult(
+            status=doc_cache.STATUS_FAILED, error_code="needs_ocr",
+            doc_kind=doc_cache.KIND_MONEY, summary="x", facts=[{"a": 1}],
+        )
+        entry = doc_extract.to_cache_entry(
+            result, tenant_id=1, sha256="a" * 64, model="m",
+        )
+        assert entry.facts_json == "{}"
+        assert entry.summary_text == ""
+        assert entry.doc_kind == doc_cache.KIND_UNKNOWN
+        assert entry.error_code == "needs_ocr"
+
+
+def test_extractor_fingerprint_is_pinned_per_version():
+    """提示词/分类规则一改，这里必须失败 —— 提醒同时递增 extractor_version。"""
+    expected = TRADE_EXTRACTOR_FINGERPRINTS[doc_cache.EXTRACTOR_VERSION]
+    assert doc_extract.extractor_fingerprint() == expected

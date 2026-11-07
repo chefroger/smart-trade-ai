@@ -104,7 +104,12 @@ def tenant_key(company_id: int | str) -> str:
 
 def normalize_model(model: str) -> str:
     """归一模型键：去空白、小写，保留 provider 前缀（换模型永不复用）。"""
-    return str(model or "").strip().lower()
+    text = str(model or "").strip().lower()
+    if ":" in text:
+        # " provider : model " 与 "provider:model" 必须是同一个键
+        provider, _, name = text.partition(":")
+        text = f"{provider.strip()}:{name.strip()}"
+    return text
 
 
 def file_sha256(path: str | Path) -> str:
