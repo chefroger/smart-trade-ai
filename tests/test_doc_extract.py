@@ -70,6 +70,22 @@ class TestParsing:
         assert first["subtotal"] is False
         assert any(f["subtotal"] for f in parsed.facts if f["row"] == "合计")
 
+    def test_xlsx_large_sheet_is_truncated(self, tmp_path):
+        import openpyxl
+
+        path = tmp_path / "big.xlsx"
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.append(["行", "数值"])
+        for index in range(205):
+            sheet.append([f"row{index}", index])
+        workbook.save(path)
+
+        parsed = doc_extract.parse_document(path)
+
+        assert parsed.truncated is True
+        assert len(parsed.facts) <= doc_extract._MAX_PARSED_FACTS
+
     def test_docx_table(self, tmp_path):
         import docx
 
@@ -220,6 +236,33 @@ class TestWarmCache:
 
         # 已有 complete 行：不重复提取
         assert doc_extract.warm_cache([path], tenant_id=1) == 0
+
+    def test_failed_attempts_cap_stops_retry(self, monkeypatch, tmp_path):
+        import trade.database as db
+
+        monkeypatch.setattr(db, "_get_db_path", lambda: tmp_path / "warm.db")
+        db.init_db()
+        path = tmp_path / "bad.txt"
+        path.write_text("坏文件", encoding="utf-8")
+        digest = doc_cache.file_sha256(path)
+        conn = db.get_connection()
+        try:
+            doc_cache.save(conn, doc_cache.CacheEntry(
+                tenant_id="1", sha256=digest, model="provider:model",
+                extractor_version=doc_cache.EXTRACTOR_VERSION,
+                extracted_at="2026-11-07T10:00:00+00:00",
+                extraction_status=doc_cache.STATUS_FAILED,
+                doc_kind=doc_cache.KIND_UNKNOWN,
+                attempts=doc_extract.MAX_CACHE_ATTEMPTS,
+                error_code="needs_ocr",
+            ))
+        finally:
+            conn.close()
+        calls = []
+        _patch_model(monkeypatch, "{}", calls)
+
+        assert doc_extract.warm_cache([path], tenant_id=1) == 0
+        assert calls == [], "达到重试上限后不得再调用提取模型"
 
     def test_kill_switch_disables_warm(self, monkeypatch, tmp_path):
         path = tmp_path / "intro.txt"
