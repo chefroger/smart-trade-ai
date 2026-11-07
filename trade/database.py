@@ -226,6 +226,25 @@ CREATE INDEX IF NOT EXISTS idx_conversations_created  ON conversations(created_a
 CREATE INDEX IF NOT EXISTS idx_usage_ts    ON usage_ledger(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_skill ON usage_ledger(skill);
 
+-- 文档提取缓存（缓存只服务概览/定位；具体事实仍须本次全文读取）
+-- 唯一键 = (tenant_id, sha256, model, extractor_version)；tenant_id 存 company_id。
+-- 只存"从文件里读到的事实"与摘要，不存原文、不存答案。
+CREATE TABLE IF NOT EXISTS doc_extractions (
+    tenant_id          TEXT    NOT NULL,
+    sha256             TEXT    NOT NULL,
+    model              TEXT    NOT NULL,
+    extractor_version  TEXT    NOT NULL,
+    extracted_at       TEXT    NOT NULL,
+    extraction_status  TEXT    NOT NULL CHECK (extraction_status IN ('complete','unclassified','failed')),
+    facts_json         TEXT    NOT NULL DEFAULT '{}',
+    summary_text       TEXT    NOT NULL DEFAULT '',
+    doc_kind           TEXT    NOT NULL DEFAULT 'unknown' CHECK (doc_kind IN ('money','info','unknown')),
+    kind_reason        TEXT,
+    attempts           INTEGER NOT NULL DEFAULT 1,
+    error_code         TEXT,
+    PRIMARY KEY (tenant_id, sha256, model, extractor_version)
+);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,

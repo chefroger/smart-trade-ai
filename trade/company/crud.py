@@ -401,6 +401,13 @@ def purge(company_id: int) -> bool:
         ).rowcount
         conn.commit()
         if n > 0:
+            # 提取缓存按公司清理：不整表清空，别的公司的行必须保留。
+            try:
+                from trade.doc_cache import purge_tenant
+
+                purge_tenant(conn, company_id)
+            except Exception:
+                pass  # 缓存清理失败不阻断公司删除（best-effort）
             # 向量表没有外键，客户级联删除不会带走向量；
             # 这里显式清理，保证「物理删除公司及所有数据」的承诺成立。
             try:
