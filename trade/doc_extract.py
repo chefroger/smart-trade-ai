@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
 import logging
 import os
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,10 @@ from trade import doc_cache
 _log = logging.getLogger(__name__)
 
 DEFAULT_EXTRACT_TIMEOUT = 60.0
+# failed 行最多重提次数；达到后同一 (tenant, sha, model, version) 不再自动重试。
+MAX_CACHE_ATTEMPTS = 3
+# 单次请求最多预热多少个文件（大目录靠多次请求逐步建缓存，不卡主流程）。
+DEFAULT_WARM_LIMIT = 5
 _MAX_TEXT_CHARS = 120_000
 _MAX_TABLE_ROWS = 200
 _MAX_TABLE_COLS = 50
@@ -124,6 +130,68 @@ def _extract_timeout() -> float:
     except (TypeError, ValueError):
         return DEFAULT_EXTRACT_TIMEOUT
     return value if value > 0 else DEFAULT_EXTRACT_TIMEOUT
+
+
+def _warm_limit() -> int:
+    raw = os.environ.get("TRADE_DOC_EXTRACT_PER_REQUEST", "").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_WARM_LIMIT
+    return value if value > 0 else DEFAULT_WARM_LIMIT
+
+
+def warm_cache(paths, *, tenant_id, limit: int | None = None) -> int:
+    """best-effort 预热：缓存未命中的文件做一次提取并写回。
+
+    只在主流程已经读完文件后调用；任何失败都静默回落（不阻断聊天）。
+    同一文件已有 complete/unclassified 行则跳过；failed 行最多重试
+    `MAX_CACHE_ATTEMPTS` 次。
+    """
+    if not doc_cache.cache_enabled():
+        return 0
+    resolved = resolve_extraction_model()
+    if resolved is None:
+        return 0
+    model_key = resolved[2]
+    total = limit if limit is not None else _warm_limit()
+    warmed = 0
+    conn = None
+    try:
+        from trade.database import get_connection
+
+        conn = get_connection()
+        for path in paths:
+            if warmed >= total:
+                break
+            try:
+                digest = doc_cache.file_sha256(path)
+            except OSError:
+                continue
+            existing = doc_cache.get(
+                conn, tenant_id=tenant_id, sha256=digest, model=model_key
+            )
+            if existing is not None:
+                if existing.extraction_status != doc_cache.STATUS_FAILED:
+                    continue
+                if existing.attempts >= MAX_CACHE_ATTEMPTS:
+                    continue
+            attempts = existing.attempts + 1 if existing else 1
+            result = asyncio.run(extract_document(path))
+            doc_cache.save(conn, to_cache_entry(
+                result, tenant_id=tenant_id, sha256=digest,
+                model=model_key, attempts=attempts,
+            ))
+            warmed += 1
+    except (sqlite3.Error, OSError) as exc:
+        _log.debug("预热文档缓存失败（不影响主流程）：%s", exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return warmed
 
 
 def resolve_extraction_model() -> tuple[str, str, str] | None:

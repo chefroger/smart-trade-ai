@@ -26,7 +26,7 @@ from trade.agent_context import bind_company, extract_user_paths
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
 from trade.database import get_connection
-from trade.doc_extract import resolve_extraction_model
+from trade.doc_extract import resolve_extraction_model, warm_cache
 from trade.doc_scope import (
     SCOPE_LOCATE,
     SCOPE_SUMMARY,
@@ -280,7 +280,8 @@ def _load_cache_hits(document_task, tenant_id: int, request_scope: str):
     只有 summary/locate 才查缓存；每个文件按当前字节哈希精确匹配，
     内容一变旧行自然不命中。缓存不可用时静默返回空（本次照常全文读）。
     """
-    if document_task is None or not scope_allows_cache(request_scope):
+    if (document_task is None or not doc_cache.cache_enabled()
+            or not scope_allows_cache(request_scope)):
         return {}, set(), ""
     resolved = resolve_extraction_model()
     if resolved is None:
@@ -338,6 +339,22 @@ def _load_cache_hits(document_task, tenant_id: int, request_scope: str):
             summary = (entry.summary_text or "").strip()[:_MAX_CACHE_SUMMARY_CHARS]
             lines.append(f"- {item.relative_path}：{summary or '（无摘要）'}")
     return evidence, skip_paths, "\n".join(lines)
+
+
+def _warm_cache_background(files, tenant_id: int) -> None:
+    """读完文件后后台预热缓存；绝不阻塞响应，失败静默。"""
+    if not doc_cache.cache_enabled() or not files:
+        return
+    # 没有配置对话模型就不必起线程（也让测试环境保持安静）。
+    if resolve_extraction_model() is None:
+        return
+    paths = [item.path for item in files]
+    try:
+        threading.Thread(
+            target=lambda: warm_cache(paths, tenant_id=tenant_id), daemon=True
+        ).start()
+    except Exception as exc:
+        _log.debug("启动缓存预热线程失败：%s", exc)
 
 
 @router.get("/usage/today")
@@ -539,6 +556,9 @@ async def trade_chat(
                     # 不通过时把原因作为回答返回，既不丢用户提问也不给不完整结论。
                     incomplete = True
                     response = format_incomplete_report(gate_result)
+                elif gate_result is not None and gate_result.status == "complete":
+                    # 读完才预热；后台线程，不阻塞本次响应。
+                    _warm_cache_background(document_task.files, cid)
         finally:
             # 释放 Hermes 侧读取记录与缓存跳过集合，避免长驻进程内累积。
             release_read_coverage(request_task_id)
@@ -558,14 +578,18 @@ async def trade_chat(
             company_id=cid, library_id=payload.library_id, query=query,
             response=response, library_name=lib_name,
             customer_id=payload.customer_id,
-            files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
-                        if gate_result else None),
+            files_read=(
+                [{"file": path, "status": "complete"} for path in gate_result.complete]
+                + [{"file": path, "status": "cached"} for path in gate_result.cache_complete]
+            ) if gate_result else None,
             context=payload.context or "",
             skill=current_skill or "",
         )
     payload_out = {"response": response, "conversation": conv}
     if gate_result is not None:
         payload_out["analysis_skipped"] = gate_result.skipped
+        if gate_result.cache_complete:
+            payload_out["analysis_cache"] = gate_result.cache_complete
         if gate_result.coverage_note:
             # 能力边界如实披露（原版 Hermes 无结构化读取快照时）
             payload_out["analysis_note"] = gate_result.coverage_note
@@ -751,6 +775,8 @@ async def trade_chat_stream(
                             if gate_result.status == "incomplete":
                                 # 不通过时把原因作为回答下发，不报错也不给不完整结论。
                                 result = format_incomplete_report(gate_result)
+                            elif gate_result.status == "complete":
+                                _warm_cache_background(document_task.files, cid)
                             _emit_threadsafe("analysis_gate", {
                                 "status": gate_result.status,
                                 "files": gate_result.complete,
@@ -784,8 +810,10 @@ async def trade_chat_stream(
                         query=query, response=result or "",
                         library_name=lib_name,
                         customer_id=payload.customer_id,
-                        files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
-                                    if gate_result else None),
+                        files_read=(
+                            [{"file": path, "status": "complete"} for path in gate_result.complete]
+                            + [{"file": path, "status": "cached"} for path in gate_result.cache_complete]
+                        ) if gate_result else None,
                         context=payload.context or "",
                         skill=current_skill or "",
                     )

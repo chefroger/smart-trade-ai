@@ -193,6 +193,44 @@ class TestExtraction:
         assert calls == []
 
 
+class TestWarmCache:
+    def test_warm_writes_and_skips_existing(self, monkeypatch, tmp_path):
+        import trade.database as db
+
+        monkeypatch.setattr(db, "_get_db_path", lambda: tmp_path / "warm.db")
+        db.init_db()
+        path = tmp_path / "intro.txt"
+        path.write_text("公司介绍", encoding="utf-8")
+        _patch_model(monkeypatch, json.dumps(
+            {"doc_kind": "info", "summary": "公司介绍", "facts": []}
+        ))
+
+        assert doc_extract.warm_cache([path], tenant_id=1) == 1
+
+        digest = doc_cache.file_sha256(path)
+        conn = db.get_connection()
+        try:
+            entry = doc_cache.get(
+                conn, tenant_id=1, sha256=digest, model="provider:model"
+            )
+        finally:
+            conn.close()
+        assert entry is not None and entry.cacheable_info
+        assert entry.summary_text == "公司介绍"
+
+        # 已有 complete 行：不重复提取
+        assert doc_extract.warm_cache([path], tenant_id=1) == 0
+
+    def test_kill_switch_disables_warm(self, monkeypatch, tmp_path):
+        path = tmp_path / "intro.txt"
+        path.write_text("公司介绍", encoding="utf-8")
+        calls = []
+        _patch_model(monkeypatch, "{}", calls)
+        monkeypatch.setenv("TRADE_DOC_CACHE", "off")
+        assert doc_extract.warm_cache([path], tenant_id=1) == 0
+        assert calls == []
+
+
 class TestCacheEntry:
     def test_complete_entry_keeps_facts(self):
         result = doc_extract.ExtractionResult(

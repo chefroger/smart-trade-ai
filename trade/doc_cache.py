@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -92,6 +93,15 @@ class CacheEntry:
         """解析 facts_json；调用方需自行处理异常（写入前已校验为 JSON 对象）。"""
         value = json.loads(self.facts_json or "{}")
         return value if isinstance(value, dict) else {}
+
+
+_CACHE_OFF_VALUES = frozenset({"off", "0", "false", "no", "disabled"})
+
+
+def cache_enabled() -> bool:
+    """熔断开关：默认开，`TRADE_DOC_CACHE=off` 时完全退回现行行为。"""
+    raw = os.environ.get("TRADE_DOC_CACHE", "").strip().lower()
+    return raw not in _CACHE_OFF_VALUES
 
 
 def tenant_key(company_id: int | str) -> str:

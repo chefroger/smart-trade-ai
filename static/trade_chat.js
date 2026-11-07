@@ -2325,7 +2325,7 @@ function addMsg(role, content, files, save, convId) {
     });
     if (files && files.length) {
         const s = document.createElement('div'); s.className = 'sources';
-        s.innerHTML = '<div class="sources-title">📄 '+(currentLang==='en'?'References':'参考文件')+'</div>' + files.map(f => '<div>📎 '+esc(f.file||f)+'</div>').join('');
+        s.innerHTML = '<div class="sources-title">📄 '+(currentLang==='en'?'References':'参考文件')+'</div>' + files.map(f => '<div>📎 '+esc(f.file||f)+(f.status==='cached' ? ' <span class="muted">（'+(currentLang==='en'?'from cached extraction':'来自缓存提取')+'）</span>' : '')+'</div>').join('');
         body.appendChild(s);
     }
     div.appendChild(avatar); div.appendChild(body);

@@ -136,6 +136,13 @@ def test_model_key_is_normalized():
     assert doc_cache.normalize_model("  DeepSeek:Chat ") == "deepseek:chat"
 
 
+def test_cache_kill_switch(monkeypatch):
+    monkeypatch.delenv("TRADE_DOC_CACHE", raising=False)
+    assert doc_cache.cache_enabled() is True
+    monkeypatch.setenv("TRADE_DOC_CACHE", "off")
+    assert doc_cache.cache_enabled() is False
+
+
 def test_all_queries_are_tenant_scoped():
     assert "tenant_id = ?" in doc_cache._SELECT_SQL
     assert doc_cache._PURGE_SQL == "DELETE FROM doc_extractions WHERE tenant_id = ?"
