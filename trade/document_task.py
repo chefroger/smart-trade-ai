@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from trade.doc_scope import detect_request_scope, scope_allows_cache
+
 # Trade 认为「需要完整读取」的文档类型。Hermes 负责实际读取与解析，
 # 这里只决定哪些文件纳入强制范围。
 _ANALYZABLE_EXTENSIONS = frozenset({
@@ -94,6 +96,8 @@ class GateResult:
     missing: list[str]
     errors: list[str]
     skipped: list[dict] = field(default_factory=list)
+    # 由缓存提取满足的文件（source=cache）：不得计入 complete（全文已读）。
+    cache_complete: list[str] = field(default_factory=list)
     # 能力边界说明：证据不含结构化元数据（原版 Hermes 无读取快照接口）时，
     # 明确告知「只能确认读过、无法核验读全」，避免用户高估校验强度。
     coverage_note: str = ""
@@ -169,8 +173,17 @@ class DocumentTask:
             return True
         return stat.st_size != item.size or stat.st_mtime_ns != item.mtime_ns
 
-    def evaluate(self, evidence: dict[str, dict[str, Any]]) -> GateResult:
-        """只接受 Hermes 明确报告 complete 的可分析文件；缺证据时 fail-closed。"""
+    def evaluate(
+        self,
+        evidence: dict[str, dict[str, Any]],
+        *,
+        request_scope: str = "full_read",
+    ) -> GateResult:
+        """只接受 Hermes 明确报告 complete 的可分析文件；缺证据时 fail-closed。
+
+        `request_scope` 只影响 `source=cache` 证据：只有 summary/locate 且
+        缓存行是 info 时才可满足门禁，且计入 cache_complete，不计入 complete。
+        """
         # 证据键先归一化，避免同一文件的不同书写形式被误判为未读取。
         normalized: dict[str, dict[str, Any]] = {}
         for key, value in evidence.items():
@@ -187,14 +200,25 @@ class DocumentTask:
         # 照常给分析结果，只把这些文件列进披露。
         unreadable: list[dict] = [
             {"file": item.relative_path, "reason": item.reason} for item in self.skipped]
+        cache_complete: list[str] = []
         for item in self.files:
+            key = str(item.path)
+            record = normalized.get(key, {})
+            # 缓存证据只能满足 info 文件的 summary/locate 请求；其余一律按未读。
+            if record.get("source") == "cache":
+                allowed = record.get("allowed_scope") or ()
+                if (scope_allows_cache(request_scope) and request_scope in allowed
+                        and record.get("doc_kind") == "info"
+                        and record.get("cache_complete") is True):
+                    cache_complete.append(item.relative_path)
+                else:
+                    missing.append(item.relative_path)
+                continue
             if self._fingerprint_changed(item):
                 missing.append(item.relative_path)
                 errors.append(f"{item.relative_path}: changed_during_analysis")
                 continue
-            key = str(item.path)
             touched = key in normalized
-            record = normalized.get(key, {})
             metadata = record.get("document_metadata") or {}
             expected_kind = item.path.suffix.lower().lstrip(".")
             # 回调来源的证据只有「是否走了解析器」，没有页数/Sheet/扫描页这些
@@ -267,6 +291,7 @@ class DocumentTask:
             missing=missing,
             errors=errors,
             skipped=unreadable,
+            cache_complete=cache_complete,
             coverage_note="" if _has_structured else _CALLBACK_COVERAGE_NOTE,
         )
 
@@ -344,4 +369,8 @@ def should_enforce_document_gate(query: str) -> bool:
         return False
     has_scope = any(re.search(p, text, re.IGNORECASE) for p in _DIRECTORY_SCOPE_PATTERNS)
     has_intent = any(re.search(p, text, re.IGNORECASE) for p in _COMPLETENESS_INTENT_PATTERNS)
-    return has_scope and has_intent
+    if has_scope and has_intent:
+        return True
+    # 概览/定位请求也要建计划（缓存只服务这两类）。范围由调用方保证：
+    # Trade 侧必须有已选文档库，否则不会进入门禁分支。
+    return scope_allows_cache(detect_request_scope(query))

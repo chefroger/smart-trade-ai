@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -18,18 +19,28 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from trade import chat_memory
+from trade import chat_memory, doc_cache
 from trade import library as library_module
 from trade import usage as usage_module
 from trade.agent_context import bind_company, extract_user_paths
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
+from trade.database import get_connection
+from trade.doc_extract import resolve_extraction_model
+from trade.doc_scope import (
+    SCOPE_LOCATE,
+    SCOPE_SUMMARY,
+    detect_request_scope,
+    scope_allows_cache,
+)
 from trade.document_task import (
     DocumentTask,
     format_incomplete_report,
     should_enforce_document_gate,
 )
 from trade.helpers import build_query, create_agent
+from trade.hermes_chat_memory_plugin.doc_skip import register as register_doc_skip
+from trade.hermes_chat_memory_plugin.doc_skip import release as release_doc_skip
 from trade.hermes_compat import release_read_coverage, snapshot_read_coverage
 from trade.prompt import detect_reply_language
 from trade.read_evidence import ReadEvidenceCollector
@@ -228,22 +239,105 @@ def _validate_scope(payload, cid: int) -> None:
             )
 
 
-def _document_gate(document_task, request_task_id: str, collector):
+def _document_gate(
+    document_task,
+    request_task_id: str,
+    collector,
+    *,
+    request_scope: str = "full_read",
+    cache_evidence: dict | None = None,
+):
     """取读取证据并判定完成度；两份来源都没有证据时返回 None（降级放行）。
 
     优先用 Hermes 的读取快照（含页数/Sheet/扫描页等结构化信息）。公开版
     Hermes 没有这个对外接口，回退到工具回调自收集的证据，这样不依赖
     Hermes 上游改动也能做完整性判定。
+
+    `cache_evidence` 只覆盖本次跳过的文件；同一文件若本次真的读了，
+    全文证据覆盖缓存证据（缓存不得冒充全文已读）。
     """
+    evidence: dict = dict(cache_evidence or {})
     hermes_evidence = snapshot_read_coverage(request_task_id)
     if hermes_evidence:
-        return document_task.evaluate(hermes_evidence)
-    if collector is not None:
+        evidence.update(hermes_evidence)
+    elif collector is not None:
         collected = collector.snapshot()
         if collected:
-            return document_task.evaluate(collected)
-    _log.warning("No read evidence available; document gate skipped")
-    return None
+            evidence.update(collected)
+    if not evidence:
+        _log.warning("No read evidence available; document gate skipped")
+        return None
+    return document_task.evaluate(evidence, request_scope=request_scope)
+
+
+_MAX_CACHE_PROMPT_FILES = 30
+_MAX_CACHE_SUMMARY_CHARS = 300
+
+
+def _load_cache_hits(document_task, tenant_id: int, request_scope: str):
+    """查本租户缓存，返回 (cache_evidence, skip_paths, prompt_block)。
+
+    只有 summary/locate 才查缓存；每个文件按当前字节哈希精确匹配，
+    内容一变旧行自然不命中。缓存不可用时静默返回空（本次照常全文读）。
+    """
+    if document_task is None or not scope_allows_cache(request_scope):
+        return {}, set(), ""
+    resolved = resolve_extraction_model()
+    if resolved is None:
+        return {}, set(), ""
+    model_key = resolved[2]
+
+    hits: list[tuple[object, object, str]] = []
+    conn = None
+    try:
+        conn = get_connection()
+        for item in document_task.files:
+            try:
+                digest = doc_cache.file_sha256(item.path)
+            except OSError:
+                continue
+            entry = doc_cache.get(
+                conn, tenant_id=tenant_id, sha256=digest, model=model_key
+            )
+            if entry is not None and entry.cacheable_info:
+                hits.append((item, entry, digest))
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        _log.warning("读取文档缓存失败，按未命中处理：%s", exc)
+        return {}, set(), ""
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    if not hits:
+        return {}, set(), ""
+
+    evidence: dict[str, dict] = {}
+    skip_paths: set[str] = set()
+    lines: list[str] = [
+        "[文档缓存（仅用于概览/定位）]",
+        "以下文件本次不重复读取，使用已有的提取摘要；"
+        "具体数字/条款/原文仍须本次全文核对，不得用缓存回答具体事实：",
+    ]
+    for item, entry, digest in hits:
+        path_key = str(item.path)
+        skip_paths.add(path_key)
+        evidence[path_key] = {
+            "source": "cache",
+            "cache_complete": True,
+            "doc_kind": entry.doc_kind,
+            "allowed_scope": [SCOPE_SUMMARY, SCOPE_LOCATE],
+            "sha256": digest,
+            "model": entry.model,
+            "extractor_version": entry.extractor_version,
+            "extracted_at": entry.extracted_at,
+        }
+        if len(lines) <= _MAX_CACHE_PROMPT_FILES:
+            summary = (entry.summary_text or "").strip()[:_MAX_CACHE_SUMMARY_CHARS]
+            lines.append(f"- {item.relative_path}：{summary or '（无摘要）'}")
+    return evidence, skip_paths, "\n".join(lines)
 
 
 @router.get("/usage/today")
@@ -315,9 +409,22 @@ async def trade_chat(
                           document_task.truncated, len(document_task.files))
                 document_task = None
 
+    request_scope = detect_request_scope(query)
+    cache_evidence: dict = {}
+    skip_paths: set[str] = set()
+    if document_task is not None:
+        # 哈希/查库是阻塞 I/O：放进线程，避免卡住事件循环。
+        cache_evidence, skip_paths, cache_block = await asyncio.to_thread(
+            _load_cache_hits, document_task, cid, request_scope
+        )
+        if cache_block:
+            full_query = full_query + "\n\n" + cache_block
+
     _MAX_AGENT_RETRIES = 2  # 最多重试 2 次（共 3 次尝试），与 SSE 流式端点保持一致
 
     request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
+    if document_task and request_task_id and skip_paths:
+        register_doc_skip(request_task_id, skip_paths)
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
     evidence = ReadEvidenceCollector() if document_task else None
 
@@ -424,14 +531,18 @@ async def trade_chat(
     if document_task and request_task_id:
         try:
             if agent_ok:
-                gate_result = _document_gate(document_task, request_task_id, evidence)
+                gate_result = _document_gate(
+                    document_task, request_task_id, evidence,
+                    request_scope=request_scope, cache_evidence=cache_evidence,
+                )
                 if gate_result is not None and gate_result.status == "incomplete":
                     # 不通过时把原因作为回答返回，既不丢用户提问也不给不完整结论。
                     incomplete = True
                     response = format_incomplete_report(gate_result)
         finally:
-            # 释放 Hermes 侧该请求的读取记录，避免长驻进程内无限累积。
+            # 释放 Hermes 侧读取记录与缓存跳过集合，避免长驻进程内累积。
             release_read_coverage(request_task_id)
+            release_doc_skip(request_task_id)
 
     lib_name = ""
     if payload.library_id:
@@ -516,7 +627,21 @@ async def trade_chat_stream(
                 _log.info("Document gate skipped (truncated=%s, files=%d)",
                           document_task.truncated, len(document_task.files))
                 document_task = None
+
+    request_scope = detect_request_scope(query)
+    cache_evidence: dict = {}
+    skip_paths: set[str] = set()
+    if document_task is not None:
+        # 哈希/查库是阻塞 I/O：放进线程，避免卡住 SSE 事件循环。
+        cache_evidence, skip_paths, cache_block = await asyncio.to_thread(
+            _load_cache_hits, document_task, cid, request_scope
+        )
+        if cache_block:
+            full_query = full_query + "\n\n" + cache_block
+
     request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
+    if document_task and request_task_id and skip_paths:
+        register_doc_skip(request_task_id, skip_paths)
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
     evidence = ReadEvidenceCollector() if document_task else None
 
@@ -617,7 +742,11 @@ async def trade_chat_stream(
                 gate_result = None
                 if document_task and request_task_id and result:
                     try:
-                        gate_result = _document_gate(document_task, request_task_id, evidence)
+                        gate_result = _document_gate(
+                            document_task, request_task_id, evidence,
+                            request_scope=request_scope,
+                            cache_evidence=cache_evidence,
+                        )
                         if gate_result is not None:
                             if gate_result.status == "incomplete":
                                 # 不通过时把原因作为回答下发，不报错也不给不完整结论。
@@ -625,14 +754,16 @@ async def trade_chat_stream(
                             _emit_threadsafe("analysis_gate", {
                                 "status": gate_result.status,
                                 "files": gate_result.complete,
+                                "cache_files": gate_result.cache_complete,
                                 "missing": gate_result.missing,
                                 "errors": gate_result.errors,
                                 "skipped": gate_result.skipped,
                                 "coverage_note": gate_result.coverage_note,
                             })
                     finally:
-                        # 释放 Hermes 侧该请求的读取记录，避免长驻进程内无限累积。
+                        # 释放 Hermes 读记录与缓存跳过集合，避免长驻进程内累积。
                         release_read_coverage(request_task_id)
+                        release_doc_skip(request_task_id)
 
                 lib_name = ""
                 if payload.library_id:
