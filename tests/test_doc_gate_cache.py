@@ -36,6 +36,19 @@ from trade.document_task import DocumentFile, DocumentTask
     ("不要总结，把文档逐条算清楚", doc_scope.SCOPE_FULL_READ),
     ("overview of the document prices", doc_scope.SCOPE_FULL_READ),
     ("give me an overview of the documents and their dates", doc_scope.SCOPE_FULL_READ),
+    # 2026-11-09 复审 P1：概览前缀不得吞掉后半句具体事实
+    ("介绍一下这批资料的结算方式", doc_scope.SCOPE_FULL_READ),
+    ("总结一下这些文件的运费", doc_scope.SCOPE_FULL_READ),
+    ("介绍一下资料里的起订量", doc_scope.SCOPE_FULL_READ),
+    ("帮我概述这批文件的保修政策", doc_scope.SCOPE_FULL_READ),
+    ("介绍一下文件里怎么收费", doc_scope.SCOPE_FULL_READ),
+    ("请给这批文件一个summary，并说明payment terms", doc_scope.SCOPE_FULL_READ),
+    ("资料里的包装要求总结一下", doc_scope.SCOPE_FULL_READ),
+    ("介绍一下这批资料的贸易术语", doc_scope.SCOPE_FULL_READ),
+    ("总结一下这些文件的最低订购", doc_scope.SCOPE_FULL_READ),
+    ("介绍一下资料的第三点", doc_scope.SCOPE_FULL_READ),
+    ("不要只给概览，把资料里的结算讲清楚", doc_scope.SCOPE_FULL_READ),
+    ("介绍一下这批资料，顺便说说怎么结账", doc_scope.SCOPE_FULL_READ),
     ("", doc_scope.SCOPE_FULL_READ),
 ])
 def test_request_scope_table(query, expected):
@@ -44,7 +57,7 @@ def test_request_scope_table(query, expected):
 
 def test_scope_rules_version_is_bumped_with_rules():
     """范围规则改动必须递增常量（与提取器版本同样的纪律）。"""
-    assert doc_scope.SCOPE_RULES_VERSION == "2"
+    assert doc_scope.SCOPE_RULES_VERSION == "3"
 
 
 def _task(tmp_path) -> DocumentTask:

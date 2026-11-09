@@ -139,6 +139,7 @@ def extractor_fingerprint() -> str:
     payload = (
         EXTRACT_PROMPT + CLASSIFY_RULES + _TRADE_FACTS_GUIDE
         + _PARSER_REVISION + parser_source
+        + f"|{_MAX_TABLE_ROWS}:{_MAX_TABLE_COLS}:{_MAX_SHEETS}:{_MAX_PARSED_FACTS}:{_MAX_TEXT_CHARS}"
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -490,6 +491,7 @@ _MONEY_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _CONTRACT_HINT_RE = re.compile(r"(合同|协议|甲方|乙方)", re.IGNORECASE)
+_MONEY_LABEL_NUMBER_RE = re.compile(r"(单价|价格|金额|总价|报价)\s*[:：]?\s*\d", re.IGNORECASE)
 _CLAUSE_RE = re.compile(r"第[一二三四五六七八九十百\d]+条")
 
 
@@ -516,7 +518,7 @@ def _looks_like_money(
     单个词"价格/合同"不再触发 —— 产品介绍里提到价格不等于金额类文档。
     """
     text = parsed.text[:5000]
-    if _MONEY_AMOUNT_RE.search(text):
+    if _MONEY_AMOUNT_RE.search(text) or _MONEY_LABEL_NUMBER_RE.search(text):
         return True
     if _CONTRACT_HINT_RE.search(text) and _CLAUSE_RE.search(text):
         return True

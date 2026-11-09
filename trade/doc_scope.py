@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-SCOPE_RULES_VERSION = "2"
+SCOPE_RULES_VERSION = "3"
 
 SCOPE_SUMMARY = "summary"
 SCOPE_LOCATE = "locate"
@@ -61,6 +61,25 @@ _NEGATED_OVERVIEW_PATTERNS = (
 )
 
 
+# 概览必须"整句只有概览"：去掉文档指代/概览动词/礼貌填充后必须不剩任何内容。
+# 否则"介绍一下这批资料的结算方式"会因前缀命中被当成 summary，进而拦截读取
+# （2026-11-09 复审 P1）。宁可保守判 full_read，也不要用摘要回答具体事实。
+_SUMMARY_SCAFFOLD_RE = re.compile(
+    r"(?:请|帮我|帮忙|麻烦|给我|简要|简单|大致|大概|主要|内容|这些|这批|这个|那些|"
+    r"它们|所有|全部|介绍|概述|概览|总结|讲讲|讲解|讲|说说|说|一下|一份|一个|什么|"
+    r"文件|文档|资料|附件|目录|文件夹|files?|documents?|"
+    r"的|都|是|了|吗|呢|of|the|these|those|all|please|give|me|an?|and|their|its|"
+    r"summari[sz]e|summary|overview|"
+    r"[\s，。！？、；：,.!?;:\"'“”‘’（）()【】\[\]…-])+",
+    re.IGNORECASE,
+)
+
+
+def _is_pure_overview(text: str) -> bool:
+    """去掉概览脚手架后是否没有剩余内容。"""
+    return not _SUMMARY_SCAFFOLD_RE.sub("", text).strip()
+
+
 def detect_request_scope(query: str) -> str:
     """返回 summary / locate / full_read；无法保守判定时一律 full_read。"""
     text = str(query or "").strip().lower()
@@ -73,7 +92,8 @@ def detect_request_scope(query: str) -> str:
         return SCOPE_FULL_READ
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in _LOCATE_PATTERNS):
         return SCOPE_LOCATE
-    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _SUMMARY_PATTERNS):
+    if (any(re.search(pattern, text, re.IGNORECASE) for pattern in _SUMMARY_PATTERNS)
+            and _is_pure_overview(text)):
         return SCOPE_SUMMARY
     return SCOPE_FULL_READ
 
