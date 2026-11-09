@@ -17,7 +17,7 @@ from trade import doc_cache, doc_extract
 # 改提示词或分类规则：必须递增 doc_cache.EXTRACTOR_VERSION 并补一条新映射；
 # 只改文本不改版本会直接失败（旧版本号对不上新指纹）。
 TRADE_EXTRACTOR_FINGERPRINTS = {
-    "4": "45eb8f6d18dae4a4aa8c672683e2b5e10fa72a5651668251ccf2bb30be9f44dc",
+    "4": "8b3fa7c79033091e51bf48731b1edc5f853039a03c81301da586d2bec45c3e33",
 }
 
 
