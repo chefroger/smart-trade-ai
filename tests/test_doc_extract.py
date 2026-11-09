@@ -17,7 +17,7 @@ from trade import doc_cache, doc_extract
 # 改提示词或分类规则：必须递增 doc_cache.EXTRACTOR_VERSION 并补一条新映射；
 # 只改文本不改版本会直接失败（旧版本号对不上新指纹）。
 TRADE_EXTRACTOR_FINGERPRINTS = {
-    "3": "c105d1aff9c644f6e9f3212d1ac8f5d7b7e30636a632ff8fdb3bf882d5fe4a01",
+    "4": "45eb8f6d18dae4a4aa8c672683e2b5e10fa72a5651668251ccf2bb30be9f44dc",
 }
 
 
@@ -238,6 +238,19 @@ class TestExtraction:
         result = await doc_extract.extract_document(txt_file)
         assert result.doc_kind == doc_cache.KIND_MONEY
         assert result.cacheable is False
+
+    async def test_price_word_alone_does_not_force_money(self, monkeypatch, tmp_path):
+        """只出现"价格"字样、没有金额结构时，保留模型给的 info（基准误杀修复）。"""
+        path = tmp_path / "intro.txt"
+        path.write_text("这是公司介绍，产品价格实惠，欢迎咨询。", encoding="utf-8")
+        _patch_model(monkeypatch, json.dumps({
+            "doc_kind": "info", "summary": "公司介绍", "facts": [],
+        }, ensure_ascii=False))
+
+        result = await doc_extract.extract_document(path)
+
+        assert result.doc_kind == doc_cache.KIND_INFO
+        assert result.cacheable is True
 
     async def test_unknown_kind_is_unclassified(self, monkeypatch, txt_file):
         _patch_model(monkeypatch, json.dumps({"doc_kind": "unknown", "summary": "x"}))

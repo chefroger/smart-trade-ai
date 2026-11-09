@@ -351,20 +351,39 @@ def _load_cache_hits(document_task, tenant_id: int, request_scope: str):
     return evidence, skip_paths, "\n".join(lines)
 
 
-def _warm_cache_background(files, tenant_id: int) -> None:
-    """读完文件后后台预热缓存；绝不阻塞响应，失败静默。"""
-    if not doc_cache.cache_enabled() or not files:
+def _warm_cache_paths(paths, tenant_id: int) -> None:
+    """后台预热给定文件；绝不阻塞响应，失败静默。"""
+    if not doc_cache.cache_enabled() or not paths:
         return
     # 没有配置对话模型就不必起线程（也让测试环境保持安静）。
     if resolve_extraction_model() is None:
         return
-    paths = [item.path for item in files]
     try:
         threading.Thread(
-            target=lambda: warm_cache(paths, tenant_id=tenant_id), daemon=True
+            target=lambda: warm_cache(list(paths), tenant_id=tenant_id), daemon=True
         ).start()
     except Exception as exc:
         _log.debug("启动缓存预热线程失败：%s", exc)
+
+
+def _warm_after_read(request_task_id, collector, tenant_id: int) -> None:
+    """按本次真实读取证据预热（不依赖门禁是否通过）。
+
+    门禁只负责"是否给出结论"；读到哪些文件就预热哪些，否则概览/定位
+    永远等不到缓存（2026-11-09 基准：缓存收益为 0 的直接原因）。
+    """
+    paths: set[str] = set()
+    if request_task_id:
+        snapshot = snapshot_read_coverage(request_task_id)
+        for path, record in (snapshot or {}).items():
+            if isinstance(record, dict) and record.get("complete") is True:
+                paths.add(str(path))
+    if collector is not None:
+        for path, record in (collector.snapshot() or {}).items():
+            if isinstance(record, dict) and record.get("complete") is True:
+                paths.add(str(path))
+    if paths:
+        _warm_cache_paths(paths, tenant_id)
 
 
 @router.get("/usage/today")
@@ -463,7 +482,8 @@ async def trade_chat(
     if document_task and request_task_id and skip_paths:
         register_doc_skip(request_task_id, skip_paths)
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
-    evidence = ReadEvidenceCollector() if document_task else None
+    # 即使没有文档计划也收集（用于"读到哪些就预热哪些"）。
+    evidence = ReadEvidenceCollector()
 
     # 超时后主线程要靠它中断仍在跑的 agent；列表用于跨线程传引用
     agent_holder: list = []
@@ -480,8 +500,8 @@ async def trade_chat(
                 agent = create_agent(
                     ephemeral_system_prompt=skill_hint,
                     skill_name=current_skill,
-                    tool_start_callback=evidence.on_start if evidence else None,
-                    tool_complete_callback=evidence.on_complete if evidence else None,
+                    tool_start_callback=evidence.on_start,
+                    tool_complete_callback=evidence.on_complete,
                 )
                 agent_holder.clear()
                 agent_holder.append(agent)
@@ -576,13 +596,15 @@ async def trade_chat(
                     # 不通过时把原因作为回答返回，既不丢用户提问也不给不完整结论。
                     incomplete = True
                     response = format_incomplete_report(gate_result)
-                elif gate_result is not None and gate_result.status == "complete":
-                    # 读完才预热；后台线程，不阻塞本次响应。
-                    _warm_cache_background(document_task.files, cid)
         finally:
-            # 释放 Hermes 侧读取记录与缓存跳过集合，避免长驻进程内累积。
+            # 读到哪些就预热哪些（不依赖门禁是否通过），再释放读记录。
+            _warm_after_read(request_task_id, evidence, cid)
             release_read_coverage(request_task_id)
             release_doc_skip(request_task_id)
+
+    if not gate_required:
+        # 没有门禁的普通请求：回调证据同样可以预热。
+        _warm_after_read(None, evidence, cid)
 
     if cache_block and not gate_required:
         response += (
@@ -704,7 +726,8 @@ async def trade_chat_stream(
     if document_task and request_task_id and skip_paths:
         register_doc_skip(request_task_id, skip_paths)
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
-    evidence = ReadEvidenceCollector() if document_task else None
+    # 即使没有文档计划也收集（用于"读到哪些就预热哪些"）。
+    evidence = ReadEvidenceCollector()
 
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -813,8 +836,6 @@ async def trade_chat_stream(
                                 if gate_result.status == "incomplete":
                                     # 不通过时把原因作为回答下发，不报错也不给不完整结论。
                                     result = format_incomplete_report(gate_result)
-                                elif gate_result.status == "complete":
-                                    _warm_cache_background(document_task.files, cid)
                                 _emit_threadsafe("analysis_gate", {
                                     "status": gate_result.status,
                                     "files": gate_result.complete,
@@ -830,9 +851,13 @@ async def trade_chat_stream(
                                 "具体事实请以本次读取为准。）"
                             )
                     finally:
-                        # 释放 Hermes 读记录与缓存跳过集合，避免长驻进程内累积。
+                        # 读到哪些就预热哪些（不依赖门禁是否通过），再释放读记录。
+                        _warm_after_read(request_task_id, evidence, cid)
                         release_read_coverage(request_task_id)
                         release_doc_skip(request_task_id)
+                elif not gate_required:
+                    # 没有门禁的普通请求：回调证据同样可以预热。
+                    _warm_after_read(None, evidence, cid)
 
                 lib_name = ""
                 if payload.library_id:

@@ -116,7 +116,7 @@ class ExtractionResult:
 
 # 解析器行为版本：解析阈值、异常处理、坐标规则改动时递增。
 # 与 doc_cache.EXTRACTOR_VERSION 同步 —— 解析器变了，旧 complete 行必须作废。
-_PARSER_REVISION = "3"
+_PARSER_REVISION = "4"
 
 
 def extractor_fingerprint() -> str:
@@ -133,6 +133,7 @@ def extractor_fingerprint() -> str:
         for fn in (
             _parse_xlsx, _parse_docx, _parse_pdf, _table_facts,
             _split_value_unit, _xlsx_has_uncached_formula,
+            _looks_like_money, _facts_look_monetary,
         )
     )
     payload = (
@@ -304,11 +305,12 @@ async def extract_document(
     kind = str(obj.get("doc_kind") or "").strip().lower()
     if kind not in {doc_cache.KIND_MONEY, doc_cache.KIND_INFO, doc_cache.KIND_UNKNOWN}:
         kind = doc_cache.KIND_UNKNOWN
-    # 代码级兜底（审计 P2-1）：内容里已有金额/币种/报价特征时，模型说 info 也不认。
-    if kind == doc_cache.KIND_INFO and _looks_like_money(parsed):
-        kind = doc_cache.KIND_MONEY
     summary = str(obj.get("summary") or "").strip()[:2000]
     model_facts = _coerce_facts(obj.get("facts"))
+    # 代码级兜底（审计 P2-1）：只有金额结构（货币+数值/金额表/合同条款）才改 money；
+    # 单纯出现"价格/合同"字样不改（2026-11-09 基准：误杀 info 使缓存收益为 0）。
+    if kind == doc_cache.KIND_INFO and _looks_like_money(parsed, model_facts):
+        kind = doc_cache.KIND_MONEY
     facts = _merge_facts(parsed.facts, model_facts)
     status = (
         doc_cache.STATUS_COMPLETE
@@ -476,19 +478,50 @@ def _failed(code: str) -> ExtractionResult:
     return ExtractionResult(status=doc_cache.STATUS_FAILED, error_code=code)
 
 
-_MONEY_HINTS = re.compile(
-    r"(?:USD|CNY|RMB|EUR|GBP|JPY|HKD|\$|￥|¥|报价|价格|单价|金额|总价|合同|"
-    r"invoice|\bPI\b|发票|价目)",
+# 金额特征必须带"数值"，只看出现"价格/合同"等词会把产品介绍全部误判成 money
+# （2026-11-09 手工基准：5 个文件全被兜底成 money，缓存收益为 0）。
+_MONEY_AMOUNT_RE = re.compile(
+    r"(?:USD|CNY|RMB|EUR|GBP|JPY|HKD|[$￥¥€])\s*[-+]?\d"
+    r"|\b\d[\d,]*(?:\.\d+)?\s*(?:USD|CNY|RMB|EUR|GBP|JPY|HKD|元|美元|人民币)",
     re.IGNORECASE,
 )
+_MONEY_LABEL_RE = re.compile(
+    r"(单价|价格|金额|总价|报价|价目|币种|数量阶梯|PI|invoice|发票)",
+    re.IGNORECASE,
+)
+_CONTRACT_HINT_RE = re.compile(r"(合同|协议|甲方|乙方)", re.IGNORECASE)
+_CLAUSE_RE = re.compile(r"第[一二三四五六七八九十百\d]+条")
 
 
-def _looks_like_money(parsed: ParsedDocument) -> bool:
-    """内容级金额特征：只用于把模型误判的 info 改回 money（fail-closed）。"""
-    blob = parsed.text[:5000]
-    if parsed.facts:
-        blob += "\n" + json.dumps(parsed.facts[:50], ensure_ascii=False)
-    return bool(_MONEY_HINTS.search(blob))
+def _facts_look_monetary(facts: list[dict]) -> bool:
+    """表格事实里出现金额类数值/标签才算 money 证据。"""
+    for fact in facts[:200]:
+        labels = " ".join(
+            str(fact.get(key, ""))
+            for key in ("name", "column", "row", "sheet", "unit", "字段名")
+        )
+        value = str(fact.get("value", ""))
+        if _MONEY_AMOUNT_RE.search(value):
+            return True
+        if _MONEY_LABEL_RE.search(labels) and any(ch.isdigit() for ch in value):
+            return True
+    return False
+
+
+def _looks_like_money(
+    parsed: ParsedDocument, model_facts: list[dict] | None = None,
+) -> bool:
+    """内容级金额特征：只认"货币+数字"、金额类表格、合同条款结构。
+
+    单个词"价格/合同"不再触发 —— 产品介绍里提到价格不等于报价单。
+    """
+    text = parsed.text[:5000]
+    if _MONEY_AMOUNT_RE.search(text):
+        return True
+    if _CONTRACT_HINT_RE.search(text) and _CLAUSE_RE.search(text):
+        return True
+    facts = list(parsed.facts) + list(model_facts or [])
+    return _facts_look_monetary(facts)
 
 
 # ── 确定性解析 ──────────────────────────────────────────────────────────────
