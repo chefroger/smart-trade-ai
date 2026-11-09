@@ -23,6 +23,8 @@ version: 1.0.0
 author: Foreign Trade Assistant
 ---
 
+初始化完成后提示用户：可以随时说「检查知识库」，我会扫描缺文件、空文件、过期资质和前后矛盾项。
+
 ```
 
 ### Product Marketing Positioning
