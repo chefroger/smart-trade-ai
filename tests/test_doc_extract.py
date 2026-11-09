@@ -139,6 +139,15 @@ class TestParsing:
         assert result.status == doc_cache.STATUS_FAILED
         assert result.error_code == "truncated"
 
+    def test_huge_csv_field_returns_error(self, tmp_path):
+        """超大单元格的 _csv.Error 也要转成 parsed.error，不能穿出去。"""
+        path = tmp_path / "huge.csv"
+        path.write_text("a," + "x" * 200000, encoding="utf-8")
+
+        parsed = doc_extract.parse_document(path)
+
+        assert parsed.error
+
     def test_corrupt_xlsx_returns_error_not_exception(self, tmp_path):
         path = tmp_path / "broken.xlsx"
         path.write_bytes(b"this is not a zip")
@@ -366,6 +375,29 @@ class TestWarmCache:
 
         assert doc_extract.warm_cache([path], tenant_id=1) == 0
         assert calls == [], "达到重试上限后不得再调用提取模型"
+
+    def test_unclassified_is_retried_within_cap(self, monkeypatch, tmp_path):
+        import trade.database as db
+
+        monkeypatch.setattr(db, "_get_db_path", lambda: tmp_path / "warm.db")
+        db.init_db()
+        path = tmp_path / "intro.txt"
+        path.write_text("公司介绍", encoding="utf-8")
+        _patch_model(monkeypatch, json.dumps({"doc_kind": "unknown"}))
+        assert doc_extract.warm_cache([path], tenant_id=1) == 1
+        # unclassified 不是终点：下次仍会重试，attempts+1
+        _patch_model(monkeypatch, json.dumps({"doc_kind": "info", "summary": "介绍"}))
+        assert doc_extract.warm_cache([path], tenant_id=1) == 1
+        digest = doc_cache.file_sha256(path)
+        conn = db.get_connection()
+        try:
+            entry = doc_cache.get(
+                conn, tenant_id=1, sha256=digest, model="provider:model"
+            )
+        finally:
+            conn.close()
+        assert entry.extraction_status == doc_cache.STATUS_COMPLETE
+        assert entry.attempts == 2
 
     def test_kill_switch_disables_warm(self, monkeypatch, tmp_path):
         path = tmp_path / "intro.txt"

@@ -193,7 +193,8 @@ def warm_cache(paths, *, tenant_id, limit: int | None = None) -> int:
                 conn, tenant_id=tenant_id, sha256=digest, model=model_key
             )
             if existing is not None:
-                if existing.extraction_status != doc_cache.STATUS_FAILED:
+                # complete 才跳过；unclassified/failed 在次数上限内继续重试。
+                if existing.extraction_status == doc_cache.STATUS_COMPLETE:
                     continue
                 if existing.attempts >= MAX_CACHE_ATTEMPTS:
                     continue
@@ -252,7 +253,7 @@ def parse_document(path: str | Path) -> ParsedDocument:
             return _parse_docx(target)
         if suffix == ".pdf":
             return _parse_pdf(target)
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, csv.Error) as exc:
         _log.debug("解析文档失败（%s）：%s", target.name, exc)
         return ParsedDocument(target, error=f"{type(exc).__name__}: {exc}")
     return ParsedDocument(target, unsupported=True)

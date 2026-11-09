@@ -147,6 +147,16 @@ def test_same_content_other_path_hits(conn, tmp_path):
     ) is not None
 
 
+def test_save_normalizes_model_key(conn):
+    """直接调用 save 也要归一模型名，不能和 to_cache_entry 口径不一致。"""
+    assert doc_cache.save(conn, _entry(model="  DeepSeek:Chat "))
+    row = conn.execute("SELECT model FROM doc_extractions").fetchone()
+    assert row[0] == "deepseek:chat"
+    assert doc_cache.get(
+        conn, tenant_id=1, sha256=_entry().sha256, model="deepseek:chat"
+    ) is not None
+
+
 def test_cache_kill_switch(monkeypatch):
     monkeypatch.delenv("TRADE_DOC_CACHE", raising=False)
     assert doc_cache.cache_enabled() is True

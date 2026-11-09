@@ -417,7 +417,7 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
 _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
     "customer_libraries", "conversations", "orders", "order_items",
-    "usage_ledger", "cron_job_companies", "trial_events",
+    "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
 })
 
 

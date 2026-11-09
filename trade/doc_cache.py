@@ -165,7 +165,7 @@ def save(conn: sqlite3.Connection, entry: CacheEntry) -> bool:
         conn.execute(_UPSERT_SQL, (
             entry.tenant_id,
             entry.sha256,
-            entry.model,
+            normalize_model(entry.model),
             entry.extractor_version,
             entry.extracted_at,
             entry.extraction_status,
