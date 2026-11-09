@@ -136,6 +136,17 @@ def test_model_key_is_normalized():
     assert doc_cache.normalize_model("  DeepSeek:Chat ") == "deepseek:chat"
 
 
+def test_same_content_other_path_hits(conn, tmp_path):
+    """缓存以内容哈希为键：同租户同内容换路径仍然命中（验收 6）。"""
+    doc_cache.save(conn, _entry())
+    moved = tmp_path / "moved.txt"
+    moved.write_bytes(b"file")
+    assert doc_cache.file_sha256(moved) == _entry().sha256
+    assert doc_cache.get(
+        conn, tenant_id=1, sha256=_entry().sha256, model="deepseek:chat"
+    ) is not None
+
+
 def test_cache_kill_switch(monkeypatch):
     monkeypatch.delenv("TRADE_DOC_CACHE", raising=False)
     assert doc_cache.cache_enabled() is True

@@ -27,7 +27,7 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 # 提取器逻辑版本：提示词、分类规则、解析器、facts 结构任一实际改动都必须递增。
-EXTRACTOR_VERSION = "1"
+EXTRACTOR_VERSION = "2"
 
 STATUS_COMPLETE = "complete"
 STATUS_UNCLASSIFIED = "unclassified"

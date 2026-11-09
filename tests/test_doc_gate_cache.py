@@ -18,6 +18,10 @@ from trade.document_task import DocumentFile, DocumentTask
     ("这些文件主要讲了什么", doc_scope.SCOPE_SUMMARY),
     ("哪些文件涉及 LED 灯带", doc_scope.SCOPE_LOCATE),
     ("LED 的资料在哪个文件", doc_scope.SCOPE_LOCATE),
+    ("介绍一下这批资料的付款方式", doc_scope.SCOPE_FULL_READ),  # 审计 P1-2
+    ("总结一下这些文件的佣金", doc_scope.SCOPE_FULL_READ),
+    ("介绍一下资料的第三条", doc_scope.SCOPE_FULL_READ),
+    ("哪些文件写了付款条件", doc_scope.SCOPE_FULL_READ),
     ("介绍一下这批报价单", doc_scope.SCOPE_FULL_READ),   # 含"报价" → money 全文
     ("总结一下这些文件里的价格", doc_scope.SCOPE_FULL_READ),
     ("哪些文件里有 2026 年的单子", doc_scope.SCOPE_FULL_READ),  # 含数字
@@ -50,6 +54,14 @@ def _cache_record(**overrides):
     }
     record.update(overrides)
     return record
+
+
+def test_overview_does_not_enable_gate():
+    """概览/定位只做缓存上下文，不再强制读取门禁（审计 P1-1）。"""
+    from trade.document_task import should_enforce_document_gate
+
+    assert should_enforce_document_gate("介绍一下这批资料") is False
+    assert should_enforce_document_gate("哪些文件涉及 LED") is False
 
 
 class TestGateCacheEvidence:
@@ -180,6 +192,34 @@ class TestLoadCacheHits:
         monkeypatch.setattr(chat, "resolve_extraction_model", lambda: ("p", "m", "p:m"))
         evidence, skip, prompt = chat._load_cache_hits(task, 1, "full_read")
         assert (evidence, skip, prompt) == ({}, set(), "")
+
+    def test_only_injected_files_are_skipped(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        import trade.api.chat as chat
+
+        files = [
+            SimpleNamespace(path=tmp_path / f"f{i}.txt", relative_path=f"f{i}.txt")
+            for i in range(40)
+        ]
+        task = SimpleNamespace(files=files)
+        entry = SimpleNamespace(
+            cacheable_info=True, doc_kind="info", summary_text="摘要",
+            model="m", extractor_version="2", extracted_at="t",
+        )
+        monkeypatch.setattr(chat.doc_cache, "file_sha256", lambda p: "a" * 64)
+        monkeypatch.setattr(chat.doc_cache, "get", lambda *a, **k: entry)
+        monkeypatch.setattr(chat, "resolve_extraction_model", lambda: ("p", "m", "p:m"))
+        monkeypatch.setattr(
+            chat, "get_connection", lambda: SimpleNamespace(close=lambda: None)
+        )
+
+        evidence, skip, prompt = chat._load_cache_hits(task, 1, "summary")
+
+        assert len(skip) == chat._MAX_CACHE_PROMPT_FILES
+        assert len(evidence) == len(skip)
+        assert str(files[-1].path) not in skip, "没写进提示的文件不得被拦截"
+        assert str(files[-1].path) not in prompt
 
     def test_cache_off_never_hits(self, tmp_path, monkeypatch, conn):
         import trade.api.chat as chat

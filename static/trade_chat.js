@@ -2398,7 +2398,10 @@ async function loadChatHistory() {
     container.innerHTML = '';
     data.reverse().forEach(c => {
         let filesRead = [];
-        try { filesRead = c.files_read ? JSON.parse(c.files_read) : []; } catch(e) { filesRead = []; }
+        try {
+            filesRead = Array.isArray(c.files_read) ? c.files_read
+                : (c.files_read ? JSON.parse(c.files_read) : []);
+        } catch(e) { filesRead = []; }
         if (c.query) addMsg('user', c.query, filesRead, false);
         if (c.response) addMsg('assistant', c.response, null, false);
     });

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from trade.doc_scope import detect_request_scope, scope_allows_cache
+from trade.doc_scope import scope_allows_cache
 
 # Trade 认为「需要完整读取」的文档类型。Hermes 负责实际读取与解析，
 # 这里只决定哪些文件纳入强制范围。
@@ -283,7 +283,8 @@ class DocumentTask:
         # 走到这里的证据若全来自工具回调（原版 Hermes 就是这种情况），
         # 就如实说明完整性未经核验，而不是让用户以为已经逐 Sheet 逐页校验过。
         _has_structured = any(
-            rec.get("source") != "callbacks" for rec in normalized.values()
+            rec.get("source") not in ("callbacks", "cache")
+            for rec in normalized.values()
         )
         return GateResult(
             status=status,
@@ -369,8 +370,6 @@ def should_enforce_document_gate(query: str) -> bool:
         return False
     has_scope = any(re.search(p, text, re.IGNORECASE) for p in _DIRECTORY_SCOPE_PATTERNS)
     has_intent = any(re.search(p, text, re.IGNORECASE) for p in _COMPLETENESS_INTENT_PATTERNS)
-    if has_scope and has_intent:
-        return True
-    # 概览/定位请求也要建计划（缓存只服务这两类）。范围由调用方保证：
-    # Trade 侧必须有已选文档库，否则不会进入门禁分支。
-    return scope_allows_cache(detect_request_scope(query))
+    # 只有"明确要求读完整个目录"才强制门禁。概览/定位只把缓存摘要当上下文，
+    # 不参与门禁（2026-11-09 审计 P1-1：门禁在冷缓存时会把已生成的回答吞掉）。
+    return has_scope and has_intent

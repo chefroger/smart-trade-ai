@@ -16,7 +16,7 @@ from trade import doc_cache, doc_extract
 # 改提示词或分类规则：必须递增 doc_cache.EXTRACTOR_VERSION 并补一条新映射；
 # 只改文本不改版本会直接失败（旧版本号对不上新指纹）。
 TRADE_EXTRACTOR_FINGERPRINTS = {
-    "1": "550a2009fccfeca8cb71985a5a9edc16ee63b957b8dfba826b6cf4744906cf9f",
+    "2": "4991c04e7b7ce9dd24c2fbc2d33b27f1c2c7da3535e39d6e26c2fa03fa9d8dd6",
 }
 
 
@@ -86,6 +86,30 @@ class TestParsing:
         assert parsed.truncated is True
         assert len(parsed.facts) <= doc_extract._MAX_PARSED_FACTS
 
+    def test_docx_large_table_is_truncated(self, tmp_path):
+        import docx
+
+        path = tmp_path / "big.docx"
+        document = docx.Document()
+        table = document.add_table(rows=205, cols=2)
+        for row in table.rows:
+            row.cells[0].text = "row"
+            row.cells[1].text = "1"
+        document.save(path)
+
+        parsed = doc_extract.parse_document(path)
+
+        assert parsed.truncated is True
+
+    def test_corrupt_xlsx_returns_error_not_exception(self, tmp_path):
+        path = tmp_path / "broken.xlsx"
+        path.write_bytes(b"this is not a zip")
+
+        parsed = doc_extract.parse_document(path)
+
+        assert parsed.error
+        assert parsed.truncated is False
+
     def test_docx_table(self, tmp_path):
         import docx
 
@@ -127,6 +151,15 @@ class TestParsing:
         scanned.close()
         assert doc_extract.parse_document(scanned_path).needs_ocr is True
 
+        # 混合 PDF：一页有文字、一页没有 → 不写缓存（无法确认整份读过）
+        mixed_path = tmp_path / "mixed.pdf"
+        mixed = fitz.open()
+        mixed.new_page().insert_text((72, 72), "page one")
+        mixed.new_page()
+        mixed.save(mixed_path)
+        mixed.close()
+        assert doc_extract.parse_document(mixed_path).needs_ocr is True
+
     def test_unsupported_type(self, tmp_path):
         path = tmp_path / "raw.bin"
         path.write_bytes(b"\x00\x01")
@@ -158,6 +191,15 @@ class TestExtraction:
         assert result.summary == "报价单"
         assert result.facts[0]["value"] == "3.50"
         assert calls and calls[0][:2] == ("provider", "model")
+
+    async def test_money_content_overrides_model_info(self, monkeypatch, txt_file):
+        """模型把含金额的文档标成 info 时，代码兜底改回 money（审计 P2-1）。"""
+        _patch_model(monkeypatch, json.dumps({
+            "doc_kind": "info", "summary": "含单价 USD 3.50", "facts": [],
+        }, ensure_ascii=False))
+        result = await doc_extract.extract_document(txt_file)
+        assert result.doc_kind == doc_cache.KIND_MONEY
+        assert result.cacheable is False
 
     async def test_unknown_kind_is_unclassified(self, monkeypatch, txt_file):
         _patch_model(monkeypatch, json.dumps({"doc_kind": "unknown", "summary": "x"}))

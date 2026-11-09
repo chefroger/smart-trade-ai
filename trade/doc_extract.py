@@ -114,13 +114,21 @@ class ExtractionResult:
         return self.status == doc_cache.STATUS_COMPLETE and self.doc_kind == doc_cache.KIND_INFO
 
 
+# 解析器行为版本：解析阈值、异常处理、坐标规则改动时递增。
+# 与 doc_cache.EXTRACTOR_VERSION 同步 —— 解析器变了，旧 complete 行必须作废。
+_PARSER_REVISION = "2"
+
+
 def extractor_fingerprint() -> str:
-    """提示词 + 分类规则的指纹；文本一改，测试会要求同时递增 extractor_version。"""
+    """提示词 + 分类规则 + 解析器版本的指纹。
+
+    任何一项实际改动都必须递增 doc_cache.EXTRACTOR_VERSION；测试按
+    "版本 → 指纹" 映射钉住，只改文本不改版本会直接失败。
+    """
     import hashlib
 
-    return hashlib.sha256(
-        (EXTRACT_PROMPT + CLASSIFY_RULES + _TRADE_FACTS_GUIDE).encode("utf-8")
-    ).hexdigest()
+    payload = EXTRACT_PROMPT + CLASSIFY_RULES + _TRADE_FACTS_GUIDE + _PARSER_REVISION
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _extract_timeout() -> float:
@@ -177,7 +185,12 @@ def warm_cache(paths, *, tenant_id, limit: int | None = None) -> int:
                 if existing.attempts >= MAX_CACHE_ATTEMPTS:
                     continue
             attempts = existing.attempts + 1 if existing else 1
-            result = asyncio.run(extract_document(path))
+            try:
+                result = asyncio.run(extract_document(path))
+            except Exception as exc:
+                # 单个文件的解析/提取异常不能带走整轮预热线程。
+                _log.warning("预热提取失败（%s）：%s", path, exc)
+                continue
             doc_cache.save(conn, to_cache_entry(
                 result, tenant_id=tenant_id, sha256=digest,
                 model=model_key, attempts=attempts,
@@ -280,6 +293,9 @@ async def extract_document(
     kind = str(obj.get("doc_kind") or "").strip().lower()
     if kind not in {doc_cache.KIND_MONEY, doc_cache.KIND_INFO, doc_cache.KIND_UNKNOWN}:
         kind = doc_cache.KIND_UNKNOWN
+    # 代码级兜底（审计 P2-1）：内容里已有金额/币种/报价特征时，模型说 info 也不认。
+    if kind == doc_cache.KIND_INFO and _looks_like_money(parsed):
+        kind = doc_cache.KIND_MONEY
     summary = str(obj.get("summary") or "").strip()[:2000]
     model_facts = _coerce_facts(obj.get("facts"))
     facts = _merge_facts(parsed.facts, model_facts)
@@ -449,6 +465,21 @@ def _failed(code: str) -> ExtractionResult:
     return ExtractionResult(status=doc_cache.STATUS_FAILED, error_code=code)
 
 
+_MONEY_HINTS = re.compile(
+    r"(?:USD|CNY|RMB|EUR|GBP|JPY|HKD|\$|￥|¥|报价|价格|单价|金额|总价|合同|"
+    r"invoice|\bPI\b|发票|价目)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_money(parsed: ParsedDocument) -> bool:
+    """内容级金额特征：只用于把模型误判的 info 改回 money（fail-closed）。"""
+    blob = parsed.text[:5000]
+    if parsed.facts:
+        blob += "\n" + json.dumps(parsed.facts[:50], ensure_ascii=False)
+    return bool(_MONEY_HINTS.search(blob))
+
+
 # ── 确定性解析 ──────────────────────────────────────────────────────────────
 
 
@@ -476,9 +507,14 @@ def _parse_csv(path: Path) -> ParsedDocument:
 
 
 def _parse_xlsx(path: Path) -> ParsedDocument:
-    import openpyxl
+    try:
+        import openpyxl
 
-    workbook = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+        workbook = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+    except Exception as exc:  # 损坏/加密/格式不符：交给调用方按 failed 处理
+        _log.warning("解析 xlsx 失败（%s）：%s", path.name, exc)
+        return ParsedDocument(path, error=f"{type(exc).__name__}: {exc}")
+
     parts: list[str] = []
     facts: list[dict] = []
     truncated = False
@@ -498,52 +534,87 @@ def _parse_xlsx(path: Path) -> ParsedDocument:
                 break
         if len(workbook.worksheets) > _MAX_SHEETS:
             truncated = True
+    except Exception as exc:
+        _log.warning("读取 xlsx 内容失败（%s）：%s", path.name, exc)
+        return ParsedDocument(path, error=f"{type(exc).__name__}: {exc}")
     finally:
-        workbook.close()
+        try:
+            workbook.close()
+        except Exception:
+            pass
     parsed = ParsedDocument(path, text="\n\n".join(parts), facts=facts[: _MAX_PARSED_FACTS])
     parsed.truncated = truncated
     return _clip(parsed)
 
 
 def _parse_docx(path: Path) -> ParsedDocument:
-    import docx
+    try:
+        import docx
 
-    document = docx.Document(str(path))
+        document = docx.Document(str(path))
+    except Exception as exc:
+        _log.warning("解析 docx 失败（%s）：%s", path.name, exc)
+        return ParsedDocument(path, error=f"{type(exc).__name__}: {exc}")
+
     parts: list[str] = []
     facts: list[dict] = []
-    for index, paragraph in enumerate(document.paragraphs):
-        text = (paragraph.text or "").strip()
-        if text:
-            parts.append(f"[段落 {index + 1}] {text}")
-    for table_index, table in enumerate(document.tables):
-        rows: list[list[Any]] = []
-        for row in table.rows:
-            if len(rows) >= _MAX_TABLE_ROWS:
-                break
-            rows.append([cell.text for cell in row.cells[:_MAX_TABLE_COLS]])
-        parts.append(f"## 表格 {table_index + 1}\n" + _rows_to_text(rows))
-        facts.extend(_table_facts(rows, sheet=f"表格 {table_index + 1}"))
+    truncated = False
+    try:
+        for index, paragraph in enumerate(document.paragraphs):
+            text = (paragraph.text or "").strip()
+            if text:
+                parts.append(f"[段落 {index + 1}] {text}")
+        for table_index, table in enumerate(document.tables):
+            rows: list[list[Any]] = []
+            for row in table.rows:
+                if len(rows) >= _MAX_TABLE_ROWS:
+                    truncated = True
+                    break
+                cells = row.cells
+                if len(cells) > _MAX_TABLE_COLS:
+                    truncated = True
+                rows.append([cell.text for cell in cells[:_MAX_TABLE_COLS]])
+            parts.append(f"## 表格 {table_index + 1}\n" + _rows_to_text(rows))
+            facts.extend(_table_facts(rows, sheet=f"表格 {table_index + 1}"))
+    except Exception as exc:
+        _log.warning("读取 docx 内容失败（%s）：%s", path.name, exc)
+        return ParsedDocument(path, error=f"{type(exc).__name__}: {exc}")
     return _clip(ParsedDocument(
         path, text="\n".join(parts), facts=facts[:_MAX_PARSED_FACTS],
+        truncated=truncated,
     ))
 
 
 def _parse_pdf(path: Path) -> ParsedDocument:
-    import fitz  # PyMuPDF
+    try:
+        import fitz  # PyMuPDF
 
-    document = fitz.open(str(path))
+        document = fitz.open(str(path))
+    except Exception as exc:
+        _log.warning("解析 PDF 失败（%s）：%s", path.name, exc)
+        return ParsedDocument(path, error=f"{type(exc).__name__}: {exc}")
+
     parts: list[str] = []
+    empty_pages = 0
     try:
         for page_index, page in enumerate(document):
             text = page.get_text() or ""
             if text.strip():
                 parts.append(f"[第 {page_index + 1} 页]\n{text}")
+            else:
+                empty_pages += 1
         if document.page_count == 0:
             return ParsedDocument(path, needs_ocr=True)
+    except Exception as exc:
+        _log.warning("读取 PDF 内容失败（%s）：%s", path.name, exc)
+        return ParsedDocument(path, error=f"{type(exc).__name__}: {exc}")
     finally:
-        document.close()
-    if not parts:
-        # 没有文字层：扫描件，缓存不承诺能读，交回全文读取流程。
+        try:
+            document.close()
+        except Exception:
+            pass
+    # 任一页没有文字层（扫描页/空白页）都不写缓存：无法确认这一页读过。
+    if not parts or empty_pages:
         return ParsedDocument(path, needs_ocr=True)
     return _clip(ParsedDocument(path, text="\n\n".join(parts)))
 
