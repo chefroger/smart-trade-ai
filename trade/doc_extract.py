@@ -116,18 +116,29 @@ class ExtractionResult:
 
 # 解析器行为版本：解析阈值、异常处理、坐标规则改动时递增。
 # 与 doc_cache.EXTRACTOR_VERSION 同步 —— 解析器变了，旧 complete 行必须作废。
-_PARSER_REVISION = "2"
+_PARSER_REVISION = "3"
 
 
 def extractor_fingerprint() -> str:
-    """提示词 + 分类规则 + 解析器版本的指纹。
+    """提示词 + 分类规则 + 解析器源码的指纹。
 
-    任何一项实际改动都必须递增 doc_cache.EXTRACTOR_VERSION；测试按
-    "版本 → 指纹" 映射钉住，只改文本不改版本会直接失败。
+    解析器源码也计入哈希：只改解析逻辑而忘记递增 doc_cache.EXTRACTOR_VERSION
+    时，测试会直接失败（审计 P2-2）。测试按"版本 → 指纹"映射钉住。
     """
     import hashlib
+    import inspect
 
-    payload = EXTRACT_PROMPT + CLASSIFY_RULES + _TRADE_FACTS_GUIDE + _PARSER_REVISION
+    parser_source = "".join(
+        inspect.getsource(fn)
+        for fn in (
+            _parse_xlsx, _parse_docx, _parse_pdf, _table_facts,
+            _split_value_unit, _xlsx_has_uncached_formula,
+        )
+    )
+    payload = (
+        EXTRACT_PROMPT + CLASSIFY_RULES + _TRADE_FACTS_GUIDE
+        + _PARSER_REVISION + parser_source
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -517,6 +528,7 @@ def _parse_xlsx(path: Path) -> ParsedDocument:
 
     parts: list[str] = []
     facts: list[dict] = []
+    values_by_sheet: list[list[list[Any]]] = []
     truncated = False
     try:
         for sheet in workbook.worksheets[:_MAX_SHEETS]:
@@ -529,7 +541,14 @@ def _parse_xlsx(path: Path) -> ParsedDocument:
                     truncated = True
                 rows.append(list(row))
             parts.append(f"## Sheet: {sheet.title}\n" + _rows_to_text(rows))
-            facts.extend(_table_facts(rows, sheet=sheet.title))
+            sheet_facts, sheet_facts_truncated = _table_facts(rows, sheet=sheet.title)
+            if sheet_facts_truncated:
+                truncated = True
+            facts.extend(sheet_facts)
+            if len(facts) > _MAX_PARSED_FACTS:
+                truncated = True
+                facts = facts[:_MAX_PARSED_FACTS]
+            values_by_sheet.append(rows)
             if truncated:
                 break
         if len(workbook.worksheets) > _MAX_SHEETS:
@@ -542,9 +561,50 @@ def _parse_xlsx(path: Path) -> ParsedDocument:
             workbook.close()
         except Exception:
             pass
-    parsed = ParsedDocument(path, text="\n\n".join(parts), facts=facts[: _MAX_PARSED_FACTS])
+    # 公式格没有缓存值时 data_only 读到 None，会被当成空单元格 —— 必须在
+    # 写入缓存前识别出来，否则计算结果会静默丢失。
+    if not truncated and _xlsx_has_uncached_formula(path, values_by_sheet):
+        truncated = True
+    parsed = ParsedDocument(path, text="\n\n".join(parts), facts=facts[:_MAX_PARSED_FACTS])
     parsed.truncated = truncated
     return _clip(parsed)
+
+
+def _xlsx_has_uncached_formula(
+    path: Path, values_by_sheet: list[list[list[Any]]],
+) -> bool:
+    """是否存在 data_only 读不到值的公式格；无法确认时按“有”处理。"""
+    try:
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(str(path), read_only=True, data_only=False)
+    except Exception as exc:
+        _log.warning("检查 xlsx 公式失败（%s）：%s", path.name, exc)
+        return True
+    try:
+        for sheet_index, sheet in enumerate(workbook.worksheets[:_MAX_SHEETS]):
+            if sheet_index >= len(values_by_sheet):
+                break
+            values_rows = values_by_sheet[sheet_index]
+            for row_index, row in enumerate(sheet.iter_rows()):
+                if row_index >= _MAX_TABLE_ROWS:
+                    break
+                values = values_rows[row_index] if row_index < len(values_rows) else []
+                for col_index, cell in enumerate(row[:_MAX_TABLE_COLS]):
+                    if getattr(cell, "data_type", "") != "f":
+                        continue
+                    value = values[col_index] if col_index < len(values) else None
+                    if value is None:
+                        return True
+    except Exception as exc:
+        _log.warning("检查 xlsx 公式失败（%s）：%s", path.name, exc)
+        return True
+    finally:
+        try:
+            workbook.close()
+        except Exception:
+            pass
+    return False
 
 
 def _parse_docx(path: Path) -> ParsedDocument:
@@ -575,7 +635,15 @@ def _parse_docx(path: Path) -> ParsedDocument:
                     truncated = True
                 rows.append([cell.text for cell in cells[:_MAX_TABLE_COLS]])
             parts.append(f"## 表格 {table_index + 1}\n" + _rows_to_text(rows))
-            facts.extend(_table_facts(rows, sheet=f"表格 {table_index + 1}"))
+            table_facts, table_facts_truncated = _table_facts(
+                rows, sheet=f"表格 {table_index + 1}"
+            )
+            if table_facts_truncated:
+                truncated = True
+            facts.extend(table_facts)
+            if len(facts) > _MAX_PARSED_FACTS:
+                truncated = True
+                facts = facts[:_MAX_PARSED_FACTS]
     except Exception as exc:
         _log.warning("读取 docx 内容失败（%s）：%s", path.name, exc)
         return ParsedDocument(path, error=f"{type(exc).__name__}: {exc}")
@@ -635,16 +703,20 @@ def _table_document(path: Path, rows: list[list[Any]], *, sheet: str) -> ParsedD
         or any(len(row) > _MAX_TABLE_COLS for row in rows)
     )
     rows = [row[:_MAX_TABLE_COLS] for row in rows[:_MAX_TABLE_ROWS]]
+    facts, facts_truncated = _table_facts(rows, sheet=sheet)
     return ParsedDocument(
         path, text=_rows_to_text(rows),
-        facts=_table_facts(rows, sheet=sheet)[:_MAX_PARSED_FACTS], truncated=truncated,
+        facts=facts[:_MAX_PARSED_FACTS],
+        truncated=truncated or facts_truncated,
     )
 
 
-def _table_facts(rows: list[list[Any]], *, sheet: str) -> list[dict]:
-    """把表格转成五元组事实（sheet、行标签、列标签、数值、单位 + 坐标）。"""
+def _table_facts(
+    rows: list[list[Any]], *, sheet: str,
+) -> tuple[list[dict], bool]:
+    """把表格转成五元组事实；返回 (facts, 是否因上限提前停止)。"""
     if not rows:
-        return []
+        return [], False
     header = [str(cell).strip() if cell is not None else "" for cell in rows[0]]
     facts: list[dict] = []
     for row_index, row in enumerate(rows[1:], start=2):
@@ -665,8 +737,8 @@ def _table_facts(rows: list[list[Any]], *, sheet: str) -> list[dict]:
                 "location": {"sheet": sheet, "row": row_index, "column": col_index + 1},
             })
             if len(facts) >= _MAX_PARSED_FACTS:
-                return facts
-    return facts
+                return facts, True
+    return facts, False
 
 
 def _split_value_unit(raw: str) -> tuple[str, str]:

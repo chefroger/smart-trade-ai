@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-SCOPE_RULES_VERSION = "1"
+SCOPE_RULES_VERSION = "2"
 
 SCOPE_SUMMARY = "summary"
 SCOPE_LOCATE = "locate"
@@ -45,8 +45,19 @@ _FULL_READ_PATTERNS = (
     # 付款类与条款序号：审计 P1-2 的漏网问法，一律全文
     r"付款|支付|佣金|定金|尾款|账期|信用期|发票|收款|银行账号?",
     r"第[一二三四五六七八九十百\d]+条",
-    r"日期|名单|客户名单|供应商名单",
+    # 具体事实类问法：数字/数量/客户等，概览句式也不能降低为 summary
+    r"数字|多少|数量|数据|百分比|百分之|客户|供应商|名单",
+    r"日期|客户名单|供应商名单",
     r"原文|逐字|引用|比较|统计|计算|核对|核算|汇总表|增长率|占比|合格率",
+    # 英文同类事实词（用词边界避免命中 update 等普通单词）
+    r"\b(?:prices?|amounts?|dates?|clauses?|quotes?|compar(?:e|ison)|"
+    r"percents?|percentages?)\b",
+)
+
+# 否定概览句式优先于 summary/locate：如「不要总结，把文档逐条算清楚」。
+_NEGATED_OVERVIEW_PATTERNS = (
+    r"(?:不要|别|不用|不必|无需)\s*(?:只|再)?\s*(?:总结|概述|概览|摘要)",
+    r"\b(?:do\s+not|don'?t)\s+(?:just\s+)?(?:summari[sz]e|overview)\b",
 )
 
 
@@ -54,6 +65,9 @@ def detect_request_scope(query: str) -> str:
     """返回 summary / locate / full_read；无法保守判定时一律 full_read。"""
     text = str(query or "").strip().lower()
     if not text:
+        return SCOPE_FULL_READ
+    if any(re.search(pattern, text, re.IGNORECASE)
+           for pattern in _NEGATED_OVERVIEW_PATTERNS):
         return SCOPE_FULL_READ
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in _FULL_READ_PATTERNS):
         return SCOPE_FULL_READ

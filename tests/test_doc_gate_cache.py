@@ -26,10 +26,25 @@ from trade.document_task import DocumentFile, DocumentTask
     ("总结一下这些文件里的价格", doc_scope.SCOPE_FULL_READ),
     ("哪些文件里有 2026 年的单子", doc_scope.SCOPE_FULL_READ),  # 含数字
     ("总结一下我们的优势", doc_scope.SCOPE_FULL_READ),    # 没有文档指代
+    # 2026-11-09 复审 P1-1：概览句式不能吞掉具体事实问法
+    ("总结一下这些文档的关键数字", doc_scope.SCOPE_FULL_READ),
+    ("请总结文档里写了多少钱", doc_scope.SCOPE_FULL_READ),
+    ("概述这些资料的百分比", doc_scope.SCOPE_FULL_READ),
+    ("介绍一下文件里的数据", doc_scope.SCOPE_FULL_READ),
+    ("资料概览一下各项目的数量", doc_scope.SCOPE_FULL_READ),
+    ("总结文档里有哪些客户", doc_scope.SCOPE_FULL_READ),
+    ("不要总结，把文档逐条算清楚", doc_scope.SCOPE_FULL_READ),
+    ("overview of the document prices", doc_scope.SCOPE_FULL_READ),
+    ("give me an overview of the documents and their dates", doc_scope.SCOPE_FULL_READ),
     ("", doc_scope.SCOPE_FULL_READ),
 ])
 def test_request_scope_table(query, expected):
     assert doc_scope.detect_request_scope(query) == expected
+
+
+def test_scope_rules_version_is_bumped_with_rules():
+    """范围规则改动必须递增常量（与提取器版本同样的纪律）。"""
+    assert doc_scope.SCOPE_RULES_VERSION == "2"
 
 
 def _task(tmp_path) -> DocumentTask:

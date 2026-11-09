@@ -967,6 +967,14 @@ async def trade_chat_stream(
                     await agent_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            # 线程里的 release 可能赶在 error 事件之后才执行；这里兜底一次，
+            # 保证流结束（异常/断连/超时）时跳过集合一定被释放。
+            if document_task and request_task_id:
+                try:
+                    release_read_coverage(request_task_id)
+                    release_doc_skip(request_task_id)
+                except Exception:
+                    _log.exception("release read coverage / doc skip failed")
             yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(
