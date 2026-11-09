@@ -43,8 +43,13 @@ _SKILLS: list[dict] = [
             "due diligence", "osint", "company verification", "domain age",
             "risk assessment", "check company", "check domain",
             "whois lookup", "sanctions check", "osint check", "company background", "check this company",
+            # 口语改写（2026-11-09 PPT 差距 B4）
+            "is this company legit", "is this customer legit", "can i trust this company",
+            "who is this company", "company legit", "trust this company",
             # Fragments
             "帮我背调", "域名老不老", "邮箱是真的假的",
+            # 改写的口语问法也要进背调（2026-11-09 PPT 差距 B4）
+            "靠不靠谱", "客户靠不靠谱", "什么来头", "这家公司什么来头",
         ],
         "aliases": ["b2b-email-intel"],
         "input_fmt": "邮箱地址 / 域名 / 公司名（自动识别类型）",
@@ -409,6 +414,11 @@ STOP RULE（防止无效搜索）:
             "做报价单", "报价单", "报价模板", "生成PI", "形式发票", "出合同", "外贸合同",
             "PI检查", "检查PI", "检查这份PI", "形式发票检查", "check this PI", "proforma invoice check",
             "装箱单模板", "报价单模板", "外贸单证", "生成商业计划书",
+            # 价值 BOM 报价（2026-11-09 PPT 差距 B2）
+            "价值BOM", "价值 BOM", "做价值 BOM", "做价值BOM", "BOM报价", "拆开报价",
+            "价值报价", "按成本拆开", "贵在哪", "看看贵在哪", "给他看看贵在哪",
+            "value bom", "bom quote", "bom quotation", "break down the quote",
+            "break down the quotation", "cost breakdown quote", "unbundle the quote",
             "proforma invoice", "quotation", "quote", "quotation template", "commercial proposal",
             "packing list template", "sales contract",
         ],
@@ -784,6 +794,10 @@ STOP RULE（防止无效搜索）:
             "customer directory", "initialization", "data structure",
             # Fragments
             "我的公司", "公司信息", "产品列表", "客户数据存在哪",
+            # 知识库体检 / 初始化（2026-11-09 PPT 差距 B1）
+            "检查知识库", "我的资料还缺啥", "资料还缺啥",
+            "check the knowledge base", "knowledge base check",
+            "what files am i missing", "what am i missing from my knowledge base",
         ],
         "aliases": [],
         "input_fmt": "公司slug（可选）+ 操作类型（初始化/查看/更新）",
@@ -1343,6 +1357,12 @@ STOP RULE（防止无效搜索）:
             "怎么逼单", "逼单话术", "客户拖着不下单", "客户一直不下单",
             "客户说要考虑", "已读不回怎么办", "客户不回消息", "怎么推进成交",
             "临门一脚", "催客户下单", "客户不签单", "定金没付", "催定金",
+            # 原话 → 卡点诊断（2026-11-09 PPT 差距 B3）
+            "客户这样回", "这封怎么回", "卡在哪一步",
+            "客户说太贵", "回了句", "客户回", "直接发过去",
+            "how should i reply", "what should i reply", "how to reply to this",
+            "where are we stuck", "which stage are we stuck at", "咋整",
+            "customer replied", "customer said too expensive",
             "close the deal", "closing follow up", "customer not responding", "not responding",
             "sales playbook", "sales knowledge base", "sales SOP",
             "sales training",

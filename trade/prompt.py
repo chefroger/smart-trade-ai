@@ -98,9 +98,23 @@ TRADE_IMAGE_BLOCK = """
 - Use `vision_analyze` for every image. Never hand-write an OCR script, never call a system OCR framework, never open a local image through the browser.
 """
 
+# 事实与推断分离 — 与准确规则不同：这一块约束「结论的可信度标注」，不是「文档读取」。
+# 背景：PPT 差距分析 B4。模型常把推断写成事实、给无来源的数字；背调还需要明确
+# 「查不到」和「查过哪些渠道」。既有档位用的是 [确切]/[推断]/[不确定]，这里做显式映射，
+# 避免同一条回复出现两套标签。
+TRADE_EVIDENCE_BLOCK = """
+# Evidence Discipline（事实与推断 — 每轮常驻）
+- 关键结论必须标三类之一：**[事实]**（附来源：用户文件名，或网址+查询日期）、**[推断]**（写依据）、**[待核实]**（无来源或未见公开信息）。
+- [事实] 等同既有 [确切]/[exact]；[待核实] 等同既有 [不确定]/[unclear]，并附「建议核实」。同一条回复只用一套标签，不得混用。
+- 报价、法规、认证、交期、关税、对方营收或人数没有来源时一律标 [待核实]，不给数字、不估算。
+- 查不到就写「暂未找到」并列出已查渠道；不得用常识补全，也不得把推断写成事实。
+- 不声称「已发送」「已联系」「已确认」，除非用户刚说过是他自己做的。
+"""
+
 TRADE_SYSTEM_PROMPT = (
     TRADE_ROLE_BLOCK + "\n\n" + LANGUAGE_POLICY_BLOCK
     + "\n\n" + COMPANY_ISOLATION_BLOCK + "\n\n" + TRADE_IMAGE_BLOCK
+    + "\n\n" + TRADE_EVIDENCE_BLOCK
 )
 
 # 短 Role（精简档用）— 与 TRADE_ROLE_BLOCK 的区别：只保留一句话身份声明
@@ -136,7 +150,7 @@ TRADE_ACCURACY_BLOCK = """
 # 首轮基础块 = 基础三块 + 准确规则（首轮最需要文档准确规则）
 TRADE_SYSTEM_PROMPT_FIRST_TURN = TRADE_SYSTEM_PROMPT + "\n\n" + TRADE_ACCURACY_BLOCK
 
-# 精简版 prompt — 非首轮对话使用（首轮已发送过完整版），保留 Disclaimer + 短 Role + 准确规则
+# 精简版 prompt — 非首轮对话使用（首轮已下发过完整版），保留 Disclaimer + 短 Role + 准确规则
 # 注意：本档不复用 TRADE_SYSTEM_PROMPT，所以图片铁律必须单独挂一次。
 TRADE_SYSTEM_PROMPT_MINIMAL = (
     TRADE_DISCLAIMER_BLOCK + TRADE_SHORT_ROLE_BLOCK
@@ -144,6 +158,7 @@ TRADE_SYSTEM_PROMPT_MINIMAL = (
     + "\n\n" + LANGUAGE_POLICY_BLOCK
     + "\n\n" + COMPANY_ISOLATION_BLOCK
     + "\n\n" + TRADE_IMAGE_BLOCK
+    + "\n\n" + TRADE_EVIDENCE_BLOCK
 )
 
 # OSINT/情报类精简 prompt — 只保留 Role + Language Policy，去掉文档生成/Cognee 等无关段落
@@ -151,6 +166,7 @@ TRADE_SYSTEM_PROMPT_MINIMAL = (
 TRADE_SYSTEM_PROMPT_OSINT = (
     TRADE_ROLE_BLOCK + "\n\n" + LANGUAGE_POLICY_BLOCK
     + "\n\n" + COMPANY_ISOLATION_BLOCK + "\n\n" + TRADE_IMAGE_BLOCK
+    + "\n\n" + TRADE_EVIDENCE_BLOCK
 ) + """
 
 # Research & Investigation Guidelines
