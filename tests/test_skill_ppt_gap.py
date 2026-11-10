@@ -153,16 +153,23 @@ class TestValueBom:
         for token in ("中国", "德国", "美国", "上海", "宁波", "Hamburg", "Shanghai"):
             assert token not in section, f"价值 BOM 段落出现具体国家/城市：{token}"
 
-    def test_external_example_has_no_cost_words(self):
-        """P2-4：对外英文示例不得出现 cost/profit/margin/markup。"""
+    def test_external_cost_words_outside_prohibition_absent(self):
+        """P2-4 / P2-B：价值 BOM 全段（含散文，不只代码块）不得出现英文成本词。
+
+        禁令句本身允许出现这些词；除禁令行外，任何一行出现即失败。
+        """
         import re
 
         section = _section(_text("b2b-doc-generation"), "价值 BOM 报价草稿（可选步骤）", "交付前自检")
-        for block in re.findall(r"```.*?```", section, re.S):
+        offenders = []
+        for line in section.splitlines():
             for word in ("cost", "profit", "margin", "markup"):
-                assert not re.search(rf"\b{word}s?\b", block, re.IGNORECASE), (
-                    f"对外英文示例出现 {word}"
-                )
+                if not re.search(rf"\b{word}s?\b", line, re.IGNORECASE):
+                    continue
+                # 只允许出现在「不得 / 不出现 / 禁止」这类禁令语境里
+                if not any(marker in line for marker in ("不", "禁", "勿", "免")):
+                    offenders.append((word, line.strip()))
+        assert not offenders, f"对外说明出现未加禁令的成本词：{offenders}"
         # 禁令本身必须写清楚英文词，不能只有中文「成本」
         assert "cost / costs / profit / margin / markup" in section
 
@@ -272,6 +279,10 @@ class TestRouting:
             "客户说太贵了怎么办",
             "这封怎么回，客户压价",
             "卡在哪一步了，客户已读不回",
+            # 2026-11-10 审计 P2-A：补回完整说法，不加回短词
+            "客户回：OK noted.",
+            "咋整，这个客户一直不回",
+            "给我一段 WhatsApp 直接发过去",
         ):
             result = match_skill(query)
             assert result is not None, f"{query} 无路由"

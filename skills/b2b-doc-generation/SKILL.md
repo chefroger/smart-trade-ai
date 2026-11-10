@@ -382,10 +382,9 @@ PI（形式发票）生成前检查
 **产出两份，不得合并**
 1. **对外英文草稿**：分项名称、规格、分项价、价值说明（Feature → Advantage → Benefit），
    每条价值说明后跟证据出处（用户文件名，或带查询日期的网址）。
-   **不出现成本、利润、利润率。** 对外英文稿同样不得出现 `cost / costs / profit / margin / markup`
-   （含 build cost、should-cost 一类）；要说明价值构成时用 value breakdown / what's included /
-   what the price covers。成本只放在对内中文说明。采购方会用 should-cost 拆解报价来压价，
-   对外分项价不等于成本拆解。
+   **不出现成本、利润、利润率。** 对外英文稿同样不得出现 cost / costs / profit / margin / markup；
+   要说明价值构成时用 value breakdown / what's included / what the price covers。
+   成本只放在对内中文说明。采购方常按成本结构拆报价来压价，对外分项价不等于成本拆解。
 2. **对内中文说明**：用户给的成本、利润**区间**、谈判要点、降配备选
    （如「降一档材料 −<差价>」，差价必须是用户给的，不自行估算）。
 
