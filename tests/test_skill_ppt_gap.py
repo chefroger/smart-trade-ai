@@ -153,6 +153,19 @@ class TestValueBom:
         for token in ("中国", "德国", "美国", "上海", "宁波", "Hamburg", "Shanghai"):
             assert token not in section, f"价值 BOM 段落出现具体国家/城市：{token}"
 
+    def test_external_example_has_no_cost_words(self):
+        """P2-4：对外英文示例不得出现 cost/profit/margin/markup。"""
+        import re
+
+        section = _section(_text("b2b-doc-generation"), "价值 BOM 报价草稿（可选步骤）", "交付前自检")
+        for block in re.findall(r"```.*?```", section, re.S):
+            for word in ("cost", "profit", "margin", "markup"):
+                assert not re.search(rf"\b{word}s?\b", block, re.IGNORECASE), (
+                    f"对外英文示例出现 {word}"
+                )
+        # 禁令本身必须写清楚英文词，不能只有中文「成本」
+        assert "cost / costs / profit / margin / markup" in section
+
 
 class TestStallDiagnosis:
     """B3：原话→卡点→草稿；不确定要给候选；聊天短句也要标草稿。"""
