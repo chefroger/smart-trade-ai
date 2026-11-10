@@ -189,6 +189,13 @@ class TestStallDiagnosis:
         for trigger in ("客户这样回", "这封怎么回", "卡在哪一步"):
             assert trigger in registry, f"skill_registry 缺少触发词：{trigger}"
 
+    def test_whatsapp_send_reminder_is_mandatory(self):
+        """写聊天草稿时必须固定附上 WhatsApp 使用注意（封号风险）。"""
+        text = _text("b2b-sales-playbook")
+        for token in ("WhatsApp 发送提醒", "群发", "非官方客户端", "opt-in", "stop"):
+            assert token in text, f"b2b-sales-playbook 缺少发送提醒内容：{token}"
+        assert text.count("WhatsApp 发送提醒") >= 2, "注入和正文都应包含发送提醒"
+
 
 class TestRouting:
     def test_stall_queries_route_to_sales_playbook(self):
