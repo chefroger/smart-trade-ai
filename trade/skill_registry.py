@@ -1358,12 +1358,13 @@ STOP RULE（防止无效搜索）:
             "客户说要考虑", "已读不回怎么办", "客户不回消息", "怎么推进成交",
             "临门一脚", "催客户下单", "客户不签单", "定金没付", "催定金",
             # 原话 → 卡点诊断（2026-11-09 PPT 差距 B3）
+            # 2026-11-10 收窄：短词会子串误伤（客户回款/回国、直接发过去…），改为带宾语的长词
             "客户这样回", "这封怎么回", "卡在哪一步",
-            "客户说太贵", "回了句", "客户回", "直接发过去",
-            "how should i reply", "what should i reply", "how to reply to this",
-            "where are we stuck", "which stage are we stuck at", "咋整",
-            "customer replied", "customer said too expensive",
-            "close the deal", "closing follow up", "customer not responding", "not responding",
+            "客户说太贵", "客户回了一句",
+            "how should i reply to this customer", "how to reply to this customer",
+            "where are we stuck", "which stage are we stuck at",
+            "customer said too expensive", "customer is not responding",
+            "close the deal", "closing follow up", "customer not responding",
             "sales playbook", "sales knowledge base", "sales SOP",
             "sales training",
         ],
