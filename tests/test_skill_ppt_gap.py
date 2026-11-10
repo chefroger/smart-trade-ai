@@ -211,6 +211,39 @@ class TestRouting:
             assert result is not None, f"{query} 无路由"
             assert result["name"] == expected, f"{query} 路由到了 {result['name']}"
 
+    def test_short_triggers_do_not_hijack_unrelated_queries(self):
+        """2026-11-10 审计 P2-1：短词子串不能把无关问句带进逼单/跟进 skill。"""
+        from trade.skill_router import match_skill
+
+        for query in (
+            "客户回款了，怎么记账",
+            "客户回国了",
+            "直接发过去报价单",
+            "the shipment is not responding",
+            "customer replied to the newsletter",
+            "how to reply to this inquiry",
+        ):
+            result = match_skill(query)
+            assert result is None or result["name"] != "b2b-sales-playbook", (
+                f"{query} 被过宽触发词带进了 b2b-sales-playbook"
+            )
+
+    def test_contextual_reply_queries_still_route_to_sales_playbook(self):
+        """收窄后，带宾语/语境的说法仍应进入 playbook（防收窄过头）。"""
+        from trade.skill_router import match_skill
+
+        for query in (
+            "客户回了一句太贵了",
+            "客户说太贵了怎么办",
+            "这封怎么回，客户压价",
+            "卡在哪一步了，客户已读不回",
+        ):
+            result = match_skill(query)
+            assert result is not None, f"{query} 无路由"
+            assert result["name"] == "b2b-sales-playbook", (
+                f"{query} 路由到了 {result['name']}"
+            )
+
 
 class TestContentHygiene:
     def test_forbidden_ppt_claims_absent(self):
