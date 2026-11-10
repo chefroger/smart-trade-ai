@@ -280,6 +280,16 @@ class TestRouting:
             )
 
 
+class TestSocialMediaCaution:
+    def test_facebook_usage_reminder_present(self):
+        """输出 Facebook 内容时必须附带使用提醒（账号/主页/BM 限制风险）。"""
+        text = _text("b2b-social-media")
+        for token in ("Facebook 使用提醒", "公共主页", "Business Manager", "群组", "双因素"):
+            assert token in text, f"b2b-social-media 缺少 Facebook 使用提醒：{token}"
+        registry = (ROOT / "trade" / "skill_registry.py").read_text(encoding="utf-8")
+        assert "Facebook 使用提醒" in registry, "注入用的 augment_prompt 没有带上提醒"
+
+
 class TestContentHygiene:
     def test_forbidden_ppt_claims_absent(self):
         hits = []
