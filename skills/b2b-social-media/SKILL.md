@@ -395,6 +395,19 @@ Tag a friend who needs to see this! 👇
 #[YourBrand] #YourBrandName
 ```
 
+## Facebook 使用提醒（每次输出 Facebook 内容后固定附上）
+
+每次给出 Facebook 帖子/文案/主页运营建议后，必须在结果末尾附一段「⚠️ Facebook 使用提醒」，
+至少包含下面五条（可按语境微调措辞，但不能省略）：
+
+1. 商业内容只发公共主页 / Business Manager，不用个人号群发好友请求或私信。
+2. 不买粉买号、不用自动化群控/非官方客户端；不批量加好友、拉群。
+3. 同一条内容不要复制到多个群组/主页；少用短链接和重复链接。
+4. 广告与帖子不得虚假宣传、用侵权素材或夸大对比；落地页与广告一致。
+5. 主页/BM 来源要干净，开双因素；被限制后不要反复注册新号。
+
+理由：Facebook 对虚假账号、垃圾信息、批量行为和违规广告会限制账号/主页/BM；外贸业务员用个人号大批加好友、群发 Messenger、把同一帖复制到多个群组，是最常见的触发点。
+
 ## Quality Standards
 
 1. **No placeholders**: All content must be complete. No "XXX", "[insert]", "[TBD]", "Lorem ipsum"
