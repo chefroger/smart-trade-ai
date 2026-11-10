@@ -1368,7 +1368,8 @@ STOP RULE（防止无效搜索）:
             # 原话 → 卡点诊断（2026-11-09 PPT 差距 B3）
             # 2026-11-10 收窄：短词会子串误伤（客户回款/回国、直接发过去…），改为带宾语的长词
             "客户这样回", "这封怎么回", "卡在哪一步",
-            "客户说太贵", "客户回了一句",
+            "客户说太贵", "客户回了一句", "客户回：", "客户一直不回",
+            "WhatsApp 直接发过去",
             "how should i reply to this customer", "how to reply to this customer",
             "where are we stuck", "which stage are we stuck at",
             "customer said too expensive", "customer is not responding",
