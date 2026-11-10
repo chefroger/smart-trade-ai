@@ -422,6 +422,8 @@ STOP RULE（防止无效搜索）:
             "proforma invoice", "quotation", "quote", "quotation template", "commercial proposal",
             "packing list template", "sales contract",
         ],
+        # 只有句子同时带 BOM/价值报价意图时才压过单独的 CIF（2026-11-10 审计 P2-3）
+        "priority_keywords": ["价值 bom", "价值bom", "value bom"],
         "aliases": [],
         "input_fmt": "外贸单证类型（报价单/PI/合同/装箱单/商业提案）+ 受众+ 语言",
         "output_fmt": "可下载的外贸单证 PPTX/DOCX/XLSX 文件",
