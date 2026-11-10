@@ -197,6 +197,21 @@ class TestRouting:
         assert result is not None
         assert result["name"] == "b2b-lead-generation"
 
+    def test_bom_intent_beats_incoterm_mention(self):
+        """P2-3：只有带 BOM/价值报价意图时才压过 CIF，纯术语问句仍走合规。"""
+        from trade.skill_router import match_skill
+
+        result = match_skill("按 CIF 重做价值 BOM")
+        assert result is not None
+        assert result["name"] == "b2b-doc-generation"
+
+        result = match_skill("CIF 和 FOB 风险怎么划分")
+        assert result is not None
+        assert result["name"] == "b2b-trade-compliance"
+
+        result = match_skill("CIF 报价要不要含保险")
+        assert result is None or result["name"] != "b2b-doc-generation"
+
     def test_english_rewrites_route_to_the_right_skill(self):
         from trade.skill_router import match_skill
 
