@@ -104,6 +104,27 @@ class TestEvidenceDisciplineBlock:
             assert "已查渠道" in text, f"{skill} 缺少「已查渠道」"
 
 
+class TestOutboundActionBan:
+    """Trade 不代发、不写发件箱；四个档位都必须常驻。"""
+
+    def test_all_tiers_forbid_sending_and_outbox(self):
+        prompt = _load_prompt_module()
+        for tier in (
+            "TRADE_SYSTEM_PROMPT_FIRST_TURN",
+            "TRADE_SYSTEM_PROMPT_MINIMAL",
+            "TRADE_SYSTEM_PROMPT_OSINT",
+            "TRADE_SYSTEM_PROMPT_FULL",
+        ):
+            text = getattr(prompt, tier)
+            for token in ("发件箱", "smtplib", "草稿，需你手动发送"):
+                assert token in text, f"{tier} 缺少对外动作禁令：{token}"
+
+    def test_block_stays_short(self):
+        prompt = _load_prompt_module()
+        lines = [l for l in prompt.TRADE_OUTBOUND_ACTION_BLOCK.strip().splitlines() if l.strip()]
+        assert len(lines) <= 6
+
+
 class TestKnowledgeMap:
     """B1：路径必须与 data_dir 层级一致；初始化不覆盖；检查不联网。"""
 

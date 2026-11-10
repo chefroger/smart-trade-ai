@@ -111,10 +111,21 @@ TRADE_EVIDENCE_BLOCK = """
 - 不声称「已发送」「已联系」「已确认」，除非用户刚说过是他自己做的。
 """
 
+# 对外动作禁令 — Trade 不代发邮件/消息，也不把草稿写进任何邮件客户端的发件箱。
+# 背景：用户反馈「草稿被放进发件箱」。仓库本身没有发信代码，但 agent 默认有
+# terminal / file 工具，模型可以自己调 AppleScript/写 .eml。唯一明确的禁令原先
+# 只在被停用的 auto-smtp-email skill 里，永远不会被注入 —— 所以在这里常驻。
+TRADE_OUTBOUND_ACTION_BLOCK = """
+# Outbound Actions（对外动作 — 每轮常驻）
+- 不得发送任何邮件或消息，不得调用 SMTP/smtplib、邮件客户端自动化（AppleScript/COM）或任何发信接口。
+- 不得把草稿写入发件箱、草稿箱、收件箱等邮件目录，也不得生成 .eml/.msg 放进邮件文件夹。
+- 邮件和消息只以文本形式输出在聊天里，标注「草稿，需你手动发送」；发送只能由用户本人完成。
+"""
+
 TRADE_SYSTEM_PROMPT = (
     TRADE_ROLE_BLOCK + "\n\n" + LANGUAGE_POLICY_BLOCK
     + "\n\n" + COMPANY_ISOLATION_BLOCK + "\n\n" + TRADE_IMAGE_BLOCK
-    + "\n\n" + TRADE_EVIDENCE_BLOCK
+    + "\n\n" + TRADE_EVIDENCE_BLOCK + "\n\n" + TRADE_OUTBOUND_ACTION_BLOCK
 )
 
 # 短 Role（精简档用）— 与 TRADE_ROLE_BLOCK 的区别：只保留一句话身份声明
@@ -159,6 +170,7 @@ TRADE_SYSTEM_PROMPT_MINIMAL = (
     + "\n\n" + COMPANY_ISOLATION_BLOCK
     + "\n\n" + TRADE_IMAGE_BLOCK
     + "\n\n" + TRADE_EVIDENCE_BLOCK
+    + "\n\n" + TRADE_OUTBOUND_ACTION_BLOCK
 )
 
 # OSINT/情报类精简 prompt — 只保留 Role + Language Policy，去掉文档生成/Cognee 等无关段落
@@ -166,7 +178,7 @@ TRADE_SYSTEM_PROMPT_MINIMAL = (
 TRADE_SYSTEM_PROMPT_OSINT = (
     TRADE_ROLE_BLOCK + "\n\n" + LANGUAGE_POLICY_BLOCK
     + "\n\n" + COMPANY_ISOLATION_BLOCK + "\n\n" + TRADE_IMAGE_BLOCK
-    + "\n\n" + TRADE_EVIDENCE_BLOCK
+    + "\n\n" + TRADE_EVIDENCE_BLOCK + "\n\n" + TRADE_OUTBOUND_ACTION_BLOCK
 ) + """
 
 # Research & Investigation Guidelines
