@@ -116,7 +116,7 @@ class TestOutboundActionBan:
             "TRADE_SYSTEM_PROMPT_FULL",
         ):
             text = getattr(prompt, tier)
-            for token in ("发件箱", "smtplib", "草稿，需你手动发送"):
+            for token in ("发件箱", "smtplib", "帮我发出去", "存到邮箱", "草稿，需你手动发送"):
                 assert token in text, f"{tier} 缺少对外动作禁令：{token}"
 
     def test_block_stays_short(self):
