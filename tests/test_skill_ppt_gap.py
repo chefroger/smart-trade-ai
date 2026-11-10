@@ -218,13 +218,29 @@ class TestStallDiagnosis:
             assert trigger in registry, f"skill_registry 缺少触发词：{trigger}"
 
     def test_whatsapp_send_reminder_is_mandatory(self):
-        """WhatsApp 草稿必须固定附发送提醒；微信草稿不套 WhatsApp 提醒。"""
+        """WhatsApp 草稿必须固定附发送提醒；微信草稿不套 WhatsApp 提醒。
+
+        B 口径：提醒留在注入里。这里直接解析仓库 frontmatter，不调用
+        load_injection_prompt —— 后者会优先读用户机上的 ~/.hermes/skills，
+        本地与 CI 可能测到不同文件。
+        """
+        import re
+
+        import yaml
+
         text = _text("b2b-sales-playbook")
+        match = re.match(r"^---\s*\n(.*?)\n---\s*\n", text, re.S)
+        assert match, "SKILL.md 缺 frontmatter"
+        frontmatter = yaml.safe_load(match.group(1)) or {}
+        injection = frontmatter.get("injection_prompt") or ""
+        body = text[match.end():]
+
         for token in ("WhatsApp 发送提醒", "群发", "非官方客户端", "opt-in", "stop"):
             assert token in text, f"b2b-sales-playbook 缺少发送提醒内容：{token}"
-        assert text.count("WhatsApp 发送提醒") >= 2, "注入和正文都应包含发送提醒"
-        assert "每次输出 WhatsApp 聊天草稿" in text
-        assert "微信草稿只需标" in text, "微信草稿不应附 WhatsApp 提醒"
+        assert "WhatsApp 发送提醒" in injection, "注入里缺 WhatsApp 发送提醒"
+        assert "WhatsApp 发送提醒" in body, "正文里缺 WhatsApp 发送提醒"
+        assert "每次输出 WhatsApp 聊天草稿" in injection, "注入未限定 WhatsApp 草稿"
+        assert "微信草稿只需标" in body, "微信草稿不应附 WhatsApp 提醒"
 
 
 class TestRouting:
