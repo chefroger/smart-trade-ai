@@ -19,7 +19,7 @@
 | B1-3 矛盾检查 | 通过 | 报告 MOQ 500 vs 800 矛盾，两个值并列，不自选 |
 | B1-4 初始化知识库 #1 | 通过 | 只新建缺失文件；已有文件未动 |
 | B1-5 初始化知识库 #2 | 通过 | 两次初始化后 products.md / certifications.md 哈希不变（见文末校验） |
-| B2-1 价值 BOM 正例 | 通过 | 对外稿无成本/利润/利润率；内胆「待填」；含人工确认句 |
+| B2-1 价值 BOM 正例 | 首轮不通过 → 复测通过 | 首轮对外英文稿出现 `build cost`；加固英文禁词后复测见附录 D |
 | B2-2 缺数据要停 | 通过 | 先问币种/术语/数量与成本项，不出任何价格 |
 | B2-3 嫌贵改写 | 通过 | 进入价值 BOM 流程，不编分项价，提示对外版不写成本 |
 | B2-4 认证护栏 | 通过 | 拒绝无文件支撑的认证写法，给替代方案，含人工确认句 |
@@ -44,7 +44,8 @@
 
 1. **B4 结构**：首轮 B4-3 把五节换成了「先说结论 / 从哪往下查」。已在 `b2b-osint` 与 `b2b-customer-intel` 增加「硬性格式：无论怎么问都原样使用 `## 1. 它是谁` … `## 5. 从哪切入`，缺证据必须出现『暂未找到』」。复测见附录 B。
 2. **B3 发送承诺**：首轮出现了「十分钟内给你一版可直接发的」。已在 `b2b-sales-playbook` 红线中加入「不得写『可直接发送/可直接发』，不承诺回复时限」。复测见附录 C。
-3. **B2-5 路由**：`按 CIF 重做价值 BOM` 被 `b2b-trade-compliance` 抢走（FOB/CIF 是它的强触发词）。输出仍满足验收（运费、保险两行待填 + 提示），因此未调整既有优先级；若要严格路由到 doc-generation，需要给后者加 `priority_keywords`，不在本次批准范围。
+3. **B2-5 路由**：`按 CIF 重做价值 BOM` 曾被 `b2b-trade-compliance` 抢走（FOB/CIF 是它的强触发词）。2026-11-10 已给 `b2b-doc-generation` 加 `priority_keywords`（价值 BOM / 价值bom / value bom），带 BOM 意图的问句回到报价 skill；纯 CIF 问句仍走合规。
+4. **B2-1 首轮不通过（2026-11-10 审计 P2-4）**：对外英文稿写入了 `build cost`。已在 `b2b-doc-generation` 增加英文禁词（cost / profit / margin / markup），复测见附录 D。
 
 ---
 
@@ -306,6 +307,8 @@ Notes
 
 草稿，需人工确认价格、利润和认证后才能发给客户。
 
+
+> 首轮判定：**不通过** —— 对外英文稿出现 `build cost`（审计 P2-4）。已在 skill 中写明英文禁词，复测见附录 D。
 
 ## B3-1 价格异议
 
@@ -1923,3 +1926,81 @@ If the project is on hold, no problem, tell me when to check back.
 3. 你把上面 4 条信息发我，我出**可直接进 WhatsApp 的成稿**（含中英对照说明），你核对后自己发。
 
 **已查找但未找到**：客户身份与联系方式、历史沟通记录、产品参数、报价记录、认证文件、订单记录 —— 均无。
+
+
+---
+
+## 附录 D：B2-1 复测（对外英文稿禁成本词后）
+
+# B2 复测（对外英文稿禁成本词后，2026-11-10）
+
+
+## B2-1 复测：价值 BOM 正例
+
+**输入**：外壳 1.00 USD，内胆成本未提供，FOB，1000 件，做价值 BOM
+
+**路由**：b2b-doc-generation
+
+**输出原文**：
+
+## 先说清这版能到哪一步
+
+按价值 BOM 的开工条件，你给的三项 —— 币种 **USD**、贸易术语 **FOB**、数量 **1,000 件** —— 都齐了，所以 BOM 结构可以直接做。但**这一版出不了总价，也给不出对客户的分项售价**，原因有两个，都是缺数据而不是缺结构：内胆你没有给数；外壳那 1.00 USD 从你的说法（"内胆成本未提供"）看是**成本口径**，而对外草稿里不能出现成本，所以对外那栏也只能留「待填」。另外 FOB 少了装运港地点，Incoterms 2020 写法不完整。
+
+我这轮实际查过的位置（检查时间 2026-11-10）：
+
+| 通道 | 结果 |
+|---|---|
+| 桌面 9 个文档目录（产品规格/报价单/认证资质/合同/发票/物流单据/海关数据/客户资料/营销素材） | **全部 0 个文件** [事实] |
+| 公司档案 `products.md` | 纯模板，型号、价格区间、MOQ、交期全是空位 [事实] |
+| 公司档案 `certifications.md` | 表格只有表头，**无任何证书记录** [事实] |
+| 公司档案 `company-profile.md` | 全字段为空 [事实] |
+
+所以下面的分项价只有一个数字来自你，其余一律「待填」——我没有估算，也不会拿常识补内胆的价。
+
+---
+
+## 一、对外英文草稿（可直接改成给客户看的版本）
+
+> 说明：这份是英文对外稿，**不含任何成本、利润、利润率字样**；分项价留 TBC，等你填卖价。
+
+**Value BOM — Reference Draft**
+
+Product: Double-wall container (outer shell + inner liner)
+Incoterm: FOB (port of loading to be confirmed), Incoterms 2020
+Quantity: 1,000 pcs
+Currency: USD
+
+| No. | Component | Specification | Qty | Unit price (USD) | Value note | Evidence |
+|---|---|---|---|---|---|---|
+| 1 | Outer shell | To be confirmed | 1,000 pcs | TBC | Structural outer layer; durability and finish determined by shell material and wall thickness — to be specified | No specification on file |
+| 2 | Inner liner | To be confirmed | 1,000 pcs | TBC | Contact layer; food-contact or chemical-resistance performance depends on liner material grade — to be specified | No specification on file |
+| | **Total (FOB)** | | 1,000 sets | **TBC** | | |
+
+Notes to be completed before issuing: (1) port of loading for FOB; (2) material grade and wall thickness for both components; (3) whether liner and shell are quoted as a set or separately; (4) packing method and carton dimensions.
+
+No certification or test report is referenced in this draft, because no certificate document is currently on file.
+
+---
+
+## 二、对内中文说明（不对外）
+
+| 项 | 数量 | 分项数据 | 来源 |
+|---|---|---|---|
+| 外壳 Shell | 1,000 pcs | 1.00 USD/pc，合计 **1,000.00 USD** [计算]（1.00 × 1,000） | 用户当次输入，**成本口径** |
+| 内胆 Inner liner | 1,000 pcs | **待填** | 你未提供 |
+| 合计成本 | | **待填**（缺内胆） | |
+
+几个必须你自己定的点，我不替你猜：
+
+第一，**内胆成本和它的计价单位**。是每件一个内胆，还是内胆按套/按重量计价？这决定第 2 行能不能直接乘 1,000。
+
+第二，**利润区间**。价值 BOM 的意义就是把差价拆开讲给客户听，但利润必须由你给区间（比如毛利 15%–25%），我只按你给的区间做分层，不会自己设一个数。
+
+第三，**降配备选**。如果要准备"便宜在哪"的退让方案，需要你说明哪一项可以降（壳厚、内胆材质等级、包装），以及降配后对应的差价 —— 这些数字也只能由你提供。
+
+第四，**FOB 装运港**。写成 `FOB Shanghai, Incoterms 2020` 这种完整形式才站得住，缺地点客户会追问。
+
+第五，**认证**。`认证资质` 目录 0 文件、`certifications.md` 表头为空，所以这份草稿里一个认证都不能写。如果客户问 FDA / LFGB / 食品接触材料报告，先把证书文件放进目录我再来引用编号，不能先写后补。
+
+草稿，需人工确认价格、利润和认证后才能发给客户。
