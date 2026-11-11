@@ -28,15 +28,18 @@ def _safe_extract(zip_path: Path, dest: Path) -> dict:
     """手动解压 + 安全校验（禁止 extractall）。返回 manifest。"""
     dest.mkdir(parents=True, exist_ok=True)
     seen: set[str] = set()
-    total = 0
+    total = 0          # ZIP 头声明的大小（提前拒绝明显超限的包）
+    written_total = 0  # 实际写出的字节（头可以被篡改，最终以真实为准）
     with zipfile.ZipFile(zip_path) as zf:
         infos = zf.infolist()
         if len(infos) > MAX_ENTRIES:
             raise InvalidPackageError("too many entries")
         for info in infos:
-            name = info.filename
-            if not name or "\x00" in name or "\\" in name:
-                raise InvalidPackageError(f"unsafe path: {name!r}")
+            # Windows 工具生成的 ZIP 可能用反斜杠：归一成正斜杠后走同一套校验，
+            # 而不是直接拒绝（否则「能生成却导不回来」）。
+            name = info.filename.replace("\\", "/")
+            if not name or "\x00" in name:
+                raise InvalidPackageError(f"unsafe path: {info.filename!r}")
             pure = PurePosixPath(name)
             if pure.is_absolute() or ".." in pure.parts:
                 raise InvalidPackageError(f"unsafe path: {name!r}")
@@ -63,7 +66,15 @@ def _safe_extract(zip_path: Path, dest: Path) -> dict:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info) as src, open(target, "wb") as out:
-                shutil.copyfileobj(src, out, length=1 << 20)
+                while True:
+                    chunk = src.read(1 << 20)
+                    if not chunk:
+                        break
+                    written_total += len(chunk)
+                    # 按实际写出的字节限额：ZIP 头声明的 file_size 不可信
+                    if written_total > MAX_UNCOMPRESSED_BYTES:
+                        raise InvalidPackageError("package expands beyond limit")
+                    out.write(chunk)
     manifest = load_manifest(dest)
     verify_checksums(dest)
     return manifest
@@ -355,12 +366,21 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             safe_name = "".join(ch for ch in name if ch not in '/\\:*?"<>|').strip() or "library"
             root = target_work_dir / safe_name
             root.mkdir(parents=True, exist_ok=True)
-            created_lib = library_module.create(
-                safe_name,
-                str(root),
-                description=source_lib.get("description") or "",
-                company_id=target_id,
-            )
+            # 用导入自身的事务插入，而不是 library_module.create（它独立连接并立即
+            # commit）：否则文件拷贝失败时 rollback 只回滚主事务，库记录会残留。
+            root_path = library_module._validate_root_path(str(root))
+            new_lib_id = _insert(conn, "libraries", {
+                "company_id": target_id,
+                "name": safe_name,
+                "root_path": root_path,
+                "description": source_lib.get("description") or "",
+            })
+            created_lib = {
+                "id": new_lib_id,
+                "name": safe_name,
+                "root_path": root_path,
+                "description": source_lib.get("description") or "",
+            }
             lib_map[source_lib["export_id"]] = root
             lib_by_name[key] = created_lib
             lib_name_by_id[created_lib["id"]] = safe_name
@@ -399,7 +419,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             for name in (
                 "trade_company", "libraries", "customers", "customer_libraries",
                 "conversations", "orders", "order_items", "order_libraries",
-                "usage_ledger", "trial_events", "doc_extractions",
+                "usage_ledger", "doc_extractions",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -549,19 +569,6 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             _insert(conn, "usage_ledger", new_row)
             usage_existing.add(key)
             usage_added += 1
-        trial_added = 0
-        trial_existing = {
-            (row["ts"], row["kind"])
-            for row in _rows(conn, "SELECT * FROM trial_events WHERE company_id = ?", (target_id,))
-        }
-        for row in source_tables["trial_events"]:
-            key = (row.get("ts"), row.get("kind"))
-            if key in trial_existing:
-                continue
-            new_row = {k: v for k, v in row.items() if k != "id"}
-            new_row["company_id"] = target_id
-            _insert(conn, "trial_events", new_row)
-            trial_added += 1
         doc_added = 0
         for row in source_tables["doc_extractions"]:
             new_row = dict(row)
@@ -571,7 +578,6 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             if conn.total_changes > before:
                 doc_added += 1
         report["tables"]["usage_ledger"] = {"inserted": usage_added, "skipped": 0}
-        report["tables"]["trial_events"] = {"inserted": trial_added, "skipped": 0}
         report["tables"]["doc_extractions"] = {"inserted": doc_added, "skipped": 0}
 
         # 公司身份 + 工作目录路径
@@ -595,10 +601,16 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             )
             report["identity"] = "imported"
 
-        conn.commit()
-        committed = True
-
-        # 文件：公司目录
+        # 文件：公司目录（在 commit **之前**落盘）
+        # 顺序必须是「DB 变更 → 文件 → commit」：文件失败时还能 rollback DB，
+        # 不会留下「库里已合并、文件没拷完」的半导入状态（2026-11-11 审计 P1-1）。
+        # 新建模式下若数据目录是上次删除残留的（created_data_dir_is_new=False），
+        # 绝不能覆盖里面已有的文件，按合并模式走冲突归档（P1-2）。
+        overwrite_files = report["mode"] == "created" and created_data_dir_is_new
+        if report["mode"] == "created" and not created_data_dir_is_new:
+            report["warnings"].append(
+                "目标数据目录是上次删除后的残留目录，已保留原有文件，冲突文件归档到 import_conflicts/"
+            )
         conflict_root = target_data_dir / "import_conflicts" / datetime.now().strftime("%Y%m%d-%H%M%S")
         company_files = staging / "company_data"
         if company_files.is_dir():
@@ -612,7 +624,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                     rel = "/".join(parts)
                 status = _merge_copy(
                     src, target_data_dir / rel, conflict_root, rel,
-                    overwrite=(report["mode"] == "created"),
+                    overwrite=overwrite_files,
                 )
                 report["files"][{"copied": "copied", "skipped": "skipped", "conflict": "conflicts"}.get(status, "skipped")] += 1
 
@@ -632,6 +644,11 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 rel = src.relative_to(lib_src).as_posix()
                 status = _merge_copy(src, root / rel, lib_conflict, rel, overwrite=False)
                 report["files"][{"copied": "copied", "skipped": "skipped", "conflict": "conflicts"}.get(status, "skipped")] += 1
+
+        # 文件全部落盘后再提交；此后的 MEMORY/Hindsight 失败属于「DB 与文件已一致、
+        # 只差记忆」，错误信息里带备份路径即可（见下方 except）。
+        conn.commit()
+        committed = True
 
         # Hermes MEMORY.md
         memory_file = staging / "memory" / "hermes_memory.md"

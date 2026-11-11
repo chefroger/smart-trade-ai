@@ -732,6 +732,16 @@ async def trade_chat_stream(
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
+    async def _put_critical(item) -> None:
+        """终态事件背压入队，但最多等 30 秒。
+
+        客户端断连后队列没人消费，无超时的 put 会留下永不完成的 task。
+        """
+        try:
+            await asyncio.wait_for(event_queue.put(item), timeout=30)
+        except TimeoutError:
+            _log.warning("SSE critical event dropped after 30s: %s", item[0])
+
     def _emit_threadsafe(event_type: str, data: dict | None = None):
         """工作线程通过 call_soon_threadsafe 投递到 asyncio queue。
 
@@ -743,8 +753,8 @@ async def trade_chat_stream(
 
         def _safe_put(ev_type, ev_data):
             if critical:
-                # 终态事件必须送达；put 会在队列有空位时再入队
-                asyncio.create_task(event_queue.put((ev_type, ev_data)))
+                # 终态事件必须送达；队列满时等待空位，但必须有上限
+                asyncio.create_task(_put_critical((ev_type, ev_data)))
                 return
             try:
                 event_queue.put_nowait((ev_type, ev_data))

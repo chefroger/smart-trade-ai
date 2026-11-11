@@ -175,6 +175,31 @@ class TestCompanyBinding:
         assert deps._ACTIVE_COMPANY.get("bind-ok-token") == company_id
         deps._ACTIVE_COMPANY.pop("bind-ok-token", None)
 
+    def test_import_rejects_cross_company_target(self, setup_mocks):
+        """导入指定目标公司时不能绕过 session 绑定（P2-3）。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from trade.api import deps
+        from trade.api.transfer import router
+
+        deps.set_session_token("import-token")
+        deps._ACTIVE_COMPANY["import-token"] = 1
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        try:
+            resp = client.post(
+                "/companies/import-package",
+                headers={"X-Hermes-Session-Token": "import-token"},
+                data={"target_company_id": "2"},
+                files={"file": ("x.zip", b"not-a-zip", "application/zip")},
+            )
+        finally:
+            deps._ACTIVE_COMPANY.pop("import-token", None)
+        assert resp.status_code == 403
+        assert "当前绑定" in resp.json()["detail"]
+
     def test_export_allowed_for_non_active_company(self, setup_mocks):
         """导出是用户对列表某一行的显式只读操作，不因绑定在别的公司被 403。
 

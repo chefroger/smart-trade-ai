@@ -4462,6 +4462,16 @@ function showImportCompanyDialog() {
 async function uploadCompanyImport(file, targetCompanyId, forceNew) {
     const status = document.getElementById('imp-status');
     if (status) status.textContent = '正在上传并导入，请勿关闭页面…';
+    // 合并到非当前公司时先切换 session 绑定：导入端点会拒绝「绑定 A 却写 B」
+    if (targetCompanyId && targetCompanyId !== currentCompanyId) {
+        const switched = await api('POST', '/api/trade/companies/' + targetCompanyId + '/switch').catch(() => null);
+        if (!switched) {
+            if (status) status.textContent = '切换目标公司失败，请重试。';
+            return;
+        }
+        currentCompanyId = targetCompanyId;
+        saveState();
+    }
     const fd = new FormData();
     fd.append('file', file);
     if (targetCompanyId) fd.append('target_company_id', String(targetCompanyId));
@@ -4538,7 +4548,11 @@ async function pollImportJob(jobId) {
         }
         if (data.status === 'error') {
             if (data.code === 'ambiguous_company') {
-                const list = (data.candidates || []).map(c => `${c.id}: ${esc(c.name)} (${esc(c.slug)})`).join('\n');
+                // prompt() 是纯文本，不能走 esc()（HTML 转义会把 A&B 显示成 A&amp;B），
+                // 也不用模板插值，免得 XSS 守卫把它当成 innerHTML 渲染点
+                const list = (data.candidates || [])
+                    .map(function (c) { return c.id + ': ' + c.name + ' (' + c.slug + ')'; })
+                    .join('\n');
                 const answer = prompt('目标机有多个同名公司，请输入要合并的公司 ID：\n' + list);
                 const targetId = parseInt(answer, 10);
                 if (targetId && _pendingImportFile) {

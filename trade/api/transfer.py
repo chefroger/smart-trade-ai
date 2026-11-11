@@ -11,7 +11,7 @@ from tempfile import mkstemp
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
@@ -135,6 +135,7 @@ def export_company_package(company_id: int, cid: int = Depends(require_company))
 
 @router.post("/companies/import-package", status_code=202)
 async def import_company_package(
+    request: Request,
     file: Annotated[UploadFile, File()],
     target_company_id: Annotated[int | None, Form()] = None,
     force_new: Annotated[bool, Form()] = False,
@@ -144,6 +145,19 @@ async def import_company_package(
 
     注意：调用方不要带 X-Company-ID；新公司尚未绑定。
     """
+    # 导入是显式指定目标公司的写操作，不能被用来绕过 session 的公司绑定
+    # （2026-11-11 审计 P2-3）。未绑定时（新公司/首次导入）照常放行。
+    if target_company_id is not None:
+        from trade.api.deps import _ACTIVE_COMPANY, _company_bind_lock
+
+        token = request.headers.get("X-Hermes-Session-Token", "")
+        with _company_bind_lock:
+            bound = _ACTIVE_COMPANY.get(token)
+        if bound is not None and bound != target_company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="只能导入到当前绑定的公司，请先切换到目标公司再导入。",
+            )
     if not _rate_ok("import", 1, 300):
         raise HTTPException(status_code=429, detail="导入过于频繁，请稍后再试")
     fd, temp_name = mkstemp(prefix="trade-company-upload-", suffix=".zip")

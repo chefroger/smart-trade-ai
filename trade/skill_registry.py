@@ -1432,6 +1432,8 @@ STOP RULE（防止无效搜索）:
             # 2026-11-10 收窄：短词会子串误伤（客户回款/回国、直接发过去…），改为带宾语的长词
             "客户这样回", "这封怎么回", "卡在哪一步",
             "客户说太贵", "客户回了一句", "客户回：", "客户一直不回",
+            # 只加完整说法：单独的「回了句」「咋整」会把「客户回款」等误伤
+            "回了句 too expensive",
             "WhatsApp 直接发过去",
             "how should i reply to this customer", "how to reply to this customer",
             "where are we stuck", "which stage are we stuck at",

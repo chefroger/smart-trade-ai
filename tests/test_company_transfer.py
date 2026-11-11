@@ -465,16 +465,21 @@ def test_manifest_export_id_traversal_is_rejected(tmp_path):
         import_company(package)
 
 
-def test_merge_failure_reports_backup_path(desktop, tmp_path, monkeypatch):
-    """合并模式在文件拷贝前已提交 DB：失败时必须把备份路径带出来（P2-2）。"""
-    import re
-
+def test_merge_file_failure_rolls_back_db(desktop, tmp_path, monkeypatch):
+    """文件拷贝在 commit 之前：失败必须回滚 DB，不能留下半合并状态（P1-1）。"""
     from trade.company.transfer import importer as importer_module
 
-    name = _unique("Merge Backup")
+    name = _unique("Merge Rollback")
     source = crud.create(name)
     _insert_sample_rows(source["id"])
     target = crud.create(name)
+    conn = database.get_connection()
+    try:
+        libs_before = conn.execute(
+            "SELECT COUNT(*) FROM libraries WHERE company_id = ?", (target["id"],)
+        ).fetchone()[0]
+    finally:
+        conn.close()
     package = tmp_path / "merge.zip"
     export_company(source["id"], package)
 
@@ -483,14 +488,96 @@ def test_merge_failure_reports_backup_path(desktop, tmp_path, monkeypatch):
 
     monkeypatch.setattr(importer_module, "_merge_copy", boom)
 
+    with pytest.raises(RuntimeError):
+        import_company(package, target_company_id=target["id"])
+
+    conn = database.get_connection()
+    try:
+        # 客户/对话等 DB 变更必须整体回滚（库记录恢复导入前数量）
+        assert conn.execute(
+            "SELECT COUNT(*) FROM customers WHERE company_id = ?", (target["id"],)
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM libraries WHERE company_id = ?", (target["id"],)
+        ).fetchone()[0] == libs_before
+    finally:
+        conn.close()
+
+
+def test_post_commit_failure_reports_backup_path(desktop, tmp_path, monkeypatch):
+    """commit 之后的副作用（MEMORY）失败时，错误信息必须带备份路径。"""
+    import re
+
+    from trade.company.transfer import importer as importer_module
+
+    hermes = tmp_path / "hermes"
+    (hermes / "memories").mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes))
+    name = _unique("Merge Backup")
+    (hermes / "memories" / "MEMORY.md").write_text(
+        "## Foreign Trade Assistant — B2B Trade Memory\n\n"
+        f"[2026-11-10 10:00] [公司: {name}]\n  Q: q\n  A: a\n\n",
+        encoding="utf-8",
+    )
+
+    source = crud.create(name)
+    _insert_sample_rows(source["id"])
+    target = crud.create(name)
+    package = tmp_path / "merge.zip"
+    export_company(source["id"], package)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("memory write failed")
+
+    monkeypatch.setattr(importer_module.merge_mod, "append_memory_blocks", boom)
+
     with pytest.raises(TransferError) as exc:
         import_company(package, target_company_id=target["id"])
 
     message = str(exc.value)
-    assert "disk full" in message
+    assert "memory write failed" in message
     match = re.search(r"导入前备份：(.+?)）", message)
     assert match, message
     assert Path(match.group(1)).is_file()
+    # 此时 DB/文件已提交，客户应已在目标公司里
+    conn = database.get_connection()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM customers WHERE company_id = ?", (target["id"],)
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_created_mode_does_not_overwrite_leftover_data_dir(desktop, tmp_path):
+    """新建模式遇到上次删除残留的 slug 目录：保留原文件、冲突进归档（P1-2）。"""
+    name = _unique("Residue")
+    source = crud.create(name)
+    company_dir = _company_dir(source)
+    marker = f"# Products\nPKG-{uuid.uuid4().hex}\n"
+    (company_dir / "products.md").write_text(marker, encoding="utf-8")
+    (company_dir / "keep.txt").write_text("LEFTOVER", encoding="utf-8")
+    package = tmp_path / "residue.zip"
+    export_company(source["id"], package)
+
+    # 模拟「公司记录已删、目录残留」：数据目录还在，DB 行没了
+    conn = database.get_connection()
+    try:
+        conn.execute("DELETE FROM companies WHERE id = ?", (source["id"],))
+        conn.commit()
+    finally:
+        conn.close()
+    (company_dir / "products.md").write_text("LOCAL-EDIT", encoding="utf-8")
+
+    report = import_company(package)
+    assert report["mode"] == "created"
+    # 残留文件不被覆盖；包里的版本进了 import_conflicts
+    assert (company_dir / "products.md").read_text(encoding="utf-8") == "LOCAL-EDIT"
+    assert (company_dir / "keep.txt").read_text(encoding="utf-8") == "LEFTOVER"
+    # 冲突归档在 data_dir/import_conflicts（company_dir 的上一级上一级）
+    conflicts = list((company_dir.parent.parent / "import_conflicts").rglob("products.md"))
+    assert conflicts and conflicts[0].read_text(encoding="utf-8") == marker
+    assert any("残留" in warning for warning in report["warnings"])
 
 
 def test_same_name_different_slug_merges_and_is_idempotent(desktop, tmp_path):
@@ -560,6 +647,16 @@ def test_zip_traversal_is_rejected(tmp_path):
     package = tmp_path / "evil.zip"
     with zipfile.ZipFile(package, "w") as zf:
         zf.writestr("../evil.txt", "x")
+        zf.writestr("manifest.json", "{}")
+    with pytest.raises(InvalidPackageError):
+        import_company(package)
+
+
+def test_windows_style_backslash_traversal_is_rejected(tmp_path):
+    """反斜杠条目先归一化再校验，不能借 Windows 分隔符绕过 ../ 检查。"""
+    package = tmp_path / "evil-backslash.zip"
+    with zipfile.ZipFile(package, "w") as zf:
+        zf.writestr("..\\evil.txt", "x")
         zf.writestr("manifest.json", "{}")
     with pytest.raises(InvalidPackageError):
         import_company(package)

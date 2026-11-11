@@ -231,7 +231,8 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     (company_id,),
                 ),
                 "usage_ledger": _rows(conn, "SELECT * FROM usage_ledger WHERE company_id = ?", (company_id,)),
-                "trial_events": _rows(conn, "SELECT * FROM trial_events WHERE company_id = ?", (company_id,)),
+                # trial_events 是许可证试用统计，不属于公司业务数据；导入会虚增
+                # 新公司的「试用价值小结」计数，因此不导出（2026-11-11 审计 P3）。
                 "doc_extractions": _rows(
                     conn, "SELECT * FROM doc_extractions WHERE tenant_id = ?", (str(company_id),)
                 ),
