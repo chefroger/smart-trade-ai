@@ -700,9 +700,11 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 shutil.rmtree(created_data_dir, ignore_errors=True)
             if created_work_dir and work_dir_is_new:
                 shutil.rmtree(created_work_dir, ignore_errors=True)
-        # 合并模式在文件拷贝之前已经 commit（见上方 S8）；此时 rollback 无效，
-        # 用户面对的是「库已合并、文件可能一半」的状态。必须把导入前备份路径
-        # 带进错误信息 —— 否则只能自己去 backups 目录按时间戳猜（审计 P2-2）。
+        # 走到这里说明 DB 与文件都已提交，失败发生在 commit 之后的副作用
+        # （MEMORY 写入 / 向量重建 / Hindsight 排队）。此时 rollback 已无效，
+        # 导入结果本身是一致的；但要把导入前备份路径带进错误信息，方便用户
+        # 需要时恢复（审计 P2-2）。文件拷贝阶段的失败不会走到这里 —— 那时
+        # committed 仍为 False，主事务会被完整回滚。
         if committed and backup_path is not None:
             raise TransferError(
                 f"{exc}（数据库已合并；导入前备份：{backup_path}）"
