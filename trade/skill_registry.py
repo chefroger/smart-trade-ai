@@ -912,7 +912,7 @@ STOP RULE（防止无效搜索）:
             "邀请客户来展会",
             # Chinese — 验厂
             "验厂", "客户要来工厂", "验厂邀请", "工厂审核", "audit",
-            "来厂考察",
+            "来厂考察", "厂里来验", "来验厂", "来厂验",
             # Chinese — 节日
             "节日问候", "节日祝福", "发个祝福", "过节",
             # Chinese — 样品
@@ -990,6 +990,10 @@ STOP RULE（防止无效搜索）:
             "tender", "bidding", "RFP",
             "Amazon listing", "prohibited word", "compliance check",
         ],
+        # 仅短付款缩写加分：压过 "payment terms"（"LC payment terms"）。
+        # 不要把 FOB/CIF 等 Incoterms 放进来——会压过「价值 BOM + CIF」这类单据生成意图
+        # （b2b-doc-generation 已有自己的 priority_keywords）。
+        "priority_keywords": ["lc", "bl", "dp", "da"],
         "aliases": [],
         "input_fmt": "检查内容类型 + 目标市场/客户地区 + 需要检查的文本/文档",
         "output_fmt": (
@@ -1075,6 +1079,8 @@ STOP RULE（防止无效搜索）:
             "客户开发流水线", "自动开发客户", "全流程客户开发",
             "编排客户开发", "一条龙开发客户", "帮我跑一轮客户开发",
             "跑一批客户", "全自动开发", "全自动化客户开发",
+            # 口语省略「全/一键」时仍归本技能，避免被「客户开发」抢走
+            "自动化客户开发",
             # English
             "auto customer development", "end to end lead generation", "auto lead generation",
             "full pipeline outreach", "automated outreach pipeline", "orchestrated lead gen",
@@ -1285,7 +1291,7 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-exhibition",
         "triggers": [
-            "展会", "参展", "广交会", "行业展", "展会邀约",
+            "展会", "参展", "广交会", "行业展", "展会邀约", "展会邀请",
             "展位设计", "展会准备", "展后跟进",
             "trade show", "exhibition", "canton fair",
         ],

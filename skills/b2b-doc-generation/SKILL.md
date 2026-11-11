@@ -20,7 +20,6 @@ triggers:
   - 出合同
   - 外贸合同
   - 装箱单模板
-  - 商业提案
   - 报价单模板
   - proforma invoice
   - quotation template
@@ -49,6 +48,7 @@ injection_prompt: |
   5) 结尾固定写一句：「草稿，需人工确认价格、利润和认证后才能发给客户。」
 
   需要具体版式（PPTX/DOCX/XLSX 页面结构）、Incoterms 参考或邮件正文模板时，用 `skill_view` 加载本技能正文。
+
 ---
 
 ```
