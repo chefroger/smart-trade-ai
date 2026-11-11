@@ -614,6 +614,43 @@ class TestLicenseWriteFailure:
         assert "写不进去" in s.get("license_file_error", "")
         assert "license.json" in s.get("license_file_error", "")
 
+    def test_corrupt_timestamp_expired_agrees_between_check_and_state(self, monkeypatch):
+        """时间戳损坏时，check_license 与 license_state 必须同一结论。
+
+        之前两边分裂：check_license 看到「进程内起点已超期」就拦起草，
+        license_state 却因为读不出磁盘上的时间戳而按试用处理 —— 用户看到
+        「⏳ 试用」，一发消息就被拦（2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=31)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", old)
+        # 磁盘上的时间戳损坏（读出来不是 ISO 格式）
+        monkeypatch.setattr(license_mod, "_get_license_data",
+                            lambda cid=None: {"first_launch_at": "损坏的时间戳!!!"})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+
+        ok, msg = license_mod.check_license(1)
+        assert not ok
+        assert "到期" in msg
+        state, _ = license_mod.license_state(1)
+        assert state == "expired"
+
+    def test_corrupt_timestamp_within_trial_agrees_between_check_and_state(self, monkeypatch):
+        """时间戳损坏但进程内起点未超期：两边都必须放行（可用性优先）。"""
+        from trade import license as license_mod
+
+        recent = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=5)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", recent)
+        monkeypatch.setattr(license_mod, "_get_license_data",
+                            lambda cid=None: {"first_launch_at": "损坏的时间戳!!!"})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+
+        ok, _msg = license_mod.check_license(1)
+        assert ok
+        state, _ = license_mod.license_state(1)
+        assert state == "trial"
+
 
 class TestLicenseSignature:
     """运行时签名验签 — 防篡改核心机制"""

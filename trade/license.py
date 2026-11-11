@@ -292,26 +292,41 @@ _MACHINE_MISMATCH_EXPIRED = (
 
 
 def _trial_state(data: dict, now: datetime, *, machine_mismatch: bool = False) -> tuple[str, str]:
-    """按试用起点判断状态；machine_mismatch 只影响到期文案。"""
+    """按试用起点判断状态；machine_mismatch 只影响到期文案。
+
+    磁盘上的 `first_launch_at` 有三种情况，**判据必须和 `check_license()`
+    一致**（那边是起草门禁，这边是展示状态，两边分裂会出现「界面说试用、
+    一发消息就被拦」）：
+      - 没有 → 用进程内暂记的起点（写盘失败场景），没有就当试用；
+      - 损坏 → 同样退回进程内起点，读不出来就当试用（可用性优先，
+        写路径会尝试重写）；
+      - 正常 → 直接按它算。
+    """
     def expired_message() -> str:
         return _MACHINE_MISMATCH_EXPIRED if machine_mismatch else _SOFT_EXPIRED_TRIAL
+
+    def from_stamp(stamp: str) -> tuple[str, str]:
+        try:
+            first = datetime.fromisoformat(stamp).replace(tzinfo=UTC)
+        except (TypeError, ValueError):
+            return "trial", ""
+        if (now - first).days < _TRIAL_DAYS:
+            return "trial", ""
+        return "expired", expired_message()
 
     first_raw = data.get("first_launch_at")
     if not first_raw:
         # 磁盘还没有记录时，沿用进程内暂记的试用起点（写盘失败场景）
         if _PROCESS_FIRST_LAUNCH:
-            try:
-                first = datetime.fromisoformat(_PROCESS_FIRST_LAUNCH).replace(tzinfo=UTC)
-            except (TypeError, ValueError):
-                return "trial", ""
-            if (now - first).days < _TRIAL_DAYS:
-                return "trial", ""
-            return "expired", expired_message()
+            return from_stamp(_PROCESS_FIRST_LAUNCH)
         return "trial", ""
     try:
         first = datetime.fromisoformat(first_raw).replace(tzinfo=UTC)
     except (TypeError, ValueError):
-        # 损坏的时间戳不当成到期——可用性优先按试用处理（写路径会尝试重写）
+        # 损坏的时间戳不当成到期——可用性优先按试用处理（写路径会尝试重写）；
+        # 但进程内暂记的起点如果已超期，那才是真实的试用起点，按到期处理
+        if _PROCESS_FIRST_LAUNCH:
+            return from_stamp(_PROCESS_FIRST_LAUNCH)
         return "trial", ""
     if (now - first).days < _TRIAL_DAYS:
         return "trial", ""
