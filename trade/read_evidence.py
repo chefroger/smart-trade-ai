@@ -125,6 +125,8 @@ class ReadEvidenceCollector:
         self._total_lines: dict[str, int | None] = {}
         self._failures: dict[str, str] = {}
         self._kinds: dict[str, dict[str, Any]] = {}
+        # Hermes 声明 truncated=False（已读到 EOF）但未给 total_lines 时，仍视为读完
+        self._reached_eof: set[str] = set()
         # 弱证据：terminal / 代码执行触碰过的路径（无分页信息）
         self._weak: set[str] = set()
 
@@ -163,7 +165,8 @@ class ReadEvidenceCollector:
         total = payload.get("total_lines")
         total = total if isinstance(total, int) and total > 0 else None
 
-        if payload.get("truncated"):
+        truncated = bool(payload.get("truncated"))
+        if truncated:
             # 字符预算截断会给出续读位置；否则按请求区间估算。
             next_offset = payload.get("next_offset")
             end = (_coerce_int(next_offset, start + limit) - 1) if next_offset else start + limit - 1
@@ -176,6 +179,11 @@ class ReadEvidenceCollector:
             self._ranges[resolved] = _merge(self._ranges.get(resolved, []), (start, end))
             if total is not None:
                 self._total_lines[resolved] = total
+            # truncated=False → 已到 EOF；后续若再收到截断分片则清掉该标记
+            if truncated:
+                self._reached_eof.discard(resolved)
+            else:
+                self._reached_eof.add(resolved)
             if payload.get("extracted_document"):
                 # 走了解析器：留下 kind，供上层识别「没真正解析」的情况。
                 self._kinds[resolved] = {"kind": Path(resolved).suffix.lower().lstrip(".")}
@@ -206,12 +214,18 @@ class ReadEvidenceCollector:
             failures = dict(self._failures)
             kinds = {p: dict(k) for p, k in self._kinds.items()}
             weak = set(self._weak)
+            reached_eof = set(self._reached_eof)
 
         snapshot: dict[str, dict[str, Any]] = {}
         for path, ranges in ranges_by_path.items():
             total = totals.get(path)
             missing = _missing_ranges(ranges, total) if total else []
-            complete = bool(total and not missing)
+            # 有总行数 → 按覆盖率；无总行数但 Hermes 声明已到 EOF → 视为读完
+            # （避免缺 total_lines 时假判 incomplete 顶替正常回答）
+            if total:
+                complete = not missing
+            else:
+                complete = path in reached_eof and bool(ranges)
             snapshot[path] = {
                 "status": "complete" if complete else "partial",
                 "complete": complete,

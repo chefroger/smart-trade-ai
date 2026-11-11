@@ -229,6 +229,56 @@ class TestLicenseCheck:
         assert not ok
         assert "到期" in msg
 
+    def test_save_failure_still_allows_chat(self, monkeypatch):
+        """首次试用写盘失败不得返回 402——进程内记住起点并放行聊天。"""
+        import trade.license as license_mod
+
+        license_mod._PROCESS_FIRST_LAUNCH = None
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+
+        def boom(data, cid=None):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(license_mod, "_save_license_data", boom)
+
+        ok, msg = license_mod.check_license(company_id=1)
+        assert ok is True
+        assert msg == ""
+        assert license_mod._PROCESS_FIRST_LAUNCH  # 进程内已记住试用起点
+
+        # 第二次检查仍应放行，且不得重置试用（同一起点）
+        stamp = license_mod._PROCESS_FIRST_LAUNCH
+        ok2, _ = license_mod.check_license(company_id=1)
+        assert ok2 is True
+        assert license_mod._PROCESS_FIRST_LAUNCH == stamp
+        license_mod._PROCESS_FIRST_LAUNCH = None
+
+    def test_corrupt_first_launch_treated_as_trial(self, monkeypatch):
+        """损坏的 first_launch_at 不得判到期——可用性优先按试用放行。"""
+        import trade.license as license_mod
+
+        license_mod._PROCESS_FIRST_LAUNCH = None
+        saved = {}
+
+        monkeypatch.setattr(
+            license_mod,
+            "_get_license_data",
+            lambda cid=None: saved.get(cid, {"first_launch_at": "not-a-date"}),
+        )
+
+        def mock_save(data, cid=None):
+            saved[cid] = data
+
+        monkeypatch.setattr(license_mod, "_save_license_data", mock_save)
+
+        ok, msg = license_mod.check_license(company_id=1)
+        assert ok is True
+        assert msg == ""
+        # 应尝试重写为合法时间戳
+        assert "first_launch_at" in saved.get(1, {})
+        datetime.datetime.fromisoformat(saved[1]["first_launch_at"])
+        license_mod._PROCESS_FIRST_LAUNCH = None
+
 
 class TestDaysRemaining:
     """剩余天数计算"""

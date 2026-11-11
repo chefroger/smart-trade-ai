@@ -276,6 +276,8 @@ class TestTriggerConflictConvergence:
         [
             "记录一下",
             "报价",  # 裸词已删；生成走「报价单」，谈判走「报价怎么谈」
+            "解压这个文件",  # 裸「解压」已删，不得进 tender-archive
+            "记住客户",  # 曾绑 customer-intel，实际是记忆意图
         ],
     )
     def test_removed_bare_triggers_no_longer_hijack(self, query):
@@ -288,6 +290,8 @@ class TestTriggerConflictConvergence:
             assert matched["name"] not in {
                 "chat-memory",  # 曾靠「记录」劫持
                 "b2b-lead-generation",  # 曾靠裸「报价」与 doc-gen 打平
+                "b2b-tender-archive",  # 曾靠裸「解压」劫持普通文件
+                "b2b-customer-intel",  # 曾靠「记住客户」抢记忆意图
             }, f"{query!r} 仍被 {matched['name']} 劫持"
 
 

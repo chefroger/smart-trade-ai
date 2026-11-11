@@ -137,6 +137,45 @@ class TestDeps:
         assert opt_company(None) is None
 
 
+class TestCompanyBinding:
+    """首次 session 绑定必须校验公司存在且激活（可用性不挡正常公司）。"""
+
+    def test_rejects_unknown_company_on_first_bind(self, test_db, setup_mocks):
+        """伪造 / 不存在的 company_id 不得占住 session。"""
+        from fastapi import HTTPException
+
+        from trade.api import deps
+        from trade.api.__init__ import _enforce_company_binding
+
+        deps.set_session_token("bind-token")
+        deps._ACTIVE_COMPANY.pop("bind-token", None)
+
+        class Req:
+            headers = {"X-Hermes-Session-Token": "bind-token"}
+            url = type("U", (), {"path": "/api/trade/customers"})()
+
+        with pytest.raises(HTTPException) as exc:
+            _enforce_company_binding(Req(), x_company_id="999999")
+        assert exc.value.status_code == 401
+        assert "bind-token" not in deps._ACTIVE_COMPANY
+
+    def test_binds_active_company(self, company_id, setup_mocks):
+        """合法激活公司首次请求应绑定 session。"""
+        from trade.api import deps
+        from trade.api.__init__ import _enforce_company_binding
+
+        deps.set_session_token("bind-ok-token")
+        deps._ACTIVE_COMPANY.pop("bind-ok-token", None)
+
+        class Req:
+            headers = {"X-Hermes-Session-Token": "bind-ok-token"}
+            url = type("U", (), {"path": "/api/trade/customers"})()
+
+        _enforce_company_binding(Req(), x_company_id=str(company_id))
+        assert deps._ACTIVE_COMPANY.get("bind-ok-token") == company_id
+        deps._ACTIVE_COMPANY.pop("bind-ok-token", None)
+
+
 class TestCronIsMachineLevel:
     """cron 端点是**机器级**资源，没有公司维度。
 

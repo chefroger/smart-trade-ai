@@ -10,6 +10,7 @@ when_to_use:
   - "不要用于：下载压缩包（走 b2b-tender-download）"
   - "不要用于：按招标清单匹配归档文件（走 b2b-tender-doc-match）"
 triggers:
+  - 压缩包
   - 批量解压
   - 解压压缩包
   - 解压并删包
@@ -20,6 +21,8 @@ triggers:
   - 解压招标包
   - 解压招标
   - 招标压缩包
+  - 招标包
+  - unzip
   - extract archives
   - batch unzip
 category: 自动化

@@ -1388,7 +1388,8 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             "客户画像", "深度画像", "客户分析", "分析一下这个客户", "了解客户",
             "客户情报", "怎么跟这个客户谈",
-            "客户偏好", "送礼建议", "回扣怎么给", "记住客户",
+            # 「记住客户」会抢走 chat-memory；「客户偏好」裸词亦易误触——用复合词
+            "分析客户偏好", "客户偏好分析", "送礼建议", "回扣怎么给",
             "客户家底", "客户决策风格", "深入了解客户",
             "customer intel", "customer dossier", "customer insight", "client analysis", "what do we know about", "know your customer",
             "deep profile", "buyer intelligence",
@@ -1614,16 +1615,17 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
     {
         "name": "b2b-tender-archive",
         "triggers": [
-            # Chinese — 解压类只归本技能
-            "解压", "压缩包", "批量解压", "解压压缩包", "解压并删包", "包中包",
+            # Chinese — 不用裸「解压」（会劫持「解压文件」等非招标场景）；
+            # 「解压这些压缩包」靠「压缩包」子串兜住（见 tender 自然语言用例）
+            "压缩包", "批量解压", "解压压缩包", "解压并删包", "包中包",
             "嵌套压缩包", "归档清理", "解压到所在目录",
-            # 2026-11-11：招标包解压自然说法
-            "解压招标包", "解压招标", "招标压缩包",
+            # 招标包解压自然说法（含「解压这个招标包」→ 招标包）
+            "解压招标包", "解压招标", "招标压缩包", "招标包",
             # English
             "unzip", "extract archives", "batch unzip",
         ],
         "aliases": [],
-        "priority_keywords": ["解压招标", "招标压缩包", "unzip"],
+        "priority_keywords": ["解压招标", "招标压缩包", "招标包", "unzip"],
         "input_fmt": "压缩包所在目录 + 模式（A 删包归档 / B 就地解压）",
         "output_fmt": "解压产物 + 报告（成功/失败/进回收站数/残留数）",
         "augment_prompt": "",

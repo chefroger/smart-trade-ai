@@ -17,10 +17,17 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
+
+# 首次试用写盘失败时，进程内暂记起点，避免「每次请求重置试用」；
+# 同时仍放行聊天（可用性优先）。成功写盘后清空。
+_PROCESS_FIRST_LAUNCH: str | None = None
 
 # ── 非对称签名密钥 ──────────────────────────────────────────────────────
 
@@ -236,11 +243,21 @@ def license_state(company_id: int | None = None) -> tuple[str, str]:
 
     first_raw = data.get("first_launch_at")
     if not first_raw:
+        # 磁盘还没有记录时，沿用进程内暂记的试用起点（写盘失败场景）
+        if _PROCESS_FIRST_LAUNCH:
+            try:
+                first = datetime.fromisoformat(_PROCESS_FIRST_LAUNCH).replace(tzinfo=UTC)
+            except (TypeError, ValueError):
+                return "trial", ""
+            if (now - first).days < _TRIAL_DAYS:
+                return "trial", ""
+            return "expired", _SOFT_EXPIRED_TRIAL
         return "trial", ""
     try:
         first = datetime.fromisoformat(first_raw).replace(tzinfo=UTC)
     except (TypeError, ValueError):
-        return "expired", _SOFT_EXPIRED_TRIAL
+        # 损坏的时间戳不当成到期——可用性优先按试用处理（写路径会尝试重写）
+        return "trial", ""
     if (now - first).days < _TRIAL_DAYS:
         return "trial", ""
     return "expired", _SOFT_EXPIRED_TRIAL
@@ -275,17 +292,39 @@ def check_license(company_id: int | None = None) -> tuple[bool, str]:
 
     只读浏览不受这里约束：历史/资料/已生成草稿的 GET 接口不经过此函数。
     """
+    global _PROCESS_FIRST_LAUNCH
+
     data = _get_license_data(company_id)
     now = datetime.now(UTC)
 
+    # 损坏的试用起点：尝试重写为有效时间，绝不因此把用户挡在聊天外
+    raw_first = data.get("first_launch_at")
+    if raw_first is not None:
+        try:
+            datetime.fromisoformat(raw_first)
+        except (TypeError, ValueError):
+            stamp = _PROCESS_FIRST_LAUNCH or now.isoformat()
+            data["first_launch_at"] = stamp
+            try:
+                _save_license_data(data, company_id)
+                _PROCESS_FIRST_LAUNCH = None
+            except Exception as exc:
+                _PROCESS_FIRST_LAUNCH = stamp
+                _log.warning("license.json 重写损坏的 first_launch_at 失败（聊天仍放行）: %s", exc)
+            return True, ""
+
     # 首次使用：记录时间
     if "first_launch_at" not in data:
-        data["first_launch_at"] = now.isoformat()
+        stamp = _PROCESS_FIRST_LAUNCH or now.isoformat()
+        data["first_launch_at"] = stamp
         try:
             _save_license_data(data, company_id)
-        except Exception:
-            # 写入失败（权限不足/磁盘满等）→ 不应静默通过，否则每次启动都重置试用
-            return False, "License 状态持久化失败，请检查 ~/.trade/ 目录权限"
+            _PROCESS_FIRST_LAUNCH = None
+        except Exception as exc:
+            # 写盘失败不得挡聊天；进程内记住起点，避免每次请求重置试用
+            _PROCESS_FIRST_LAUNCH = stamp
+            _log.warning("license.json 写入失败（聊天仍放行）: %s", exc)
+            return True, ""
         return True, ""
 
     # 与中间件共用自恢复路径，避免写接口与聊天门控结论不一致

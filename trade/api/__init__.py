@@ -61,6 +61,15 @@ def _enforce_company_binding(
                        f"Use POST /api/trade/companies/{cid}/switch to switch.",
             )
         if bound is None:
+            # 首次绑定前先确认公司存在且激活，避免伪造/停用 ID 占住 session
+            from trade.company import get_trade_company
+
+            tc = get_trade_company(cid)
+            if not tc or not tc.get("is_active"):
+                raise HTTPException(
+                    status_code=401,
+                    detail=f"Company {cid} not found or inactive.",
+                )
             _ACTIVE_COMPANY[token] = cid
 
 

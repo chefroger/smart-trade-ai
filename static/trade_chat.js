@@ -2525,7 +2525,17 @@ async function sendMsg() {
             body:JSON.stringify({library_id:currentLibraryId,customer_id:currentCustomerId,query,context:currentChatContext,language:currentLang}),
             signal:streamCtl.signal,
         });
-        if (!r.ok) { progDiv.remove(); deliver('assistant', `⚠️ 请求失败 (${r.status})`); sendBtn.disabled = false; return; }
+        if (!r.ok) {
+            progDiv.remove();
+            if (r.status === 402) {
+                const err = await r.json().catch(() => ({}));
+                showLicenseExpired(err.detail || t('license.expired'));
+            } else {
+                deliver('assistant', `⚠️ 请求失败 (${r.status})`);
+            }
+            sendBtn.disabled = false;
+            return;
+        }
 
         const reader = r.body.getReader(); const decoder = new TextDecoder();
         let buffer = '';
@@ -4153,7 +4163,17 @@ async function onboardingStartOSINT() {
             body: JSON.stringify({ query: prompt }),
             signal: _onboardingStreamCtl.signal
         });
-        if (!resp.ok) { progDiv.remove(); resultsArea.innerHTML = '<div class="onb-error">请求失败 (' + resp.status + ')</div>'; resetInputs(); return; }
+        if (!resp.ok) {
+            progDiv.remove();
+            if (resp.status === 402) {
+                var err402 = await resp.json().catch(function() { return {}; });
+                showLicenseExpired(err402.detail || t('license.expired'));
+            } else {
+                resultsArea.innerHTML = '<div class="onb-error">请求失败 (' + resp.status + ')</div>';
+            }
+            resetInputs();
+            return;
+        }
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
         var buffer = '';
@@ -4370,10 +4390,19 @@ async function onCompanyChange(cid) {
     currentCustomerId = null;
     if (cid) {
         const newCid = parseInt(cid);
+        const prevCid = currentCompanyId;
         // 先更新前端状态（让后续 API 调用带上正确的 X-Company-ID header）
         currentCompanyId = newCid;
         // 通知后端切换 session 绑定（旧 cid 会触发 403，因此 _enforce_company_binding 需放行 /switch 端点）
-        try { await api('POST', '/api/trade/companies/' + newCid + '/switch'); } catch(_) {}
+        const switched = await api('POST', '/api/trade/companies/' + newCid + '/switch');
+        if (!switched) {
+            // 切换失败：回滚前端选中，避免后续请求带着未绑定的公司 ID
+            currentCompanyId = prevCid;
+            const sel = $('company-select');
+            if (sel && prevCid != null) sel.value = String(prevCid);
+            toast('切换公司失败，请重试');
+            return;
+        }
         saveState();
         loadUsageToday();
         // 首个公司 + 引导未完成 → 显示新手引导

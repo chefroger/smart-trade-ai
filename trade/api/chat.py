@@ -735,10 +735,17 @@ async def trade_chat_stream(
     def _emit_threadsafe(event_type: str, data: dict | None = None):
         """工作线程通过 call_soon_threadsafe 投递到 asyncio queue。
 
-        put_nowait 在队列满时抛出 QueueFull，用 call_soon_threadsafe 回调时不好捕获，
-        改为 queue.put_nowait 包装在一次非阻塞 try 中，满则静默丢弃（优先保持 SSE 连接稳定）。
+        进度类事件（tool_* / thinking）队列满可丢，保证 SSE 不堵死。
+        response / error / done / analysis_gate 是终态或门禁结论，改走
+        create_task(put) 背压等待，避免用户只看到「工具跑完了却没有回复」。
         """
+        critical = event_type in ("response", "error", "done", "analysis_gate")
+
         def _safe_put(ev_type, ev_data):
+            if critical:
+                # 终态事件必须送达；put 会在队列有空位时再入队
+                asyncio.create_task(event_queue.put((ev_type, ev_data)))
+                return
             try:
                 event_queue.put_nowait((ev_type, ev_data))
             except asyncio.QueueFull:
