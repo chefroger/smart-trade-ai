@@ -11,16 +11,15 @@ triggers:
   - 部署
   - 全套方案
   - 公司介绍
-  - 产品介绍
   - 营销方案
   - 营销定位
   - 市场定位
-  - 竞争对手分析
   - 开始使用
   # ... (see skill_registry.py for full list)
 category: 系统工具
 version: 1.0.0
 author: Foreign Trade Assistant
+
 ---
 
 初始化完成后提示用户：可以随时说「检查知识库」，我会扫描缺文件、空文件、过期资质和前后矛盾项。
