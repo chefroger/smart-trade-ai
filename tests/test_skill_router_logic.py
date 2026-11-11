@@ -448,3 +448,27 @@ class TestQualityGateIsSelfContained:
         ):
             skill = get_skill_by_name(name)
             assert "自检" in self._active_prompt(skill), f"{name} 的生效注入里没有自检条目"
+
+
+def test_when_to_use_reaches_the_model():
+    """SKILL.md 的 when_to_use 必须作为注入下发（2026-11-11 审计）。
+
+    这个字段原先没有任何代码消费：Trade 只注入 injection_prompt，Hermes 只读
+    name + description —— 「什么时候用 / 不要用于」写在文件里却永远到不了模型。
+    """
+    from trade.skill_router import augment_query, load_when_to_use
+
+    items = load_when_to_use("chat-memory")
+    assert items, "chat-memory 的 when_to_use 应能读到"
+    assert any("不要用于" in item for item in items), "「不要用于」也要下发"
+
+    out = augment_query("查询上次讨论", skill_name="chat-memory")
+    assert "适用场景（用户这样说时启用本技能）" in out
+    assert items[0] in out
+
+
+def test_when_to_use_absent_for_unknown_skill():
+    """未知 skill 读不到 when_to_use 时返回空元组，不抛异常。"""
+    from trade.skill_router import load_when_to_use
+
+    assert load_when_to_use("__no_such_skill__") == ()

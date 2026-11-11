@@ -884,3 +884,66 @@ class TestCustomerSearchBatchFetch:
         assert not conn_calls, (
             f"逐个 get() 被调用了 {len(conn_calls)} 次 —— 应改为一次 get_by_ids()"
         )
+
+
+class TestPaidFeatureGate:
+    """导入/导出是付费能力：未激活（试用）时后端也必须拒绝（2026-11-11）。
+
+    界面隐藏只是体验，边界在后端 —— 否则试用用户直接调 API 就能用。
+    """
+
+    def test_trial_user_gets_402(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import transfer
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        with pytest.raises(HTTPException) as exc:
+            transfer._require_paid_feature()
+        assert exc.value.status_code == 402
+        assert "付费功能" in exc.value.detail
+
+    def test_active_user_passes(self, monkeypatch):
+        from trade.api import transfer
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("active", ""))
+        transfer._require_paid_feature()  # 不抛
+
+    def test_license_read_failure_fails_open(self, monkeypatch):
+        """读不到许可证状态时放行 —— 不能因为状态异常锁住付费用户。"""
+        from trade.api import transfer
+
+        def boom(cid=None):
+            raise RuntimeError("license unreadable")
+
+        monkeypatch.setattr("trade.license.license_state", boom)
+        transfer._require_paid_feature()  # 不抛
+
+    def test_export_endpoint_rejects_trial(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import transfer
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        with pytest.raises(HTTPException) as exc:
+            transfer.export_company_package(company_id=1, cid=1)
+        assert exc.value.status_code == 402
+
+    def test_import_endpoint_rejects_trial(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from trade.api import deps
+        from trade.api.transfer import router
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        deps.set_session_token("paid-gate-token")
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        resp = client.post(
+            "/companies/import-package",
+            headers={"X-Hermes-Session-Token": "paid-gate-token"},
+            files={"file": ("x.zip", b"not-a-zip", "application/zip")},
+        )
+        assert resp.status_code == 402

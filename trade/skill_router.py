@@ -50,6 +50,8 @@ try:
 except (ValueError, TypeError):
     _INJECTION_CACHE_MAX = 128
 _INJECTION_CACHE: OrderedDict[str, tuple[float, str]] = OrderedDict()
+# SKILL.md frontmatter 的 when_to_use（同样按 mtime 缓存）
+_WHEN_CACHE: OrderedDict[str, tuple[float, tuple[str, ...]]] = OrderedDict()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SKILL.md → injection_prompt 加载器
@@ -188,6 +190,46 @@ def load_injection_prompt(skill_name: str) -> str | None:
                 _INJECTION_CACHE.popitem(last=False)
 
     return injection or None
+
+
+def load_when_to_use(skill_name: str) -> tuple[str, ...]:
+    """从 SKILL.md frontmatter 读取 when_to_use（mtime 缓存）。
+
+    这个字段原先**没有任何代码消费** —— Trade 只注入 injection_prompt，
+    Hermes 只读 name + description，于是「什么时候用 / 不要用于」写死在文件里
+    却永远到不了模型（2026-11-11 审计）。这里把它作为注入的一部分下发。
+
+    没有该字段、读不到文件、YAML 异常时返回空元组（降级为无此段）。
+    """
+    skill_dir = _get_skill_dir(skill_name)
+    if skill_dir is None:
+        return ()
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return ()
+    try:
+        mtime = skill_md.stat().st_mtime
+    except OSError:
+        return ()
+    with _injection_cache_lock:
+        cached = _WHEN_CACHE.get(skill_name)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    try:
+        content = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    fm, _ = _parse_frontmatter(content)
+    raw = fm.get("when_to_use") or ()
+    # 兼容两种写法：YAML 列表，或单行字符串
+    items = (raw,) if isinstance(raw, str) else tuple(raw)
+    values = tuple(str(item).strip() for item in items if str(item).strip())
+    with _injection_cache_lock:
+        _WHEN_CACHE.pop(skill_name, None)
+        _WHEN_CACHE[skill_name] = (mtime, values)
+        while len(_WHEN_CACHE) > _INJECTION_CACHE_MAX:
+            _WHEN_CACHE.popitem(last=False)
+    return values
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -636,6 +678,14 @@ def augment_query(
     # SKILL.md 中没有 injection_prompt 字段时，使用 skill_registry 中预定义的默认 prompt
     if augment is None:
         augment = skill.get("augment_prompt", "")
+
+    # 「什么时候用 / 不要用于」原先写在 frontmatter 里但无人读取，补进注入
+    #（2026-11-11 审计）：只在本技能命中时下发，不影响其它 skill 的 token。
+    when_items = load_when_to_use(name)
+    if when_items and "适用场景" not in augment:
+        augment = (augment or "") + "\n\n适用场景（用户这样说时启用本技能）：\n" + "\n".join(
+            f"- {item}" for item in when_items
+        ) + "\n"
 
     # 检索最相关的 QA 对（references/qa_pairs.md），精准注入相关知识
     qa_pairs = _load_qa_pairs(name)

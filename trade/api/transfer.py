@@ -64,6 +64,26 @@ def _cleanup(path: str) -> None:
     Path(path).unlink(missing_ok=True)
 
 
+def _require_paid_feature() -> None:
+    """导入/导出是付费能力：未激活（试用）时不开放。
+
+    与界面门禁一致（static/trade_chat.js 的 _licenseActivated）。界面隐藏是
+    用户体验，这里才是真正的边界 —— 否则试用用户直接调 API 就能用。
+    许可证读取异常时**放行**（可用性优先，不能因为读不到状态就锁住付费用户）。
+    """
+    try:
+        from trade.license import license_state
+
+        state, _message = license_state()
+    except Exception:  # noqa: BLE001 — 读不到状态不阻断
+        return
+    if state != "active":
+        raise HTTPException(
+            status_code=402,
+            detail="公司数据导入/导出为付费功能，激活后可用。",
+        )
+
+
 def _set_job(job_id: str, **updates) -> None:
     with _JOB_LOCK:
         job = _JOBS.setdefault(job_id, {})
@@ -93,8 +113,10 @@ def _run_import(job_id: str, zip_path: Path, target_company_id: int | None,
 @router.get("/companies/{company_id}/export")
 def export_company_package(company_id: int, cid: int = Depends(require_company)):
     """下载单个公司的数据包。"""
+    # 越权判断先于付费判断：跨公司请求应先得到 403，不暴露「这是付费功能」
     if cid != company_id:
         raise HTTPException(status_code=403, detail="导出目标与 X-Company-ID 不一致")
+    _require_paid_feature()
     if not _rate_ok(f"export:{cid}", 2, 60):
         raise HTTPException(status_code=429, detail="导出过于频繁，请稍后再试")
     try:
@@ -145,6 +167,7 @@ async def import_company_package(
 
     注意：调用方不要带 X-Company-ID；新公司尚未绑定。
     """
+    # 越权判断先于付费判断：跨公司请求应先得到 403，不暴露「这是付费功能」
     # 导入是显式指定目标公司的写操作，不能被用来绕过 session 的公司绑定
     # （2026-11-11 审计 P2-3）。未绑定时（新公司/首次导入）照常放行。
     if target_company_id is not None:
@@ -158,6 +181,7 @@ async def import_company_package(
                 status_code=403,
                 detail="只能导入到当前绑定的公司，请先切换到目标公司再导入。",
             )
+    _require_paid_feature()
     if not _rate_ok("import", 1, 300):
         raise HTTPException(status_code=429, detail="导入过于频繁，请稍后再试")
     fd, temp_name = mkstemp(prefix="trade-company-upload-", suffix=".zip")
