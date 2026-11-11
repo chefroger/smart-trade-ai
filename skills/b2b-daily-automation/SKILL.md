@@ -51,6 +51,8 @@ injection_prompt: |
   用 cronjob 工具创建任务：指定 schedule（cron 表达式）、skills（如 b2b-linkedin-marketing）、deliver 目标；返回任务 ID + 下次执行时间（换算用户本地时区）+ 修改/暂停/删除方法。
 
   质量标准：内容针对用户行业与产品（不泛泛而谈）；生成即用；每份输出带明确的下一步行动建议。
+
+  需要早安简报 / LinkedIn 内容 / 欧洲触达等定时任务的完整模板与执行步骤时，用 `skill_view` 加载本技能正文。
 ---
 
 ## 🌅 早安简报规范（Morning Brief Specification）

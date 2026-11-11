@@ -143,3 +143,18 @@ injection_prompt: |
   - 如果用户需求与已有 skill 重叠（如已有 b2b-customs-data），提醒用户避免重复
   - 写入 skill_registry.py 时必须保持 Python 语法正确（逗号、缩进、引号匹配）
 ---
+
+<!-- 维护提示：本技能的全部规则都在上方 frontmatter 的 injection_prompt 里
+     （路由命中时由 Trade 注入，日常实际生效的就是它）。正文不再重复一遍规则，
+     改流程/数字只改 injection_prompt 一处。 -->
+
+# b2b-skill-generator — 自动生成新 B2B Skill
+
+规则见上方 `injection_prompt`：六阶段流程（澄清需求 → 设计触发词/别名/格式 → 写
+`SKILL.md` → 写 `skill_registry.py` → 重启服务 → 确认）。
+
+生成新 skill 会写两个位置：`~/.hermes/skills/{name}/SKILL.md`（Hermes 运行时技能目录）
+与 `~/.trade/foreign-trade-assistant/trade/skill_registry.py`（运行时注册表）。
+注意这两个都是**运行目录**；仓库里的 `skills/` 与 `trade/skill_registry.py` 不会自动同步，
+需要另外提交到仓库，否则下次 `trade-update` 拉取 GitHub main 时新 skill 会丢。
+

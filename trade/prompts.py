@@ -330,12 +330,12 @@ def prompt_tier(
 ) -> str:
     """返回本次应使用的 system prompt 档位名。
 
-    档位（2026-10-22 按 token 成本重新分层）：
-      "minimal"     — 非首轮、无文档任务（≈1760 token）
-      "first_turn"  — 首轮（≈1836 token）
-      "osint"       — 背调类（≈1875 token）
-      "full"        — 文档**分析**类（≈5497 token）
-      "full_docgen" — 文档**生成**类（≈6091 token，多付产出规则约 570 token）
+    档位（2026-11-10 复测：常驻「对外动作禁令」后整体 +136 token）：
+      "minimal"     — 非首轮、无文档任务（≈2101 token）
+      "first_turn"  — 首轮（≈2177 token）
+      "osint"       — 背调类（≈2218 token）
+      "full"        — 文档**分析**类（≈5999 token）
+      "full_docgen" — 文档**生成**类（≈6593 token，多付产出规则约 594 token）
 
     判定顺序（先特后普）：
       1. 命中生成类 skill → full_docgen

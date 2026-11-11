@@ -1,6 +1,6 @@
 ---
 name: auto-trade-customer-development
-description: 全自动外贸客户开发编排器 — 一句话触发「搜索 → 背调 → 评分 → 写信 → 交付草稿 → 入库 → 日志」端到端流水线
+description: 外贸客户开发编排器 — 搜索/背调/评分/写信/交付草稿/入库端到端流水线
 when_to_use:
   - "全自动客户开发流水线"
   - "定时搜索 + 自动生成开发信草稿（由用户自行发送）"
@@ -138,3 +138,15 @@ injection_prompt: |
 
   如果用户没有提供产品/市场/客户类型等关键信息，先一次性问完，不要逐条挤牙膏。
 ---
+
+<!-- 维护提示：本技能的全部规则都在上方 frontmatter 的 injection_prompt 里
+     （路由命中时由 Trade 注入，日常实际生效的就是它）。正文不再重复一遍规则，
+     改流程/数字只改 injection_prompt 一处。 -->
+
+# auto-trade-customer-development — 外贸客户开发端到端编排器
+
+规则见上方 `injection_prompt`：六阶段流水线（搜索 → 背调 → 评分 → 写信 → 交付草稿 → 入库 → 日志）、
+A/B/C 分级与跟进节奏、日志落盘路径 `~/.trade/audit/auto-pipeline-{date}.md`。
+
+产出是**草稿**：邮件正文只以文本形式给用户，由用户自己核对后手动发送。
+

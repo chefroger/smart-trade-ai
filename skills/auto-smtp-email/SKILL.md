@@ -30,3 +30,12 @@ injection_prompt: |
 
   需要发邮件时：用 b2b-cold-outreach 生成草稿，由用户自己复制发送。
 ---
+
+# auto-smtp-email —（已禁用，仅保留为引用记录）
+
+本技能**不会安装、不会注册、不会被路由触发**（`trade/skill_registry.py` 的
+`_BLOCKED_SKILLS` 拦截，安装与启动时由 `_purge_blocked_skills` 清理）。
+
+保留这个文件只为记录 Trade 的设计决定：AI 可以起草邮件，但不能替用户发送。
+需要写开发信请用 `b2b-cold-outreach`，草稿由用户本人核对后手动发送。
+
