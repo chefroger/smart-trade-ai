@@ -928,10 +928,29 @@ async function api(method, path, body, extraHeaders) {
 
 // ── 许可证 ──
 
+// 是否已付费激活（整机一份，见 trade/license.py）。
+// 导入/导出是付费功能：未激活时界面上不出现这两个按钮。
+let _licenseActivated = false;
+
+/**
+ * 按许可证状态开关付费功能的界面入口。
+ * - 「导入公司数据」那一行：默认 hidden，激活后才显示；
+ * - 公司列表每行的「导出」按钮：只在 loadCompanyListUI() 里按状态渲染，
+ *   状态变化时若公司弹窗正开着就重画一次。
+ */
+function _applyLicenseGates() {
+    const row = document.getElementById('import-company-row');
+    if (row) row.classList.toggle('hidden', !_licenseActivated);
+    const modal = document.getElementById('company-modal');
+    if (modal && !modal.classList.contains('hidden')) loadCompanyListUI();
+}
+
 async function loadLicenseStatus() {
     try {
         const r = await fetch('/api/trade/license/status', _buildApiOpts('GET', null, TOKEN, currentCompanyId));
         const data = await r.json();
+        _licenseActivated = !!data.activated;
+        _applyLicenseGates();
         const bar = document.getElementById('license-bar');
         if (!bar) return;
 
@@ -4364,7 +4383,7 @@ function loadCompanyListUI() {
         <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light);">
             <div style="flex:1;"><div style="font-weight:600;font-size:13px;">${esc(c.name)}</div>
             <div style="font-size:11px;color:var(--text-muted);">${esc(c.slug)} · ${c.contact_email ? ' · ' + esc(c.contact_email) : ''}</div></div>
-            <button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>
+            ${_licenseActivated ? `<button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>` : ''}
             <button class="btn btn-danger btn-xs" onclick="deleteCompany(${c.id})">删除</button>
         </div>`).join('');
 }
