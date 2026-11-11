@@ -212,6 +212,7 @@ const I18N = {
         'sys.restart_toast':'🔄 正在重启 Trade 服务...',
         'sys.restart_ok':'✅ 重启命令已发送，页面将在几秒后刷新',
         'sys.restart_fail':'❌ 重启失败: ',
+        'sys.restart_busy_update':'⏳ 更新正在进行中，请等更新完成后再点重启。',
         'sys.restart_wait':'🔄 服务正在重启，页面即将刷新...',
         'sys.restart_timeout':'⚠️ 服务重启超时，请手动刷新页面',
         'sys.skills_updating':'⏳ 更新中...',
@@ -398,6 +399,7 @@ const I18N = {
         'sys.restart_toast':'🔄 Restarting Trade...',
         'sys.restart_ok':'✅ Restart command sent, page will refresh soon',
         'sys.restart_fail':'❌ Restart failed: ',
+        'sys.restart_busy_update':'⏳ Update in progress — restart after it finishes.',
         'sys.restart_wait':'🔄 Service restarting, page will refresh...',
         'sys.restart_timeout':'⚠️ Restart timeout, please refresh manually',
         'sys.skills_updating':'⏳ Updating...',
@@ -1237,7 +1239,8 @@ async function _confirmTradeUpdate() {
  */
 function _showRestartPrompt() {
     const rb = $('system-restart-btn');
-    if (rb) rb.hidden = false;
+    // 升级进行中绝不露出：此时重启会把升级打断，按钮必须等升级结束才出现
+    if (rb && !_tradeUpdateInFlight) rb.hidden = false;
 }
 
 /**
@@ -1257,12 +1260,37 @@ function _updateErrorText(resp) {
     return text;
 }
 
+// 更新与重启必须串行：升级请求还在跑时点重启，watchdog 会把跑升级的进程
+// 一起杀掉，pip 安装 / 模板同步 / 数据库检查全部中断
+// （2026-11-11 实测：用户在 Step 3/7 点了重启，升级只做了一半）。
+let _tradeUpdateInFlight = false;
+// 升级前重启按钮是否已经可见（Hermes 升级等场景会提前露出）——
+// 升级期间先收起，升级失败时按原样恢复。
+let _restartPromptBeforeUpdate = false;
+
+function _setUpdateInFlight(active) {
+    _tradeUpdateInFlight = active;
+    const rb = document.getElementById('system-restart-btn');
+    if (!rb) return;
+    rb.disabled = active;
+    if (active) {
+        // 升级期间收起重启按钮：它属于「升级完成后」的动作。提前露出来
+        // 用户就会在升级途中点它，把升级线程一起杀掉（2026-11-11 实测）。
+        _restartPromptBeforeUpdate = !rb.hidden;
+        rb.hidden = true;
+    } else if (_restartPromptBeforeUpdate) {
+        rb.hidden = false;
+        _restartPromptBeforeUpdate = false;
+    }
+}
+
 async function doTradeUpdate(e) {
     // 用 currentTarget 或回退到事件对象，再不行直接查 DOM
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-update-btn');
     if (!btn) return;
     if (!(await _confirmTradeUpdate())) return;
     _setBtnBusy(btn, true);
+    _setUpdateInFlight(true);
     toast(t('sys.updating_now'));
     var updateFailed = false;
     var restartScheduled = false;
@@ -1302,16 +1330,19 @@ async function doTradeUpdate(e) {
     }
     if (updateFailed) {
         _setBtnBusy(btn, false);
+        _setUpdateInFlight(false);
         return;
     }
     if (!restartScheduled) {
         // 后端只更新不重启（audit P1-10）：露出重启按钮，让用户自己点
         _setBtnBusy(btn, false);
+        _setUpdateInFlight(false);
         _showRestartPrompt();
         return;
     }
     // 存入标记，页面 reload 后检测并显示 toast
     try { sessionStorage.setItem('_trade_upgrade_done', '1'); } catch(_) {}
+    _setUpdateInFlight(false);
     _waitForRestartAndReload(() => {
         _setBtnBusy(btn, false);
     });
@@ -1321,17 +1352,33 @@ async function doTradeUpdate(e) {
 async function doRestartTrade(e) {
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-restart-btn');
     if (!btn) return;
+    // 升级还在跑：重启会中断升级。后端同样会 409，这里提前拦下少一次往返。
+    if (_tradeUpdateInFlight) {
+        toast(t('sys.restart_busy_update'));
+        return;
+    }
     _setBtnBusy(btn, true);
     toast(t('sys.restart_toast'));
+    let triggered = true;
     try {
         const resp = await api('POST', '/api/trade/system/restart');
         if (resp && resp.ok) {
             toast(t('sys.restart_ok'));
+        } else if (resp) {
+            toast(t('sys.restart_fail') + (resp.error || ''));
+            triggered = false;
         } else {
-            toast(t('sys.restart_fail') + (resp?.error || ''));
+            // api() 已经 toast 过具体原因（如 409 更新中）；服务没动，
+            // 不能空等重启 —— 否则 120 秒后再弹一条误导性的「重启超时」。
+            triggered = false;
         }
     } catch(e) {
+        // 连接被掐断通常说明重启已经开始了
         toast(t('sys.restart_wait'));
+    }
+    if (!triggered) {
+        _setBtnBusy(btn, false);
+        return;
     }
     _waitForRestartAndReload(() => {
         _setBtnBusy(btn, false);
@@ -1897,6 +1944,7 @@ async function doUpdateSystem() {
     const btn = document.getElementById('update-banner');
     if (!(await _confirmTradeUpdate())) return;
     if (btn) btn.textContent = '更新中...';
+    _setUpdateInFlight(true);
     try {
         const resp = await api('POST', '/api/trade/system/update',
             {target_sha: _pendingUpdateTarget || null},
@@ -1911,20 +1959,25 @@ async function doUpdateSystem() {
                 toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '),
                     {sticky: true});
             }
-            // 后端永不自动重启：露出重启按钮，由用户自己点
+            // 后端永不自动重启：升级**全部完成**后才露出重启按钮
             if (btn) { btn.remove(); }
+            _setUpdateInFlight(false);
             _showRestartPrompt();
             checkVersion();
         } else if (resp?.error || (resp?.errors && resp.errors.length)) {
             // 之前这里只有一句「更新失败」，用户无从知道原因
             toast(_updateErrorText(resp), {sticky: true});
             if (btn) btn.textContent = '⬆️ 升级';
+            _setUpdateInFlight(false);
+        } else {
+            // resp 为 null 时 api() 已 toast，不重复提示
+            _setUpdateInFlight(false);
         }
-        // resp 为 null 时 api() 已 toast，不重复提示
     } catch(e) {
         // 更新请求不会触发服务重启（后端不自动重启）：按普通网络失败处理
         toast(t('sys.update_network'));
         if (btn) btn.textContent = '⬆️ 升级';
+        _setUpdateInFlight(false);
     }
 }
 

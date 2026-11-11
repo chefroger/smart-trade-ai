@@ -767,6 +767,42 @@ class TestSystemRouter:
         paths = [r.path for r in router.routes if hasattr(r, "path")]
         assert "/system/restart" in paths
 
+    def test_restart_refused_while_update_running(self):
+        """升级未完成时点重启必须 409。
+
+        2026-11-11 实测：升级还在 Step 3/7，用户点了重启 → watchdog 杀掉跑
+        升级的进程，pip 安装/模板同步/数据库检查全部没跑，前端只留下
+        「更新请求失败」的误导性提示。这里钉住「升级中不许重启」。
+        """
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import trade.app as app_module
+
+        calls: list[int] = []
+        # 请求必须在 token patch 生效期间发出，否则依赖里读到的还是空 token
+        with patch("trade.api.deps._SESSION_TOKEN", "test-token"):
+            router = app_module._create_system_router()
+            app = FastAPI()
+            app.include_router(router, prefix="/api/trade")
+            client = TestClient(app)
+            headers = {"X-Hermes-Session-Token": "test-token"}
+
+            with patch.object(app_module, "_perform_restart", lambda: calls.append(1)):
+                assert app_module._update_lock.acquire(blocking=False)
+                try:
+                    resp = client.post("/api/trade/system/restart", headers=headers)
+                finally:
+                    app_module._update_lock.release()
+                assert resp.status_code == 409
+                assert "更新正在进行中" in resp.json()["detail"]
+                assert calls == []
+
+                # 升级结束（锁释放）后重启照常放行
+                resp = client.post("/api/trade/system/restart", headers=headers)
+                assert resp.status_code == 200
+                assert calls == [1]
+
 
 # ── update_trade 测试 ─────────────────────────────────────────────────────
 
