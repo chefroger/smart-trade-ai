@@ -179,6 +179,95 @@ def test_roundtrip_creates_company_and_rewrites_paths(desktop, tmp_path):
         conn.close()
 
 
+def test_chinese_text_and_filenames_survive_cross_platform_package(desktop, tmp_path):
+    """中文公司名/客户/文件名在包里必须是 UTF-8，换平台导入后一字不差。
+
+    跨平台的关键在 ZIP 条目名：非 ASCII 名必须带 UTF-8 标志位（0x800），
+    否则 Python 在 Windows 上会按 CP437 解码成乱码。JSON/checksums/MEMORY
+    则必须显式 UTF-8 写入和读取。本用例在 CI 的 macOS / Windows / Linux
+    三平台各跑一遍。
+    """
+    name = _unique("宁波华翔进出口")
+    # 用 ASCII slug 建公司：中文名经 _slugify 后含 CJK，会被 _validate_slug 拒绝
+    source = crud.create(name, slug=_unique("ningbo"))
+    conn = database.get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO customers (company_id, name) VALUES (?, ?)",
+            (source["id"], "宁波华翔采购部"),
+        )
+        customer_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        lib = conn.execute(
+            "SELECT * FROM libraries WHERE company_id = ? ORDER BY id LIMIT 1",
+            (source["id"],),
+        ).fetchone()
+        library_id = lib[0]
+        library_root = Path(lib[3])
+        library_root.mkdir(parents=True, exist_ok=True)
+        chinese_file = library_root / "报价单-中文.pdf"
+        chinese_file.write_bytes("中文内容，含税率 13%".encode())
+        conn.execute(
+            "INSERT INTO conversations "
+            "(company_id, customer_id, library_id, query, response, context, files_read) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (source["id"], customer_id, library_id,
+             "这批货含税价多少？", "含税 USD 1.20", "报价",
+             json.dumps([{"file": str(chinese_file)}], ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    package = tmp_path / "chinese.zip"
+    export_company(source["id"], package)
+
+    with zipfile.ZipFile(package) as zf:
+        names = zf.namelist()
+        assert any("报价单-中文.pdf" in entry for entry in names)
+        # 非 ASCII 条目必须声明 UTF-8（否则 Windows 解压/读取会乱码）
+        for info in zf.infolist():
+            if any(ord(ch) > 127 for ch in info.filename):
+                assert info.flag_bits & 0x800, f"missing UTF-8 flag: {info.filename}"
+        # 所有文本载荷都必须能严格按 UTF-8 解码
+        for entry in names:
+            if entry.endswith((".json", ".md")) or entry == "checksums.sha256":
+                zf.read(entry).decode("utf-8")
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["company"]["name"] == name
+        checksums = zf.read("checksums.sha256").decode("utf-8")
+        assert "报价单-中文.pdf" in checksums
+
+    report = import_company(package, force_new=True)
+    target_id = report["target"]["id"]
+    assert report["target"]["name"] == name
+
+    conn = database.get_connection()
+    try:
+        assert conn.execute(
+            "SELECT name FROM customers WHERE company_id = ?", (target_id,)
+        ).fetchone()[0] == "宁波华翔采购部"
+        query, response, files_read = conn.execute(
+            "SELECT query, response, files_read FROM conversations "
+            "WHERE company_id = ?", (target_id,)
+        ).fetchone()
+        assert (query, response) == ("这批货含税价多少？", "含税 USD 1.20")
+        rewritten = json.loads(files_read)[0]["file"]
+        assert "报价单-中文.pdf" in rewritten
+        assert Path(rewritten).is_file()
+        roots = [
+            Path(row[0]) for row in conn.execute(
+                "SELECT root_path FROM libraries WHERE company_id = ?", (target_id,)
+            )
+        ]
+    finally:
+        conn.close()
+
+    copied = [root / "报价单-中文.pdf" for root in roots
+              if (root / "报价单-中文.pdf").is_file()]
+    assert copied, f"中文文件名未落到目标库: {roots}"
+    assert copied[0].read_bytes() == "中文内容，含税率 13%".encode()
+
+
 def test_same_name_different_slug_merges_and_is_idempotent(desktop, tmp_path):
     name = _unique("Same Name")
     source = crud.create(name)
