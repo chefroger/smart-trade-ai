@@ -117,7 +117,9 @@ def append_memory_blocks(blocks: list[str]) -> dict:
         else:
             raise RuntimeError("cannot lock Hermes MEMORY.md")
 
-        existing = memory_file.read_text(encoding="utf-8") if memory_file.exists() else ""
+        # utf-8-sig：Windows 记事本编辑过的 MEMORY.md 可能带 BOM，BOM 会让首行
+        # 标题正则匹配失败，整段公司记忆被静默丢掉
+        existing = memory_file.read_text(encoding="utf-8-sig") if memory_file.exists() else ""
         existing_hashes = {
             block_hash(block)
             for block in _split_all_blocks(existing)
@@ -196,10 +198,17 @@ def conversation_key(row: dict) -> str:
 
 
 def order_signature(row: dict, items: list[dict]) -> str:
-    """订单去重键：优先 order_no，否则用客户 + 摘要 + 明细签名。"""
+    """订单去重键：优先 order_no，否则用客户 + 摘要 + 明细签名。
+
+    `customer_id` 必须由调用方传入**重映射后**的值（源包与目标库的自增 ID
+    不同，否则同一订单永远匹配不上）。明细里的自增/时间戳字段同理要剔除 ——
+    两侧的 id / order_id / created_at 天然不同，带着它们算签名等于永不去重
+    （2026-11-11 自查：无 order_no 的订单重复导入会翻倍）。
+    """
     number = (row.get("order_no") or "").strip()
     if number:
         return "no:" + number
+    volatile = {"id", "order_id", "created_at", "updated_at"}
     payload = {
         "customer_id": row.get("customer_id"),
         "product_name": row.get("product_name"),
@@ -210,7 +219,12 @@ def order_signature(row: dict, items: list[dict]) -> str:
         "total_amount": row.get("total_amount"),
         "created_at": row.get("created_at"),
         "items": sorted(
-            json.dumps(item, sort_keys=True, ensure_ascii=False) for item in items
+            json.dumps(
+                {key: value for key, value in item.items() if key not in volatile},
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            for item in items
         ),
     }
     return "sig:" + hashlib.sha256(

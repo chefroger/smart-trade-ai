@@ -11,11 +11,21 @@ import json
 import re
 from pathlib import Path
 
+# Windows 绝对路径（盘符）或 UNC（\\server\share）—— 匹配时必须大小写不敏感，
+# 否则 C:\Users 与 c:\users 会被当成两个前缀，源机器绝对路径原样残留。
+_WINDOWS_PATH_RE = re.compile(r"^(?:[A-Za-z]:/|//)")
+
 
 def normalize_for_match(value: str) -> str:
-    """把路径归一成可比较形式：反斜杠转正斜杠、合并重复分隔符、去尾分隔符。"""
+    """把路径归一成可比较形式：反斜杠转正斜杠、合并重复分隔符、去尾分隔符。
+
+    UNC 前导 ``//`` 必须保留 —— 无条件合并重复分隔符会把 ``\\\\server\\share``
+    压成 ``/server/share``。
+    """
     text = (value or "").strip().replace("\\", "/")
-    text = re.sub(r"/+", "/", text)
+    prefix = "//" if text.startswith("//") else ""
+    rest = re.sub(r"/+", "/", text[len(prefix):])
+    text = prefix + rest
     if len(text) > 2 and text.endswith("/"):
         text = text.rstrip("/")
     return text
@@ -34,15 +44,33 @@ class PathMapper:
         # 最长源前缀优先，避免 /a 抢在 /a/b 前面
         self._mappings = sorted(cleaned, key=lambda item: len(item[0]), reverse=True)
 
+    @staticmethod
+    def _match(text: str, src: str) -> str | None:
+        """返回匹配后的剩余后缀；不匹配返回 None。
+
+        Windows/UNC 源路径按大小写不敏感比较（目标机可能是 Mac/Linux，
+        大小写不一致不应导致路径漏改）。
+        """
+        if text == src:
+            return ""
+        if _WINDOWS_PATH_RE.match(src):
+            if text.casefold() == src.casefold():
+                return ""
+            if text.casefold().startswith(src.casefold() + "/"):
+                return text[len(src):]
+            return None
+        if text.startswith(src + "/"):
+            return text[len(src):]
+        return None
+
     def rewrite(self, value: str | None) -> str | None:
         if not value:
             return value
         text = normalize_for_match(value)
         for src, dst in self._mappings:
-            if text == src:
-                return dst
-            if text.startswith(src + "/"):
-                return dst + text[len(src):]
+            rest = self._match(text, src)
+            if rest is not None:
+                return dst + rest
         return value
 
     def rewrite_files_read(self, raw: str | None) -> str:

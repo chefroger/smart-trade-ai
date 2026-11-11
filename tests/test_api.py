@@ -175,6 +175,38 @@ class TestCompanyBinding:
         assert deps._ACTIVE_COMPANY.get("bind-ok-token") == company_id
         deps._ACTIVE_COMPANY.pop("bind-ok-token", None)
 
+    def test_export_allowed_for_non_active_company(self, setup_mocks):
+        """导出是用户对列表某一行的显式只读操作，不因绑定在别的公司被 403。
+
+        2026-11-11 Windows 反馈：公司列表里看不到导出按钮。根因之一是该按钮
+        只对「当前公司」渲染 —— 现在每行都显示，导出路径也必须放行非当前公司，
+        否则点下去只会得到 403。
+        """
+        from fastapi import HTTPException
+
+        from trade.api import deps
+        from trade.api.__init__ import _enforce_company_binding
+
+        deps.set_session_token("export-token")
+        deps._ACTIVE_COMPANY["export-token"] = 1
+
+        class ExportReq:
+            headers = {"X-Hermes-Session-Token": "export-token"}
+            url = type("U", (), {"path": "/api/trade/companies/2/export"})()
+
+        # 绑定在 1，导出 2：不得抛异常
+        _enforce_company_binding(ExportReq(), x_company_id="2")
+
+        class OrdersReq:
+            headers = {"X-Hermes-Session-Token": "export-token"}
+            url = type("U", (), {"path": "/api/trade/companies/2/orders"})()
+
+        # 普通业务路径仍按绑定拦截（导出是唯一例外）
+        with pytest.raises(HTTPException) as exc:
+            _enforce_company_binding(OrdersReq(), x_company_id="2")
+        assert exc.value.status_code == 403
+        deps._ACTIVE_COMPANY.pop("export-token", None)
+
 
 class TestCronIsMachineLevel:
     """cron 端点是**机器级**资源，没有公司维度。

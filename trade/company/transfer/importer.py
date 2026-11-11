@@ -16,6 +16,7 @@ from trade.company.transfer import (
     MAX_UNCOMPRESSED_BYTES,
     AmbiguousCompanyError,
     InvalidPackageError,
+    TransferError,
 )
 from trade.company.transfer import merge as merge_mod
 from trade.company.transfer.manifest import load_manifest, verify_checksums
@@ -185,9 +186,11 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
     conn = None
     created_company_id = None
     created_data_dir = None
+    created_data_dir_is_new = False
     created_work_dir = None
     work_dir_is_new = False
     backup_path = None
+    committed = False  # 合并模式的 DB 提交发生在文件拷贝之前（见下方 except）
     report: dict = {
         "mode": None,
         "source": {},
@@ -214,6 +217,21 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         }
 
         conn = get_connection()
+        # 包比本机 schema 新时拒绝：导入端会按本机列过滤，静默丢掉新字段比
+        # 明确要求先升级更糟（manifest 里记录的就是导出机的 schema 版本）。
+        try:
+            local_schema = int(
+                conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] or 0
+            )
+            package_schema = int(manifest.get("schema_version") or 0)
+        except (sqlite3.Error, TypeError, ValueError):
+            package_schema = local_schema = 0
+        if package_schema > local_schema:
+            raise InvalidPackageError(
+                f"数据包来自更新版本的 Trade（schema {package_schema} > 本机 {local_schema}），"
+                "请先更新 Trade 后再导入。"
+            )
+
         matches = _find_targets(conn, source_name)
         if target_company_id is not None:
             target = conn.execute(
@@ -249,6 +267,16 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             snapshot_db(db_path, backup_path)
             report["backup"] = str(backup_path)
         else:
+            # 记录创建前的数据根目录：slug 目录可能是上次删除公司后残留的
+            # （DB 没记录但磁盘目录还在），创建会复用它；失败清理时绝不能
+            # 把这个用户目录连同里面残留的文件一起 rmtree。
+            trade_home = Path(company_crud.TRADE_HOME)
+            try:
+                preexisting_roots = {
+                    path.resolve() for path in trade_home.iterdir() if path.is_dir()
+                }
+            except OSError:
+                preexisting_roots = set()
             created = company_crud.create(
                 name=source_name,
                 slug=_safe_slug_hint(source_slug, source_name),
@@ -264,16 +292,33 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "SELECT data_dir FROM trade_companies WHERE company_id = ?", (target_id,)
             ).fetchone()
             created_data_dir = created_row[0] if created_row else None
+            created_data_dir_is_new = bool(
+                created_data_dir
+                and Path(created_data_dir).resolve() not in preexisting_roots
+            )
             created_work_dir = created.get("work_dir")
             work_dir_is_new = bool(created.get("work_dir_is_new"))
             report["mode"] = "created"
 
         target = company_crud.get(target_id) or {}
         ctx = _target_context(conn, target_id)
-        target_data_dir = Path(ctx["row"].get("data_dir") or "")
+        raw_data_dir = (ctx["row"].get("data_dir") or "").strip()
+        # 必须绝对路径：空串/"." 会让 Path(".") 通过 is_dir()，文件被写进当前工作目录；
+        # 还必须在 TRADE_HOME 下，避免脏数据把文件写到任意位置。
+        home = Path(company_crud.TRADE_HOME).resolve()
+        target_data_dir = Path(raw_data_dir) if raw_data_dir else Path()
+        if (not raw_data_dir or not target_data_dir.is_absolute()
+                or target_data_dir.resolve() == home
+                or not ensure_within(home, target_data_dir.resolve())):
+            raise InvalidPackageError(f"target data_dir is invalid: {raw_data_dir!r}")
         if not target_data_dir.is_dir():
             raise InvalidPackageError(f"target data_dir missing: {target_data_dir}")
-        target_work_dir = Path(ctx["work_dir"]) if ctx["work_dir"] else None
+        raw_work_dir = (ctx["work_dir"] or "").strip()
+        target_work_dir = (
+            Path(raw_work_dir)
+            if raw_work_dir and Path(raw_work_dir).is_absolute()
+            else None
+        )
         if target_work_dir is None or not target_work_dir.is_dir():
             from trade.company.workdir import _setup_work_directory
 
@@ -310,7 +355,12 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             safe_name = "".join(ch for ch in name if ch not in '/\\:*?"<>|').strip() or "library"
             root = target_work_dir / safe_name
             root.mkdir(parents=True, exist_ok=True)
-            created_lib = library_module.create(safe_name, str(root), company_id=target_id)
+            created_lib = library_module.create(
+                safe_name,
+                str(root),
+                description=source_lib.get("description") or "",
+                company_id=target_id,
+            )
             lib_map[source_lib["export_id"]] = root
             lib_by_name[key] = created_lib
             lib_name_by_id[created_lib["id"]] = safe_name
@@ -442,13 +492,14 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         order_inserted = order_skipped = 0
         for row in source_tables["orders"]:
             items = source_items.get(row["id"], [])
-            sig = merge_mod.order_signature(row, items)
-            if sig in existing_sig:
-                order_skipped += 1
-                continue
             new_row = _without_id(dict(row))
             new_row["company_id"] = target_id
             new_row["customer_id"] = customer_map.get(row.get("customer_id"))
+            # 去重键必须用重映射后的 customer_id，否则与目标库已有订单永远对不上
+            sig = merge_mod.order_signature(new_row, items)
+            if sig in existing_sig:
+                order_skipped += 1
+                continue
             new_id = _insert(conn, "orders", new_row)
             order_map[row["id"]] = new_id
             for item in items:
@@ -533,6 +584,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             report["identity"] = "imported"
 
         conn.commit()
+        committed = True
 
         # 文件：公司目录
         conflict_root = target_data_dir / "import_conflicts" / datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -573,7 +625,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         memory_file = staging / "memory" / "hermes_memory.md"
         if memory_file.is_file():
             blocks = [
-                block for block in memory_file.read_text(encoding="utf-8").split("\n\n")
+                block for block in memory_file.read_text(encoding="utf-8-sig").split("\n\n")
                 if block.strip()
             ]
             target_name = target.get("name") or source_name
@@ -600,7 +652,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             report["warnings"].append(f"vector rebuild skipped: {exc}")
 
         return report
-    except Exception:
+    except Exception as exc:
         if conn is not None:
             try:
                 conn.rollback()
@@ -614,10 +666,18 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 cleanup.close()
             except sqlite3.Error:
                 pass
-            if created_data_dir:
+            # 只删本次新建的目录：slug 目录可能是上次删除后残留的用户目录
+            if created_data_dir and created_data_dir_is_new:
                 shutil.rmtree(created_data_dir, ignore_errors=True)
             if created_work_dir and work_dir_is_new:
                 shutil.rmtree(created_work_dir, ignore_errors=True)
+        # 合并模式在文件拷贝之前已经 commit（见上方 S8）；此时 rollback 无效，
+        # 用户面对的是「库已合并、文件可能一半」的状态。必须把导入前备份路径
+        # 带进错误信息 —— 否则只能自己去 backups 目录按时间戳猜（审计 P2-2）。
+        if committed and backup_path is not None:
+            raise TransferError(
+                f"{exc}（数据库已合并；导入前备份：{backup_path}）"
+            ) from exc
         raise
     finally:
         if conn is not None:

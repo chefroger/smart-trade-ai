@@ -49,8 +49,12 @@ def _enforce_company_binding(
     except ValueError:
         return  # 无效 ID 由 require_company 处理
 
-    # switch 端点允许携带不同于当前绑定的 company_id（因为它的语义就是切换）
-    if "/switch" in request.url.path:
+    # switch 端点允许携带不同于当前绑定的 company_id（因为它的语义就是切换）。
+    # 导出（/export）同理：它是用户对列表里某一行的**显式只读操作**，不该要求
+    # 先切换当前公司 —— 否则界面上只能给当前公司显示导出按钮，没建立选中状态时
+    # 一个按钮都看不到（2026-11-11 Windows 反馈）。公司存在性/激活状态仍由
+    # require_company 校验，路由再核对 company_id 与路径一致。
+    if "/switch" in request.url.path or request.url.path.endswith("/export"):
         return
 
     with _company_bind_lock:

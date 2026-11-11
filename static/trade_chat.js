@@ -4364,7 +4364,7 @@ function loadCompanyListUI() {
         <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light);">
             <div style="flex:1;"><div style="font-weight:600;font-size:13px;">${esc(c.name)}</div>
             <div style="font-size:11px;color:var(--text-muted);">${esc(c.slug)} · ${c.contact_email ? ' · ' + esc(c.contact_email) : ''}</div></div>
-            ${c.id === currentCompanyId ? `<button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>` : ''}
+            <button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>
             <button class="btn btn-danger btn-xs" onclick="deleteCompany(${c.id})">删除</button>
         </div>`).join('');
 }
@@ -4394,7 +4394,7 @@ async function exportCompany(cid) {
         });
         if (resp.status === 413) {
             const data = await resp.json().catch(() => ({}));
-            alert('数据包超过 1GB，未自动打包。\n请手动拷贝：\n' + (data.paths || []).join('\n'));
+            alert('数据包过大，未自动打包。\n请手动拷贝：\n' + (data.paths || []).join('\n'));
             return;
         }
         if (!resp.ok) {
@@ -4424,7 +4424,7 @@ function showImportCompanyDialog() {
                 同名公司已存在时默认合并；如果只是同名但不是同一家公司，勾选下面的强制新建。
             </p>
             <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin:10px 0;">
-                <input type="checkbox" id="imp-force-new"> 同名但不是同一家公司，强制新建
+                <input type="checkbox" id="imp-force-new"> 同名但不是同一家公司，强制新建（请先勾选，再选择文件）
             </label>
             <input type="file" id="imp-file" accept=".zip" style="width:100%;margin:10px 0;">
             <div id="imp-status" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;line-height:1.6;min-height:40px;"></div>
@@ -4458,11 +4458,16 @@ async function uploadCompanyImport(file, targetCompanyId, forceNew) {
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
             if (status) status.textContent = '导入失败：' + (data.detail || resp.status);
+            // 清空选择：否则重新选同一个文件不会触发 change，用户无法重试
+            const inp = document.getElementById('imp-file');
+            if (inp) inp.value = '';
             return;
         }
         pollImportJob(data.job_id);
     } catch (err) {
         if (status) status.textContent = '导入失败：' + (err && err.message ? err.message : err);
+        const inp = document.getElementById('imp-file');
+        if (inp) inp.value = '';
     }
 }
 
@@ -4476,6 +4481,15 @@ async function pollImportJob(jobId) {
                 headers: { 'X-Hermes-Session-Token': TOKEN },
             });
             data = await resp.json();
+            if (!resp.ok) {
+                // 任务只存在进程内存里：服务重启后 404，再轮询 30 分钟也没用
+                if (status) {
+                    status.textContent = resp.status === 404
+                        ? '导入任务已失效（服务可能重启过），请刷新页面后检查公司列表。'
+                        : '查询导入状态失败：' + (data.detail || resp.status);
+                }
+                return;
+            }
         } catch (err) {
             continue;
         }
@@ -4599,8 +4613,10 @@ async function onCompanyChange(cid) {
         const prevCid = currentCompanyId;
         // 先更新前端状态（让后续 API 调用带上正确的 X-Company-ID header）
         currentCompanyId = newCid;
-        // 通知后端切换 session 绑定（旧 cid 会触发 403，因此 _enforce_company_binding 需放行 /switch 端点）
-        const switched = await api('POST', '/api/trade/companies/' + newCid + '/switch');
+        // 通知后端切换 session 绑定（旧 cid 会触发 403，因此 _enforce_company_binding 需放行 /switch 端点）。
+        // 网络异常时 api() 会 throw；.catch 折算成 null，与 HTTP 失败走同一条回滚，
+        // 否则前端显示新公司、后端仍绑旧公司，后续每个请求都 403（审计 O-7）。
+        const switched = await api('POST', '/api/trade/companies/' + newCid + '/switch').catch(() => null);
         if (!switched) {
             // 切换失败：回滚前端选中，避免后续请求带着未绑定的公司 ID
             currentCompanyId = prevCid;

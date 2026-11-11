@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 import zipfile
 from pathlib import Path
@@ -11,7 +12,14 @@ import pytest
 
 from trade import database
 from trade.company import crud
-from trade.company.transfer import AmbiguousCompanyError, InvalidPackageError, PackageTooLargeError
+from trade.company.transfer import (
+    FORMAT_VERSION,
+    PACKAGE_FORMAT,
+    AmbiguousCompanyError,
+    InvalidPackageError,
+    PackageTooLargeError,
+    TransferError,
+)
 from trade.company.transfer.exporter import export_company
 from trade.company.transfer.importer import import_company
 from trade.company.transfer.paths import PathMapper
@@ -127,7 +135,9 @@ def test_roundtrip_creates_company_and_rewrites_paths(desktop, tmp_path):
     source = crud.create(name)
     _insert_sample_rows(source["id"])
     company_dir = _company_dir(source)
-    (company_dir / "products.md").write_text("# Products\nWidget\n", encoding="utf-8")
+    # 写有特征的内容：模板骨架自带 products.md，只断言 is_file() 会假绿
+    marker = f"# Products\nUNIQUE-{uuid.uuid4().hex}\n"
+    (company_dir / "products.md").write_text(marker, encoding="utf-8")
 
     package = tmp_path / "acme.zip"
     export_result = export_company(source["id"], package)
@@ -149,7 +159,10 @@ def test_roundtrip_creates_company_and_rewrites_paths(desktop, tmp_path):
         ).fetchone()
         data_dir, slug = target[1], target[0]
         assert data_dir != "."
-        assert (Path(data_dir) / "companies" / slug / "products.md").is_file()
+        imported = (Path(data_dir) / "companies" / slug / "products.md")
+        assert imported.is_file()
+        # 内容级断言：company_data 没进包时这里会读到模板默认内容而不是 marker
+        assert imported.read_text(encoding="utf-8") == marker
 
         customer = conn.execute(
             "SELECT * FROM customers WHERE company_id = ?", (target_id,)
@@ -268,6 +281,167 @@ def test_chinese_text_and_filenames_survive_cross_platform_package(desktop, tmp_
     assert copied[0].read_bytes() == "中文内容，含税率 13%".encode()
 
 
+def test_orders_without_order_no_are_idempotent(desktop, tmp_path):
+    """无 order_no 的订单靠签名去重：源/目标 customer_id 与明细自增 ID 不同，
+    签名必须用重映射后的客户 ID 并剔除自增字段，否则重复导入会翻倍。"""
+    name = _unique("No Order No")
+    source = crud.create(name)
+    target = crud.create(name)
+    conn = database.get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO customers (company_id, name) VALUES (?, ?)",
+            (source["id"], "Buyer"),
+        )
+        customer_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO orders (company_id, customer_id, order_no, product_name, "
+            "quantity, unit, unit_price, currency, total_amount) "
+            "VALUES (?, ?, '', ?, ?, ?, ?, ?, ?)",
+            (source["id"], customer_id, "No-No Widget", 5, "pcs", 2.0, "USD", 10.0),
+        )
+        order_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO order_items (order_id, position, product_name, quantity, "
+            "unit, unit_price, currency, total_amount) VALUES (?, 0, ?, ?, ?, ?, ?, ?)",
+            (order_id, "No-No Widget", 5, "pcs", 2.0, "USD", 10.0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    package = tmp_path / "no-no.zip"
+    export_company(source["id"], package)
+    first = import_company(package, target_company_id=target["id"])
+    second = import_company(package, target_company_id=target["id"])
+    assert first["tables"]["orders"]["inserted"] == 1
+    assert second["tables"]["orders"]["inserted"] == 0
+
+    conn = database.get_connection()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE company_id = ?", (target["id"],)
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_newer_schema_package_is_rejected(desktop, tmp_path):
+    """包 schema 比本机新时拒绝导入，避免新字段被静默丢掉。"""
+    source = crud.create(_unique("New Schema"))
+    package = tmp_path / "schema.zip"
+    export_company(source["id"], package)
+
+    newer = tmp_path / "newer.zip"
+    with zipfile.ZipFile(package) as src, zipfile.ZipFile(newer, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info)
+            if info.filename == "manifest.json":
+                manifest = json.loads(data)
+                manifest["schema_version"] = 999999
+                data = json.dumps(manifest).encode("utf-8")
+            dst.writestr(info, data)
+
+    with pytest.raises(InvalidPackageError) as exc:
+        import_company(newer)
+    assert "更新版本" in str(exc.value)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows 创建目录符号链接需要额外权限")
+def test_export_does_not_follow_symlinked_directories(desktop, tmp_path):
+    """python 3.13 前 rglob 会跟进符号链接目录：一个链接就能把家目录打进包。"""
+    source = crud.create(_unique("Symlink"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("OUTSIDE-SECRET", encoding="utf-8")
+    link = _company_dir(source) / "linkdir"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink not supported here")
+
+    package = tmp_path / "symlink.zip"
+    export_company(source["id"], package)
+    with zipfile.ZipFile(package) as zf:
+        blob = b"".join(zf.read(name) for name in zf.namelist())
+    assert b"OUTSIDE-SECRET" not in blob
+
+
+def test_export_package_excludes_whole_database_snapshot(desktop, tmp_path):
+    """只导出本公司：包内不能出现整库快照（2026-11-11 审计 P1-1）。
+
+    导出内部会用 snapshot_db 做一致性快照；快照若落在 staging 里会被原样
+    打进 zip，等于把全部公司、客户、license 一起交出去。
+    """
+    source = crud.create(_unique("Export Only"))
+    other = crud.create(_unique("Other Company"))
+    secret = "SECRET-B-CUSTOMER-" + uuid.uuid4().hex
+    conn = database.get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO customers (company_id, name) VALUES (?, ?)",
+            (other["id"], secret),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    package = tmp_path / "single.zip"
+    export_company(source["id"], package)
+
+    with zipfile.ZipFile(package) as zf:
+        names = zf.namelist()
+        assert not any(Path(name).name.startswith("snapshot.db") for name in names)
+        blob = b"".join(zf.read(name) for name in names)
+    assert secret.encode("utf-8") not in blob
+
+
+def test_manifest_export_id_traversal_is_rejected(tmp_path):
+    """manifest 里的 export_id 会拼进 staging 路径，必须拒路径逃逸（P2-1）。"""
+    manifest = {
+        "format": PACKAGE_FORMAT,
+        "format_version": FORMAT_VERSION,
+        "company": {"name": "Evil"},
+        "tables": {},
+        "paths": {"libraries": [{"export_id": "../../victim"}]},
+    }
+    package = tmp_path / "evil-manifest.zip"
+    with zipfile.ZipFile(package, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        zf.writestr("checksums.sha256", "")
+
+    with pytest.raises(InvalidPackageError):
+        import_company(package)
+
+
+def test_merge_failure_reports_backup_path(desktop, tmp_path, monkeypatch):
+    """合并模式在文件拷贝前已提交 DB：失败时必须把备份路径带出来（P2-2）。"""
+    import re
+
+    from trade.company.transfer import importer as importer_module
+
+    name = _unique("Merge Backup")
+    source = crud.create(name)
+    _insert_sample_rows(source["id"])
+    target = crud.create(name)
+    package = tmp_path / "merge.zip"
+    export_company(source["id"], package)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(importer_module, "_merge_copy", boom)
+
+    with pytest.raises(TransferError) as exc:
+        import_company(package, target_company_id=target["id"])
+
+    message = str(exc.value)
+    assert "disk full" in message
+    match = re.search(r"导入前备份：(.+?)）", message)
+    assert match, message
+    assert Path(match.group(1)).is_file()
+
+
 def test_same_name_different_slug_merges_and_is_idempotent(desktop, tmp_path):
     name = _unique("Same Name")
     source = crud.create(name)
@@ -348,6 +522,31 @@ def test_package_too_large_cleans_up(desktop, tmp_path):
     assert not package.exists()
 
 
+def test_export_refuses_package_its_own_importer_would_reject(desktop, tmp_path, monkeypatch):
+    """导出的包解压后必须不超过导入上限，否则用户拿到一个永远导不回去的包。"""
+    source = crud.create(_unique("Unpacked Limit"))
+    monkeypatch.setattr("trade.company.transfer.exporter.MAX_UNCOMPRESSED_BYTES", 10)
+    package = tmp_path / "too-big-unpacked.zip"
+    with pytest.raises(PackageTooLargeError):
+        export_company(source["id"], package)
+    assert not package.exists()
+
+
+def test_export_failure_preserves_existing_destination(desktop, tmp_path, monkeypatch):
+    """导出失败不能删掉目标路径上原有的包（审计 O-2）：先写临时文件再原子替换。"""
+    source = crud.create(_unique("Preserve"))
+    package = tmp_path / "existing.zip"
+    package.write_bytes(b"OLD-PACKAGE")
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr("trade.post_install.backup.snapshot_db", boom)
+    with pytest.raises(RuntimeError):
+        export_company(source["id"], package)
+    assert package.read_bytes() == b"OLD-PACKAGE"
+
+
 def test_path_mapper_handles_windows_source():
     mapper = PathMapper([
         (r"C:\Users\alice\Desktop\Acme", "/Users/bob/Desktop/Acme"),
@@ -359,6 +558,13 @@ def test_path_mapper_handles_windows_source():
     assert mapper.rewrite(r"C:\Users\alice\.trade\acme\companies\acme\products.md") == (
         "/Users/bob/.trade/acme/companies/acme/products.md"
     )
+    # Windows 路径大小写不敏感：盘符/目录大小写不同也必须命中
+    assert mapper.rewrite(r"c:\users\ALICE\Desktop\Acme\a.pdf") == (
+        "/Users/bob/Desktop/Acme/a.pdf"
+    )
+    # UNC 路径的前导 // 不能被归一化压掉
+    unc = PathMapper([(r"\\server\share\Acme", "/data/Acme")])
+    assert unc.rewrite(r"\\SERVER\share\Acme\a.pdf") == "/data/Acme/a.pdf"
     assert mapper.rewrite("/elsewhere/file.txt") == "/elsewhere/file.txt"
 
 

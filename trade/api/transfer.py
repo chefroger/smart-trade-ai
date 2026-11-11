@@ -30,6 +30,20 @@ _RATE_LOCK = threading.Lock()
 _RATE: dict[str, list[float]] = {}
 _JOBS: dict[str, dict] = {}
 _JOB_LOCK = threading.Lock()
+_MAX_JOBS = 100
+_JOB_TTL = 24 * 3600
+
+
+def _prune_jobs() -> None:
+    """清掉过期任务，避免长期运行时 `_JOBS` 无限增长（审计 O-4）。"""
+    now = time.time()
+    with _JOB_LOCK:
+        stale = [key for key, job in _JOBS.items()
+                 if now - job.get("updated_at", 0) > _JOB_TTL]
+        for key in stale:
+            _JOBS.pop(key, None)
+        for key in list(_JOBS)[:max(0, len(_JOBS) - _MAX_JOBS)]:
+            _JOBS.pop(key, None)
 
 
 def _rate_ok(key: str, limit: int, window: float) -> bool:
@@ -78,7 +92,7 @@ def _run_import(job_id: str, zip_path: Path, target_company_id: int | None,
 def export_company_package(company_id: int, cid: int = Depends(require_company)):
     """下载单个公司的数据包。"""
     if cid != company_id:
-        raise HTTPException(status_code=403, detail="只能导出当前公司")
+        raise HTTPException(status_code=403, detail="导出目标与 X-Company-ID 不一致")
     if not _rate_ok(f"export:{cid}", 2, 60):
         raise HTTPException(status_code=429, detail="导出过于频繁，请稍后再试")
     try:
@@ -90,7 +104,7 @@ def export_company_package(company_id: int, cid: int = Depends(require_company))
                 "code": "package_too_large",
                 "limit_bytes": exc.limit_bytes,
                 "measured_bytes": exc.measured_bytes,
-                "hint": "压缩包超过 1GB，请手动拷贝数据库、公司目录和桌面资料库",
+                "hint": "数据包过大（压缩后 >1GB 或解压后超过导入上限），请手动拷贝数据库、公司目录和桌面资料库",
                 "paths": exc.paths,
             },
         )
@@ -138,6 +152,7 @@ async def import_company_package(
     finally:
         await file.close()
 
+    _prune_jobs()
     job_id = uuid.uuid4().hex
     _set_job(job_id, status="queued", phase="queued")
     thread = threading.Thread(
