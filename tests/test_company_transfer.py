@@ -26,6 +26,21 @@ def _ensure_db():
     database.init_db()
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_companies(_ensure_db):
+    """本文件会创建多个公司；清掉它们，避免污染依赖公司数的 cron 测试。"""
+    yield
+    conn = database.get_connection()
+    try:
+        for table in ("usage_ledger", "trial_events", "cron_job_companies",
+                      "doc_extractions"):
+            conn.execute(f"DELETE FROM {table}")
+        conn.execute("DELETE FROM companies")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @pytest.fixture()
 def desktop(tmp_path, monkeypatch):
     """把工作目录固定到临时 Desktop，避免测试写真实桌面。"""
