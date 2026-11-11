@@ -96,6 +96,12 @@ Manual Trade installation involves three steps (`git clone` + `pip install` + `i
 
 Hermes will handle cloning, installing dependencies, and registering skills automatically. This approach has a much higher success rate than manual commands.
 
+## License and Trial
+
+- New installs get a **30-day trial**. The state is stored locally (no online registration); it is a convenience period, not tamper-proof licensing.
+- **Paid activation codes are bound to the current computer.** After moving to a new machine or reinstalling the OS, send the new machine's request code to the author, **Roger Lau**, for re-issuance.
+- Company export/import migrates business data only (database, company directory, memory). It does **not** include the license or desktop library files; copy those yourself if needed.
+
 ---
 
 ## Get started

@@ -467,6 +467,48 @@ class TestMachineBinding:
         assert "还没激活" in s.get("message", "")
 
 
+class TestLicenseWriteFailure:
+    """写盘失败时的试用起点一致性（工单 C2）。"""
+
+    def test_process_start_expired_blocks_check_and_state(self, monkeypatch):
+        """同进程内起点已 31 天：check_license 与 license_state 必须都到期。"""
+        from trade import license as license_mod
+
+        old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=31)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", old)
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+
+        def boom(_data, _cid=None):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(license_mod, "_save_license_data", boom)
+
+        ok, msg = license_mod.check_license(1)
+        assert not ok
+        assert "到期" in msg
+        state, _ = license_mod.license_state(1)
+        assert state == "expired"
+
+    def test_write_error_is_exposed_in_status(self, monkeypatch):
+        """写盘失败仍放行，但 status() 带上可定位的错误提示。"""
+        from trade import license as license_mod
+
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_LICENSE_WRITE_ERROR", "")
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+
+        def boom(_data, _cid=None):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(license_mod, "_save_license_data", boom)
+
+        ok, _msg = license_mod.check_license(1)
+        assert ok  # 未到期时写盘失败不挡聊天
+        s = license_mod.status(1)
+        assert "写不进去" in s.get("license_file_error", "")
+        assert "license.json" in s.get("license_file_error", "")
+
+
 class TestLicenseSignature:
     """运行时签名验签 — 防篡改核心机制"""
 

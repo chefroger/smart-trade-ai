@@ -29,6 +29,10 @@ _log = logging.getLogger(__name__)
 # 同时仍放行聊天（可用性优先）。成功写盘后清空。
 _PROCESS_FIRST_LAUNCH: str | None = None
 
+# license.json 写盘失败时记录提示（供 status() 返回给界面/远程支持定位），
+# 成功后清空。不改变「写盘失败仍放行聊天」的可用性取舍。
+_LICENSE_WRITE_ERROR: str = ""
+
 # ── 非对称签名密钥 ──────────────────────────────────────────────────────
 
 # Ed25519 公钥 — 用于验证激活码签名。私钥由作者持有，用户端无法生成合法激活码。
@@ -358,42 +362,67 @@ def ensure_license_state(company_id: int | None = None) -> tuple[str, str]:
     return state, message
 
 
+def _stamp_expired(stamp: str, now: datetime) -> bool:
+    """进程内暂记的试用起点是否已经超过试用期。"""
+    try:
+        first = datetime.fromisoformat(stamp).replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return False
+    return (now - first).days >= _TRIAL_DAYS
+
+
+def _record_write_error(exc: Exception) -> None:
+    global _LICENSE_WRITE_ERROR
+    _LICENSE_WRITE_ERROR = f"许可证文件写不进去：{_license_file_path()}（{exc}）"
+
+
 def check_license(company_id: int | None = None) -> tuple[bool, str]:
     """检查是否允许**起草/新查询**（到期后返回 False + 软着陆文案）。
 
     只读浏览不受这里约束：历史/资料/已生成草稿的 GET 接口不经过此函数。
     """
-    global _PROCESS_FIRST_LAUNCH
+    global _LICENSE_WRITE_ERROR, _PROCESS_FIRST_LAUNCH
 
     data = _get_license_data(company_id)
     now = datetime.now(UTC)
 
-    # 损坏的试用起点：尝试重写为有效时间，绝不因此把用户挡在聊天外
+    # 损坏的试用起点：尽量重写为有效时间；若进程内已知起点已超期，则拒绝
     raw_first = data.get("first_launch_at")
     if raw_first is not None:
         try:
             datetime.fromisoformat(raw_first)
         except (TypeError, ValueError):
             stamp = _PROCESS_FIRST_LAUNCH or now.isoformat()
+            # 与 license_state 保持一致：写盘失败场景下的进程内起点也要判到期
+            if _stamp_expired(stamp, now):
+                return False, _SOFT_EXPIRED_TRIAL
             data["first_launch_at"] = stamp
             try:
                 _save_license_data(data, company_id)
                 _PROCESS_FIRST_LAUNCH = None
+                _LICENSE_WRITE_ERROR = ""
             except Exception as exc:
                 _PROCESS_FIRST_LAUNCH = stamp
+                _record_write_error(exc)
                 _log.warning("license.json 重写损坏的 first_launch_at 失败（聊天仍放行）: %s", exc)
             return True, ""
 
     # 首次使用：记录时间
     if "first_launch_at" not in data:
         stamp = _PROCESS_FIRST_LAUNCH or now.isoformat()
+        # 写盘失败后重启重算试用的已知取舍：同一进程内必须按真实起点判到期，
+        # 不能每次请求都提前 return True（2026-11-11 工单 C2）。
+        if _stamp_expired(stamp, now):
+            return False, _SOFT_EXPIRED_TRIAL
         data["first_launch_at"] = stamp
         try:
             _save_license_data(data, company_id)
             _PROCESS_FIRST_LAUNCH = None
+            _LICENSE_WRITE_ERROR = ""
         except Exception as exc:
             # 写盘失败不得挡聊天；进程内记住起点，避免每次请求重置试用
             _PROCESS_FIRST_LAUNCH = stamp
+            _record_write_error(exc)
             _log.warning("license.json 写入失败（聊天仍放行）: %s", exc)
             return True, ""
         return True, ""
@@ -461,6 +490,8 @@ def status(company_id: int | None = None) -> dict:
     }
     if machine_mismatch:
         result["message"] = _MACHINE_MISMATCH_MSG
+    if _LICENSE_WRITE_ERROR:
+        result["license_file_error"] = _LICENSE_WRITE_ERROR
 
     if "first_launch_at" in data:
         try:
