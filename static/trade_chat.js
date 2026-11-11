@@ -4384,7 +4384,7 @@ function _downloadBlob(blob, filename) {
 }
 
 async function exportCompany(cid) {
-    if (!confirm('导出包包含客户资料、对话、记忆和 Agent 身份，且未加密。请妥善保管。继续导出？')) return;
+    if (!confirm('导出包包含客户资料、对话、记忆和 Agent 身份，不包含桌面资料库文件（需自行拷贝），且未加密。请妥善保管。继续导出？')) return;
     try {
         const resp = await fetch(`/api/trade/companies/${cid}/export`, {
             headers: {
@@ -4402,11 +4402,27 @@ async function exportCompany(cid) {
             toast('导出失败：' + (data.detail || resp.status));
             return;
         }
+        // 桌面目录超限时包内不含资料库文件，后端通过响应头告知需手动拷贝的路径
+        let exportNote = null;
+        const warnHeader = resp.headers.get('X-Trade-Export-Warnings');
+        if (warnHeader) {
+            try {
+                const info = JSON.parse(decodeURIComponent(warnHeader));
+                if (info.manual_paths && info.manual_paths.length) {
+                    exportNote = '数据包已导出，但桌面资料库文件不随包迁移。\n'
+                        + '请按需手动拷贝以下目录，导入后放到目标机对应的公司桌面目录：\n'
+                        + info.manual_paths.join('\n');
+                } else if (info.warnings && info.warnings.length) {
+                    exportNote = '导出完成，有提示：\n' + info.warnings.join('\n');
+                }
+            } catch(_) { /* 头解析失败不影响下载 */ }
+        }
         const blob = await resp.blob();
         const cd = resp.headers.get('content-disposition') || '';
         const match = /filename="?([^";]+)"?/.exec(cd);
         _downloadBlob(blob, match ? decodeURIComponent(match[1]) : `trade-company-${cid}.zip`);
-        toast('导出完成，请妥善保管数据包');
+        if (exportNote) alert(exportNote);
+        else toast('导出完成，请妥善保管数据包');
     } catch (err) {
         toast('导出失败：' + (err && err.message ? err.message : err));
     }
@@ -4421,6 +4437,7 @@ function showImportCompanyDialog() {
             <h3>📦 导入公司数据</h3>
             <p style="font-size:12px;color:var(--text-muted);line-height:1.6;">
                 选择从另一台电脑导出的 <code>.zip</code>。包内含客户资料、对话、记忆和 Agent 身份，未加密。<br>
+                桌面资料库文件不在包内，如有需要请自行拷贝到目标机对应目录。<br>
                 同名公司已存在时默认合并；如果只是同名但不是同一家公司，勾选下面的强制新建。
             </p>
             <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin:10px 0;">
@@ -4504,6 +4521,10 @@ async function pollImportJob(jobId) {
                     + '，订单 +' + ((report.tables && report.tables.orders && report.tables.orders.inserted) || 0)
                     + '，文件 ' + ((report.files && report.files.copied) || 0) + ' 个'
                     + (report.memory && report.memory.added ? '，记忆 +' + report.memory.added : '');
+                // 导出时跳过的资料库文件：这里给出目标机的精确落盘位置
+                if (report.warnings && report.warnings.length) {
+                    status.textContent += '\n⚠️ ' + report.warnings.join('\n');
+                }
             }
             await loadCompanies();
             if (report.target && report.target.id) {

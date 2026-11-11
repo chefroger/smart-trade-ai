@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
 from pathlib import Path
 from tempfile import mkstemp
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -113,10 +115,20 @@ def export_company_package(company_id: int, cid: int = Depends(require_company))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     filename = f"trade-company-{(result['company'].get('slug') or company_id)}.zip"
+    # 桌面目录超限时包内不含资料库文件：把「需手动拷贝」的路径带到响应头，
+    # 前端下载完据此提醒；放在 manifest 里用户看不到。
+    headers: dict[str, str] = {}
+    if result.get("manual_paths") or result.get("warnings"):
+        payload = json.dumps({
+            "manual_paths": result.get("manual_paths") or [],
+            "warnings": result.get("warnings") or [],
+        }, ensure_ascii=False)
+        headers["X-Trade-Export-Warnings"] = quote(payload, safe="")
     return FileResponse(
         result["path"],
         media_type="application/zip",
         filename=filename,
+        headers=headers,
         background=BackgroundTask(_cleanup, result["path"]),
     )
 

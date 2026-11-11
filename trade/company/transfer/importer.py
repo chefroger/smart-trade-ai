@@ -369,6 +369,18 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             target_libs.append(created_lib)
             libs_inserted += 1
 
+        # 导出时因桌面目录超限被跳过的资料库：这里补一条可操作的提示，
+        # 告诉用户文件要手动拷到哪个目标目录（否则只会看到一个空库）
+        for source_lib in source_libs:
+            if source_lib.get("files_included") is not False:
+                continue
+            target_root = lib_map.get(source_lib.get("export_id"))
+            if target_root is not None:
+                report["warnings"].append(
+                    f"资料库「{source_lib.get('name') or ''}」的文件未包含在包中，"
+                    f"请把源桌面目录里的同名库手动拷贝到：{target_root}"
+                )
+
         target_lib_roots = {row.get("name") or "": str(row["root_path"]) for row in target_libs}
         for source_lib in source_libs:
             if source_lib.get("export_id") in lib_map:

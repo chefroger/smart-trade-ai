@@ -176,7 +176,8 @@ def test_roundtrip_creates_company_and_rewrites_paths(desktop, tmp_path):
         assert files and files[0]["file"].replace("\\", "/").startswith(
             str(desktop).replace("\\", "/")
         )
-        assert Path(files[0]["file"]).is_file()
+        # 桌面资料库文件不随包迁移（用户按需手动拷贝），路径仍要改写到目标机
+        assert not Path(files[0]["file"]).is_file()
         assert conn.execute(
             "SELECT COUNT(*) FROM orders WHERE company_id = ?", (target_id,)
         ).fetchone()[0] == 1
@@ -219,6 +220,9 @@ def test_chinese_text_and_filenames_survive_cross_platform_package(desktop, tmp_
         library_root.mkdir(parents=True, exist_ok=True)
         chinese_file = library_root / "报价单-中文.pdf"
         chinese_file.write_bytes("中文内容，含税率 13%".encode())
+        # 桌面资料库文件不随包走；用公司目录里的中文文件验证 ZIP 中文名/内容编码
+        company_zh = _company_dir(source) / "中文资料.md"
+        company_zh.write_text("公司简介：中文内容必须原样保留。\n", encoding="utf-8")
         conn.execute(
             "INSERT INTO conversations "
             "(company_id, customer_id, library_id, query, response, context, files_read) "
@@ -236,7 +240,9 @@ def test_chinese_text_and_filenames_survive_cross_platform_package(desktop, tmp_
 
     with zipfile.ZipFile(package) as zf:
         names = zf.namelist()
-        assert any("报价单-中文.pdf" in entry for entry in names)
+        assert any("中文资料.md" in entry for entry in names)
+        # 桌面资料库文件永不进包
+        assert not any(entry.startswith("libraries/") for entry in names)
         # 非 ASCII 条目必须声明 UTF-8（否则 Windows 解压/读取会乱码）
         for info in zf.infolist():
             if any(ord(ch) > 127 for ch in info.filename):
@@ -248,7 +254,7 @@ def test_chinese_text_and_filenames_survive_cross_platform_package(desktop, tmp_
         manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         assert manifest["company"]["name"] == name
         checksums = zf.read("checksums.sha256").decode("utf-8")
-        assert "报价单-中文.pdf" in checksums
+        assert "中文资料.md" in checksums
 
     report = import_company(package, force_new=True)
     target_id = report["target"]["id"]
@@ -266,19 +272,26 @@ def test_chinese_text_and_filenames_survive_cross_platform_package(desktop, tmp_
         assert (query, response) == ("这批货含税价多少？", "含税 USD 1.20")
         rewritten = json.loads(files_read)[0]["file"]
         assert "报价单-中文.pdf" in rewritten
-        assert Path(rewritten).is_file()
+        # 桌面资料库文件不随包走，导入后需用户自己拷
+        assert not Path(rewritten).is_file()
         roots = [
             Path(row[0]) for row in conn.execute(
                 "SELECT root_path FROM libraries WHERE company_id = ?", (target_id,)
             )
         ]
+        data_dir, slug = conn.execute(
+            "SELECT t.data_dir, c.slug FROM trade_companies t "
+            "JOIN companies c ON c.id = t.company_id WHERE t.company_id = ?",
+            (target_id,),
+        ).fetchone()
     finally:
         conn.close()
 
-    copied = [root / "报价单-中文.pdf" for root in roots
-              if (root / "报价单-中文.pdf").is_file()]
-    assert copied, f"中文文件名未落到目标库: {roots}"
-    assert copied[0].read_bytes() == "中文内容，含税率 13%".encode()
+    assert roots and not any((root / "报价单-中文.pdf").exists() for root in roots)
+    # Trade 生成的公司目录内容必须随包迁移（中文文件名+内容都不变）
+    assert (Path(data_dir) / "companies" / slug / "中文资料.md").read_text(
+        encoding="utf-8"
+    ) == "公司简介：中文内容必须原样保留。\n"
 
 
 def test_orders_without_order_no_are_idempotent(desktop, tmp_path):
@@ -365,6 +378,44 @@ def test_export_does_not_follow_symlinked_directories(desktop, tmp_path):
     with zipfile.ZipFile(package) as zf:
         blob = b"".join(zf.read(name) for name in zf.namelist())
     assert b"OUTSIDE-SECRET" not in blob
+
+
+def test_desktop_library_files_are_never_packed(desktop, tmp_path):
+    """桌面资料库文件永不进包（可能有几百 GB），只打包 DB/公司目录/记忆。"""
+    source = crud.create(_unique("Big Desktop"))
+    rows = _insert_sample_rows(source["id"])
+
+    package = tmp_path / "big-desktop.zip"
+    result = export_company(source["id"], package)
+
+    assert package.is_file()
+    assert result["manual_paths"] == [str(rows["library_root"])]
+    with zipfile.ZipFile(package) as zf:
+        names = zf.namelist()
+        assert "db/customers.json" in names
+        assert "db/conversations.json" in names
+        assert not any(name.startswith("libraries/") for name in names)
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+    assert any("手动拷贝" in warning for warning in manifest["warnings"])
+    assert manifest["paths"]["libraries"][0]["files_included"] is False
+
+    report = import_company(package, force_new=True)
+    lib_stats = report["tables"]["libraries"]
+    assert lib_stats["skipped"] >= 1
+    assert any("未包含在包中" in warning for warning in report["warnings"])
+
+    conn = database.get_connection()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM customers WHERE company_id = ?", (report["target"]["id"],)
+        ).fetchone()[0] == 1
+        roots = [Path(row[0]) for row in conn.execute(
+            "SELECT root_path FROM libraries WHERE company_id = ?",
+            (report["target"]["id"],),
+        )]
+    finally:
+        conn.close()
+    assert roots and not any((root / "order.pdf").exists() for root in roots)
 
 
 def test_export_package_excludes_whole_database_snapshot(desktop, tmp_path):

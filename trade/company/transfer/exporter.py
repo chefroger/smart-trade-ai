@@ -1,4 +1,7 @@
-"""单公司导出：DB 行 + 公司目录 + 资料库文件 + Hermes 公司记忆 -> ZIP。"""
+"""单公司导出：DB 行 + 公司目录 + Hermes 公司记忆 -> ZIP。
+
+桌面资料库（可能有几百 GB）只导出元数据，文件由用户按需手动拷贝。
+"""
 
 from __future__ import annotations
 
@@ -20,6 +23,25 @@ from trade.company.transfer import (
 )
 from trade.company.transfer import merge as merge_mod
 from trade.company.transfer.manifest import sha256_file, write_checksums
+
+
+def _dir_size(root: Path) -> int:
+    """目录内普通文件总字节数；不跟进符号链接，读不了的文件按 0 计。"""
+    total = 0
+    if not root.is_dir():
+        return 0
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+        dirnames[:] = [name for name in dirnames if not (base / name).is_symlink()]
+        for name in filenames:
+            path = base / name
+            if path.is_symlink():
+                continue
+            try:
+                total += path.stat().st_size
+            except OSError:
+                pass
+    return total
 
 
 def _rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
@@ -75,7 +97,13 @@ def _copy_tree(src: Path, dst: Path, warnings: list[str]) -> list[str]:
 
 
 def _collect_files(staging: Path, manifest: dict, company_dir: Path | None,
-                   libraries: list[dict], warnings: list[str]) -> None:
+                   libraries: list[dict], warnings: list[str],
+                   *, manual_paths: list[str] | None = None) -> None:
+    """把公司数据目录装进包；桌面资料库只写元数据，文件一律不打包。
+
+    桌面目录可能有几百 GB，打包既慢又容易把用户无关文件卷进来；迁移时由
+    用户按需自己拷。DB/公司目录/记忆是 Trade 生成的内容，照常导出。
+    """
     files: list[dict] = []
 
     def add(path: Path, kind: str) -> None:
@@ -99,20 +127,22 @@ def _collect_files(staging: Path, manifest: dict, company_dir: Path | None,
     for lib in libraries:
         root = Path(lib.get("root_path") or "")
         export_id = f"L{lib['id']}"
-        export_libraries.append({
+        entry = {
             "export_id": export_id,
             "source_id": lib["id"],
             "name": lib.get("name") or "",
             "root_path": str(root),
             # 导入端重建库记录时没有别的地方能取到它；description 是用户可见元数据
             "description": lib.get("description") or "",
-        })
-        if root.is_dir():
-            _copy_tree(root, staging / "libraries" / export_id, warnings)
-            for path in (staging / "libraries" / export_id).rglob("*"):
-                if path.is_file():
-                    add(path, "library")
-        else:
+            # 桌面资料库文件永远不进包：用户按需手动拷贝
+            "files_included": False,
+        }
+        export_libraries.append(entry)
+        if root.is_dir() and _dir_size(root) > 0:
+            warnings.append(f"资料库文件未打包，请手动拷贝：{root}")
+            if manual_paths is not None:
+                manual_paths.append(str(root))
+        elif not root.is_dir():
             warnings.append(f"library root missing: {root}")
 
     manifest["paths"]["libraries"] = export_libraries
@@ -280,9 +310,13 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                         )
             else:
                 warnings.append(f"skipped company dir (not absolute): {data_dir_raw}")
-        _collect_files(staging, manifest,
-                       company_dir if company_dir and company_dir.is_dir() else None,
-                       tables["libraries"], warnings)
+        manual_paths: list[str] = []
+        _collect_files(
+            staging, manifest,
+            company_dir if company_dir and company_dir.is_dir() else None,
+            tables["libraries"], warnings,
+            manual_paths=manual_paths,
+        )
 
         memory_path = merge_mod._memory_file()
         if memory_path.is_file():
@@ -341,6 +375,7 @@ def export_company(company_id: int, dest_zip: Path | None = None,
             "bytes": size,
             "company": manifest["company"],
             "warnings": warnings,
+            "manual_paths": manual_paths,
         }
     except Exception:
         zip_path.unlink(missing_ok=True)
