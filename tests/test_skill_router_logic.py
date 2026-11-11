@@ -39,6 +39,14 @@ import pytest
         ("市场调研", "b2b-market-analysis"),
         ("竞争对手分析", "b2b-market-analysis"),
         ("end to end lead generation", "auto-trade-customer-development"),
+        ("自动化客户开发", "auto-trade-customer-development"),
+        # 短 ASCII 缩写 + 中文混排（词边界不能按 UNICODE \w）
+        ("DA是什么意思", "b2b-trade-compliance"),
+        ("LC是什么", "b2b-trade-compliance"),
+        ("BL是什么", "b2b-trade-compliance"),
+        ("LC payment terms", "b2b-trade-compliance"),
+        ("厂里来验", "b2b-trade-ops"),
+        ("来验厂", "b2b-trade-ops"),
         # 单公司进口核查（W8 简易方案；2026-10-28 补激活词）
         ("这个公司是否有从中国进口产品", "b2b-customs-data"),
         ("这家公司有没有从中国进口过", "b2b-customs-data"),
@@ -278,6 +286,69 @@ class TestTriggerMutualExclusivity:
             "以下触发词单独查询时没有路由回自己的技能（被抢或无命中）：\n"
             + "\n".join(f"  {t!r} 属于 {owner}，实际 → {got}" for t, owner, got in stolen)
         )
+
+    def test_skill_md_triggers_do_not_collide_with_other_registry_owners(self):
+        """SKILL.md 里的触发词若不属于本 skill 的 registry，也不得侵占别的 skill。
+
+        Hermes 发现层读 SKILL.md，路由器读 skill_registry。两边漂移时，MD 里残留的
+        旧触发词会在文档/发现层宣称错误归属（实测曾有 23 条跨技能抢词）。
+        """
+        from pathlib import Path
+
+        from trade.skill_registry import _SKILLS
+        from trade.skill_router import _parse_frontmatter
+
+        owners: dict[str, list[str]] = {}
+        for skill in self._active_skills():
+            for trigger in skill.get("triggers", []):
+                owners.setdefault(trigger.lower(), []).append(skill["name"])
+
+        collisions = []
+        root = Path(__file__).resolve().parent.parent / "skills"
+        for skill in _SKILLS:
+            name = skill["name"]
+            md_path = root / name / "SKILL.md"
+            if not md_path.is_file():
+                continue
+            fm, _ = _parse_frontmatter(md_path.read_text(encoding="utf-8"))
+            md_triggers = fm.get("triggers") or []
+            if isinstance(md_triggers, str):
+                md_triggers = [md_triggers]
+            own_reg = {t.lower() for t in skill.get("triggers", [])}
+            for trigger in md_triggers:
+                key = str(trigger).lower()
+                if key in own_reg:
+                    continue
+                other = [o for o in owners.get(key, []) if o != name]
+                if other:
+                    collisions.append((name, trigger, other))
+        assert not collisions, (
+            "SKILL.md 触发词与其他 skill 的 registry 归属冲突：\n"
+            + "\n".join(
+                f"  {skill} 的 SKILL.md 含 {t!r}，但 registry 归属 {others}"
+                for skill, t, others in collisions
+            )
+        )
+
+    def test_short_ascii_abbreviation_matches_adjacent_cjk(self):
+        """短 ASCII 缩写在中文邻接时仍应命中（禁止 UNICODE \\w 边界漏匹配）。"""
+        from trade.skill_router import match_skill
+
+        for query in ("DA是什么意思", "什么是LC", "BL怎么写"):
+            matched = match_skill(query)
+            assert matched is not None, query
+            assert matched["name"] == "b2b-trade-compliance", query
+
+    def test_short_ascii_abbreviation_does_not_noise_match_english_words(self):
+        """短 ASCII 缩写仍不得子串误伤 today/data/able/table。"""
+        from trade.skill_router import match_skill
+
+        for query in (
+            "today I need data update",
+            "please enable table view",
+            "I am able to help",
+        ):
+            assert match_skill(query) is None, query
 
 
 class TestPlatformSpecificInjectionIsSelfDetected:

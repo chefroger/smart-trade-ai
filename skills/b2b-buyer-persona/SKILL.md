@@ -8,7 +8,6 @@ when_to_use:
   - "不要用于：客户深度画像（用 b2b-customer-intel）"
 triggers:
   - 买家画像
-  - 客户画像
   - 角色分析
   - 人物画像
   - 采购角色
@@ -110,6 +109,7 @@ injection_prompt: |
   ```
 
   **输出语言规则**：客户可见内容用英语（Hook、论点、开发信内容）。分析框架和角色名称可用中文。
+
 ---
 
 # B2B Buyer Persona & Role-Based Messaging

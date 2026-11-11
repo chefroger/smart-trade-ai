@@ -15,10 +15,7 @@ triggers:
   - 开发客户
   - 客户开发
   - 找潜在客户
-  - 开发信
   - 询盘
-  - 客户跟进
-  - 客户分析
   - 报价
   - 谈判
   - 回复询盘
@@ -35,6 +32,7 @@ triggers:
 category: 客户开发
 version: 1.3.2
 author: Foreign Trade Assistant
+
 ---
 
   ## Phase 0 — 三通道并行潜客搜索（找客户专用）

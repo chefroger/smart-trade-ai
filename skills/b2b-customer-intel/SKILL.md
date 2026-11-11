@@ -13,7 +13,6 @@ triggers:
   - 客户分析
   - 了解客户
   - 客户情报
-  - 客户档案
   - 怎么跟这个客户谈
   - 这个客户什么性格
   - 客户偏好
@@ -26,7 +25,6 @@ triggers:
   - 深入了解客户
   - 分析一下这个客户
   - customer intel
-  - customer profile
   - know your customer
   - client analysis
   - deep profile
@@ -53,6 +51,7 @@ injection_prompt: |
   禁止为外部客户创建 Trade 公司记录或桌面目录。
 
   需要 15 维度的完整字段、四类买家跟进策略时，用 `skill_view` 加载本技能正文。
+
 ---
 
 # B2B Customer Intelligence — 单一客户深度画像

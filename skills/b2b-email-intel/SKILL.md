@@ -9,7 +9,6 @@ when_to_use:
   - "用户提到「邮箱检测」「邮箱真实性」"
   - "不要用于：完整公司背调（用 b2b-osint）"
 triggers:
-  - 背景调查
   - 邮箱查询
   - 邮箱注册
   - 邮箱查注册
@@ -23,6 +22,7 @@ triggers:
 category: 客户开发
 version: 1.0.0
 author: Foreign Trade Assistant
+
 ---
 
 ## 输出要求
