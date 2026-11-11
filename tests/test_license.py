@@ -410,7 +410,11 @@ class TestMachineBinding:
     """付费许可绑定本机硬件（工单 C1）。"""
 
     def test_machine_id_prefers_hardware_and_rewrites_cache(self, monkeypatch):
-        """缓存与硬件不一致时以硬件为准，并把缓存回写成硬件值。"""
+        """缓存与硬件不一致时以硬件为准，并把缓存回写成硬件值。
+
+        没有付费签名时允许回写；**有签名时不能回写**（绑定值是「签名签在哪台
+        机器上」的凭据，覆盖了就没法区分拷机与篡改）—— 见下一个用例。
+        """
         from trade import license as license_mod
 
         store = {"_machine_id": "test:old"}
@@ -421,6 +425,37 @@ class TestMachineBinding:
 
         assert license_mod._machine_id() == "test:new"
         assert store["_machine_id"] == "test:new"
+
+    def test_machine_id_does_not_overwrite_binding_with_signature(self, monkeypatch):
+        """有付费签名时，绑定值不能被本机机器码覆盖。
+
+        覆盖之后就再也分不清「文件从别的机器拷来 / 系统重装过」（应回落试用
+        并给申请码）和「文件被篡改」（应报 tampered），付费用户会被误判
+        （2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        store = {"_machine_id": "test:old", "activated": True, "signature": "sig"}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+
+        assert license_mod._machine_id() == "test:new"   # 本机当前机器码
+        assert store["_machine_id"] == "test:old"        # 绑定值原样保留
+
+    def test_machine_id_migrates_to_hardware_without_signature(self, monkeypatch):
+        """没有付费签名时，hostname 兜底缓存可以迁移到硬件（新激活绑硬件）。"""
+        from trade import license as license_mod
+
+        store = {"_machine_id": "host:myhost"}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:hw")
+
+        assert license_mod._machine_id() == "test:hw"
+        assert store["_machine_id"] == "test:hw"
 
     def test_machine_id_falls_back_to_cache_when_hardware_fails(self, monkeypatch):
         """硬件读取失败不抛错、不拒绝启动，退回缓存。"""
@@ -465,6 +500,77 @@ class TestMachineBinding:
         assert s["status"] != "tampered"
         assert s["request_code"].startswith("TRADE-REQ-")
         assert "还没激活" in s.get("message", "")
+
+    @_crypto_needed
+    def test_copied_license_stays_trial_not_tampered_on_repeated_status(self, monkeypatch):
+        """拷机后反复查状态，必须一直是「未激活」，不能恶化成 tampered。
+
+        绑定值被本机机器码覆盖过一次之后，原签名再也验不过，状态会从 trial
+        变成「许可证数据异常」——付费用户看到的是被指责篡改（2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        _setup_temp_ed25519_key(monkeypatch)
+        store: dict = {}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:old")
+
+        future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365)).isoformat()
+        sig = license_mod._sign_license(future)
+        store.update({"activated": True, "expires_at": future, "signature": sig})
+
+        # 换到另一台机器：硬件码变了
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+
+        for _ in range(3):
+            s = license_mod.status(1)
+            assert s["status"] == "trial"          # 不是 tampered
+            assert s["machine_mismatch"] is True
+            assert s["activated"] is False
+        # 绑定值没被本机机器码覆盖 —— 覆盖了就再也验不过原签名
+        assert store["_machine_id"] == "test:old"
+
+    @_crypto_needed
+    def test_hostname_fallback_binding_stays_active_after_hardware_recovers(self, monkeypatch):
+        """硬件恢复后，hostname 兜底绑定的付费用户仍然是 active（不是 tampered）。
+
+        旧版在硬件读不到时会把 `host:<hostname>` 持久化进 license.json，付费
+        签名就签在它上面。硬件恢复后若用机器码覆盖它，签名再也验不过 ——
+        付费用户被误判成「许可证数据异常」（2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        _setup_temp_ed25519_key(monkeypatch)
+        store: dict = {}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+
+        # 激活那一刻硬件读不到 → 机器码退回 hostname 兜底
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: None)
+        monkeypatch.setattr("platform.node", lambda: "myhost")
+        assert license_mod._machine_id() == "host:myhost"
+
+        future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365)).isoformat()
+        sig = license_mod._sign_license(future)
+        store.update({"activated": True, "expires_at": future, "signature": sig})
+
+        # 之后硬件恢复
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:hw")
+        monkeypatch.setattr(license_mod, "_HARDWARE_ID_CACHE", None)
+
+        for _ in range(3):
+            assert license_mod.license_state(1) == ("active", "")
+            s = license_mod.status(1)
+            assert s["status"] == "active"
+            assert s["activated"] is True
+            assert s["machine_mismatch"] is False
+        # 绑定没被销毁：签名仍然验得过
+        assert store["_machine_id"] == "host:myhost"
 
 
 class TestLicenseWriteFailure:

@@ -146,22 +146,48 @@ def _read_hardware_machine_id() -> str | None:
     return mid
 
 
-def _machine_id() -> str:
-    """返回本机机器码：硬件优先，读不到才退回缓存，最后 hostname 兜底。
+def _is_hostname_fallback(value: str) -> bool:
+    """机器码是不是 hostname 兜底值。
 
-    - 硬件与缓存不一致 → 以硬件为准并回写缓存（付费验证必须如此）；
-    - 硬件读取失败 → 退回缓存，保证权限/命令异常时不阻断启动；
+    旧版 `_machine_id()` 在硬件读不到时会把 `host:<hostname>` **持久化**进
+    license.json，付费签名就是签在它上面的。所以它是这台机器的历史合法绑定，
+    不是脏数据（2026-11-11 审计：硬件恢复后覆盖它 → 签名再也验不过 →
+    付费用户被误判成「许可证数据异常」）。
+    """
+    return bool(value) and value.startswith("host:")
+
+
+def _binding_id(data: dict) -> str:
+    """付费签名**绑定**的机器码：license.json 里持久化的那个值。
+
+    它是「签名签在哪台机器上」的凭据，**不能被本机当前机器码覆盖** ——
+    一旦覆盖，就再也分不清「文件是从别的机器拷来的 / 系统重装过」
+    （应回落试用并给申请码）和「文件被篡改」（应报 tampered），
+    付费用户会被误判（2026-11-11 审计）。
+    """
+    return str(data.get("_machine_id") or "").strip()
+
+
+def _machine_id() -> str:
+    """返回**本机当前**机器码：硬件优先，读不到才退回绑定值，最后 hostname 兜底。
+
+    - 硬件可读 → 用硬件（申请码与新激活都基于它）；
+    - 硬件读不到 → 退回绑定值，保证权限/命令异常时不阻断启动；
     - 两者都没有 → `host:{node}` 兜底并持久化。
+
+    这里**不覆盖**已存在的绑定值（绑定值有付费签名时尤其不能动，见
+    `_binding_id`）。没有签名的试用用户允许迁移到硬件，这样之后的新激活
+    绑的是硬件而不是 hostname。
     """
     import platform as _plat
 
     hardware = _read_hardware_machine_id()
     data = _get_license_data()
-    cached = str(data.get("_machine_id") or "").strip()
+    cached = _binding_id(data)
 
     if hardware:
-        if cached != hardware:
-            # 换机 / 旧缓存：以硬件为准，回写缓存（写失败不影响本次使用）
+        if cached != hardware and not data.get("signature"):
+            # 没有付费签名：缓存可以安全迁移到硬件
             try:
                 data["_machine_id"] = hardware
                 _save_license_data(data)
@@ -297,11 +323,14 @@ def _activation_owned_by_other_machine(data: dict) -> bool:
 
     只有签名对文件里缓存的旧机器码仍然有效、而本机硬件码不同时才成立；
     签名本身损坏/篡改仍然走 tampered。
+
+    `host:` 兜底绑定不参与比对：它本来就是本机的绑定（见 `_is_hostname_fallback`），
+    与本机硬件码「不同」是正常的，拿它判换机会把付费用户误伤成未激活。
     """
     if not (data.get("activated") and data.get("expires_at")):
         return False
     cached = str(data.get("_machine_id") or "").strip()
-    if not cached:
+    if not cached or _is_hostname_fallback(cached):
         return False
     hardware = _read_hardware_machine_id()
     if not hardware or hardware == cached:
@@ -591,8 +620,14 @@ def _verify_license_for(data: dict, machine_id: str) -> bool:
 
 
 def _verify_license(data: dict) -> bool:
-    """用**本机**机器码验签（硬件优先，见 `_machine_id()`）。"""
-    return _verify_license_for(data, _machine_id())
+    """按 license.json 里的**绑定机器码**验签。
+
+    绑定值才是签名针对的那台机器 —— 用本机当前机器码验会把「从别的机器
+    拷来的 license.json」误判成篡改（真正的拷机判定由
+    `_activation_owned_by_other_machine` 用「绑定值 vs 本机硬件」来做）。
+    """
+    binding = _binding_id(data)
+    return _verify_license_for(data, binding or _machine_id())
 
 
 def _recover_signature_from_code(data: dict) -> bool:
@@ -695,6 +730,9 @@ def activate(code: str, company_id: int | None = None) -> tuple[bool, str]:
     data["expires_at"] = expires_at
     data["activated_at"] = now.isoformat()
     data["signature"] = base64.urlsafe_b64encode(decoded["signature"]).decode()
+    # 绑定值必须记成本次激活用的机器码：新签名就是针对它签的，
+    # 验签也按绑定值来（见 _binding_id / _verify_license）。
+    data["_machine_id"] = _machine_id()
     _save_license_data(data, company_id)
 
     return True, f"激活成功，有效期至 {expires_at[:10]}"
