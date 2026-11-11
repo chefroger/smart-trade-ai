@@ -72,22 +72,27 @@ except (ValueError, TypeError):
     _TRIAL_DAYS = 30
 
 
-def _machine_id() -> str:
-    """获取本机唯一硬件标识符（首次计算后持久化缓存）。
+# 硬件机器码的**进程内**缓存：付费验签每个请求都会调用 license_state，
+# 不能每次都起 ioreg 子进程。它只在进程生命周期内有效，不落盘，因此
+# license.json 被拷到另一台电脑时，新进程读到的仍是新机器的硬件码。
+_HARDWARE_ID_CACHE: str | None = None
 
-    首次调用时尝试从系统获取最稳定的标识符（macOS IOPlatformUUID 等），
-    成功后立即持久化到 license_data 中。后续调用直接返回缓存值，
-    避免因运行环境不同（终端 vs launchd vs 后台进程）导致结果不一致。
+
+def _read_hardware_machine_id() -> str | None:
+    """只读硬件标识；读不到返回 None（不回退 hostname、不写任何系统位置）。
+
+    与 license.json 缓存分开是为了让付费验签**每次都以本机硬件为准**：
+    license.json 被整份拷到另一台电脑时，文件里的旧 `_machine_id` 不能再
+    冒充本机（2026-11-11 工单 C1）。
     """
-    # 从持久化缓存读取
-    cached = _get_license_data().get("_machine_id")
-    if cached:
-        return cached
+    global _HARDWARE_ID_CACHE
+    if _HARDWARE_ID_CACHE:
+        return _HARDWARE_ID_CACHE
 
     import platform as _plat
     import subprocess as _sp
 
-    mid = ""
+    mid: str | None = None
     sys_name = _plat.system()
     if sys_name == "Darwin":
         try:
@@ -98,17 +103,18 @@ def _machine_id() -> str:
             for line in result.stdout.splitlines():
                 if "IOPlatformUUID" in line:
                     uuid = line.strip().split('"')[-2]
-                    mid = f"mac:{uuid}"
-                    break
+                    if uuid:
+                        mid = f"mac:{uuid}"
+                        break
         except Exception:
             pass
 
     elif sys_name == "Linux":
         for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
             try:
-                mid = Path(path).read_text().strip()
-                if mid:
-                    mid = f"linux:{mid}"
+                value = Path(path).read_text().strip()
+                if value:
+                    mid = f"linux:{value}"
                     break
             except Exception:
                 continue
@@ -116,28 +122,59 @@ def _machine_id() -> str:
     elif sys_name == "Windows":
         try:
             import winreg
+
+            # 只读打开，不写注册表
             key = winreg.OpenKey(
                 winreg.HKEY_LOCAL_MACHINE,
                 r"SOFTWARE\Microsoft\Cryptography",
             )
-            guid, _ = winreg.QueryValueEx(key, "MachineGuid")
-            winreg.CloseKey(key)
+            try:
+                guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            finally:
+                winreg.CloseKey(key)
             if guid:
                 mid = f"win:{guid}"
         except Exception:
             pass
 
-    if not mid:
-        mid = f"host:{_plat.node()}"
+    if mid:
+        _HARDWARE_ID_CACHE = mid
+    return mid
 
-    # 持久化到 license_data，后续调用直接读取
+
+def _machine_id() -> str:
+    """返回本机机器码：硬件优先，读不到才退回缓存，最后 hostname 兜底。
+
+    - 硬件与缓存不一致 → 以硬件为准并回写缓存（付费验证必须如此）；
+    - 硬件读取失败 → 退回缓存，保证权限/命令异常时不阻断启动；
+    - 两者都没有 → `host:{node}` 兜底并持久化。
+    """
+    import platform as _plat
+
+    hardware = _read_hardware_machine_id()
+    data = _get_license_data()
+    cached = str(data.get("_machine_id") or "").strip()
+
+    if hardware:
+        if cached != hardware:
+            # 换机 / 旧缓存：以硬件为准，回写缓存（写失败不影响本次使用）
+            try:
+                data["_machine_id"] = hardware
+                _save_license_data(data)
+            except Exception as exc:
+                _log.warning("机器码缓存回写失败（本次仍以硬件为准）: %s", exc)
+        return hardware
+
+    if cached:
+        _log.warning("硬件机器码读取失败，退回 license.json 缓存值（不会拒绝启动）")
+        return cached
+
+    mid = f"host:{_plat.node()}"
     try:
-        data = _get_license_data()
         data["_machine_id"] = mid
         _save_license_data(data)
     except Exception:
         pass  # 持久化失败不影响使用，只是下次仍需重新检测
-
     return mid
 
 # 暴力破解限流：持久化到 SQLite license_data 中，进程重启不清零
@@ -216,6 +253,56 @@ _SOFT_EXPIRED_TRIAL = (
 _SOFT_EXPIRED_LICENSE = (
     "许可证已到期。历史记录和产品资料仍可查看，起草已暂停；续期后立即恢复。"
 )
+# 付费码绑定的是另一台机器：按「本机未激活」处理，不判篡改、不提盗版
+_MACHINE_MISMATCH_MSG = "这台电脑还没激活，请把申请码发给作者激活。"
+_MACHINE_MISMATCH_EXPIRED = (
+    "这台电脑还没激活，试用已到期。历史记录和产品资料仍可查看，"
+    "请把申请码发给作者激活后继续起草。"
+)
+
+
+def _trial_state(data: dict, now: datetime, *, machine_mismatch: bool = False) -> tuple[str, str]:
+    """按试用起点判断状态；machine_mismatch 只影响到期文案。"""
+    def expired_message() -> str:
+        return _MACHINE_MISMATCH_EXPIRED if machine_mismatch else _SOFT_EXPIRED_TRIAL
+
+    first_raw = data.get("first_launch_at")
+    if not first_raw:
+        # 磁盘还没有记录时，沿用进程内暂记的试用起点（写盘失败场景）
+        if _PROCESS_FIRST_LAUNCH:
+            try:
+                first = datetime.fromisoformat(_PROCESS_FIRST_LAUNCH).replace(tzinfo=UTC)
+            except (TypeError, ValueError):
+                return "trial", ""
+            if (now - first).days < _TRIAL_DAYS:
+                return "trial", ""
+            return "expired", expired_message()
+        return "trial", ""
+    try:
+        first = datetime.fromisoformat(first_raw).replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        # 损坏的时间戳不当成到期——可用性优先按试用处理（写路径会尝试重写）
+        return "trial", ""
+    if (now - first).days < _TRIAL_DAYS:
+        return "trial", ""
+    return "expired", expired_message()
+
+
+def _activation_owned_by_other_machine(data: dict) -> bool:
+    """license.json 里的付费签名是否属于**另一台机器**。
+
+    只有签名对文件里缓存的旧机器码仍然有效、而本机硬件码不同时才成立；
+    签名本身损坏/篡改仍然走 tampered。
+    """
+    if not (data.get("activated") and data.get("expires_at")):
+        return False
+    cached = str(data.get("_machine_id") or "").strip()
+    if not cached:
+        return False
+    hardware = _read_hardware_machine_id()
+    if not hardware or hardware == cached:
+        return False
+    return _verify_license_for(data, cached)
 
 
 def license_state(company_id: int | None = None) -> tuple[str, str]:
@@ -228,6 +315,9 @@ def license_state(company_id: int | None = None) -> tuple[str, str]:
     now = datetime.now(UTC)
 
     if data.get("activated") and data.get("expires_at"):
+        # 换机：付费签名属于另一台电脑 → 按本机未激活继续算试用，不判 tampered
+        if _activation_owned_by_other_machine(data):
+            return _trial_state(data, now, machine_mismatch=True)
         if not _verify_license(data):
             return "tampered", (
                 "许可证数据异常，请使用激活码重新激活。"
@@ -241,26 +331,7 @@ def license_state(company_id: int | None = None) -> tuple[str, str]:
             return "active", ""
         return "expired", _SOFT_EXPIRED_LICENSE
 
-    first_raw = data.get("first_launch_at")
-    if not first_raw:
-        # 磁盘还没有记录时，沿用进程内暂记的试用起点（写盘失败场景）
-        if _PROCESS_FIRST_LAUNCH:
-            try:
-                first = datetime.fromisoformat(_PROCESS_FIRST_LAUNCH).replace(tzinfo=UTC)
-            except (TypeError, ValueError):
-                return "trial", ""
-            if (now - first).days < _TRIAL_DAYS:
-                return "trial", ""
-            return "expired", _SOFT_EXPIRED_TRIAL
-        return "trial", ""
-    try:
-        first = datetime.fromisoformat(first_raw).replace(tzinfo=UTC)
-    except (TypeError, ValueError):
-        # 损坏的时间戳不当成到期——可用性优先按试用处理（写路径会尝试重写）
-        return "trial", ""
-    if (now - first).days < _TRIAL_DAYS:
-        return "trial", ""
-    return "expired", _SOFT_EXPIRED_TRIAL
+    return _trial_state(data, now)
 
 
 def ensure_license_state(company_id: int | None = None) -> tuple[str, str]:
@@ -345,7 +416,8 @@ def days_remaining(company_id: int | None = None) -> int:
     data = _get_license_data(company_id)
     now = datetime.now(UTC)
 
-    if data.get("activated") and data.get("expires_at"):
+    if (data.get("activated") and data.get("expires_at")
+            and not _activation_owned_by_other_machine(data)):
         expires = datetime.fromisoformat(data["expires_at"]).replace(tzinfo=UTC)
         # 使用日期对比确保到期日当天返回 0 而非 -1
         remaining = (expires.date() - now.date()).days
@@ -373,17 +445,22 @@ def status(company_id: int | None = None) -> dict:
     now = datetime.now(UTC)
     # 与写门控一致：展示前先尝试自恢复，避免 UI 长期显示「异常」而聊天已恢复
     state, _message = ensure_license_state(company_id)
+    machine_mismatch = _activation_owned_by_other_machine(data)
 
     result: dict = {
         "days_remaining": days_remaining(company_id),
-        "activated": data.get("activated", False),
-        "expires_at": data.get("expires_at"),
+        # 换机的付费码不算本机已激活：回落试用，并给出申请码让用户重签
+        "activated": data.get("activated", False) and not machine_mismatch,
+        "expires_at": None if machine_mismatch else data.get("expires_at"),
         "trial_used": 0,
         "trial_total": _TRIAL_DAYS,
         "request_code": "",
         "read_only": state in ("expired", "tampered"),
         "status": state,
+        "machine_mismatch": machine_mismatch,
     }
+    if machine_mismatch:
+        result["message"] = _MACHINE_MISMATCH_MSG
 
     if "first_launch_at" in data:
         try:
@@ -438,8 +515,8 @@ def _sign_license(expires_at: str) -> str:
     return base64.urlsafe_b64encode(sig).decode()
 
 
-def _verify_license(data: dict) -> bool:
-    """验签：用公钥验证 license_data 中的 signature 是否匹配 expires_at + machine_hash。
+def _verify_license_for(data: dict, machine_id: str) -> bool:
+    """验签：signature 是否匹配 expires_at + 指定机器码。
 
     返回 True 表示签名有效，False 表示数据被篡改或缺少签名。
     内部静默处理所有异常（cryptography 未安装、签名格式错误等），统一返回 False。
@@ -459,7 +536,7 @@ def _verify_license(data: dict) -> bool:
         # 验签 payload: YYYYMMDD + SHA256(machine_id).hexdigest()
         # 兼容新旧两种格式：优先用完整 256 bit (64 hex)，失败则回退 64 bit (16 hex)
         date_str = expires_at[:10].replace("-", "")
-        full_hash = hashlib.sha256(_machine_id().encode()).hexdigest().upper()
+        full_hash = hashlib.sha256(machine_id.encode()).hexdigest().upper()
         public_key = ed25519.Ed25519PublicKey.from_public_bytes(_PUBLIC_KEY_BYTES)
 
         # 新格式 (256 bit): date(8) + hash(64)
@@ -480,6 +557,11 @@ def _verify_license(data: dict) -> bool:
     except (InvalidSignature, ValueError, TypeError):
         # 签名不匹配 / base64 解码失败 / payload 构造失败 → 篡改证据或数据损坏
         return False
+
+
+def _verify_license(data: dict) -> bool:
+    """用**本机**机器码验签（硬件优先，见 `_machine_id()`）。"""
+    return _verify_license_for(data, _machine_id())
 
 
 def _recover_signature_from_code(data: dict) -> bool:

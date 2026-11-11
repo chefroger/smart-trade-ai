@@ -47,12 +47,14 @@ class TestMachineId:
         """模拟所有平台检测失败时的 hostname fallback"""
         with mock.patch("trade.license._get_license_data", return_value={}):
             with mock.patch("trade.license._save_license_data"):
-                with mock.patch("platform.system", return_value="SunOS"):
-                    with mock.patch("subprocess.run", side_effect=OSError):
-                        with mock.patch("platform.node", return_value="myhost"):
-                            from trade.license import _machine_id
-                            mid = _machine_id()
-                            assert mid == "host:myhost"
+                # 进程内硬件缓存可能已被前面的用例填充，先清空
+                with mock.patch("trade.license._HARDWARE_ID_CACHE", None):
+                    with mock.patch("platform.system", return_value="SunOS"):
+                        with mock.patch("subprocess.run", side_effect=OSError):
+                            with mock.patch("platform.node", return_value="myhost"):
+                                from trade.license import _machine_id
+                                mid = _machine_id()
+                                assert mid == "host:myhost"
 
 
 class TestRequestCode:
@@ -402,6 +404,67 @@ class TestActivate:
         assert not ok
         # DEADBEEF 哈希不在本地机器码中，会被拒绝（签名无效或机器码不匹配）
         assert not ok
+
+
+class TestMachineBinding:
+    """付费许可绑定本机硬件（工单 C1）。"""
+
+    def test_machine_id_prefers_hardware_and_rewrites_cache(self, monkeypatch):
+        """缓存与硬件不一致时以硬件为准，并把缓存回写成硬件值。"""
+        from trade import license as license_mod
+
+        store = {"_machine_id": "test:old"}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+
+        assert license_mod._machine_id() == "test:new"
+        assert store["_machine_id"] == "test:new"
+
+    def test_machine_id_falls_back_to_cache_when_hardware_fails(self, monkeypatch):
+        """硬件读取失败不抛错、不拒绝启动，退回缓存。"""
+        from trade import license as license_mod
+
+        monkeypatch.setattr(license_mod, "_get_license_data",
+                            lambda cid=None: {"_machine_id": "test:old"})
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: None)
+        assert license_mod._machine_id() == "test:old"
+
+    @_crypto_needed
+    def test_copied_license_is_unactivated_not_tampered(self, monkeypatch):
+        """整份 license.json 拷到另一台机器：按未激活回落试用，不判篡改。"""
+        from trade import license as license_mod
+
+        _setup_temp_ed25519_key(monkeypatch)
+        store: dict = {}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:old")
+
+        future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365)).isoformat()
+        sig = license_mod._sign_license(future)
+        store.update({
+            "activated": True,
+            "expires_at": future,
+            "signature": sig,
+            # _sign_license 已把 test:old 写入缓存
+        })
+        assert license_mod.license_state(1) == ("active", "")
+
+        # 换到另一台机器：硬件码变了
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+        state, _msg = license_mod.license_state(1)
+        assert state == "trial"  # 不是 tampered
+
+        s = license_mod.status(1)
+        assert s["machine_mismatch"] is True
+        assert s["activated"] is False
+        assert s["status"] != "tampered"
+        assert s["request_code"].startswith("TRADE-REQ-")
+        assert "还没激活" in s.get("message", "")
 
 
 class TestLicenseSignature:
