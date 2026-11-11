@@ -159,7 +159,10 @@ def test_roundtrip_creates_company_and_rewrites_paths(desktop, tmp_path):
             "SELECT * FROM conversations WHERE company_id = ?", (target_id,)
         ).fetchone()
         files = json.loads(conversation["files_read"])
-        assert files and files[0]["file"].startswith(str(desktop))
+        # PathMapper 统一输出正斜杠；Windows 上 str(desktop) 是反斜杠
+        assert files and files[0]["file"].replace("\\", "/").startswith(
+            str(desktop).replace("\\", "/")
+        )
         assert Path(files[0]["file"]).is_file()
         assert conn.execute(
             "SELECT COUNT(*) FROM orders WHERE company_id = ?", (target_id,)
