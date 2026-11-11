@@ -22,6 +22,7 @@ from trade.api.memory import router as memory_router
 from trade.api.onboarding import router as onboarding_router
 from trade.api.orders import router as orders_router
 from trade.api.templates import router as templates_router
+from trade.api.transfer import router as transfer_router
 
 
 def _enforce_company_binding(
@@ -90,6 +91,7 @@ router.include_router(chat_router)
 router.include_router(memory_router)
 router.include_router(cron_router)
 router.include_router(templates_router)
+router.include_router(transfer_router)
 router.include_router(copilot_router)
 
 # 便捷导出

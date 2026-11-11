@@ -4311,8 +4311,161 @@ function loadCompanyListUI() {
         <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light);">
             <div style="flex:1;"><div style="font-weight:600;font-size:13px;">${esc(c.name)}</div>
             <div style="font-size:11px;color:var(--text-muted);">${esc(c.slug)} · ${c.contact_email ? ' · ' + esc(c.contact_email) : ''}</div></div>
+            ${c.id === currentCompanyId ? `<button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>` : ''}
             <button class="btn btn-danger btn-xs" onclick="deleteCompany(${c.id})">删除</button>
         </div>`).join('');
+}
+
+// ── 公司数据导出 / 导入 ─────────────────────────────────────────────
+let _pendingImportFile = null;
+
+function _downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'trade-company.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function exportCompany(cid) {
+    if (!confirm('导出包包含客户资料、对话、记忆和 Agent 身份，且未加密。请妥善保管。继续导出？')) return;
+    try {
+        const resp = await fetch(`/api/trade/companies/${cid}/export`, {
+            headers: {
+                'X-Hermes-Session-Token': TOKEN,
+                'X-Company-ID': String(cid),
+            },
+        });
+        if (resp.status === 413) {
+            const data = await resp.json().catch(() => ({}));
+            alert('数据包超过 1GB，未自动打包。\n请手动拷贝：\n' + (data.paths || []).join('\n'));
+            return;
+        }
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            toast('导出失败：' + (data.detail || resp.status));
+            return;
+        }
+        const blob = await resp.blob();
+        const cd = resp.headers.get('content-disposition') || '';
+        const match = /filename="?([^";]+)"?/.exec(cd);
+        _downloadBlob(blob, match ? decodeURIComponent(match[1]) : `trade-company-${cid}.zip`);
+        toast('导出完成，请妥善保管数据包');
+    } catch (err) {
+        toast('导出失败：' + (err && err.message ? err.message : err));
+    }
+}
+
+function showImportCompanyDialog() {
+    document.querySelectorAll('.import-company-backdrop').forEach(el => el.remove());
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop import-company-backdrop';
+    backdrop.innerHTML = `
+        <div class="modal" style="max-width:560px;">
+            <h3>📦 导入公司数据</h3>
+            <p style="font-size:12px;color:var(--text-muted);line-height:1.6;">
+                选择从另一台电脑导出的 <code>.zip</code>。包内含客户资料、对话、记忆和 Agent 身份，未加密。<br>
+                同名公司已存在时默认合并；如果只是同名但不是同一家公司，勾选下面的强制新建。
+            </p>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin:10px 0;">
+                <input type="checkbox" id="imp-force-new"> 同名但不是同一家公司，强制新建
+            </label>
+            <input type="file" id="imp-file" accept=".zip" style="width:100%;margin:10px 0;">
+            <div id="imp-status" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;line-height:1.6;min-height:40px;"></div>
+            <div class="form-actions">
+                <button class="btn" onclick="this.closest('.modal-backdrop').remove()">关闭</button>
+            </div>
+        </div>`;
+    document.body.appendChild(backdrop);
+    document.getElementById('imp-file').addEventListener('change', (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        _pendingImportFile = file;
+        const forceNew = document.getElementById('imp-force-new').checked;
+        uploadCompanyImport(file, null, forceNew);
+    });
+}
+
+async function uploadCompanyImport(file, targetCompanyId, forceNew) {
+    const status = document.getElementById('imp-status');
+    if (status) status.textContent = '正在上传并导入，请勿关闭页面…';
+    const fd = new FormData();
+    fd.append('file', file);
+    if (targetCompanyId) fd.append('target_company_id', String(targetCompanyId));
+    if (forceNew) fd.append('force_new', 'true');
+    try {
+        const resp = await fetch('/api/trade/companies/import-package', {
+            method: 'POST',
+            headers: { 'X-Hermes-Session-Token': TOKEN },
+            body: fd,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            if (status) status.textContent = '导入失败：' + (data.detail || resp.status);
+            return;
+        }
+        pollImportJob(data.job_id);
+    } catch (err) {
+        if (status) status.textContent = '导入失败：' + (err && err.message ? err.message : err);
+    }
+}
+
+async function pollImportJob(jobId) {
+    const status = document.getElementById('imp-status');
+    for (let i = 0; i < 1800; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        let data = null;
+        try {
+            const resp = await fetch(`/api/trade/companies/import-package/${jobId}`, {
+                headers: { 'X-Hermes-Session-Token': TOKEN },
+            });
+            data = await resp.json();
+        } catch (err) {
+            continue;
+        }
+        if (!data) continue;
+        if (data.status === 'done') {
+            const report = data.report || {};
+            if (status) {
+                status.textContent = '导入完成：' + (report.mode === 'created' ? '已新建公司' : '已合并到已有公司')
+                    + '（' + ((report.target && report.target.name) || '') + '）\n'
+                    + '客户 +' + ((report.tables && report.tables.customers && report.tables.customers.inserted) || 0)
+                    + '，对话 +' + ((report.tables && report.tables.conversations && report.tables.conversations.inserted) || 0)
+                    + '，订单 +' + ((report.tables && report.tables.orders && report.tables.orders.inserted) || 0)
+                    + '，文件 ' + ((report.files && report.files.copied) || 0) + ' 个'
+                    + (report.memory && report.memory.added ? '，记忆 +' + report.memory.added : '');
+            }
+            await loadCompanies();
+            if (report.target && report.target.id) {
+                await onCompanyChange(report.target.id);
+            }
+            setTimeout(() => {
+                const backdrop = document.querySelector('.import-company-backdrop');
+                if (backdrop) backdrop.remove();
+            }, 2000);
+            return;
+        }
+        if (data.status === 'error') {
+            if (data.code === 'ambiguous_company') {
+                const list = (data.candidates || []).map(c => `${c.id}: ${c.name} (${c.slug})`).join('\n');
+                const answer = prompt('目标机有多个同名公司，请输入要合并的公司 ID：\n' + list);
+                const targetId = parseInt(answer, 10);
+                if (targetId && _pendingImportFile) {
+                    uploadCompanyImport(_pendingImportFile, targetId, false);
+                } else if (status) {
+                    status.textContent = '已取消：未选择目标公司';
+                }
+                return;
+            }
+            if (status) status.textContent = '导入失败：' + (data.error || '未知错误');
+            return;
+        }
+        if (status) status.textContent = '导入中…（' + (data.phase || data.status) + '）';
+    }
+    if (status) status.textContent = '导入超时，请查看日志或重试。';
 }
 
 function autoSlug() {
@@ -4754,5 +4907,9 @@ function renderNoCompanyPage() {
         viewCache[key].element.remove();
         delete viewCache[key];
     }
-    $('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon">🏢</div><h2>请先选择或创建公司</h2><p>Trade AI 为多公司隔离架构</p><button onclick="showAddCompanyModal()">➕ 创建公司</button></div>`;
+    $('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon">🏢</div><h2>请先选择或创建公司</h2><p>Trade AI 为多公司隔离架构</p>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+            <button onclick="showAddCompanyModal()">➕ 创建公司</button>
+            <button onclick="showImportCompanyDialog()">📦 导入已有公司数据</button>
+        </div></div>`;
 }
