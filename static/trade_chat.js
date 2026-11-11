@@ -4450,7 +4450,7 @@ async function pollImportJob(jobId) {
         }
         if (data.status === 'error') {
             if (data.code === 'ambiguous_company') {
-                const list = (data.candidates || []).map(c => `${c.id}: ${c.name} (${c.slug})`).join('\n');
+                const list = (data.candidates || []).map(c => `${c.id}: ${esc(c.name)} (${esc(c.slug)})`).join('\n');
                 const answer = prompt('目标机有多个同名公司，请输入要合并的公司 ID：\n' + list);
                 const targetId = parseInt(answer, 10);
                 if (targetId && _pendingImportFile) {
