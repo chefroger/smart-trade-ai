@@ -234,6 +234,63 @@ class TestChinaLeadsRouting:
         )
 
 
+class TestTriggerConflictConvergence:
+    """短词/泛词劫持收敛回归（2026-11-11）。
+
+    精确重复触发词已清零；真实故障是裸短词子串抢走专用 skill。
+    本类钉住那次收敛后的归属，新增裸短词前先过这里。
+    """
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            ("招标文件", "b2b-tender-info"),
+            ("招标下载", "b2b-tender-download"),
+            ("投标匹配", "b2b-tender-doc-match"),
+            ("解压招标包", "b2b-tender-archive"),
+            ("标书检查", "b2b-trade-compliance"),
+            ("投标检查", "b2b-trade-compliance"),
+            ("西班牙语怎么说", "b2b-trade-compliance"),
+            ("西班牙客户", "b2b-lead-generation"),
+            ("SEO优化", "b2b-seo-aeo"),
+            ("SEO文章怎么写", "b2b-seo-aeo"),
+            ("帮我写开发信", "b2b-cold-outreach"),
+            ("生成报价单", "b2b-doc-generation"),
+            ("分析报价单", "b2b-document"),
+            ("询盘怎么回", "b2b-lead-generation"),
+            ("怎么报价", "b2b-lead-generation"),
+            ("buyer persona", "b2b-buyer-persona"),
+        ],
+    )
+    def test_converged_queries_route_to_owner(self, query, expected):
+        from trade.skill_router import match_skill
+
+        matched = match_skill(query)
+        assert matched is not None, f"{query!r} 没命中任何技能"
+        assert matched["name"] == expected, (
+            f"{query!r} → {matched['name']}，应为 {expected}"
+        )
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "记录一下",
+            "报价",  # 裸词已删；生成走「报价单」，谈判走「报价怎么谈」
+        ],
+    )
+    def test_removed_bare_triggers_no_longer_hijack(self, query):
+        """被删掉的裸短词不应再单独把查询绑到错误技能。"""
+        from trade.skill_router import match_skill
+
+        matched = match_skill(query)
+        # 允许无命中；若命中也绝不能是曾持有该裸词的泛技能误伤路径
+        if matched is not None:
+            assert matched["name"] not in {
+                "chat-memory",  # 曾靠「记录」劫持
+                "b2b-lead-generation",  # 曾靠裸「报价」与 doc-gen 打平
+            }, f"{query!r} 仍被 {matched['name']} 劫持"
+
+
 class TestTriggerMutualExclusivity:
     """跨技能触发词互斥性审计（2026-10-20，意图路由加固第一项）。
 

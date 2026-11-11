@@ -18,6 +18,11 @@ triggers:
   - 招标公告
   - 招标动态
   - 国际招标
+  - 招标文件
+  - 投标文件
+  - 公开招标
+  - 招标项目
+  - 查投标
   - find public tenders
   - tender opportunities
 category: 客户开发

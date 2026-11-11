@@ -748,7 +748,11 @@ class TestProbe8Registration:
         assert hits[0] == "b2b-tender-download", hits
 
     def test_tender_discovery_does_not_inject_compliance(self):
-        """「找招标」注入的必须是 G1 —— 裸「招标」归合规技能，但注入只看 top1。"""
+        """「找招标」注入的必须是 G1（tender-info）。
+
+        2026-11-11：裸「招标/投标」已从 compliance 收回；合规侧改用
+        「投标检查/标书检查」等复合词，运营问法走 tender-*。
+        """
         from trade.skill_router import augment_query
 
         injected = augment_query("帮我找招标")

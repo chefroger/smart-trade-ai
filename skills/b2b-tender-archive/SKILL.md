@@ -17,6 +17,9 @@ triggers:
   - 嵌套压缩包
   - 归档清理
   - 解压到所在目录
+  - 解压招标包
+  - 解压招标
+  - 招标压缩包
   - extract archives
   - batch unzip
 category: 自动化

@@ -1,6 +1,6 @@
 ---
 name: b2b-lead-generation
-description: 多通道客户开发 — Google Maps + LinkedIn + Facebook 搜索、开发信生成、询盘首响、报价异议与谈判
+description: 多通道客户开发 — 搜索/开发信/询盘首响/报价异议与谈判
 when_to_use:
   - "用户提到「找客户」「开发客户」「开发信」"
   - "需要多通道搜索客户（Google Maps / LinkedIn / Facebook / 海关数据）"
@@ -16,15 +16,17 @@ triggers:
   - 客户开发
   - 找潜在客户
   - 开发信
-  - 询盘
   - 客户跟进
   - 客户分析
-  - 报价
-  - 谈判
   - 回复询盘
   - 询盘怎么回
   - 首封回复
   - 询盘首响
+  - 询盘处理
+  - 报价策略
+  - 报价怎么谈
+  - 谈判技巧
+  - 推进成交
   - 客户嫌贵
   - 客户压价
   - 价格太高
