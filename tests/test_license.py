@@ -652,6 +652,36 @@ class TestLicenseWriteFailure:
         assert state == "trial"
 
 
+class TestDeletedLicenseFile:
+    """license.json 被删除：按试用/到期处理，绝不视为已付费（2026-11-12）。"""
+
+    def test_missing_file_is_trial_and_not_activated(self, monkeypatch):
+        from trade import license as license_mod
+
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+        monkeypatch.setattr(license_mod, "_machine_id", lambda: "test:machine")
+
+        assert license_mod.license_state(1) == ("trial", "")
+        s = license_mod.status(1)
+        assert s["activated"] is False
+        assert s["status"] == "trial"
+
+    def test_missing_file_with_expired_process_start_is_expired(self, monkeypatch):
+        from trade import license as license_mod
+
+        old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=31)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", old)
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+        monkeypatch.setattr(license_mod, "_machine_id", lambda: "test:machine")
+
+        state, _msg = license_mod.license_state(1)
+        assert state == "expired"
+        assert license_mod.status(1)["activated"] is False
+
+
 class TestLicenseSignature:
     """运行时签名验签 — 防篡改核心机制"""
 

@@ -96,6 +96,7 @@ const I18N = {
         'license.expiring':'即将到期','license.trial':'试用',
         'license.active':'已激活','license.req_code':'申请码',
         'license.activate_btn':'🔑 输入激活码','license.days_left':'剩余 {n} 天',
+        'license.paid_only':'该功能仅对付费用户开放',
         // toast
         'toast.copied':'已复制','toast.saved':'已保存','toast.deleted':'已删除',
         'toast.updated':'已更新','toast.error':'操作失败','toast.network':'网络错误',
@@ -297,6 +298,7 @@ const I18N = {
         'license.expiring':'Expiring Soon','license.trial':'Trial',
         'license.active':'Active','license.req_code':'Request Code',
         'license.activate_btn':'🔑 Enter Activation Code','license.days_left':'{n} days left',
+        'license.paid_only':'Available to paid users only.',
         'toast.copied':'Copied','toast.saved':'Saved','toast.deleted':'Deleted',
         'toast.updated':'Updated','toast.error':'Error','toast.network':'Network Error',
         'toast.no_company':'Please select a company first','toast.csv_ok':'Imported {n} customers',
@@ -928,29 +930,68 @@ async function api(method, path, body, extraHeaders) {
 
 // ── 许可证 ──
 
+// #region license-gate
 // 是否已付费激活（整机一份，见 trade/license.py）。
-// 导入/导出是付费功能：未激活时界面上不出现这两个按钮。
+// 试用 / 到期 / tampered / license.json 被删 → activated=false，付费入口隐藏。
 let _licenseActivated = false;
+// 许可证状态读取失败/超时：付费界面 fail-open（可用性优先；界面隐藏不是安全边界）。
+// 注意：license.json 被删时接口会正常返回 trial/expired，走成功分支，不会置这个标记。
+let _licenseGateUnknown = false;
+
+// 与左侧被 data-paid 隐藏的三组栏目保持一致：
+// 销售转化（customers/docs/docgen）、工具（osint/tasks）、历史（history）。
+const _PAID_VIEWS = new Set(['customers', 'tasks', 'history']);
+const _PAID_CHAT_CTX = new Set(['docs', 'docgen', 'osint']);
+
+function _isPaidDestination(view, chatCtx) {
+    return _PAID_VIEWS.has(view) || (view === 'chat' && _PAID_CHAT_CTX.has(chatCtx || ''));
+}
+
+function _licenseGateAllowsPaid() {
+    return _licenseActivated || _licenseGateUnknown;
+}
 
 /**
  * 按许可证状态开关付费功能的界面入口。
- * - 「导入公司数据」那一行：默认 hidden，激活后才显示；
- * - 公司列表每行的「导出」按钮：只在 loadCompanyListUI() 里按状态渲染，
- *   状态变化时若公司弹窗正开着就重画一次。
+ * - 所有 [data-paid] 元素：默认 hidden，付费激活（或状态读取失败 fail-open）后显示；
+ * - 「导入公司数据」那一行与公司列表「导出」按钮沿用同一判定；
+ * - 状态变化时若公司弹窗正开着就重画一次。
  */
 function _applyLicenseGates() {
+    const showPaid = _licenseGateAllowsPaid();
+    document.querySelectorAll('[data-paid]').forEach(el => {
+        el.classList.toggle('hidden', !showPaid);
+    });
     const row = document.getElementById('import-company-row');
-    if (row) row.classList.toggle('hidden', !_licenseActivated);
+    if (row) row.classList.toggle('hidden', !showPaid);
     const modal = document.getElementById('company-modal');
     if (modal && !modal.classList.contains('hidden')) loadCompanyListUI();
+    // 运行中失去付费权限（例如 license.json 被删除后窗口重新聚焦）：如果当前正停在
+    // 付费视图上，退回今日简报，避免内容继续可见。初始化阶段 currentCompanyId 还是
+    // 空，不会在这里触发跳转。
+    if (!showPaid
+            && typeof currentCompanyId !== 'undefined' && currentCompanyId
+            && typeof currentView !== 'undefined'
+            && _isPaidDestination(currentView, currentChatContext)
+            && typeof navToView === 'function') {
+        navToView('chat', 'daily', '今日简报');
+    }
 }
+// #endregion license-gate
 
 async function loadLicenseStatus() {
+    const ctrl = new AbortController();
+    // 本地接口正常是毫秒级；超时也不锁界面，走下面的 fail-open。
+    // 2 秒：初始化会 await 这个调用，不能让许可证接口把整个界面拖住。
+    const timeoutId = setTimeout(() => ctrl.abort(), 2000);
     try {
-        const r = await fetch('/api/trade/license/status', _buildApiOpts('GET', null, TOKEN, currentCompanyId));
+        const opts = _buildApiOpts('GET', null, TOKEN, currentCompanyId);
+        opts.signal = ctrl.signal;
+        const r = await fetch('/api/trade/license/status', opts);
+        if (!r.ok) throw new Error('license status ' + r.status);
         const data = await r.json();
         _licenseActivated = !!data.activated;
-        _applyLicenseGates();
+        _licenseGateUnknown = false;
         const bar = document.getElementById('license-bar');
         if (!bar) return;
 
@@ -993,7 +1034,15 @@ async function loadLicenseStatus() {
             bar.style.display = 'block'; bar.style.background = '#FEF2F2'; bar.style.color = '#991B1B';
             bar.innerHTML = '⚠️ License Error · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;font-weight:600;">Reactivate</a>' + reqCodeHtml;
         }
-    } catch(e) {}
+    } catch(e) {
+        // 读不到状态（网络/401/超时）：付费 UI fail-open，不能因为本地接口抖动
+        // 把付费用户的栏目全部藏掉。license.json 被删时接口正常返回 trial/expired，
+        // 走上面的成功分支，会隐藏付费入口。
+        _licenseGateUnknown = true;
+    } finally {
+        clearTimeout(timeoutId);
+        _applyLicenseGates();
+    }
 }
 
 function showLicenseExpired(msg) {
@@ -1724,6 +1773,11 @@ function navToView(view, chatCtx, chatName) {
     // 未选择公司时，所有菜单点击都显示固定提示页
     if (!currentCompanyId) {
         renderNoCompanyPage();
+        return;
+    }
+    // 付费栏目的深链/恢复兜底：入口虽然隐藏了，仍需挡住内部调用与恢复的旧视图
+    if (_isPaidDestination(view, chatCtx) && !_licenseGateAllowsPaid()) {
+        toast(t('license.paid_only'));
         return;
     }
 
@@ -4383,7 +4437,7 @@ function loadCompanyListUI() {
         <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light);">
             <div style="flex:1;"><div style="font-weight:600;font-size:13px;">${esc(c.name)}</div>
             <div style="font-size:11px;color:var(--text-muted);">${esc(c.slug)} · ${c.contact_email ? ' · ' + esc(c.contact_email) : ''}</div></div>
-            ${_licenseActivated ? `<button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>` : ''}
+            ${_licenseGateAllowsPaid() ? `<button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>` : ''}
             <button class="btn btn-danger btn-xs" onclick="deleteCompany(${c.id})">删除</button>
         </div>`).join('');
 }
@@ -4448,6 +4502,11 @@ async function exportCompany(cid) {
 }
 
 function showImportCompanyDialog() {
+    // 导入/导出是付费能力：入口隐藏之外，这里再挡一次控制台直接调用
+    if (!_licenseGateAllowsPaid()) {
+        toast(t('license.paid_only'));
+        return;
+    }
     document.querySelectorAll('.import-company-backdrop').forEach(el => el.remove());
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop import-company-backdrop';
@@ -4975,8 +5034,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     } catch(_) {}
 
-    // 许可证状态检查
-    loadLicenseStatus();
+    // 许可证状态检查（等结果再恢复视图：避免试用用户先把付费页渲染出来）。
+    // loadLicenseStatus 内部有 2 秒超时，到点走 fail-open，不会无限拖住初始化。
+    await loadLicenseStatus();
 
     try {
         await loadCompanies();
@@ -5005,10 +5065,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             startVersionCheck();
             return;
         }
-        // 恢复之前的视图或默认打开今日简报
-        const restoreView = reloadState?.view || 'chat';
-        const restoreCtx = reloadState?.chatCtx || 'daily';
-        const restoreName = reloadState?.chatName || '今日简报';
+        // 恢复之前的视图或默认打开今日简报；付费视图对试用用户回落到简报
+        let restoreView = reloadState?.view || 'chat';
+        let restoreCtx = reloadState?.chatCtx || 'daily';
+        let restoreName = reloadState?.chatName || '今日简报';
+        if (_isPaidDestination(restoreView, restoreCtx) && !_licenseGateAllowsPaid()) {
+            restoreView = 'chat';
+            restoreCtx = 'daily';
+            restoreName = '今日简报';
+        }
         navToView(restoreView, restoreCtx, restoreName);
         // 恢复滚动位置（等 DOM 渲染完成后）
         if (reloadState?.scrollY > 0) {
@@ -5024,15 +5089,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 // 页面关闭时清理轮询
 window.addEventListener('beforeunload', () => { stopCronPolling(); stopVersionCheck(); });
 
+// 许可证是整机一份：license.json 被删除/替换后，回到页面时重新判定。
+// 后端会按 trial/expired 返回，前端据此立即隐藏付费入口，不需要刷新页面。
+window.addEventListener('focus', () => { loadLicenseStatus(); });
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadLicenseStatus();
+});
+
 function renderNoCompanyPage() {
     // 清除视图缓存
     for (const key in viewCache) {
         viewCache[key].element.remove();
         delete viewCache[key];
     }
-    $('main-content').innerHTML = `<div class="empty-state"><div class="empty-icon">🏢</div><h2>请先选择或创建公司</h2><p>Trade AI 为多公司隔离架构</p>
-        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-            <button onclick="showAddCompanyModal()">➕ 创建公司</button>
-            <button onclick="showImportCompanyDialog()">📦 导入已有公司数据</button>
-        </div></div>`;
+    // 「创建公司」始终保留（试用用户也要能建第一家公司）；导入是付费能力
+    const importBtn = _licenseGateAllowsPaid()
+        ? '<button onclick="showImportCompanyDialog()">📦 导入已有公司数据</button>'
+        : '';
+    $('main-content').innerHTML = '<div class="empty-state"><div class="empty-icon">🏢</div>'
+        + '<h2>请先选择或创建公司</h2><p>Trade AI 为多公司隔离架构</p>'
+        + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">'
+        + '<button onclick="showAddCompanyModal()">➕ 创建公司</button>'
+        + importBtn
+        + '</div></div>';
 }

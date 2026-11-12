@@ -31,7 +31,7 @@
                 <select id="company-select" aria-label="选择公司" onchange="onCompanyChange(this.value)">
                     <option value="">— 选择公司 —</option>
                 </select>
-                <button onclick="showAddCompanyModal()" title="添加公司">+</button>
+                <button id="company-add-btn" class="hidden" data-paid onclick="showAddCompanyModal()" title="添加公司">+</button>
             </div>
         </div>
     </div>
@@ -63,7 +63,7 @@
             </div>
         </div>
 
-        <div class="nav-section">
+        <div class="nav-section hidden" data-paid>
             <div class="nav-section-title">👤 销售转化</div>
             <div class="nav-item" data-view="customers" onclick="navToView('customers')">
                 <span class="nav-icon">👥</span><span class="nav-label">客户管理</span>
@@ -76,7 +76,7 @@
             </div>
         </div>
 
-        <div class="nav-section">
+        <div class="nav-section hidden" data-paid>
             <div class="nav-section-title">🛠️ 工具</div>
             <div class="nav-item" data-view="chat" data-chat-context="osint" onclick="navToView('chat','osint','客户背调')">
                 <span class="nav-icon">🕵️</span><span class="nav-label">客户背调</span>
@@ -86,7 +86,7 @@
             </div>
         </div>
 
-        <div class="nav-section">
+        <div class="nav-section hidden" data-paid>
             <div class="nav-section-title">💬 历史</div>
             <div class="nav-item" data-view="history" onclick="navToView('history')">
                 <span class="nav-icon">🕐</span><span class="nav-label">对话记录</span>
@@ -105,11 +105,11 @@
          文案与配色由 trade_chat.js 的 loadUsageToday() 填。 -->
     <div id="usage-today" class="usage-today" hidden></div>
     <div class="sidebar-footer">
-        <button id="system-update-btn" onclick="doTradeUpdate(event)" data-tip="更新系统">⬆️</button>
+        <button id="system-update-btn" class="hidden" data-paid onclick="doTradeUpdate(event)" data-tip="更新系统">⬆️</button>
         <button id="system-restart-btn" onclick="doRestartTrade(event)" data-tip="重启" hidden>♻️</button>
         <button id="skills-help-btn" onclick="showSkillsHelp()" data-tip="技能帮助">📖</button>
         <button id="skills-update-btn" onclick="updateSkills(event)" data-tip="更新技能" hidden>📚</button>
-        <button id="upgrade-help-btn" onclick="showUpgradeHelp()" data-tip="升级说明">ℹ️</button>
+        <button id="upgrade-help-btn" class="hidden" data-paid onclick="showUpgradeHelp()" data-tip="升级说明">ℹ️</button>
         <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导">🎓</button>
         <!-- 聊天副驾设置入口暂时隐藏（2026-11-06）；弹窗与接口保留，改回可见只需删掉 hidden。 -->
         <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾" hidden>⚙️</button>
