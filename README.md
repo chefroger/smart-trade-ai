@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
 ```
 
-脚本会自动装好 Hermes、Python 3.14 环境、Trade 本体和 45 个技能。装完在终端输入 `trade`，浏览器自动打开聊天界面。
+脚本会自动检查 Python 3.14 环境、安装 Trade 本体和 44 个技能。**Hermes Agent 需要你先用官方安装器装好**（脚本会检查，缺了就提示你去装）。装完在终端输入 `trade`，浏览器自动打开聊天界面。
 
 > 首次使用需要一个大模型 API Key（推荐 DeepSeek）。想手动安装、让 Hermes 代装，或先看注意事项：
 > [安装步骤](#安装步骤三种方式) · [安装前须知](#安装前须知)
@@ -127,7 +127,16 @@ Hermes 会自动完成 clone、安装依赖、注册 skills 等全部步骤，�
 
 - 首次使用有 **30 天体验期**，状态保存在本机、不联网登记，重在体验，不防破解。
 - **付费激活码绑定当前电脑**。换电脑、重装系统后，请把新机器上的申请码发给作者 **Roger Lau** 重新签发。
-- 公司数据导出/导入只迁移业务数据（数据库、公司目录、记忆）；**不含许可证，也不含桌面资料库文件**，桌面文件请按需自行拷贝。
+- 试用期内界面只保留免费能力，以下入口**不会出现**，激活后自动显示：
+  - 左侧「👤 销售转化」（客户管理 / 文档库 / 文档生成）
+  - 左侧「🛠️ 工具」（客户背调 / 定时任务）
+  - 左侧「💬 历史」（对话记录）
+  - 公司名右侧的「➕ 添加公司」按钮（没有公司时，空状态页的「创建公司」仍然可见）
+  - 左下角的「⬆️ 更新系统」与「ℹ️ 升级说明」
+- **公司数据导出 / 导入是付费功能**：在「公司设置」里选中公司 → 导出得到一个 `.zip`，在另一台电脑导入即可迁移客户、对话、订单、记忆与 Agent 身份。
+  - 同名公司不会重复创建，默认合并；确实只是重名时可选「强制新建」。
+  - 包内**不含许可证**，也不含桌面资料库文件（桌面可能有几百 GB，需自行拷贝）；导出提示里会列出要拷贝的目录。
+  - **包未加密**，含客户资料与记忆，请妥善保管。
 
 ---
 
@@ -194,7 +203,7 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
 ```
 
-脚本自动完成：Python 环境检查 → Hermes Agent → Trade 安装 → 45 个 skills → 数据库初始化 → 开机自启 + 桌面快捷方式（Windows）。
+脚本自动完成：Python 3.14 环境检查 → Hermes Agent 检查 → Trade 安装 → 44 个 skills → 数据库初始化 → 开机自启（macOS 用 launchd、Linux 用 systemd、Windows 用计划任务 + 桌面快捷方式）。
 
 > **如果你希望安装前先审查脚本**：
 > ```bash
@@ -295,7 +304,7 @@ $TradeHome\venv\Scripts\python.exe server.py
 
 ---
 
-## 45 项专业能力
+## 专业能力
 
 | 场景 | 能力 |
 |------|------|
@@ -344,6 +353,7 @@ $TradeHome\venv\Scripts\python.exe server.py
 | 解压与归档 | 7z/rar/zip/gz 批量解压、嵌套包多轮展开，原包进回收站 |
 | 清单匹配归档 | 按招标清单的编号与名称匹配文件，成套打包归档 |
 | Skill 生成器 | 用自然语言描述需求，自动生成新 skill 并注册到系统 |
+| 公司数据迁移 | 把一个公司的客户/对话/订单/记忆/Agent 身份打包导出，在另一台电脑导入合并（付费功能） |
 
 ---
 
@@ -384,16 +394,17 @@ $TradeHome\venv\Scripts\python.exe server.py
 
 ```
 trade/                     B2B 业务层
-├── api/                   FastAPI 路由（10 个业务域）
+├── api/                   FastAPI 路由（12 个业务域 + license/system）
 ├── osint/                 客户背调模块（6 层检测）
+├── company/transfer/      单公司数据打包导出/导入（跨电脑迁移）
 ├── skill_router.py        Skill 自动匹配引擎
 ├── skill_registry.py      45 个 skill 注册表（纯数据）
 ├── bootstrap.py            启动引导（Hermes 版本检查、env 加载、Skills 同步）
 ├── app.py                  FastAPI app factory
-└── ... + 22 个业务模块
+└── ... + 40 个业务模块
 
-skills/                    45 个 B2B skills（Markdown 驱动）
-tests/                     Python 测试（75 个文件）＋ 文档读取规则端到端实测
+skills/                    45 个 skill（42 个 b2b-* + 2 个 auto-* + 1 个 chat-memory）
+tests/                     Python 测试（87 个文件）＋ 文档读取规则端到端实测
 tests_js/                  前端工具函数测试（node:test，零依赖；CI 会执行）
 server.py                  FastAPI 入口
 ```
@@ -430,11 +441,14 @@ ruff check trade/ server.py                 # 代码检查
 trade doctor
 ```
 
-它会**端到端验活**四项，并指出是哪一项坏了：
+它会**端到端验活**七项，并指出是哪一项坏了：
 
 | 检查项 | 怎么验的 |
 |---|---|
 | Hermes 运行环境 | 真的构造一个 agent（能抓到"版本对但起不来"这类问题） |
+| 急停状态（ESTOP） | 确认 Hermes 没有被 `hermes pause` 停掉（否则定时任务会静默不跑） |
+| 技能一致性 | 比对项目内置技能与 Hermes 已安装技能，列出缺失项 |
+| 安装脚本状态 | 检查 skills/模板是否已同步到用户目录 |
 | 图片识别（原生 vision） | 生成一张随机验证码图发给模型，看它能否读出来 |
 | Tavily 搜索 | 真的发一次搜索请求（不是只看 key 存不存在） |
 | Trade 自身 | 数据库可读写 + 真的走一次对话回合 |
@@ -455,13 +469,15 @@ trade doctor
 
 Hermes 会自动执行 `git pull` → `pip install` → `install-trade-skills` → 数据库检查 → 重启 Trade。遇到报错它会自行排查重试，比手动操作更省心。
 
-### 系统升级按钮无反应
+### 更新系统按钮点了没反应
 
-点击「系统升级」按钮后，系统会自动执行 `git pull` + `pip install` + skills 更新，完成后**自动重启服务并刷新页面**。重启时新进程先启动并等待旧进程释放端口（最多 10 秒），避免端口冲突。整个过程中页面会短暂不可用，之后自动恢复。
+点击左下角「⬆️ 更新系统」按钮后，系统会自动执行 `git pull` + `pip install` + skills 更新。**更新完成后不会自动重启**——你会在界面上看到「✅ 更新完成。请点击"🔄 重启"以应用新版本。」，这时再点左下角「♻️ 重启」按钮生效。
 
-如果升级后页面没有自动刷新，或出现异常，请手动按 `Ctrl+Shift+R`（Windows）/ `Cmd+Shift+R`（macOS）强制刷新浏览器。
+重启时新进程先启动并等待旧进程释放端口（最多 10 秒），避免端口冲突。整个过程中页面会短暂不可用，之后自动恢复。
 
-如果升级按钮完全无响应（常见于从极旧版本升级），请按以下步骤手动操作：
+如果更新后页面没有自动刷新，或出现异常，请手动按 `Ctrl+Shift+R`（Windows）/ `Cmd+Shift+R`（macOS）强制刷新浏览器。
+
+如果更新按钮完全无响应（常见于从极旧版本升级），请按以下步骤手动操作：
 
 **macOS：**
 
@@ -472,12 +488,15 @@ Hermes 会自动执行 `git pull` → `pip install` → `install-trade-skills` �
 ```bash
 cd ~/.trade/foreign-trade-assistant
 git pull origin main
-pip install -e "."
-install-trade-skills
+~/.trade/venv/bin/pip install -r requirements.txt
+~/.trade/venv/bin/pip install -e "." --no-deps
+~/.trade/venv/bin/python -c "from trade.post_install import install_skills; install_skills()"
 ```
 
+> `--no-deps` 不能去掉：Hermes 的 setup.py 会拒绝构建 wheel，不加这个参数 pip 会去解析 hermes-agent 依赖并失败。
+
 4. 所有命令执行完后，关闭终端
-5. 双击桌面上的 Trade 图标启动，或重新运行 `python server.py`
+5. 重新运行 `~/.trade/venv/bin/python server.py` 启动
 
 **Windows：**
 
@@ -505,11 +524,12 @@ $env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade.post_install impo
 ```bash
 cd ~/.trade/foreign-trade-assistant
 git pull origin main
-pip install -e "."
-install-trade-skills
+~/.trade/venv/bin/pip install -r requirements.txt
+~/.trade/venv/bin/pip install -e "." --no-deps
+~/.trade/venv/bin/python -c "from trade.post_install import install_skills; install_skills()"
 ```
 
-4. 重新运行 `python server.py` 启动
+4. 重新运行 `~/.trade/venv/bin/python server.py` 启动
 
 > 如果执行 `git pull` 时报错找不到 `git`，说明 Git 未安装。请先打开终端输入 `hermes` 确认 Hermes 正常，或从 [git-scm.com](https://git-scm.com) 下载安装 Git 后再试。
 
@@ -525,9 +545,10 @@ install-trade-skills
 ```bash
 cd ~/.trade/foreign-trade-assistant
 git pull origin main
-pip install -e "."
-install-trade-skills
-python server.py
+~/.trade/venv/bin/pip install -r requirements.txt
+~/.trade/venv/bin/pip install -e "." --no-deps
+~/.trade/venv/bin/python -c "from trade.post_install import install_skills; install_skills()"
+~/.trade/venv/bin/python server.py
 ```
 
 **Windows：**
@@ -550,13 +571,13 @@ $env:LOCALAPPDATA\trade\venv\Scripts\python.exe server.py
 |---------|---------|------------|
 | ⚠️ 更新结果未知，请检查网络 | `git pull` 超时（120s）或 HTTP 错误 | 全部步骤 |
 | ⚠️ 请求超时 | `fetch()` 120s AbortController 触发 | 全部步骤 |
-| ⚠️ 升级完成，但有 N 项警告 | skills 同步等**非关键步骤**失败（网络波动）——不影响升级 | 无需处理：代码与依赖已更新并会正常重启，仅技能清单可能未更新，可稍后手动执行 `install-trade-skills` |
+| ⚠️ 升级完成，但有 N 项警告 | skills 同步等**非关键步骤**失败（网络波动）——不影响升级 | 无需处理：代码与依赖已更新，**再点一次「♻️ 重启」即可生效**，仅技能清单可能未更新，可稍后手动执行 `install_skills()` |
 | ❌ 更新失败: Git 未安装或不在 PATH 中 | 系统找不到 `git` 命令 | [安装 Git](https://git-scm.com/download/win) 后重跑全部步骤 |
-| ❌ 更新失败: pip install failed | 依赖包下载失败（PyPI 不通） | `pip install -e "."` 重试 |
+| ❌ 更新失败: pip install failed | 依赖包下载失败（PyPI 不通） | `pip install -r requirements.txt` 重试 |
 | ❌ 更新失败: git pull / clone failed | GitHub 连不上 | 开 VPN 全局模式后重试 `git pull` |
 
 > 升级流程只有 **git pull / pip install / 数据库检查**三步属于关键步骤，失败才会中止升级并提示 `❌`；
-> skills 同步、模板同步、开机自启设置失败一律降级为警告（`⚠️`）**不会阻止重启**——避免因一次网络抖动把你锁在旧版本上。
+> skills 同步、模板同步、开机自启设置失败一律降级为警告（`⚠️`）**不会阻止你点重启**——避免因一次网络抖动把你锁在旧版本上。
 
 > 如果 VPN 已开启但仍失败，尝试在终端中先设置代理再执行更新：
 > ```bash

@@ -100,7 +100,16 @@ Hermes will handle cloning, installing dependencies, and registering skills auto
 
 - New installs get a **30-day trial**. The state is stored locally (no online registration); it is a convenience period, not tamper-proof licensing.
 - **Paid activation codes are bound to the current computer.** After moving to a new machine or reinstalling the OS, send the new machine's request code to the author, **Roger Lau**, for re-issuance.
-- Company export/import migrates business data only (database, company directory, memory). It does **not** include the license or desktop library files; copy those yourself if needed.
+- During the trial, only free capabilities are shown. These entries are **hidden until activated**:
+  - Left sidebar **Sales Conversion** (Customer Management / Document Library / Document Generation)
+  - Left sidebar **Tools** (Customer Due Diligence / Scheduled Tasks)
+  - Left sidebar **History** (chat records)
+  - The **➕ Add Company** button next to the company name (the empty-state "Create Company" button stays visible so a trial user can create the first company)
+  - Bottom-left **⬆️ Update** and **ℹ️ Upgrade Guide** buttons
+- **Company export/import is a paid feature**: in Company Settings pick a company → export a `.zip`, then import it on another computer to migrate customers, conversations, orders, memory and agent identity.
+  - Same-name companies are merged, not duplicated; choose "force new" only when it is a different company with the same name.
+  - The package does **not** include the license, and desktop library files are not packed (they can be hundreds of GB — copy them yourself); the export prompt lists the directories.
+  - **The package is not encrypted** and contains customer data and memory; store it safely.
 
 ---
 
@@ -112,7 +121,7 @@ Hermes will handle cloning, installing dependencies, and registering skills auto
 curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh | bash
 ```
 
-The script handles: Python check → Hermes Agent → Smart Trade AI → 45 skills → database init.
+The script handles: Python 3.14 check → Hermes Agent check → Smart Trade AI → 44 skills → database init. **Hermes Agent must be installed first** (the script only checks for it and tells you how to install it if missing).
 
 > **Prefer to review before running?**
 > ```bash
@@ -179,25 +188,35 @@ hermes setup
 
 # 3. Install Smart Trade AI
 git clone --branch main https://github.com/chefroger/smart-trade-ai.git $env:LOCALAPPDATA\trade\foreign-trade-assistant
-cd $env:LOCALAPPDATA\trade\foreign-trade-assistant; pip install -e "."; install-trade-skills
+cd $env:LOCALAPPDATA\trade\foreign-trade-assistant
+py -3.14 -m venv $env:LOCALAPPDATA\trade\venv
+$env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -r requirements.txt
+$env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -e "." --no-deps
+$env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
+$env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade import database; database.init_db()"
 
-python server.py
+$env:LOCALAPPDATA\trade\venv\Scripts\python.exe server.py
 # → Open http://127.0.0.1:9119/trade
 ```
 
+> `--no-deps` is required: Hermes's setup.py refuses to build a wheel, so pip would try to
+> resolve hermes-agent as a dependency and fail.
+>
 > If step 3 fails with `Filename too long`, long paths are not enabled. Verify step 0 was run and the machine was rebooted.
 
 ### Build standalone app (double-click to run, no terminal needed)
 
 ```bash
 pip install pyinstaller
-./scripts/build.sh          # macOS → dist/Smart Trade AI.app
-powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
+./scripts/build.sh          # macOS → dist/TradeWin.app
 ```
+
+> The Windows standalone build is temporarily disabled (`scripts/build.ps1` only prints a
+> notice). On Windows, run `tradewin` from the venv instead.
 
 ---
 
-## 45 Professional Skills
+## Professional Skills
 
 | Skill | Description |
 |------|------|
@@ -206,12 +225,13 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 | LinkedIn Operations | Profile optimization + content strategy + InMail templates |
 | Customs Data | Analyze import/export data, identify high-value buyers |
 | Lead Generation | Google Maps + LinkedIn + Facebook multi-channel customer discovery, one-click save |
+| China Leads | Free public-channel leads: source factories / competitors' domestic factories / domestic buyers (industrial belts + search + customs records + manual verification) |
 | Cold Outreach | Product promotion emails / cold emails / follow-ups based on company product data |
 | Email Intelligence | 120+ platform email registration check (holehe), social profile discovery |
 | Client Management | A/B/C grading, detail panel, document library linking |
 | Document Analysis | Complete file-by-file parsing of PDF/Word/Excel/PPT, never skips or truncates |
 | Business Doc Generation | One-click quotes, proforma invoices, contracts (DOCX / XLSX / PPTX) |
-| Quote & Negotiation | Negotiation strategy based on product knowledge base + client profile |
+| Data Directory | Structured knowledge-base management: products / customers / quotes / contracts / certifications / logistics |
 | Due Diligence | 6-layer verification: email → WHOIS → sanctions → MX → tech stack → LinkedIn |
 | Customer Intel | Single-customer 15-dimension deep profile: decision chain, purchasing preferences, gift advice |
 | Customer Finder | 3-question wizard: what to sell → where to sell → find who, auto search + cold email |
@@ -245,7 +265,7 @@ powershell -File scripts/build.ps1  # Windows → dist/Smart Trade AI.exe
 | Extract & Archive | Batch-extract 7z/rar/zip/gz, unwrap nested archives, send originals to the recycle bin |
 | List-Based Filing | Matches files to tender lists by number and name, packages complete sets |
 | Auto Customer Dev | One-click end-to-end pipeline: search → vet → score → email → save → log |
-| ~~Auto SMTP Email~~ | ~~Preview-then-send via SMTP — disabled, AI does not send emails on behalf of users~~ |
+| Company Data Migration | Package one company's customers / conversations / orders / memory / agent identity into a `.zip`, import and merge on another computer (paid feature) |
 
 ---
 
@@ -282,16 +302,17 @@ If you really need to reach the UI from another device, set `TRADE_ALLOW_REMOTE_
 
 ```
 trade/                     B2B business layer
-├── api/                   FastAPI routes (10 business domains)
+├── api/                   FastAPI routes (12 business domains + license/system)
 ├── osint/                 Client due diligence module (6-layer verification)
+├── company/transfer/      Single-company data export/import (cross-computer migration)
 ├── skill_router.py        Skill auto-matching engine
-├── skill_registry.py      45 skill registry (pure data)
+├── skill_registry.py      45-entry skill registry (pure data)
 ├── bootstrap.py            Startup bootstrap (Hermes version check, env loading, skills sync)
 ├── app.py                  FastAPI app factory
-└── ... + 22 business modules
+└── ... + 40 business modules
 
-skills/                    45 B2B skills (Markdown-driven)
-tests/                     Python tests (75 files) + end-to-end document-reading rule tests
+skills/                    45 skills (42 b2b-* + 2 auto-* + 1 chat-memory)
+tests/                     Python tests (87 files) + end-to-end document-reading rule tests
 tests_js/                  Frontend utility tests (node:test, zero dependencies; run by CI)
 server.py                  FastAPI entry point
 ```
