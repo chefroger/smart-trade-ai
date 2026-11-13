@@ -873,8 +873,8 @@ async def trade_chat_stream(
                         release_read_coverage(request_task_id)
                         release_doc_skip(request_task_id)
                 elif not gate_required:
-                    # 没有门禁的普通请求：回调证据同样可以预热。
-                    _warm_after_read(None, evidence, cid)
+                    # 没有门禁的普通请求：回调证据同样可以预热（有 task_id 时也读快照）。
+                    _warm_after_read(request_task_id, evidence, cid)
 
                 lib_name = ""
                 if payload.library_id:
