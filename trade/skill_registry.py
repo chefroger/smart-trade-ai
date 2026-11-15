@@ -756,6 +756,8 @@ STOP RULE（防止无效搜索）:
         ),
         "augment_prompt": """你是 b2b-daily-automation 技能。当用户需要设置每日自动化任务（如早安简报、定时发布、周报自动生成）时，请执行以下步骤：
 
+**创建纪律：** 只有用户明确要求才创建定时任务；不创建提醒和催办类任务。cron 产出只留 trade 本地（deliver=local），不投递到任何外部平台。
+
 1. 加载 skill: b2b-daily-automation
 2. 确认任务需求：
    - 早安简报：当日汇率 + 天气 + 目标市场动态 + 今日待办

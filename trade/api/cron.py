@@ -78,10 +78,19 @@ def get_today_cron(cid: int = Depends(require_company)):
         output = _find_cron_output(task_name, today, job_id=task.get("job_id", ""))
 
         if output:
-            completed.append({
-                "name": task_name, "time": task["time"],
-                "output": output, "has_output": True,
-            })
+            # Hermes 判无新内容时写 [SILENT] 并跳过投递；产出文件仍在。
+            # Trade 今日简报不展示气泡、不计入「已完成待看」——只在有实质
+            # 完成 / 失败 / 需用户动作时显示。
+            if _is_silent_cron_output(output):
+                completed.append({
+                    "name": task_name, "time": task["time"],
+                    "output": None, "has_output": False, "silent": True,
+                })
+            else:
+                completed.append({
+                    "name": task_name, "time": task["time"],
+                    "output": output, "has_output": True,
+                })
             continue
 
         # 第三态：调度解析不出来。`_cron_to_time` 只处理 "M H * * *"，
@@ -349,6 +358,19 @@ def _job_visible(job_id: str, company_id: int | None) -> bool:
         return visible_for_company(job_id, company_id, company_count=_company_count())
     except Exception:
         return False
+
+
+def _is_silent_cron_output(text: str) -> bool:
+    """判断 cron 产出是否为 Hermes 静默 / 无变化标记。
+
+    Hermes 无新内容时输出 `[SILENT]`（或等价 no_change 标记）。只认「全文
+    实质等于该标记」——正文里顺带提到 SILENT 的正常产出不算静默。
+    """
+    if not text:
+        return False
+    # 去掉空白后只剩标记本身
+    compact = "".join(text.split()).upper()
+    return compact in {"[SILENT]", "SILENT", "[NO_CHANGE]", "NO_CHANGE"}
 
 
 def _find_cron_output(task_name: str, today: str, job_id: str = "") -> str | None:
