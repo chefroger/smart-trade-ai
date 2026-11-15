@@ -736,11 +736,11 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-daily-automation",
         "triggers": [
             # Chinese
-            "每日任务", "自动化", "定时任务", "定时发布", "Cron",
+            "每日任务", "自动化", "定时任务", "Cron",
             "早安简报", "工作总结", "晚间总结", "周报", "日报", "每日简报", "设置每日简报", "每日早报",
             "定时提醒", "自动发送",
             # English
-            "daily tasks", "automation", "scheduled tasks", "scheduled posting",
+            "daily tasks", "automation", "scheduled tasks",
             "morning brief", "daily summary", "weekly report", "daily report",
             "cron job", "recurring task", "automated workflow", "exchange rate", "market news",
             # Fragments
@@ -749,25 +749,25 @@ STOP RULE（防止无效搜索）:
             "每天早上", "发简报", "daily brief",
         ],
         "aliases": [],
-        "input_fmt": "任务类型（早报/晚报/定时发布/周报）+ 发送频率 + 目标平台",
+        "input_fmt": "任务类型（早报/晚报/LinkedIn或社媒文案/周报）+ 执行频率（本地交付）",
         "output_fmt": (
             "Cron 任务配置 + 任务执行脚本内容 + "
-            "触发时间（UTC）+ 预期输出描述"
+            "触发时间（UTC）+ 预期输出描述（deliver=local）"
         ),
-        "augment_prompt": """你是 b2b-daily-automation 技能。当用户需要设置每日自动化任务（如早安简报、定时发布、周报自动生成）时，请执行以下步骤：
+        "augment_prompt": """你是 b2b-daily-automation 技能。当用户需要设置每日自动化任务（如早安简报、晚间总结、周报自动生成）时，请执行以下步骤：
 
 **创建纪律：** 只有用户明确要求才创建定时任务；不创建提醒和催办类任务。cron 产出只留 trade 本地（deliver=local），不投递到任何外部平台。
 
 1. 加载 skill: b2b-daily-automation
 2. 确认任务需求：
    - 早安简报：当日汇率 + 天气 + 目标市场动态 + 今日待办
-   - 定时发布：指定平台（LinkedIn/FB/Ins）+ 发布时间
+   - LinkedIn/社媒内容生成：生成可复制粘贴的文案（本地交付，用户手动发布）
    - 晚间总结：今日新询盘/客户互动/订单进度
    - 周报：本周数据汇总 + 下周行动计划
 3. 使用 cronjob 工具创建任务：
    - 指定 schedule（如 "0 8 * * *" 对应每天UTC 8点）
-   - 指定 skills（如 b2b-linkedin-marketing 用于内容发布）
-   - 指定 deliver 目标（当前对话 origin 或指定平台）
+   - 指定 skills（如 b2b-linkedin-marketing 用于内容生成）
+   - deliver 固定为 local（只留 trade 本地）
 4. 返回：
    - 已创建的任务 ID
    - 下次执行时间（换算为用户本地时间）

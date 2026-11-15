@@ -1,15 +1,14 @@
 ---
 name: b2b-daily-automation
-description: 定时任务自动化 — 早安简报、日报/周报、定时发布、自动化工作流
+description: 定时任务自动化 — 早安简报、日报/周报、LinkedIn/社媒文案生成（本地交付）、自动化工作流
 when_to_use:
-  - "配置工作日自动化任务（早报 / 开发信 / 社媒 / 每日总结）"
-  - "用户提到「定时任务」「自动发邮件」「cron」"
-  - "不要用于：单次执行的任务"
+  - "配置工作日自动化任务（早报 / 开发信 / 社媒文案 / 每日总结）"
+  - "用户提到「定时任务」「cron」「每日简报」"
+  - "不要用于：单次执行的任务；不要自动对外发信或发帖"
 triggers:
   - 每日任务
   - 自动化
   - 定时任务
-  - 定时发布
   - Cron
   - 早安简报
   - 工作总结
@@ -21,7 +20,7 @@ triggers:
   - daily brief
   # ... (see skill_registry.py for full list)
 category: 自动化
-version: 1.2.1
+version: 1.2.2
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-daily-automation 技能。用于生成每日简报、定时任务等自动化内容。
@@ -34,7 +33,7 @@ injection_prompt: |
   数据真实性（最重要）
   ════════════════════════════════════════
   简报/报表中的所有数据必须通过 web_search 实时获取或从数据库查询，**不得编造、不得留空、不得使用占位符**：
-  - 汇率 / 金价 / 铜价 / 铝价 / 原油价：逐项搜索（"USD CNY exchange rate today"、"gold price today" 等），每项至少 2 次不同关键词
+  - 汇率 / 金价 / 铜价 / 铝价 / 原油价：逐项搜索（"USD CNY exchange rate today"、"gold price today" 等），每项 2–3 次不同关键词搜索（上限 3 次）
   - 目标市场新闻：搜索每个目标市场的 top business news today；有产品行业配置时补充行业新闻
   - 客户跟进 / 待办：从数据库查询（昨日客户互动、A 级待跟进客户）
   - KPI / 询盘数 / 业绩：必须来自数据库或用户提供，无数据时标注「N/A — 数据待补充」
@@ -45,12 +44,12 @@ injection_prompt: |
   - 早安简报：汇率（中行中间价）→ 大宗商品 → 目标市场动态 → 客户跟进提醒 → 今日待办 → 今日一句话
   - 晚间总结：今日操作回顾 → 定时任务执行情况 → 客户变动 → 待跟进提醒 → 明日建议
   - 周报（周五）：执行摘要 → 关键指标 → 管道状态 → 本周成单 → 挑战与阻碍 → 下周计划
-  - 定时发布：按平台生成可直接发布的内容（LinkedIn / 社媒）
+  - LinkedIn/社媒内容生成：按渠道生成可复制粘贴的文案（本地交付，用户手动发布）
 
   ════════════════════════════════════════
   cron 任务设置
   ════════════════════════════════════════
-  用 cronjob 工具创建任务：指定 schedule（cron 表达式）、skills（如 b2b-linkedin-marketing）、deliver 目标；返回任务 ID + 下次执行时间（换算用户本地时区）+ 修改/暂停/删除方法。
+  用 cronjob 工具创建任务：指定 schedule（cron 表达式）、skills（如 b2b-linkedin-marketing）；deliver 固定为 local；返回任务 ID + 下次执行时间（换算用户本地时区）+ 修改/暂停/删除方法。
 
   质量标准：内容针对用户行业与产品（不泛泛而谈）；生成即用；每份输出带明确的下一步行动建议。
 
@@ -63,7 +62,7 @@ injection_prompt: |
 
 ### 执行步骤
 
-1. 使用 `web_search` 搜索以下信息（逐项搜索，每项至少 2 次不同关键词）：
+1. 使用 `web_search` 搜索以下信息（逐项搜索，每项 2–3 次不同关键词，上限 3 次）：
    - 当日美元/欧元/英镑兑人民币汇率（搜索 "USD CNY exchange rate today"）
    - 当日金价、铜价、铝价、原油价（搜索 "gold price today" / "copper LME price" / "crude oil price today"）
    - 目标市场新闻（搜索每个目标市场的 top business news today）
@@ -113,7 +112,7 @@ injection_prompt: |
 
 ### Task 2: LinkedIn Content (09:30 - Workdays)
 
-**Purpose**: AI generates content ready to copy-paste to LinkedIn
+**Purpose**: AI generates LinkedIn copy for the user to paste manually (local delivery only)
 
 **Content Types** (rotating):
 - Text post with insight
@@ -123,7 +122,7 @@ injection_prompt: |
 
 **Generated Content Template**:
 ```
-# LinkedIn Post — Ready to Publish
+# LinkedIn Post — Draft for Manual Posting
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 [Content — optimized for LinkedIn engagement]
@@ -136,8 +135,8 @@ injection_prompt: |
 🏷️ **Hashtags:**
 #[Industry] #[Product] #[B2B] #[Sourcing] #[CompanyName]
 
-⏰ **Best time to post:** 09:30 AM local time
-✅ **Ready to paste and publish**
+⏰ **Suggested time:** 09:30 AM local time
+✅ **Draft ready — copy and post yourself**
 ```
 
 ### Task 3: European Outreach (10:00 - Workdays)
@@ -193,12 +192,12 @@ ACTION ITEMS FOR TODAY:
 3. [ ] [Other task]
 ```
 
-### Task 5: Social Media Posting (14:00 - Workdays)
+### Task 5: Social Media Content (14:00 - Workdays)
 
-**Purpose**: Generate and schedule social content
+**Purpose**: Generate social copy for the user to post manually (local delivery only)
 
-**Platform Rotation**:
-| Day | Platform | Content Type |
+**Channel Rotation**:
+| Day | Channel | Content Type |
 |-----|----------|-------------|
 | Mon | Facebook | Industry article/insight |
 | Mon | Instagram | Product showcase |
@@ -213,22 +212,22 @@ ACTION ITEMS FOR TODAY:
 
 **Generated Content Template**:
 ```
-# Social Media Post — Ready to Publish
+# Social Media Post — Draft for Manual Posting
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Platform: [Facebook/Instagram/TikTok/YouTube]
-Scheduled time: [14:00 local time]
+Channel: [Facebook/Instagram/TikTok/YouTube]
+Suggested time: [14:00 local time]
 
 📝 **Caption/Description:**
 [Full post text]
 
 🏷️ **Hashtags:**
-[Platform-specific hashtags]
+[Channel-specific hashtags]
 
 🖼️ **Media:**
 [Description of image/video to use]
 
-✅ **Ready to schedule or publish**
+✅ **Draft ready — copy and post yourself**
 ```
 
 ### Task 6: US/North America Outreach (16:00 - Workdays)
@@ -386,7 +385,7 @@ trade cron create \
   --name "LinkedIn Post" \
   --schedule "30 9 * * 1-5" \
   --deliver local \
-  --prompt "Generate LinkedIn post ready to publish. Include: engaging text post with hook, value proposition, and CTA. Add 5 relevant hashtags. User is in [INDUSTRY] exporting [PRODUCT]. Content should be professional but authentic."
+  --prompt "Generate LinkedIn post draft for manual posting (local only). Include: engaging text post with hook, value proposition, and CTA. Add 5 relevant hashtags. User is in [INDUSTRY] exporting [PRODUCT]. Content should be professional but authentic. Do not post or schedule on any platform."
 
 # European Outreach — 10:00 Monday-Friday
 trade cron create \
@@ -457,9 +456,9 @@ trade cron create \
 ### What Gets Logged
 
 After each task execution:
-- Emails sent → logged to CRM
+- Outreach drafts generated → logged to CRM as drafts (user sends manually)
 - Follow-ups completed → logged to CRM
-- Social posts published → logged to analytics
+- Social drafts generated → kept local for user to post manually
 - Inquiries received → added to pipeline
 
 ## Phase 6: Task Customization
@@ -485,11 +484,12 @@ After each task execution:
 
 1. **内容真实性**：KPI 数据、询盘数量、业绩统计必须来自数据库查询或用户提供，不编造任何指标值。无数据时标注 "N/A — 数据待补充"
 2. **Relevance**: Every piece of content must be specific to the user's industry and products
-2. **Timeliness**: Posts go out during optimal engagement windows for target audiences
-3. **Personalization**: Outbound messages reference specific prospect details
-4. **Completeness**: Generated content is ready to use — no editing needed
+2. **Timeliness**: Suggest optimal engagement windows; user posts manually
+3. **Personalization**: Outbound drafts reference specific prospect details
+4. **Completeness**: Generated content is ready to copy — no editing needed
 5. **Consistency**: Same quality and tone across all automated outputs
 6. **Actionability**: Every brief and summary has clear next steps
+7. **Local delivery only**: All cron outputs stay in trade (deliver=local); never auto-post or auto-send
 
 ## Common Pitfalls
 
