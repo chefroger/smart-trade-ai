@@ -267,8 +267,8 @@ def test_list_customer_emails_company_scoped(tmp_path, monkeypatch):
     """两公司客户同邮箱：一封邮件两条 match；list_customer_emails 按公司+客户过滤。"""
     _init_mailbox_db(tmp_path, monkeypatch)
     from trade import customer
-    from trade.company import crud as company
     from trade import mailbox_store as ms
+    from trade.company import crud as company
     from trade.database import get_connection
 
     co_a = company.create(name="Co A Scope", slug="co-a-scope")

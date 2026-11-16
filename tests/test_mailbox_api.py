@@ -147,8 +147,7 @@ def test_customer_emails_company_scoped(mock_api_tc, mock_store_tc, api_client):
     client, token, cid = api_client
     mock_api_tc.return_value = None
     mock_store_tc.return_value = None
-    from trade import company, customer
-    from trade import mailbox_store
+    from trade import company, customer, mailbox_store
 
     other = company.create(name="Other Co", slug="other-mailbox-co")
     c1 = customer.create("客户甲", company_id=cid, email="scoped-a@example.com")
