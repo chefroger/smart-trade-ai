@@ -96,11 +96,9 @@ def test_mailbox_test_ok(mock_tc, api_client):
 
 
 @patch("trade.mailbox_store.test_connection")
-@patch("trade.api.mailboxes.test_connection")
-def test_mailbox_create_duplicate_409(mock_api_tc, mock_store_tc, api_client):
+def test_mailbox_create_duplicate_409(mock_store_tc, api_client):
     """重复 email_address → 409 约定文案。"""
     client, token, _cid = api_client
-    mock_api_tc.return_value = None
     mock_store_tc.return_value = None
     body = {
         "preset": "qq",
@@ -116,11 +114,37 @@ def test_mailbox_create_duplicate_409(mock_api_tc, mock_store_tc, api_client):
 
 
 @patch("trade.mailbox_store.test_connection")
-@patch("trade.api.mailboxes.test_connection")
-def test_mailbox_list_no_secret_field(mock_api_tc, mock_store_tc, api_client):
+def test_mailbox_create_case_duplicate_409(mock_store_tc, api_client):
+    """大小写不同的同一地址 → 409。"""
+    client, token, _cid = api_client
+    mock_store_tc.return_value = None
+    r1 = client.post(
+        "/api/trade/mailboxes",
+        headers=_headers(token),
+        json={
+            "preset": "126",
+            "email_address": "CaseDup@Example.com",
+            "secret": "sixteen-char-code",
+        },
+    )
+    assert r1.status_code == 201
+    assert r1.json()["email_address"] == "casedup@example.com"
+    r2 = client.post(
+        "/api/trade/mailboxes",
+        headers=_headers(token),
+        json={
+            "preset": "126",
+            "email_address": "casedup@example.com",
+            "secret": "sixteen-char-code",
+        },
+    )
+    assert r2.status_code == 409
+
+
+@patch("trade.mailbox_store.test_connection")
+def test_mailbox_list_no_secret_field(mock_store_tc, api_client):
     """列表仅 has_secret，无 secret 字段。"""
     client, token, _cid = api_client
-    mock_api_tc.return_value = None
     mock_store_tc.return_value = None
     client.post(
         "/api/trade/mailboxes",
@@ -141,11 +165,9 @@ def test_mailbox_list_no_secret_field(mock_api_tc, mock_store_tc, api_client):
 
 
 @patch("trade.mailbox_store.test_connection")
-@patch("trade.api.mailboxes.test_connection")
-def test_customer_emails_company_scoped(mock_api_tc, mock_store_tc, api_client):
+def test_customer_emails_company_scoped(mock_store_tc, api_client):
     """客户邮件须属当前公司，否则 404。"""
     client, token, cid = api_client
-    mock_api_tc.return_value = None
     mock_store_tc.return_value = None
     from trade import company, customer, mailbox_store
 
@@ -177,10 +199,7 @@ def test_customer_emails_company_scoped(mock_api_tc, mock_store_tc, api_client):
             "received_at": "2026-01-01T12:00:00+08:00",
         },
     )
-    conn.execute(
-        "INSERT OR IGNORE INTO email_matches (email_id, company_id, customer_id) VALUES (?,?,?)",
-        (eid, cid, c1["id"]),
-    )
+    mailbox_store.attach_matches(conn, eid, [(cid, c1["id"])])
     conn.commit()
 
     ok = client.get(

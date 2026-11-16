@@ -46,12 +46,8 @@ def api_mailbox_test(payload: MailboxTestRequest):
 
 @router.post("/mailboxes", status_code=201)
 def api_mailbox_create(payload: MailboxCreateRequest):
-    """测通后创建绑定；重复地址返回 409。"""
+    """创建绑定（store 内测通一次，不在此重复测通）；重复地址返回 409。"""
     host, port, username = _resolve_imap(payload)
-    try:
-        test_connection(host, port, username, payload.secret)
-    except MailboxError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         return mailbox_store.create_mailbox(
             payload.preset,
@@ -62,6 +58,8 @@ def api_mailbox_create(payload: MailboxCreateRequest):
             port=port,
             username=username,
         )
+    except MailboxError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         msg = str(exc)
         # 唯一约束：与前端约定 409 文案

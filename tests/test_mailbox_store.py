@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
@@ -86,12 +88,17 @@ def _seed_two_companies_with_customers(tmp_path, monkeypatch):
 
 
 def test_match_from_or_to_case_insensitive(tmp_path, monkeypatch):
-    """From 命中公司 A，To 命中公司 B → 一封邮件两行 email_matches。"""
+    """多公司命中时只挂 pairs[0]；未命中客户两列 NULL；无 email_matches 表。"""
     _seed_two_companies_with_customers(tmp_path, monkeypatch)
     from trade import mailbox_store as ms
     from trade.database import get_connection
 
     conn = get_connection()
+    tables = {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert "email_matches" not in tables
+
     conn.execute(
         "INSERT INTO mailboxes (provider, preset, email_address, host, port, username) "
         "VALUES ('imap', '126', 'bind@example.com', 'imap.126.com', 993, 'bind@example.com')"
@@ -110,18 +117,37 @@ def test_match_from_or_to_case_insensitive(tmp_path, monkeypatch):
         "received_at": "2026-01-01T10:00:00",
     }
     pairs = ms.find_customer_matches(msg["from_addr"], msg["to_addrs"])
-    assert len(pairs) == 2
+    assert len(pairs) == 2  # 两公司都命中，但入库只取第一对
 
     email_id = ms.insert_email_ignore(conn, mailbox_id, msg)
     assert email_id is not None
     inserted = ms.attach_matches(conn, email_id, pairs)
     conn.commit()
 
-    assert inserted == 2
-    email_count = conn.execute("SELECT COUNT(*) AS c FROM emails").fetchone()["c"]
-    match_count = conn.execute("SELECT COUNT(*) AS c FROM email_matches").fetchone()["c"]
-    assert email_count == 1
-    assert match_count == 2
+    assert inserted == 1
+    row = conn.execute(
+        "SELECT company_id, customer_id FROM emails WHERE id=?", (email_id,)
+    ).fetchone()
+    assert row["company_id"] == pairs[0][0]
+    assert row["customer_id"] == pairs[0][1]
+    # 其余命中丢弃（显式：不静默多挂）
+    assert (row["company_id"], row["customer_id"]) != pairs[1]
+
+    # 未命中客户：两列 NULL，邮件仍入库
+    msg2 = {
+        **msg,
+        "message_id": "<no-match@example.com>",
+        "from_addr": "nobody@example.com",
+        "to_addrs": [],
+    }
+    eid2 = ms.insert_email_ignore(conn, mailbox_id, msg2)
+    ms.attach_matches(conn, eid2, ms.find_customer_matches(msg2["from_addr"], []))
+    conn.commit()
+    row2 = conn.execute(
+        "SELECT company_id, customer_id FROM emails WHERE id=?", (eid2,)
+    ).fetchone()
+    assert row2["company_id"] is None
+    assert row2["customer_id"] is None
 
 
 def test_dedupe_d1_skips_second_insert(tmp_path, monkeypatch):
@@ -163,7 +189,7 @@ def test_dedupe_d1_skips_second_insert(tmp_path, monkeypatch):
 
 
 def test_unbind_deletes_secret_emails_matches(tmp_path, monkeypatch):
-    """delete_mailbox 删除凭证、邮件与匹配。"""
+    """delete_mailbox 删除凭证与邮件。"""
     _seed_two_companies_with_customers(tmp_path, monkeypatch)
     from trade import mailbox_store as ms
     from trade.database import get_connection
@@ -199,7 +225,6 @@ def test_unbind_deletes_secret_emails_matches(tmp_path, monkeypatch):
     assert ms.get_secret(mailbox_id) is None
     assert conn.execute("SELECT COUNT(*) AS c FROM mailboxes WHERE id=?", (mailbox_id,)).fetchone()["c"] == 0
     assert conn.execute("SELECT COUNT(*) AS c FROM emails").fetchone()["c"] == 0
-    assert conn.execute("SELECT COUNT(*) AS c FROM email_matches").fetchone()["c"] == 0
 
 
 def test_pull_timeout_advances_cursor(tmp_path, monkeypatch):
@@ -236,7 +261,12 @@ def test_pull_timeout_advances_cursor(tmp_path, monkeypatch):
         )
 
     def fake_fetch(_row, _secret):
-        return batch, {"last_uidvalidity": 99, "last_uid": 67}
+        return batch, {
+            "last_uidvalidity": 99,
+            "last_uid": 67,
+            "truncated": False,
+            "is_first_pull": False,
+        }
 
     monkeypatch.setattr(ms, "fetch_new", fake_fetch)
 
@@ -309,8 +339,166 @@ def test_list_customer_emails_company_scoped(tmp_path, monkeypatch):
     inserted = ms.attach_matches(conn, email_id, pairs)
     conn.commit()
 
-    assert inserted == 2
-    assert len(ms.list_customer_emails(co_a["id"], cust_a["id"])) == 1
-    assert len(ms.list_customer_emails(co_b["id"], cust_b["id"])) == 1
+    assert inserted == 1
+    # 只挂 pairs[0]；另一公司客户看不到这封
+    assert len(ms.list_customer_emails(pairs[0][0], pairs[0][1])) == 1
+    assert ms.list_customer_emails(pairs[1][0], pairs[1][1]) == []
     assert ms.list_customer_emails(co_a["id"], cust_b["id"]) == []
     assert ms.list_customer_emails(co_b["id"], cust_a["id"]) == []
+
+
+def test_pull_first_timeout_does_not_advance_cursor(tmp_path, monkeypatch):
+    """首拉降序超时：不把 last_uid 推到最大 UID。"""
+    _init_mailbox_db(tmp_path, monkeypatch)
+    from trade import mailbox_store as ms
+    from trade.database import get_connection
+
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO mailboxes (provider, preset, email_address, host, port, username) "
+        "VALUES ('imap', '126', 'first-to@example.com', 'imap.126.com', 993, 'first-to@example.com')"
+    )
+    conn.commit()
+    mailbox_id = conn.execute("SELECT id FROM mailboxes LIMIT 1").fetchone()["id"]
+    ms.set_secret(mailbox_id, "fake-secret-16chars")
+
+    # 降序：最新 UID 在前
+    batch = [
+        {
+            "message_id": f"ft-{uid}",
+            "uid": uid,
+            "from_addr": "a@example.com",
+            "to_addrs": [],
+            "subject": "t",
+            "snippet": "t",
+            "body_text": "t",
+            "received_at": "2026-01-04T10:00:00",
+        }
+        for uid in (90, 80, 70, 60, 50)
+    ]
+
+    def fake_fetch(_row, _secret):
+        return batch, {
+            "last_uidvalidity": 1,
+            "last_uid": 90,
+            "truncated": False,
+            "is_first_pull": True,
+        }
+
+    monkeypatch.setattr(ms, "fetch_new", fake_fetch)
+    tick = {"n": 0}
+    t0 = 1_000_000.0
+
+    def fake_monotonic():
+        tick["n"] += 1
+        if tick["n"] >= 5:
+            return t0 + ms.PULL_TIMEOUT_SEC + 1
+        return t0 + tick["n"] * 0.01
+
+    monkeypatch.setattr(ms.time, "monotonic", fake_monotonic)
+    result = ms.pull_one(mailbox_id)
+    assert result["pulled"] == 3
+    row = conn.execute(
+        "SELECT last_uid, last_uidvalidity FROM mailboxes WHERE id=?", (mailbox_id,)
+    ).fetchone()
+    assert row["last_uid"] is None
+    assert conn.execute("SELECT COUNT(*) AS c FROM emails").fetchone()["c"] == 3
+
+
+def test_pull_first_truncated_holds_cursor(tmp_path, monkeypatch):
+    """首拉截断：入库 500（此处用小上限），last_uid 不推进；二次仍走首拉且不重复。"""
+    _init_mailbox_db(tmp_path, monkeypatch)
+    from trade import mailbox as mb
+    from trade import mailbox_store as ms
+    from trade.database import get_connection
+
+    monkeypatch.setattr(mb, "FIRST_PULL_LIMIT", 3)
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO mailboxes (provider, preset, email_address, host, port, username) "
+        "VALUES ('imap', '126', 'trunc@example.com', 'imap.126.com', 993, 'trunc@example.com')"
+    )
+    conn.commit()
+    mailbox_id = conn.execute("SELECT id FROM mailboxes LIMIT 1").fetchone()["id"]
+    ms.set_secret(mailbox_id, "fake-secret-16chars")
+
+    batch = [
+        {
+            "message_id": f"tr-{uid}",
+            "uid": uid,
+            "from_addr": "a@example.com",
+            "to_addrs": [],
+            "subject": "t",
+            "snippet": "t",
+            "body_text": "t",
+            "received_at": "2026-01-04T10:00:00",
+        }
+        for uid in (30, 20, 10)
+    ]
+    calls = {"n": 0}
+
+    def fake_fetch(row, _secret):
+        calls["n"] += 1
+        # 第二次仍应是首拉（last_uid 仍空）
+        assert row.get("last_uid") is None
+        return batch, {
+            "last_uidvalidity": 5,
+            "last_uid": 30,
+            "truncated": True,
+            "is_first_pull": True,
+        }
+
+    monkeypatch.setattr(ms, "fetch_new", fake_fetch)
+    r1 = ms.pull_one(mailbox_id)
+    assert r1["pulled"] == 3
+    assert r1.get("truncated") is True
+    row = conn.execute("SELECT last_uid FROM mailboxes WHERE id=?", (mailbox_id,)).fetchone()
+    assert row["last_uid"] is None
+    assert conn.execute("SELECT COUNT(*) AS c FROM emails").fetchone()["c"] == 3
+
+    r2 = ms.pull_one(mailbox_id)
+    assert r2["pulled"] == 0  # message_id 去重，不计入
+    assert conn.execute("SELECT COUNT(*) AS c FROM emails").fetchone()["c"] == 3
+    assert calls["n"] == 2
+
+
+def test_create_mailbox_case_insensitive_duplicate(tmp_path, monkeypatch):
+    """大小写不同的同一地址不可重复绑定。"""
+    _init_mailbox_db(tmp_path, monkeypatch)
+    from trade import mailbox_store as ms
+
+    monkeypatch.setattr(ms, "test_connection", lambda *a, **k: None)
+    ms.create_mailbox("126", "Case@Example.COM", "sixteen-char-code")
+    with pytest.raises(ValueError, match="已绑定"):
+        ms.create_mailbox("126", "case@example.com", "sixteen-char-code")
+
+
+def test_pull_all_isolates_single_mailbox_failure(tmp_path, monkeypatch):
+    """一个邮箱失败不影响 pull-all 继续处理下一个。"""
+    _init_mailbox_db(tmp_path, monkeypatch)
+    from trade import mailbox_store as ms
+    from trade.database import get_connection
+
+    conn = get_connection()
+    for addr in ("a@example.com", "b@example.com"):
+        conn.execute(
+            "INSERT INTO mailboxes (provider, preset, email_address, host, port, username) "
+            "VALUES ('imap', '126', ?, 'imap.126.com', 993, ?)",
+            (addr, addr),
+        )
+    conn.commit()
+    ids = [r["id"] for r in conn.execute("SELECT id FROM mailboxes ORDER BY id").fetchall()]
+    for mid in ids:
+        ms.set_secret(mid, "fake-secret-16chars")
+
+    def fake_pull(mid):
+        if mid == ids[0]:
+            raise RuntimeError("boom-isolated")
+        return {"pulled": 1, "matched": 0}
+
+    monkeypatch.setattr(ms, "pull_one", fake_pull)
+    out = ms.pull_all()
+    assert len(out["results"]) == 2
+    assert out["results"][0]["mailbox_id"] == ids[0]
+    assert "boom" in (out["results"][0].get("error") or "")
+    assert out["results"][1]["pulled"] == 1
