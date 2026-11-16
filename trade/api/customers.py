@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from trade import customer as customer_module
+from trade import mailbox_store
 from trade.api.deps import require_company
 from trade.api.models import CustomerCreate, CustomerUpdate
 
@@ -242,6 +243,20 @@ def get_customer(
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
     return cust
+
+
+@router.get("/customers/{customer_id}/emails")
+def list_customer_emails_api(
+    customer_id: int,
+    cid: int = Depends(require_company),
+    limit: int = 50,
+):
+    """客户关联邮件列表（须属于当前公司）。"""
+    cust = customer_module.get(customer_id, company_id=cid)
+    if not cust:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    lim = min(max(limit, 1), 50)
+    return mailbox_store.list_customer_emails(cid, customer_id, lim)
 
 
 @router.get("/customers/{customer_id}/overview")
