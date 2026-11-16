@@ -171,6 +171,160 @@ class TestCustomerCrmColumns:
         _add_customer_crm_columns(conn)  # 幂等
         conn.close()
 
+    def test_init_db_upgrades_pre_crm_legacy_db(self, tmp_path, monkeypatch):
+        """审计 P1：旧库无 stage 列时，完整 init_db() 不得炸（索引须在补列后）。
+
+        复现路径：先用当前 schema 建库并塞数据，再把 customers 重建成
+        18b0ae6 形态（无 CRM 三列），最后跑 init_db，断言行数/旧值/新列/备份。
+        """
+        import trade.database as dbmod
+
+        trade_home = tmp_path / ".trade"
+        (trade_home / "data").mkdir(parents=True)
+        db_path = trade_home / "data" / "trade.db"
+        monkeypatch.setattr(dbmod, "_get_db_path", lambda: db_path)
+
+        dbmod.init_db()
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                "INSERT INTO companies (name, slug) VALUES ('Legacy Co', 'legacy-co')"
+            )
+            company_id = conn.execute("SELECT id FROM companies").fetchone()[0]
+            conn.execute(
+                "INSERT INTO customers (company_id, name, contact, note, extra1, extra2) "
+                "VALUES (?, '旧客户甲', 'Ada', '备注甲', "
+                "'{\"country\":\"IT\",\"tier\":\"A\"}', '{\"email\":\"a@x.com\"}')",
+                (company_id,),
+            )
+            conn.execute(
+                "INSERT INTO customers (company_id, name, contact, note) "
+                "VALUES (?, '旧客户乙', 'Bob', '备注乙')",
+                (company_id,),
+            )
+            cust_a = conn.execute(
+                "SELECT id FROM customers WHERE name = '旧客户甲'"
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO conversations (company_id, customer_id, query, response) "
+                "VALUES (?, ?, '问甲', '答甲')",
+                (company_id, cust_a),
+            )
+            conn.execute(
+                "INSERT INTO conversations (company_id, customer_id, query, response) "
+                "VALUES (?, ?, '问乙', '答乙')",
+                (company_id, cust_a),
+            )
+            conn.execute(
+                "INSERT INTO orders (company_id, customer_id, product_name, "
+                "quantity, unit_price, currency, total_amount, status) "
+                "VALUES (?, ?, '旧订单', 1, 100, 'USD', 100, '已下单')",
+                (company_id, cust_a),
+            )
+            conn.commit()
+
+            # 剥掉 CRM 列 + 索引，模拟升级前的旧库
+            conn.executescript(
+                """
+                DROP INDEX IF EXISTS idx_customers_company_stage;
+                DROP INDEX IF EXISTS idx_customers_company_follow_up;
+                ALTER TABLE customers RENAME TO customers_pre_crm;
+                CREATE TABLE customers (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id  INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+                    name        TEXT    NOT NULL,
+                    contact     TEXT    DEFAULT '',
+                    note        TEXT    DEFAULT '',
+                    created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
+                    updated_at  TEXT    DEFAULT (datetime('now', 'localtime')),
+                    extra1      TEXT    DEFAULT '{}',
+                    extra2      TEXT    DEFAULT '{}',
+                    extra3      TEXT    DEFAULT '{}'
+                );
+                INSERT INTO customers
+                    (id, company_id, name, contact, note, created_at, updated_at,
+                     extra1, extra2, extra3)
+                SELECT id, company_id, name, contact, note, created_at, updated_at,
+                       extra1, extra2, extra3
+                FROM customers_pre_crm;
+                DROP TABLE customers_pre_crm;
+                CREATE INDEX IF NOT EXISTS idx_customers_company ON customers(company_id);
+                """
+            )
+            conn.commit()
+
+            cols_before = {
+                r[1] for r in conn.execute("PRAGMA table_info(customers)")
+            }
+            assert "stage" not in cols_before
+            before_customers = conn.execute(
+                "SELECT id, name, contact, note, extra1, extra2 FROM customers "
+                "ORDER BY id"
+            ).fetchall()
+            before_conv = conn.execute(
+                "SELECT COUNT(*) FROM conversations"
+            ).fetchone()[0]
+            before_orders = conn.execute(
+                "SELECT COUNT(*) FROM orders"
+            ).fetchone()[0]
+            assert len(before_customers) == 2
+            assert before_conv == 2
+            assert before_orders == 1
+        finally:
+            conn.close()
+
+        # SCHEMA_SQL 不得再含 CRM 复合索引（否则旧库 executescript 即崩）
+        assert "idx_customers_company_stage" not in dbmod.SCHEMA_SQL
+        assert "idx_customers_company_follow_up" not in dbmod.SCHEMA_SQL
+
+        dbmod.init_db()  # 完整升级路径
+
+        backup_dir = trade_home / "backups"
+        backups = list(backup_dir.glob("trade-*.db")) if backup_dir.is_dir() else []
+        assert backups, "缺 CRM 列时应先备份再迁移"
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)")}
+            assert {"stage", "next_follow_up_date", "is_starred"} <= cols
+            after = conn.execute(
+                "SELECT id, name, contact, note, extra1, extra2, "
+                "stage, next_follow_up_date, is_starred FROM customers ORDER BY id"
+            ).fetchall()
+            assert len(after) == 2
+            for old, new in zip(before_customers, after, strict=True):
+                assert new["id"] == old["id"]
+                assert new["name"] == old["name"]
+                assert new["contact"] == old["contact"]
+                assert new["note"] == old["note"]
+                assert new["extra1"] == old["extra1"]
+                assert new["extra2"] == old["extra2"]
+                assert new["stage"] == "询盘"
+                assert new["next_follow_up_date"] == ""
+                assert new["is_starred"] == 0
+            assert conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == 2
+            assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+            idx = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+            assert "idx_customers_company_stage" in idx
+            assert "idx_customers_company_follow_up" in idx
+        finally:
+            conn.close()
+
+        dbmod.init_db()  # 幂等：再次启动不得再炸、不得丢数据
+        conn = sqlite3.connect(str(db_path))
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0] == 2
+        finally:
+            conn.close()
+
 
 class TestListOverviewAndImportant:
     """list 聚合字段 + overview + set_important。"""

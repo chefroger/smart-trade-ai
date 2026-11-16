@@ -312,6 +312,14 @@ async function openCustomerWall(cid) {
     const orders = ov.orders || [];
     const emails = ov.emails || [];
     const keyChats = ov.key_talks || [];
+    // 无 is_important 时后端用最近 5 条兜底——标题/统计不能仍写「重要对话」
+    const talksAreImportant = keyChats.some(function (c) { return c.is_important; });
+    const talksTitle = talksAreImportant
+        ? (currentLang === 'en' ? 'Key talks' : '重要对话')
+        : (currentLang === 'en' ? 'Recent talks' : '最近对话');
+    const talksStatLabel = talksAreImportant
+        ? (currentLang === 'en' ? 'Mail + key talks' : '邮件 + 重要对话')
+        : (currentLang === 'en' ? 'Mail + talks' : '邮件 + 对话');
     const timeline = ov.timeline || [];
     const stats = ov.stats || {};
     const orderTotal = stats.order_total_amount;
@@ -386,7 +394,7 @@ async function openCustomerWall(cid) {
     }
     bodyHtml += '</article></div></div>';
 
-    bodyHtml += secHead(currentLang === 'en' ? 'Key talks' : '重要对话', 'KEY TALKS // ' + keyChats.length) + '<div class="wgrid">';
+    bodyHtml += secHead(talksTitle, 'TALKS // ' + keyChats.length) + '<div class="wgrid">';
     if (!keyChats.length) {
         bodyHtml += '<div class="wall-empty"' + delay() + '>' + (currentLang==='en'?'No conversations linked to this customer':'暂无关联到该客户的对话') + '</div>';
     } else {
@@ -429,7 +437,7 @@ async function openCustomerWall(cid) {
             }).join(' · '))
             : (hasAmount ? '0' : '—')) +
         '</b><span>' + (currentLang==='en'?'Order total':'订单总额') + '</span></div>' +
-        '<div class="wstat"' + delay() + '><b>' + (stats.mail_and_talk_count || (emails.length + keyChats.length)) + '</b><span>' + (currentLang==='en'?'Mail + talks':'邮件 + 重要对话') + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b>' + (stats.mail_and_talk_count || (emails.length + keyChats.length)) + '</b><span>' + talksStatLabel + '</span></div>' +
         '</div>' +
         '<div class="wall-actions">' +
         '<button type="button" class="primary" id="wall-edit">' + (currentLang==='en'?'Edit profile':'编辑档案') + '</button>' +
