@@ -223,8 +223,8 @@ CREATE INDEX IF NOT EXISTS idx_trial_events_company ON trial_events(company_id, 
 
 CREATE INDEX IF NOT EXISTS idx_libraries_company   ON libraries(company_id);
 CREATE INDEX IF NOT EXISTS idx_customers_company    ON customers(company_id);
-CREATE INDEX IF NOT EXISTS idx_customers_company_stage ON customers(company_id, stage);
-CREATE INDEX IF NOT EXISTS idx_customers_company_follow_up ON customers(company_id, next_follow_up_date);
+-- CRM 复合索引不放这里：旧库 CREATE TABLE IF NOT EXISTS 不会加 stage 等列，
+-- executescript 建索引会先炸。索引改在 _add_customer_crm_columns 补列后再建。
 CREATE INDEX IF NOT EXISTS idx_orders_company      ON orders(company_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer     ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order   ON order_items(order_id);
