@@ -12,15 +12,20 @@ from email.utils import parseaddr
 from pathlib import Path
 from typing import Any
 
-from trade.database import _get_db_path, get_connection
+from trade import database as _db
+from trade.database import get_connection
 from trade.mailbox import PRESETS, MailboxError, fetch_new, test_connection
 
 PULL_TIMEOUT_SEC = 120
 
 
 def secrets_path() -> Path:
-    """凭证文件与 trade.db 同目录。"""
-    return _get_db_path().parent / "mailbox_secrets.json"
+    """凭证文件与 trade.db 同目录。
+
+    经 ``_db._get_db_path`` 查模块属性，避免 ``from … import _get_db_path``
+    把测试 monkeypatch 的 lambda 永久绑进本模块（chat_smoke 泄漏事故）。
+    """
+    return _db._get_db_path().parent / "mailbox_secrets.json"
 
 
 def _load_secrets() -> dict[str, str]:

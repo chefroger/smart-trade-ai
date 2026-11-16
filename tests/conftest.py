@@ -39,10 +39,13 @@ def _isolate_process_globals():
 
     deps = _sys.modules.get("trade.api.deps")
     chat = _sys.modules.get("trade.api.chat")
+    db = _sys.modules.get("trade.database")
     # 未加载的模块不碰：保持「fixture 不引入额外 import」这条原则
     _deps_state = (
         (deps._SESSION_TOKEN, dict(deps._ACTIVE_COMPANY)) if deps is not None else None
     )
+    # 防止用例直接赋值 _get_db_path 后未恢复，污染后续文件（见 test_chat_smoke 事故）
+    _db_path_fn = db._get_db_path if db is not None else None
 
     yield
 
@@ -54,3 +57,5 @@ def _isolate_process_globals():
     if chat is not None:
         chat._chat_timestamps.clear()
         chat._last_skill_per_company.clear()
+    if db is not None and _db_path_fn is not None:
+        db._get_db_path = _db_path_fn
