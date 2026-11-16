@@ -49,6 +49,7 @@
 - `UNIQUE(mailbox_id, message_id)`
 - 字段：`uid`, `from_addr`, `to_addrs`, `subject`, `snippet`, `body_text`, `received_at`, …
 - **不含** `company_id` / `customer_id`
+- **去重（D1）**：同一 `(mailbox_id, message_id)` 再次出现时 **只跳过、不更新**（`INSERT OR IGNORE` 或等价）；不改正文/主题，不重算 matches。正常二次拉取只取 `UID > last_uid`，本就不会再下旧信；UIDVALIDITY 重置全量重对时靠本条兜底。
 
 ### `email_matches`（多对多）
 
