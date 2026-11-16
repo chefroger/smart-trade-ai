@@ -1,4 +1,4 @@
-"""邮箱 IMAP 绑定：init_db 应创建 mailboxes / emails / email_matches 三表。"""
+"""邮箱 IMAP 绑定：init_db 应创建 mailboxes / emails（两列挂客户），无 email_matches。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def test_init_db_creates_mailbox_tables(tmp_path, monkeypatch):
-    """全新库 init_db 后应有三表，且 emails 不含 company_id/customer_id。"""
+    """全新库 init_db 后应有 mailboxes/emails，含两列，且无 email_matches。"""
     import trade.database as dbmod
 
     trade_home = tmp_path / ".trade"
@@ -30,17 +30,25 @@ def test_init_db_creates_mailbox_tables(tmp_path, monkeypatch):
         }
         assert "mailboxes" in tables
         assert "emails" in tables
-        assert "email_matches" in tables
+        assert "email_matches" not in tables
 
         email_cols = {r[1] for r in conn.execute("PRAGMA table_info(emails)")}
-        assert "company_id" not in email_cols
-        assert "customer_id" not in email_cols
+        assert "company_id" in email_cols
+        assert "customer_id" in email_cols
+        # UNIQUE(mailbox_id, message_id) 已在表定义中
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )
+        }
+        assert "idx_emails_company_customer_time" in indexes
     finally:
         conn.close()
 
 
 def test_init_db_upgrades_legacy_without_mailbox_tables(tmp_path, monkeypatch):
-    """旧库缺邮箱三表时升级：保留客户、补表、只备一次份。"""
+    """旧库缺邮箱表时升级：保留客户、补表、只备一次份。"""
     import trade.database as dbmod
 
     trade_home = tmp_path / ".trade"
@@ -68,7 +76,7 @@ def test_init_db_upgrades_legacy_without_mailbox_tables(tmp_path, monkeypatch):
         ).fetchone()["name"]
         assert before_name == "保留下来的客户"
 
-        # 模拟升级前版本：已有业务库但没有邮箱三表
+        # 模拟升级前版本：已有业务库但没有邮箱表
         conn.executescript(
             """
             DROP TABLE IF EXISTS email_matches;
@@ -110,6 +118,7 @@ def test_init_db_upgrades_legacy_without_mailbox_tables(tmp_path, monkeypatch):
             )
         }
         assert "mailboxes" in tables
+        assert "email_matches" not in tables
         assert conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0] == 0
         row = conn.execute(
             "SELECT name FROM customers WHERE name='保留下来的客户'"
@@ -125,3 +134,37 @@ def test_init_db_upgrades_legacy_without_mailbox_tables(tmp_path, monkeypatch):
         list(backup_dir.glob("trade-*.db")) if backup_dir.is_dir() else []
     )
     assert len(backups_again) == backup_n, "schema 已完整时不得再新增备份"
+
+
+def test_empty_email_matches_dropped_on_init(tmp_path, monkeypatch):
+    """开发机残留空 email_matches 时 init_db 应 DROP。"""
+    import trade.database as dbmod
+
+    trade_home = tmp_path / ".trade"
+    (trade_home / "data").mkdir(parents=True)
+    db_path = trade_home / "data" / "trade.db"
+    monkeypatch.setattr(dbmod, "_get_db_path", lambda: db_path)
+    dbmod.init_db()
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS email_matches ("
+            "email_id INTEGER, company_id INTEGER, customer_id INTEGER)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    dbmod.init_db()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "email_matches" not in tables
+    finally:
+        conn.close()

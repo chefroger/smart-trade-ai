@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS doc_extractions (
     PRIMARY KEY (tenant_id, sha256, model, extractor_version)
 );
 
--- 邮箱 IMAP 绑定：账号 / 邮件正文 / 客户匹配（junction，不把 company_id 放进 emails）
+-- 邮箱 IMAP 绑定：账号 / 邮件正文（两列挂客户；未匹配时 company_id/customer_id 可空）
 CREATE TABLE IF NOT EXISTS mailboxes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL DEFAULT 'imap',
@@ -282,20 +282,15 @@ CREATE TABLE IF NOT EXISTS emails (
     snippet TEXT,
     body_text TEXT,
     received_at TEXT,
+    company_id INTEGER,
+    customer_id INTEGER,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     UNIQUE(mailbox_id, message_id)
 );
-
-CREATE TABLE IF NOT EXISTS email_matches (
-    email_id INTEGER NOT NULL,
-    company_id INTEGER NOT NULL,
-    customer_id INTEGER NOT NULL,
-    UNIQUE(email_id, company_id, customer_id)
-);
-CREATE INDEX IF NOT EXISTS idx_email_matches_company_customer
-    ON email_matches(company_id, customer_id, email_id);
 CREATE INDEX IF NOT EXISTS idx_emails_mailbox ON emails(mailbox_id);
 CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at);
+CREATE INDEX IF NOT EXISTS idx_emails_company_customer_time
+    ON emails(company_id, customer_id, received_at);
 
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -397,6 +392,42 @@ def _add_customer_crm_columns(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_customers_company_follow_up "
         "ON customers(company_id, next_follow_up_date)"
     )
+    conn.commit()
+
+
+def _ensure_emails_customer_columns(conn: sqlite3.Connection) -> None:
+    """幂等：emails 补 company_id / customer_id 与索引；空 email_matches 表可 DROP。
+
+    分支开发机可能已有无两列的 emails / 有 email_matches。用户库若尚未发布
+    本功能则不会有这些表。有数据的 email_matches 禁止静默删除。
+    """
+    tables = {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    # 尚无 emails 表时由 SCHEMA_SQL 建（含两列），此处无需处理
+    if "emails" not in tables:
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(emails)")}
+    if "company_id" not in cols:
+        conn.execute("ALTER TABLE emails ADD COLUMN company_id INTEGER")
+    if "customer_id" not in cols:
+        conn.execute("ALTER TABLE emails ADD COLUMN customer_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_emails_company_customer_time "
+        "ON emails(company_id, customer_id, received_at)"
+    )
+    # 仅当旧 junction 表存在且无行时 DROP；有数据则报错让人工确认
+    if "email_matches" in tables:
+        n = conn.execute("SELECT COUNT(*) AS c FROM email_matches").fetchone()[0]
+        if n == 0:
+            conn.execute("DROP TABLE IF EXISTS email_matches")
+        else:
+            raise RuntimeError(
+                "检测到 email_matches 表仍有数据，已改为 emails 两列形态，"
+                "请人工确认后再删该表（禁止静默丢数据）"
+            )
     conn.commit()
 
 
@@ -508,7 +539,7 @@ _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
     "customer_libraries", "conversations", "orders", "order_items",
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
-    "mailboxes", "emails", "email_matches",
+    "mailboxes", "emails",
 })
 
 
@@ -557,6 +588,13 @@ def _needs_schema_work(conn: sqlite3.Connection) -> bool:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)")}
             if not {"stage", "next_follow_up_date", "is_starred"} <= cols:
                 return True
+        # emails 两列形态：缺 company_id/customer_id 或仍有空 email_matches → 需处理
+        if "emails" in existing:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(emails)")}
+            if "company_id" not in cols or "customer_id" not in cols:
+                return True
+        if "email_matches" in existing:
+            return True
     except sqlite3.Error:
         # 读不出来（损坏/权限）→ 保守起见当作需要处理，让它照旧备份并报错
         return True
@@ -725,6 +763,8 @@ def init_db() -> Path:
         _add_context_column(conn)
         # customers CRM 实列（stage / 跟进日 / 标星）
         _add_customer_crm_columns(conn)
+        # emails 两列挂客户 + 清理空的 email_matches
+        _ensure_emails_customer_columns(conn)
         # 执行增量迁移（从 schema_migrations 表驱动）
         new_migrations = _apply_pending_migrations(conn)
         conn.commit()
