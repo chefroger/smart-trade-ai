@@ -26,9 +26,23 @@ BODY_TRUNC_MARK = "…（正文过长，仅显示前 5000 字）"
 SNIPPET_MAX = 200
 FIRST_PULL_DAYS = 90
 FIRST_PULL_LIMIT = 500
+# 建连与单次 socket 读写共用上界，避免 IMAP 默认无限阻塞
+IMAP_SOCKET_TIMEOUT_SEC = 60
 
 _INBOX = "INBOX"
-_ID_ARG = '("name" "Trade")'
+# 任务书：RFC2971 ID 自报 name/version/vendor
+_ID_ARG = '("name" "Trade" "version" "1.0" "vendor" "smart-trade-ai")'
+
+# SINCE 日期必须用英文月份缩写；strftime("%b") 会随 locale 变成中文导致搜索失败
+_IMAP_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+def _imap_since_date(dt: datetime) -> str:
+    """把日期格式化为 IMAP SINCE 用的 ``DD-Mon-YYYY``（英文月名）。"""
+    return f"{dt.day:02d}-{_IMAP_MONTHS[dt.month - 1]}-{dt.year}"
 
 
 class MailboxError(Exception):
@@ -218,8 +232,12 @@ def _send_imap_id(client: imaplib.IMAP4_SSL) -> None:
 
 
 def _imap_connect(host: str, port: int, username: str, secret: str) -> imaplib.IMAP4_SSL:
-    """建立 SSL 连接并登录，附带 ID。"""
-    client = imaplib.IMAP4_SSL(host, int(port))
+    """建立 SSL 连接并登录，附带 ID；建连与 socket 读写共用超时。"""
+    client = imaplib.IMAP4_SSL(host, int(port), timeout=IMAP_SOCKET_TIMEOUT_SEC)
+    # 部分实现建连后 sock 超时可能被清掉，拉取阶段再设一次
+    sock = getattr(client, "sock", None)
+    if sock is not None and hasattr(sock, "settimeout"):
+        sock.settimeout(IMAP_SOCKET_TIMEOUT_SEC)
     client.login(username, secret)
     _send_imap_id(client)
     return client
@@ -241,9 +259,14 @@ def test_connection(host: str, port: int, username: str, secret: str) -> None:
 
 
 def _uidvalidity(client: imaplib.IMAP4_SSL) -> int:
-    """EXAMINE 后读取 UIDVALIDITY。"""
+    """读取 SELECT/EXAMINE 后的 UIDVALIDITY。
+
+    真实 imaplib 对 ``* OK [UIDVALIDITY n]`` 的 ``response("UIDVALIDITY")``
+    返回 ``('UIDVALIDITY', [b'n'])``，typ 不是 ``OK``——不能按 typ==OK 判断。
+    """
     typ, data = client.response("UIDVALIDITY")
-    if typ != "OK" or not data:
+    # typ 可能是 "UIDVALIDITY"（真机）或历史 mock 的 "OK"；有 data 就解析
+    if not data:
         return 0
     val = data[0]
     if isinstance(val, bytes):
@@ -295,7 +318,8 @@ def fetch_new(mailbox_row: dict, secret: str) -> tuple[list[dict], dict]:
     """只读拉取新邮件；返回 (messages, cursor_update)。不写库。
 
     messages 含 message_id/from_addr/to_addrs/subject/snippet/body_text/received_at/uid。
-    cursor_update 含 last_uidvalidity / last_uid（本轮见到的最大 UID）。
+    cursor_update 含 last_uidvalidity / last_uid / truncated / is_first_pull。
+    首拉截断（≥ FIRST_PULL_LIMIT）时 truncated=True，调用方不得推进 last_uid。
     """
     host = _row_str(mailbox_row, "host")
     port = int(mailbox_row.get("port") or 993)
@@ -309,10 +333,13 @@ def fetch_new(mailbox_row: dict, secret: str) -> tuple[list[dict], dict]:
     messages: list[dict] = []
     max_uid = 0
     uidvalidity = 0
+    truncated = False
+    is_first_pull = False
 
     try:
         client = _imap_connect(host, port, username, secret)
-        typ, _data = client.examine(_INBOX)
+        # 真实 imaplib 无 examine()；select(readonly=True) 等价只读、不置 \\Seen
+        typ, _data = client.select(_INBOX, readonly=True)
         if typ != "OK":
             raise MailboxError("无法打开收件箱（只读）")
         uidvalidity = _uidvalidity(client)
@@ -322,6 +349,7 @@ def fetch_new(mailbox_row: dict, secret: str) -> tuple[list[dict], dict]:
             and last_v_i is not None
             and uidvalidity == last_v_i
         )
+        is_first_pull = not incremental
 
         if incremental:
             # 增量：UID > last_uid，升序拉取
@@ -333,11 +361,14 @@ def fetch_new(mailbox_row: dict, secret: str) -> tuple[list[dict], dict]:
         else:
             # 首拉或 UIDVALIDITY 变化：SINCE 90 天，UID 降序最多 500
             since = datetime.now(UTC) - timedelta(days=FIRST_PULL_DAYS)
-            since_str = since.strftime("%d-%b-%Y")
+            since_str = _imap_since_date(since)
             typ, data = client.uid("search", None, f"SINCE {since_str}")
             if typ != "OK":
                 raise MailboxError("搜索邮件失败")
-            uids = sorted(_parse_uid_search(data), reverse=True)[:FIRST_PULL_LIMIT]
+            all_uids = sorted(_parse_uid_search(data), reverse=True)
+            # 达到上限即视为截断：窗口内更旧的邮件本轮未取
+            truncated = len(all_uids) >= FIRST_PULL_LIMIT
+            uids = all_uids[:FIRST_PULL_LIMIT]
 
         for uid in uids:
             msg = _fetch_uid_message(client, uid)
@@ -362,6 +393,8 @@ def fetch_new(mailbox_row: dict, secret: str) -> tuple[list[dict], dict]:
         cursor_update = {
             "last_uidvalidity": uidvalidity,
             "last_uid": max_uid if max_uid else (last_uid_i or 0),
+            "truncated": truncated,
+            "is_first_pull": is_first_pull,
         }
         return messages, cursor_update
     except MailboxError:
