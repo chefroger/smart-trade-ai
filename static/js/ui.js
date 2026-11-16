@@ -267,6 +267,9 @@ function navToView(view, chatCtx, chatName) {
             case 'customers':
                 renderCustomersViewInto(container);
                 break;
+            case 'mailboxes':
+                renderMailboxesViewInto(container);
+                break;
             case 'tasks':
                 renderTasksViewInto(container);
                 break;
