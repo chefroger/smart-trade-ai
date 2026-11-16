@@ -1473,7 +1473,7 @@ const _ALL_SKILLS = [
         {n:"b2b-seo-aeo",d:"SEO+AEO 文章生成 — 针对 Google + AI 搜索优化",t:"SEO文章、AEO文章、搜索引擎优化、seo article"},
         {n:"b2b-short-video",d:"外贸 B2B 短视频脚本生成（TikTok/Shorts/Reels）",t:"短视频、视频脚本、TikTok脚本、short video"},
         {n:"b2b-market-analysis",d:"市场分析作战地图 — 认证/关税/关键词/3 秒 Hook",t:"市场分析、目标市场、作战地图、market analysis"},
-        {n:"b2b-daily-automation",d:"定时任务（早安简报/日报/周报/定时发布）",t:"每日任务、定时任务、早安简报、cron、日报"},
+        {n:"b2b-daily-automation",d:"定时任务（早安简报/日报/周报/LinkedIn/社媒文案生成）",t:"每日任务、定时任务、早安简报、cron、日报"},
     ]},{g:"文档管理",items:[
         {n:"b2b-document",d:"本地文档分析与提取（PDF/Word/Excel 等）",t:"分析文档、读报价、看合同、analyze document"},
         {n:"b2b-doc-generation",d:"生成报价/合同/提案/PPT（DOCX/XLSX/PPTX）",t:"生成报价单、生成合同、做 PPT、generate doc"},
