@@ -214,8 +214,88 @@ class TestListOverviewAndImportant:
         assert ov is not None
         assert ov["stats"]["order_count"] == 1
         assert ov["stats"]["order_total_amount"] == 100.0
+        assert ov["stats"]["order_total_currency"] == "USD"
         assert ov["people"]
         assert len(ov["orders"]) == 1
         assert any(t["is_important"] for t in ov["key_talks"])
         assert ov["timeline"]
         assert ov["customer"]["stage"] == "报价"
+
+    def test_create_persists_crm_fields(self, test_db, company_id):
+        """审计 P2：POST 建客户时 stage / next_follow_up_date / is_starred 必须入库。"""
+        from trade import customer
+
+        row = customer.create(
+            "CRM New",
+            company_id=company_id,
+            stage="样品",
+            next_follow_up_date="2026-03-15",
+            is_starred=1,
+        )
+        assert row["stage"] == "样品"
+        assert row["next_follow_up_date"] == "2026-03-15"
+        assert row["is_starred"] in (1, True)
+
+        again = customer.get(row["id"], company_id=company_id)
+        assert again["stage"] == "样品"
+        assert again["next_follow_up_date"] == "2026-03-15"
+        assert again["is_starred"] in (1, True)
+
+        # 非法阶段回落默认；非法标星视为 0
+        bad = customer.create(
+            "Bad Stage",
+            company_id=company_id,
+            stage="不存在的阶段",
+            is_starred=9,
+        )
+        assert bad["stage"] == "询盘"
+        assert bad["is_starred"] in (0, False)
+
+    def test_multi_currency_totals_not_summed(self, test_db, company_id):
+        """审计 P2：多币种订单不得硬加总额。"""
+        from trade import customer, order
+
+        c = customer.create("FX Co", company_id=company_id)
+        cid = c["id"]
+        order.create(
+            company_id=company_id, customer_id=cid,
+            product_name="A", total_amount=100, currency="USD",
+        )
+        order.create(
+            company_id=company_id, customer_id=cid,
+            product_name="B", total_amount=200, currency="EUR",
+        )
+
+        listed = {r["id"]: r for r in customer.list_by_company(company_id)}
+        assert listed[cid]["order_count"] == 2
+        assert listed[cid]["order_total_amount"] is None
+        assert listed[cid]["order_total_currency"] is None
+        assert listed[cid]["order_totals_by_currency"]["USD"] == 100.0
+        assert listed[cid]["order_totals_by_currency"]["EUR"] == 200.0
+
+        ov = customer.get_overview(cid, company_id=company_id)
+        assert ov["stats"]["order_total_amount"] is None
+        assert ov["stats"]["order_total_currency"] is None
+        assert ov["stats"]["order_totals_by_currency"]["USD"] == 100.0
+        assert ov["stats"]["order_totals_by_currency"]["EUR"] == 200.0
+
+    def test_overview_cross_company_isolation(self, test_db, company_id):
+        """审计：A 公司读不到 B 公司客户 overview。"""
+        from trade import company, customer, order
+
+        co_b = company.create("Other Co B")["id"]
+        cust_b = customer.create("B Only", company_id=co_b)
+        order.create(
+            company_id=co_b, customer_id=cust_b["id"],
+            product_name="Secret", total_amount=999, currency="USD",
+        )
+
+        # A 公司用 B 的 customer_id → fail-closed
+        assert customer.get(cust_b["id"], company_id=company_id) is None
+        assert customer.get_overview(cust_b["id"], company_id=company_id) is None
+
+        # B 公司自己可读
+        ov_b = customer.get_overview(cust_b["id"], company_id=co_b)
+        assert ov_b is not None
+        assert ov_b["stats"]["order_total_amount"] == 999.0
+        assert ov_b["customer"]["name"] == "B Only"

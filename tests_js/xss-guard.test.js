@@ -86,15 +86,19 @@ const SAFE_PATTERNS = [
     /^r\.work_dir\.split\('\/'\)\.pop\(\)$/, // → toast() 文本
     // CRM 列表入场延迟：纯数字运算，无用户字符串
     /^\(idx \* 0\.04\)\.toFixed\(2\)$/,
-    // stageHtml：只拼 _CRM_STAGES 常量名 + CSS class，正文不插用户字段
-    /^stageHtml$/,
 ];
+
+/** stageHtml 赋值必须是这份精确形态（_CRM_STAGES + esc(s)，用户 stage 只比 class）。 */
+const STAGE_HTML_ASSIGN =
+    /const stageHtml = _CRM_STAGES\.map\(function \(s\) \{\s*return '<span class="pill' \+ \(stage === s \? ' on' : ''\) \+ \(overdue && stage === s \? ' hot' : ''\) \+ '">' \+ esc\(s\) \+ '<\/span>';\s*\}\)\.join\(''\);/;
 
 function isSafe(expr) {
     const e = expr.trim();
     if (SAFE_PATTERNS.some((re) => re.test(e))) return true;
     // 明确带 esc/escJs 的（扫描时已排除，这里兜底）
     if (e.includes('esc(') || e.includes('escJs(')) return true;
+    // 不按变量名放行：只有构造表达式钉死为安全形态时才允许 ${stageHtml}
+    if (e === 'stageHtml' && STAGE_HTML_ASSIGN.test(SRC)) return true;
     return false;
 }
 
@@ -144,5 +148,16 @@ test('tier / unit / guidance.desc 三处渲染点都带 esc()', () => {
     assert.ok(
         /esc\(guidance\.desc\)/.test(SRC),
         '引导条描述必须转义（与同一行的 guidance.name 保持一致）',
+    );
+});
+
+test('stageHtml 构造表达式钉死为 _CRM_STAGES.map + esc(s)', () => {
+    assert.ok(
+        STAGE_HTML_ASSIGN.test(SRC),
+        'stageHtml 必须由 _CRM_STAGES.map 构造，正文走 esc(s)，不得把用户 stage 拼进 HTML',
+    );
+    assert.ok(
+        /\$\{stageHtml\}/.test(SRC),
+        '列表仍通过 ${stageHtml} 插入（安全由构造断言担保，不靠变量名白名单）',
     );
 });

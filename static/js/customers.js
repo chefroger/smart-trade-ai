@@ -163,8 +163,9 @@ function renderCustomersTable(data) {
         const follow = _customerFollowUpDate(c);
         const overdue = follow && follow < today;
         const stage = _customerStage(c);
+        // 正文只拼 _CRM_STAGES 常量（再走 esc）；用户 stage 仅参与 class 比较
         const stageHtml = _CRM_STAGES.map(function (s) {
-            return '<span class="pill' + (stage === s ? ' on' : '') + (overdue && stage === s ? ' hot' : '') + '">' + s + '</span>';
+            return '<span class="pill' + (stage === s ? ' on' : '') + (overdue && stage === s ? ' hot' : '') + '">' + esc(s) + '</span>';
         }).join('');
         const subLine = [title, mainCategory, country, email].filter(Boolean).join(' · ');
         const followText = overdue
@@ -248,11 +249,12 @@ function filterCustomers() {
 // ── 客户卡片墙（S-01）────────────────────────────────────────
 let _wallEscBound = false;
 
-function _wallAnimateCount(el, target) {
+function _wallAnimateCount(el, target, currency) {
     if (!el) return;
     if (target == null || isNaN(target)) { el.textContent = '—'; return; }
+    const prefix = (currency || 'USD') + ' ';
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        el.textContent = '$' + Number(target).toLocaleString('en-US');
+        el.textContent = prefix + Number(target).toLocaleString('en-US');
         return;
     }
     let start = null;
@@ -262,7 +264,7 @@ function _wallAnimateCount(el, target) {
         if (!start) start = ts;
         const p = Math.min((ts - start) / dur, 1);
         const v = Math.round(goal * (1 - Math.pow(1 - p, 3)));
-        el.textContent = '$' + v.toLocaleString('en-US');
+        el.textContent = prefix + v.toLocaleString('en-US');
         if (p < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
@@ -292,7 +294,10 @@ async function openCustomerWall(cid) {
 
     // 任务书：点客户名只调 overview 一个接口
     const ov = await api('GET', `/api/trade/customers/${cid}/overview`);
-    if (!ov || !ov.customer) return;
+    if (!ov || !ov.customer) {
+        toast(currentLang === 'en' ? 'Failed to load customer wall' : '加载客户详情失败');
+        return;
+    }
     const c = ov.customer;
     // 同步本地列表缓存（阶段/跟进日实列）
     const cached = allCustomers.find(function (x) { return x.id === cid; });
@@ -310,7 +315,10 @@ async function openCustomerWall(cid) {
     const timeline = ov.timeline || [];
     const stats = ov.stats || {};
     const orderTotal = stats.order_total_amount;
-    const hasAmount = orderTotal != null;
+    const orderCurrency = stats.order_total_currency || '';
+    const byCurrency = stats.order_totals_by_currency || {};
+    const multiCurrency = !orderCurrency && byCurrency && Object.keys(byCurrency).length > 1;
+    const hasAmount = orderTotal != null && !isNaN(orderTotal);
 
     let seq = 0;
     function delay() { return ' style="animation-delay:' + ((seq++) * 0.06).toFixed(2) + 's"'; }
@@ -414,7 +422,13 @@ async function openCustomerWall(cid) {
         '<div class="wstats">' +
         '<div class="wstat"' + delay() + '><b>' + (stats.people_count || people.length) + '</b><span>' + (currentLang==='en'?'People':'关联人物') + '</span></div>' +
         '<div class="wstat"' + delay() + '><b>' + (stats.order_count || orders.length) + '</b><span>' + (currentLang==='en'?'Orders':'订单记录') + '</span></div>' +
-        '<div class="wstat"' + delay() + '><b id="wall-stat-total">' + (hasAmount ? '$0' : '—') + '</b><span>' + (currentLang==='en'?'Order total':'订单总额') + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b id="wall-stat-total">' +
+        (multiCurrency
+            ? esc(Object.keys(byCurrency).map(function (k) {
+                return k + ' ' + Number(byCurrency[k]).toLocaleString('en-US');
+            }).join(' · '))
+            : (hasAmount ? '0' : '—')) +
+        '</b><span>' + (currentLang==='en'?'Order total':'订单总额') + '</span></div>' +
         '<div class="wstat"' + delay() + '><b>' + (stats.mail_and_talk_count || (emails.length + keyChats.length)) + '</b><span>' + (currentLang==='en'?'Mail + talks':'邮件 + 重要对话') + '</span></div>' +
         '</div>' +
         '<div class="wall-actions">' +
@@ -434,7 +448,10 @@ async function openCustomerWall(cid) {
     wall.removeAttribute('inert');
     wall.setAttribute('aria-hidden', 'false');
     $('wall-back')?.focus();
-    if (hasAmount) _wallAnimateCount($('wall-stat-total'), orderTotal);
+    // 单一币种才数字滚动；多币种已在上方直接列出各币种金额
+    if (hasAmount && !multiCurrency) {
+        _wallAnimateCount($('wall-stat-total'), orderTotal, orderCurrency);
+    }
 
     $('wall-back')?.addEventListener('click', closeCustomerWall);
     $('wall-edit')?.addEventListener('click', function () { closeCustomerWall(); showCustomerDetail(cid); });

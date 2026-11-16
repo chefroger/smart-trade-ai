@@ -84,9 +84,23 @@ class CustomerCreate(BaseModel):
     follow_up_note: str = Field("", description="AI 跟进建议")
     main_category: str = Field("", description="主营品类 (客户主营产品/行业)")
     match_score: int = Field(0, description="匹配度评分 (0-5)")
-    stage: str = Field("询盘", description="商机阶段（询盘/报价/样品/订单）")
+    stage: Literal["询盘", "报价", "样品", "订单"] = Field(
+        "询盘", description="商机阶段（询盘/报价/样品/订单）"
+    )
     next_follow_up_date: str = Field("", description="下次跟进日 YYYY-MM-DD")
-    is_starred: int = Field(0, description="是否标星 0/1")
+    is_starred: Literal[0, 1] = Field(0, description="是否标星 0/1")
+
+    @field_validator("next_follow_up_date")
+    @classmethod
+    def _follow_up_ymd(cls, v: str) -> str:
+        """空串放行；非空必须是 YYYY-MM-DD。"""
+        s = (v or "").strip()
+        if not s:
+            return ""
+        import re
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            raise ValueError("next_follow_up_date must be YYYY-MM-DD")
+        return s
 
 
 class CustomerUpdate(BaseModel):
@@ -109,10 +123,26 @@ class CustomerUpdate(BaseModel):
     main_category: str | None = Field(None, description="主营品类 (客户主营产品/行业)")
     match_score: int | None = Field(None, description="匹配度评分 (0-5)")
     # CRM 实列（S-01）：stage / next_follow_up_date / is_starred
-    stage: str | None = Field(None, description="商机阶段（询盘/报价/样品/订单）")
+    stage: Literal["询盘", "报价", "样品", "订单"] | None = Field(
+        None, description="商机阶段（询盘/报价/样品/订单）"
+    )
     next_follow_up_date: str | None = Field(None, description="下次跟进日 YYYY-MM-DD")
-    is_starred: int | None = Field(None, description="是否标星 0/1")
+    is_starred: Literal[0, 1] | None = Field(None, description="是否标星 0/1")
     tags: list[str] | None = Field(None, description="客户标签（写入 extra3.tags）")
+
+    @field_validator("next_follow_up_date")
+    @classmethod
+    def _follow_up_ymd_opt(cls, v: str | None) -> str | None:
+        """None=不改；空串=清空；非空必须 YYYY-MM-DD。"""
+        if v is None:
+            return None
+        s = v.strip()
+        if not s:
+            return ""
+        import re
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            raise ValueError("next_follow_up_date must be YYYY-MM-DD")
+        return s
 
 
 # ── Conversation Rating ────────────────────────────────────────────────────────

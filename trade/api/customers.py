@@ -59,6 +59,9 @@ def create_customer(
         wechat=payload.wechat, source=payload.source,
         buyer_type=payload.buyer_type, follow_up_note=payload.follow_up_note,
         main_category=payload.main_category, match_score=payload.match_score,
+        stage=payload.stage,
+        next_follow_up_date=payload.next_follow_up_date,
+        is_starred=payload.is_starred,
     )
 
 

@@ -11,6 +11,24 @@ import os
 from trade.database import get_connection
 
 
+# CRM 商机阶段白名单（与前端 _CRM_STAGES / API Literal 对齐）
+CRM_STAGES = frozenset({"询盘", "报价", "样品", "订单"})
+
+
+def _normalize_crm_stage(stage: str | None, *, default: str = "询盘") -> str:
+    """非法阶段回落到 default，避免脏值进库。"""
+    s = (stage or "").strip()
+    return s if s in CRM_STAGES else default
+
+
+def _normalize_is_starred(v) -> int:
+    """只认 0/1；其它值视为 0。"""
+    try:
+        return 1 if int(v) == 1 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def create(
     name: str,
     contact: str = "",
@@ -33,6 +51,9 @@ def create(
     follow_up_note: str = "",
     main_category: str = "",
     match_score: int = 0,
+    stage: str = "询盘",
+    next_follow_up_date: str = "",
+    is_starred: int = 0,
     _skip_dedup: bool = False,
 ) -> dict:
     """创建一条归属于指定公司的客户记录。返回新行的字典表示。
@@ -40,6 +61,9 @@ def create(
     _skip_dedup 内部参数：bulk_save() 等调用方已在外部做过去重时传入 True，
     跳过本函数内的 O(n) 软去重扫描，避免 N+1 性能退化。
     """
+    stage = _normalize_crm_stage(stage)
+    is_starred = _normalize_is_starred(is_starred)
+    next_follow_up_date = (next_follow_up_date or "").strip()
     extra1 = json.dumps({
         "country": country,
         "tier": tier,
@@ -104,8 +128,14 @@ def create(
             }
 
         cur = conn.execute(
-            "INSERT INTO customers (company_id, name, contact, note, extra1, extra2) VALUES (?, ?, ?, ?, ?, ?)",
-            (company_id, name, contact, note, extra1, extra2),
+            "INSERT INTO customers "
+            "(company_id, name, contact, note, stage, next_follow_up_date, is_starred, "
+            "extra1, extra2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                company_id, name, contact, note,
+                stage, next_follow_up_date, is_starred,
+                extra1, extra2,
+            ),
         )
         conn.commit()
         row = conn.execute(
@@ -143,21 +173,46 @@ def list_by_company(company_id: int) -> list[dict]:
         conn.close()
 
 
+def _totals_from_currency_rows(rows) -> tuple[int, float | None, str | None, dict[str, float]]:
+    """把按币种聚合的行收成 (count, single_total|None, single_currency|None, by_currency)。
+
+    多币种时不把金额硬加在一起（审计 P2：混币种 SUM 会错），
+    order_total_amount 只在单一币种时有值。
+    """
+    by_currency: dict[str, float] = {}
+    count = 0
+    for r in rows:
+        count += int(r["order_count"] or 0)
+        cur = (r["currency"] or "USD").strip() or "USD"
+        by_currency[cur] = by_currency.get(cur, 0.0) + float(r["order_total_amount"] or 0)
+    if len(by_currency) == 1:
+        currency, total = next(iter(by_currency.items()))
+        return count, total, currency, by_currency
+    if not by_currency:
+        return 0, 0.0, None, {}
+    return count, None, None, by_currency
+
+
 def _attach_list_aggregates(
     conn, company_id: int, customers: list[dict]
 ) -> None:
-    """就地给客户列表挂上订单数/总额/最近联系时间（两次 GROUP BY，避免 N+1）。"""
+    """就地给客户列表挂上订单数/总额/最近联系时间。
+
+    订单按 (customer_id, currency) 分组，避免跨币种直接相加。
+    """
     if not customers:
         return
-    order_stats = {
-        int(r["customer_id"]): r
-        for r in conn.execute(
-            "SELECT customer_id, COUNT(*) AS order_count, "
-            "COALESCE(SUM(total_amount), 0) AS order_total_amount "
-            "FROM orders WHERE company_id = ? GROUP BY customer_id",
-            (company_id,),
-        ).fetchall()
-    }
+    # customer_id -> list of currency rows
+    order_rows: dict[int, list] = {}
+    for r in conn.execute(
+        "SELECT customer_id, COALESCE(NULLIF(TRIM(currency), ''), 'USD') AS currency, "
+        "COUNT(*) AS order_count, "
+        "COALESCE(SUM(total_amount), 0) AS order_total_amount "
+        "FROM orders WHERE company_id = ? GROUP BY customer_id, currency",
+        (company_id,),
+    ).fetchall():
+        order_rows.setdefault(int(r["customer_id"]), []).append(r)
+
     last_contact = {
         int(r["customer_id"]): r["last_contact_at"]
         for r in conn.execute(
@@ -169,9 +224,13 @@ def _attach_list_aggregates(
     }
     for c in customers:
         cid = int(c["id"])
-        st = order_stats.get(cid)
-        c["order_count"] = int(st["order_count"]) if st else 0
-        c["order_total_amount"] = float(st["order_total_amount"]) if st else 0.0
+        count, total, currency, by_cur = _totals_from_currency_rows(
+            order_rows.get(cid, [])
+        )
+        c["order_count"] = count
+        c["order_total_amount"] = total
+        c["order_total_currency"] = currency
+        c["order_totals_by_currency"] = by_cur
         c["last_contact_at"] = last_contact.get(cid)
 
 
@@ -208,12 +267,19 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
     emails = [e for e in (e2.get("email"), e2.get("backup_email")) if e]
 
     orders = order_module.list_by_customer(customer_id, company_id=company_id)
-    order_total = 0.0
-    has_amount = False
+    # 按币种汇总，禁止跨币种硬加（审计 P2）
+    by_currency: dict[str, float] = {}
     for o in orders:
-        if o.get("total_amount") is not None and o.get("total_amount") != "":
-            order_total += float(o["total_amount"] or 0)
-            has_amount = True
+        if o.get("total_amount") is None or o.get("total_amount") == "":
+            continue
+        cur = (o.get("currency") or "USD").strip() or "USD"
+        by_currency[cur] = by_currency.get(cur, 0.0) + float(o["total_amount"] or 0)
+    if len(by_currency) == 1:
+        order_currency, order_total = next(iter(by_currency.items()))
+    elif not by_currency:
+        order_currency, order_total = None, None
+    else:
+        order_currency, order_total = None, None
 
     chats = chat_memory.list_by_company(
         company_id, limit=50, customer_id=customer_id
@@ -242,7 +308,9 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
         "stats": {
             "people_count": len(people),
             "order_count": len(orders),
-            "order_total_amount": order_total if has_amount else None,
+            "order_total_amount": order_total,
+            "order_total_currency": order_currency,
+            "order_totals_by_currency": by_currency,
             "mail_and_talk_count": len(emails) + len(key_talks),
         },
         "people": people,
@@ -321,6 +389,13 @@ def update(
     # tags：显式传入才更新；None=本次不动
     extra3_updates = {k: v for k, v in kwargs.items() if k in extra3_keys and v is not None}
     basic_updates = {k: v for k, v in kwargs.items() if k in basic_allowed and v is not None}
+    # CRM 白名单：脏 stage / is_starred 不入库
+    if "stage" in basic_updates:
+        basic_updates["stage"] = _normalize_crm_stage(basic_updates["stage"])
+    if "is_starred" in basic_updates:
+        basic_updates["is_starred"] = _normalize_is_starred(basic_updates["is_starred"])
+    if "next_follow_up_date" in basic_updates and basic_updates["next_follow_up_date"] is not None:
+        basic_updates["next_follow_up_date"] = str(basic_updates["next_follow_up_date"]).strip()
 
     if not (extra1_updates or extra2_updates or extra3_updates or basic_updates):
         return get(customer_id, company_id=company_id)
