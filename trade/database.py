@@ -253,6 +253,50 @@ CREATE TABLE IF NOT EXISTS doc_extractions (
     PRIMARY KEY (tenant_id, sha256, model, extractor_version)
 );
 
+-- 邮箱 IMAP 绑定：账号 / 邮件正文 / 客户匹配（junction，不把 company_id 放进 emails）
+CREATE TABLE IF NOT EXISTS mailboxes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL DEFAULT 'imap',
+    preset TEXT NOT NULL,
+    display_name TEXT DEFAULT '',
+    email_address TEXT NOT NULL UNIQUE,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL DEFAULT 993,
+    use_ssl INTEGER NOT NULL DEFAULT 1,
+    username TEXT NOT NULL,
+    last_uidvalidity INTEGER,
+    last_uid INTEGER,
+    last_sync_at TEXT,
+    last_error TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mailbox_id INTEGER NOT NULL,
+    message_id TEXT NOT NULL,
+    uid TEXT,
+    from_addr TEXT,
+    to_addrs TEXT,
+    subject TEXT,
+    snippet TEXT,
+    body_text TEXT,
+    received_at TEXT,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(mailbox_id, message_id)
+);
+
+CREATE TABLE IF NOT EXISTS email_matches (
+    email_id INTEGER NOT NULL,
+    company_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    UNIQUE(email_id, company_id, customer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_email_matches_company_customer
+    ON email_matches(company_id, customer_id, email_id);
+CREATE INDEX IF NOT EXISTS idx_emails_mailbox ON emails(mailbox_id);
+CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
@@ -464,6 +508,7 @@ _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
     "customer_libraries", "conversations", "orders", "order_items",
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
+    "mailboxes", "emails", "email_matches",
 })
 
 
