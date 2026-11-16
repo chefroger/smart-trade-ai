@@ -84,6 +84,10 @@ const SAFE_PATTERNS = [
     /^(cronExpr|prompt|selected\.join\('\\n'\)|t\.id)$/,  // → input.value
     /^currentCompanyId$/,                   // → URL 里的整数 id
     /^r\.work_dir\.split\('\/'\)\.pop\(\)$/, // → toast() 文本
+    // CRM 列表入场延迟：纯数字运算，无用户字符串
+    /^\(idx \* 0\.04\)\.toFixed\(2\)$/,
+    // stageHtml：只拼 _CRM_STAGES 常量名 + CSS class，正文不插用户字段
+    /^stageHtml$/,
 ];
 
 function isSafe(expr) {
