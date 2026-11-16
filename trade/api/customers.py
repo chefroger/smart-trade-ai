@@ -2,11 +2,12 @@
 Trade AI Assistant — 客户管理 API 路由。
 
 端点：
-  GET    /customers                              — 列出当前公司的客户
+  GET    /customers                              — 列出当前公司的客户（附订单数/总额/最近联系）
   POST   /customers                              — 创建客户
   GET    /customers/template                     — 下载 CSV 导入模板
   POST   /customers/bulk                         — 批量导入（CSV 文件上传）
   GET    /customers/{customer_id}                 — 获取客户详情
+  GET    /customers/{customer_id}/overview        — CRM 卡片墙聚合
   PUT    /customers/{customer_id}                 — 更新客户
   DELETE /customers/{customer_id}                 — 删除客户
   POST   /customers/{customer_id}/libraries/{id}  — 关联文档库
@@ -238,6 +239,18 @@ def get_customer(
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
     return cust
+
+
+@router.get("/customers/{customer_id}/overview")
+def get_customer_overview(
+    customer_id: int,
+    cid: int = Depends(require_company),
+):
+    """CRM 卡片墙聚合：统计、人物/订单/邮件/重要对话、时间线。"""
+    overview = customer_module.get_overview(customer_id, company_id=cid)
+    if not overview:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return overview
 
 
 @router.put("/customers/{customer_id}")

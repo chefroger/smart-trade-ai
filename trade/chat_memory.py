@@ -123,6 +123,7 @@ def save(
             "id": new_id, "company_id": company_id, "customer_id": customer_id,
             "library_id": library_id, "query": query, "response": response,
             "files_read": files_read or [], "created_at": None, "context": context,
+            "is_important": False,
             "extra1": {}, "extra2": {}, "extra3": {},
         }
     finally:
@@ -149,15 +150,47 @@ def list_by_context(
         conn.close()
 
 
-def list_by_company(company_id: int, limit: int = 50) -> list[dict]:
-    """返回指定公司最近的对话记录，按最新在前排序。"""
+def list_by_company(
+    company_id: int, limit: int = 50, customer_id: int | None = None
+) -> list[dict]:
+    """返回指定公司最近的对话记录，按最新在前排序。
+
+    customer_id 给定时只返回该客户的对话（CRM 卡片墙）；未给则返回公司全部。
+    与 get_recent 不同：这里**不会**在未选客户时强制 `customer_id IS NULL`，
+    因为历史列表 / 卡片墙需要看到已归属客户的记录。
+    """
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT * FROM conversations WHERE company_id = ? ORDER BY id DESC LIMIT ?",
-            (company_id, limit),
-        ).fetchall()
+        if customer_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM conversations WHERE company_id = ? AND customer_id = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (company_id, customer_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM conversations WHERE company_id = ? ORDER BY id DESC LIMIT ?",
+                (company_id, limit),
+            ).fetchall()
         return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_important(
+    company_id: int, conversation_id: int, important: bool = True
+) -> dict | None:
+    """标记 / 取消标记对话为「重要」（CRM 卡片墙）。旧数据默认 0。"""
+    conn = get_connection()
+    try:
+        n = conn.execute(
+            "UPDATE conversations SET is_important = ? WHERE id = ? AND company_id = ?",
+            (1 if important else 0, conversation_id, company_id),
+        ).rowcount
+        conn.commit()
+        if n == 0:
+            return None
+        return get(company_id, conversation_id)
     finally:
         conn.close()
 
@@ -681,19 +714,21 @@ def search_history(
 
 def _row_to_dict(row) -> dict:
     """将 SQLite 行对象转换为字典，同时将 files_read JSON 字段反序列化。"""
+    _row_keys = row.keys()
     result = {
         "id": row["id"],
         "company_id": row["company_id"],
-        "customer_id": row["customer_id"] if "customer_id" in row.keys() else None,
+        "customer_id": row["customer_id"] if "customer_id" in _row_keys else None,
         "library_id": row["library_id"],
         "query": row["query"],
         "response": row["response"],
         "files_read": json.loads(row["files_read"]) if row["files_read"] else [],
         "created_at": row["created_at"],
-        "context": row["context"] if "context" in row.keys() else "",
+        "context": row["context"] if "context" in _row_keys else "",
+        # 缺列（旧 SELECT / 未迁移）时视为非重要，避免卡片墙崩溃
+        "is_important": bool(row["is_important"]) if "is_important" in _row_keys else False,
     }
     # 安全解析 extra 列 — 仅当列存在于结果集中时才处理（get_recent 等函数不 SELECT 这些列）
-    _row_keys = row.keys()
     for col in ("extra1", "extra2", "extra3"):
         if col not in _row_keys:
             continue

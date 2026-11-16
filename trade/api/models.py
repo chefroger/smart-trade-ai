@@ -84,6 +84,9 @@ class CustomerCreate(BaseModel):
     follow_up_note: str = Field("", description="AI 跟进建议")
     main_category: str = Field("", description="主营品类 (客户主营产品/行业)")
     match_score: int = Field(0, description="匹配度评分 (0-5)")
+    stage: str = Field("询盘", description="商机阶段（询盘/报价/样品/订单）")
+    next_follow_up_date: str = Field("", description="下次跟进日 YYYY-MM-DD")
+    is_starred: int = Field(0, description="是否标星 0/1")
 
 
 class CustomerUpdate(BaseModel):
@@ -105,6 +108,11 @@ class CustomerUpdate(BaseModel):
     follow_up_note: str | None = Field(None, description="AI 跟进建议")
     main_category: str | None = Field(None, description="主营品类 (客户主营产品/行业)")
     match_score: int | None = Field(None, description="匹配度评分 (0-5)")
+    # CRM 实列（S-01）：stage / next_follow_up_date / is_starred
+    stage: str | None = Field(None, description="商机阶段（询盘/报价/样品/订单）")
+    next_follow_up_date: str | None = Field(None, description="下次跟进日 YYYY-MM-DD")
+    is_starred: int | None = Field(None, description="是否标星 0/1")
+    tags: list[str] | None = Field(None, description="客户标签（写入 extra3.tags）")
 
 
 # ── Conversation Rating ────────────────────────────────────────────────────────
@@ -112,6 +120,10 @@ class CustomerUpdate(BaseModel):
 class ConversationRate(BaseModel):
     rating: int = Field(..., ge=1, le=5, description="评分 1-5")
     feedback: str | None = Field(None, description="可选反馈文字")
+
+
+class ConversationImportant(BaseModel):
+    important: bool = Field(True, description="是否标记为重要对话")
 
 
 # ── Customer Duplicates ────────────────────────────────────────────────────────
