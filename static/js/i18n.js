@@ -215,7 +215,7 @@ const I18N = {
         'guide.progress':'今日进度',
         // mailbox panel
         'mailbox.title':'邮箱',
-        'mailbox.guide_en_tip':'下方连接步骤为中文说明（各邮箱授权码需在网页版设置中获取）。',
+        'mailbox.guide_en_tip':'Guide in Chinese only for now — ask us if you need English help.',
         'mailbox.guide_title':'连接指南',
         'mailbox.form_title':'绑定新邮箱',
         'mailbox.list_title':'已绑定邮箱',
@@ -442,7 +442,7 @@ const I18N = {
         'guide.rest':'No task scheduled now',
         'guide.progress':"Today's Progress",
         'mailbox.title':'Mailboxes',
-        'mailbox.guide_en_tip':'The connection guide below is in Chinese only. Follow your provider\'s web mail settings to get an IMAP authorization code, then use the form.',
+        'mailbox.guide_en_tip':'Guide in Chinese only for now — ask us if you need English help.',
         'mailbox.guide_title':'Connection guide',
         'mailbox.form_title':'Bind a mailbox',
         'mailbox.list_title':'Bound mailboxes',
