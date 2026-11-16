@@ -5,9 +5,9 @@
     --accent: #C8102E; --accent-ink: #FFFFFF;
     --line: #E3E3E0; --line-strong: #141414;
     --chip: #F1F1EF; --radius: 2px;
-    /* mockup 格子底：主内容区用；待办横幅用更深实底盖住格子 */
+    /* mockup 格子底：主区纯白场底 + 32px 格；待办横幅用更深实底盖住格子 */
     --grid-line: rgba(20, 20, 20, 0.045);
-    --bg-field: #F5F5F3;
+    --bg-field: #FFFFFF;
     --todo-bar-bg: #EBEBE9;
     --font-ui: "Archivo", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
     --font-mono: "Share Tech Mono", ui-monospace, monospace;
@@ -179,7 +179,7 @@ body {
 .main#main-content, .main {
     flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative;
     min-height: 0;
-    /* zip .screen：32px 十字格子 + 略冷灰底 */
+    /* zip .screen：32px 十字格子 + S-01 纯白场底 */
     background:
         linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 32px 32px,
         linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 32px 32px,
@@ -263,7 +263,7 @@ body {
 .chat-input-area {
     position: absolute; bottom: 0; left: 0; right: 0;
     padding: 0 24px 20px; display: flex; justify-content: center;
-    background: linear-gradient(180deg, transparent 0%, rgba(245, 245, 243, 0.92) 40%);
+    background: linear-gradient(180deg, transparent 0%, rgba(255, 255, 255, 0.92) 40%);
     pointer-events: none;
 }
 .chat-input-area > * { pointer-events: all; }
