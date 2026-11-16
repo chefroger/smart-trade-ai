@@ -1,0 +1,5 @@
+Fonts bundled for offline Trade UI:
+• Archivo — OFL (https://scripts.sil.org/OFL)
+• Share Tech Mono — OFL
+• Noto Sans SC — OFL (Google Noto)
+Downloaded via jsDelivr fontsource mirrors; no runtime CDN.
