@@ -318,7 +318,12 @@ class TestCustomerCrmColumns:
         finally:
             conn.close()
 
-        dbmod.init_db()  # 幂等：再次启动不得再炸、不得丢数据
+        backup_n = len(backups)
+        dbmod.init_db()  # 幂等：再次启动不得再炸、不新增备份、不丢数据
+        backups_again = (
+            list(backup_dir.glob("trade-*.db")) if backup_dir.is_dir() else []
+        )
+        assert len(backups_again) == backup_n, "schema 已最新时不得再备份"
         conn = sqlite3.connect(str(db_path))
         try:
             assert conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0] == 2

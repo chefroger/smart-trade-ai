@@ -873,8 +873,30 @@ body > #toast-container, body > #customer-wall {
 
 .ddline {
     height: 2px; flex: none;
-    background-image: linear-gradient(90deg, var(--line-strong) 0 10px, transparent 10px 14px, var(--line-strong) 14px 16px, transparent 16px 20px);
-    background-size: 20px 2px; background-repeat: repeat-x;
+    background-image: repeating-linear-gradient(
+        90deg,
+        var(--line-strong) 0 14px,
+        transparent 14px 18px,
+        var(--line-strong) 18px 20px,
+        transparent 20px 24px
+    );
+    background-size: 24px 2px; background-repeat: repeat-x;
+}
+
+/* 聊天区命令语（撒玛利亚人风味道，只加这一行） */
+.chat-cmd {
+    flex: none; text-align: center; font-family: var(--font-mono);
+    font-size: 12px; letter-spacing: .22em; color: var(--muted);
+    padding: 10px 24px 4px; user-select: none;
+}
+.chat-cmd .cmd-cursor {
+    display: inline-block; width: .55em; height: 1em; margin-left: 2px;
+    background: var(--accent); vertical-align: -0.12em;
+    animation: cmdBlink 1s steps(1) infinite;
+}
+@keyframes cmdBlink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+    .chat-cmd .cmd-cursor { animation: none; opacity: 1; }
 }
 
 /* 聊天 / 面板 S-01 线语言 */
@@ -956,6 +978,20 @@ body > #toast-container, body > #customer-wall {
 .wall-title { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
 .wall-title h3 { margin: 0; font-size: 22px; letter-spacing: .02em; }
 .wall-title .sub { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.55; }
+/* mockup .bracket：标题区四角细框（纯 CSS，不改 DOM 结构） */
+.wall-title.bracket {
+    position: relative;
+    padding: 10px 14px;
+    background:
+        linear-gradient(var(--ink), var(--ink)) left top / 14px 1.5px no-repeat,
+        linear-gradient(var(--ink), var(--ink)) left top / 1.5px 14px no-repeat,
+        linear-gradient(var(--ink), var(--ink)) right top / 14px 1.5px no-repeat,
+        linear-gradient(var(--ink), var(--ink)) right top / 1.5px 14px no-repeat,
+        linear-gradient(var(--ink), var(--ink)) left bottom / 14px 1.5px no-repeat,
+        linear-gradient(var(--ink), var(--ink)) left bottom / 1.5px 14px no-repeat,
+        linear-gradient(var(--ink), var(--ink)) right bottom / 14px 1.5px no-repeat,
+        linear-gradient(var(--ink), var(--ink)) right bottom / 1.5px 14px no-repeat;
+}
 .wall-stamp {
     margin: 2px 0 0 auto; font-size: 11px; font-weight: 700; letter-spacing: .14em;
     border: 1.5px solid var(--accent); color: var(--accent); padding: 3px 9px;

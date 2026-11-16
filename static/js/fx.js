@@ -96,7 +96,12 @@ function initFxBackground() {
     if (btn) btn.addEventListener('click', toggleFx);
 
     // 时钟走秒 + 状态文案轮播
-    const STATUS = ['系统就绪', '客户档案已同步', '今日待跟进请留意', '逾期客户已标红'];
+    const STATUS = [
+        '系统就绪 · SYSTEM READY',
+        '客户档案已同步 · PROFILES SYNCED',
+        '今日待跟进请留意 · FOLLOW-UPS DUE',
+        '逾期客户已标红 · FOLLOW-UP OVERDUE',
+    ];
     let statusIdx = 0;
     function pad2(n) { return (n < 10 ? '0' : '') + n; }
     function tickClock() {

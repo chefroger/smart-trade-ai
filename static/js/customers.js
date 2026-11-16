@@ -88,6 +88,17 @@ function _isFollowUpOverdue(c) {
     return !!(d && d < _todayYmd());
 }
 
+/** 逾期天数（今天 − 跟进日，按本地日期；未逾期返回 0）。 */
+function _followUpOverdueDays(c) {
+    const d = _customerFollowUpDate(c);
+    if (!d) return 0;
+    const today = _todayYmd();
+    if (d >= today) return 0;
+    const a = new Date(d + 'T00:00:00');
+    const b = new Date(today + 'T00:00:00');
+    return Math.max(0, Math.round((b - a) / 86400000));
+}
+
 function _customerStage(c) {
     return String(c.stage || '询盘').trim();
 }
@@ -335,9 +346,12 @@ async function openCustomerWall(cid) {
             count + '</span><span class="ddline" aria-hidden="true"></span></div>';
     }
 
+    const overdueDays = overdue ? _followUpOverdueDays(c) : 0;
     const stamp = overdue
-        ? (currentLang === 'en' ? 'OVERDUE' : '已逾期')
-        : (stage || (e1.tier ? ('TIER ' + e1.tier) : 'POI'));
+        ? (currentLang === 'en'
+            ? ('THREAT · OVERDUE ' + overdueDays + ' DAYS')
+            : ('THREAT · 已逾期 ' + overdueDays + ' 天'))
+        : (e1.tier ? ('TIER ' + e1.tier) : 'POI');
 
     let bodyHtml = '';
     bodyHtml += secHead(currentLang === 'en' ? 'People' : '关联人物', 'PEOPLE // ' + people.length) + '<div class="wgrid">';
@@ -346,7 +360,8 @@ async function openCustomerWall(cid) {
         const role = p.role || (currentLang === 'en' ? 'Primary contact' : '主要联系人');
         bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="avatar">' + esc(ini) +
             '</span><span><span class="wc-name">' + esc(p.name) + '</span><br /><span class="wc-role">' + esc(role) +
-            '</span></span><span class="tagchip dim" style="margin-left:auto">' + (currentLang==='en'?'Contact':'联系人') +
+            '</span></span><span class="tagchip dim" style="margin-left:auto">' +
+            (currentLang==='en'?'ASSET · PRIMARY CONTACT':'ASSET · 主要联系人') +
             '</span></div>' +
             (p.note ? '<p class="muted">' + esc(p.note) + '</p>' : '') +
             (p.email ? '<p class="mono">' + esc(p.email) + '</p>' : '') +
@@ -422,7 +437,7 @@ async function openCustomerWall(cid) {
     wall.innerHTML =
         '<div class="wall-head">' +
         '<button type="button" class="wall-back" id="wall-back">' + (currentLang==='en'?'← Back to list':'← 返回客户列表') + '</button>' +
-        '<div class="wall-title"><div><h3>' + esc(c.name) + '</h3>' +
+        '<div class="wall-title bracket"><div><h3>' + esc(c.name) + '</h3>' +
         '<div class="sub">' + esc([e1.country, e1.buyer_type, e1.main_category].filter(Boolean).join(' · ') || (currentLang==='en'?'Customer file':'客户档案')) +
         '<br />' + (currentLang==='en'?'Next follow-up: ':'下次跟进：') +
         (overdue ? '<span style="color:var(--accent);font-weight:700;">' + (currentLang==='en'?'Overdue':'已逾期') + '</span>' : esc(follow || '—')) +
