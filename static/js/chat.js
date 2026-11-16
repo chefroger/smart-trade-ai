@@ -18,6 +18,7 @@ function renderChatViewInto(container, ctx, name) {
                 <button onclick="clearChat()">${t('chat.clr')}</button>
             </div>
         </div>
+        <div class="chat-cmd" aria-hidden="true">WHAT ARE YOUR COMMANDS?<span class="cmd-cursor"></span></div>
         <div class="chat-messages" id="chat-messages">
             <div class="empty-state" id="chat-empty">
                 <div class="empty-icon">💬</div>
@@ -27,14 +28,28 @@ function renderChatViewInto(container, ctx, name) {
         </div>
         <div class="chat-input-area">
             <div class="chat-input-inner">
-                <textarea id="msg-input" aria-label="输入消息" placeholder="${t('chat.ph.' + ctx)}" rows="1"
+                <textarea id="msg-input" aria-label="${currentLang==='en'?'Message':'输入消息'}" placeholder="AWAITING COMMAND · ${esc(t('chat.ph.' + ctx))}" rows="1"
                     onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"
                     oninput="this.style.height='24px';this.style.height=(this.scrollHeight>80?80:this.scrollHeight)+'px';"></textarea>
-                <button onclick="sendMsg()" id="send-btn" title="发送">↑</button>
-                <button id="stop-btn" class="hidden" title="停止">■</button>
+                <button type="button" class="chat-attach-btn" id="attach-btn" title="${currentLang==='en'?'Attach files':'添加文件'}" aria-label="${currentLang==='en'?'Attach files':'添加文件'}">${typeof iconHtml==='function'?iconHtml('paperclip',20):'📎'}</button>
+                <input type="file" id="chat-file-input" multiple hidden>
+                <button type="button" class="chat-send-btn" onclick="sendMsg()" id="send-btn" title="${currentLang==='en'?'Send':'发送'}">${typeof iconHtml==='function'?iconHtml('send',16):''}<span>${currentLang==='en'?'Send':'发送'}</span></button>
+                <button type="button" class="chat-stop-btn hidden" id="stop-btn" title="${currentLang==='en'?'Stop':'停止'}">■ ${currentLang==='en'?'Stop':'停止'}</button>
             </div>
         </div>
         <div class="drop-overlay" id="drop-overlay"><div class="drop-overlay-inner">&#128193; ${currentLang==='en'?'Drop files to add':'释放以添加文件'}</div></div>`;
+
+    // 回形针：走与拖放相同的导入弹窗
+    const attachBtn = container.querySelector('#attach-btn');
+    const fileInput = container.querySelector('#chat-file-input');
+    if (attachBtn && fileInput) {
+        attachBtn.addEventListener('click', function () { fileInput.click(); });
+        fileInput.addEventListener('change', function () {
+            const files = Array.from(fileInput.files || []);
+            fileInput.value = '';
+            if (files.length) _showDropModal(files);
+        });
+    }
 
     if (ctx === 'docs') loadChatLibrarySelect();
     loadChatHistory();
@@ -81,7 +96,8 @@ function _renderGuidanceBar(currentTimeStr, completed, pending) {
     const guidance = _getCurrentTaskGuidance(currentTimeStr);
     const doneCount = completed.length, totalPending = pending.length;
 
-    let barHtml = `<div id="guidance-bar" style="flex-shrink:0;max-height:20vh;overflow-y:auto;background:var(--bg-card);border-bottom:1px solid var(--border);padding:6px 12px;line-height:1.4;font-size:12px;">`;
+    // 背景/边框交给 CSS（#guidance-bar：暗实底；主区格子由 .main 铺）
+    let barHtml = `<div id="guidance-bar">`;
 
     // 当前任务行
     if (guidance) {

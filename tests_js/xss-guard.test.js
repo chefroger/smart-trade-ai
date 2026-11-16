@@ -84,13 +84,29 @@ const SAFE_PATTERNS = [
     /^(cronExpr|prompt|selected\.join\('\\n'\)|t\.id)$/,  // → input.value
     /^currentCompanyId$/,                   // → URL 里的整数 id
     /^r\.work_dir\.split\('\/'\)\.pop\(\)$/, // → toast() 文本
+    // CRM 列表入场延迟：纯数字运算，无用户字符串
+    /^\(idx \* 0\.04\)\.toFixed\(2\)$/,
 ];
+
+/** stageHtml 安全不变量（不钉死空白/换行，避免格式微调就红）。 */
+function stageHtmlIsSafe() {
+    const m = SRC.match(/const stageHtml\s*=\s*([^;]+);/);
+    if (!m) return false;
+    const expr = m[1];
+    // 必须来自 _CRM_STAGES.map；正文走 esc(s)；不得把用户 stage 拼进 HTML 文本
+    if (!/_CRM_STAGES\.map\s*\(/.test(expr)) return false;
+    if (!/esc\s*\(\s*s\s*\)/.test(expr)) return false;
+    if (/\+\s*stage\s*\+/.test(expr)) return false;
+    return true;
+}
 
 function isSafe(expr) {
     const e = expr.trim();
     if (SAFE_PATTERNS.some((re) => re.test(e))) return true;
     // 明确带 esc/escJs 的（扫描时已排除，这里兜底）
     if (e.includes('esc(') || e.includes('escJs(')) return true;
+    // 不按变量名放行：只有构造满足安全不变量时才允许 ${stageHtml}
+    if (e === 'stageHtml' && stageHtmlIsSafe()) return true;
     return false;
 }
 
@@ -140,5 +156,16 @@ test('tier / unit / guidance.desc 三处渲染点都带 esc()', () => {
     assert.ok(
         /esc\(guidance\.desc\)/.test(SRC),
         '引导条描述必须转义（与同一行的 guidance.name 保持一致）',
+    );
+});
+
+test('stageHtml 由 _CRM_STAGES.map + esc(s) 构造（格式可动，不变量不可破）', () => {
+    assert.ok(
+        stageHtmlIsSafe(),
+        'stageHtml 必须由 _CRM_STAGES.map 构造，正文走 esc(s)，不得把用户 stage 拼进 HTML',
+    );
+    assert.ok(
+        /\$\{stageHtml\}/.test(SRC),
+        '列表仍通过 ${stageHtml} 插入（安全由构造不变量担保，不靠变量名白名单）',
     );
 });

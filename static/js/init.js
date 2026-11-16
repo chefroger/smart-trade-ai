@@ -2,6 +2,8 @@
 document.addEventListener('DOMContentLoaded', async () => {
     // 初始化语言
     initLang();
+    // S-01 特效 / 图标 / 顶栏时钟（不依赖公司状态，尽早挂上）
+    if (typeof initFxBackground === 'function') initFxBackground();
 
     // Hermes 版本过旧 → 只显示升级面板，不再走公司/聊天初始化：那些功能此刻全都
     // 依赖 Hermes，走下去只会让用户在坏掉的界面上乱点

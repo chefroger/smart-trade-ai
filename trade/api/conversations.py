@@ -17,7 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from trade import chat_memory
 from trade import library as library_module
 from trade.api.deps import require_company
-from trade.api.models import ConversationRate, ConversationSave, ConversationUpdate
+from trade.api.models import (
+    ConversationImportant,
+    ConversationRate,
+    ConversationSave,
+    ConversationUpdate,
+)
 
 router = APIRouter(tags=["conversations"])
 
@@ -26,20 +31,24 @@ router = APIRouter(tags=["conversations"])
 def list_conversations(
     library_id: int | None = None,
     context: str | None = None,
+    customer_id: int | None = None,
     limit: int = 50,
     x_company_id: int = Depends(require_company),
 ):
-    """列出当前公司的最近对话，可按文档库或上下文过滤。
+    """列出当前公司的最近对话，可按文档库、上下文或客户过滤。
 
     limit 强制夹在 1～200：SQLite 的 `LIMIT -1` 等于不限，负值/超大值都会
     变成"一次拖出全公司对话"的口子（审计 P2-26）。
+    customer_id 为可选附加过滤（CRM 卡片墙）；未传时行为与原先一致。
     """
     limit = max(1, min(int(limit), 200))
     if context:
         return chat_memory.list_by_context(x_company_id, context, limit)
     if library_id is not None:
         return chat_memory.list_by_library(x_company_id, library_id, limit)
-    return chat_memory.list_by_company(x_company_id, limit)
+    return chat_memory.list_by_company(
+        x_company_id, limit, customer_id=customer_id
+    )
 
 
 @router.get("/conversations/quality-stats")
@@ -128,6 +137,21 @@ def rate_conversation(
     """为对话记录评分（1-5）+ 可选反馈。"""
     result = chat_memory.add_rating(
         x_company_id, conversation_id, payload.rating, payload.feedback or "",
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True, "conversation": result}
+
+
+@router.put("/conversations/{conversation_id}/important")
+def mark_conversation_important(
+    conversation_id: int,
+    payload: ConversationImportant,
+    x_company_id: int = Depends(require_company),
+):
+    """标记 / 取消标记对话为重要（CRM 卡片墙）。"""
+    result = chat_memory.set_important(
+        x_company_id, conversation_id, payload.important,
     )
     if not result:
         raise HTTPException(status_code=404, detail="Conversation not found")
