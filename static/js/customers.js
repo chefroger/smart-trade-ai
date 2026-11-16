@@ -303,12 +303,21 @@ async function openCustomerWall(cid) {
     if (!wall) return;
     closeCustomerDetail();
 
-    // 任务书：点客户名只调 overview 一个接口
-    const ov = await api('GET', `/api/trade/customers/${cid}/overview`);
+    // 卡片墙：overview + 客户关联邮件 + 是否已绑定邮箱（并行）
+    const [ov, mailRes, mailboxRes] = await Promise.all([
+        api('GET', `/api/trade/customers/${cid}/overview`),
+        api('GET', `/api/trade/customers/${cid}/emails`),
+        api('GET', '/api/trade/mailboxes'),
+    ]);
     if (!ov || !ov.customer) {
         toast(currentLang === 'en' ? 'Failed to load customer wall' : '加载客户详情失败');
         return;
     }
+    const mailRecords = Array.isArray(mailRes)
+        ? mailRes
+        : ((mailRes && mailRes.emails) ? mailRes.emails : []);
+    const mailboxes = Array.isArray(mailboxRes) ? mailboxRes : [];
+    const mailboxBound = mailboxes.length > 0;
     const c = ov.customer;
     // 同步本地列表缓存（阶段/跟进日实列）
     const cached = allCustomers.find(function (x) { return x.id === cid; });
@@ -321,7 +330,7 @@ async function openCustomerWall(cid) {
     const overdue = _isFollowUpOverdue(c);
     const people = ov.people || [];
     const orders = ov.orders || [];
-    const emails = ov.emails || [];
+    const fileEmails = ov.emails || [];
     const keyChats = ov.key_talks || [];
     // 无 is_important 时后端用最近 5 条兜底——标题/统计不能仍写「重要对话」
     const talksAreImportant = keyChats.some(function (c) { return c.is_important; });
@@ -397,17 +406,46 @@ async function openCustomerWall(cid) {
     }
     bodyHtml += '</div></div>';
 
-    bodyHtml += secHead(currentLang === 'en' ? 'Email' : '邮件往来', 'EMAIL // 0') + '<div class="wgrid">';
-    bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top">' +
-        (typeof iconHtml==='function'?iconHtml('mail',20):'') +
-        '<span class="muted">' + (currentLang==='en'?'Addresses on file':'档案中的邮箱') + '</span></div>';
-    if (emails.length) {
-        emails.forEach(function (em) { bodyHtml += '<p class="mono">' + esc(em) + '</p>'; });
-        bodyHtml += '<p class="muted">' + (currentLang==='en'?'No mailbox sync yet — inbox binding is a later task.':'暂无邮件记录（邮箱接入另立项）') + '</p>';
-    } else {
-        bodyHtml += '<p class="muted">' + (currentLang==='en'?'No email on file':'暂无邮箱，也无邮件记录') + '</p>';
+    const emailCount = mailboxBound ? mailRecords.length : 0;
+    bodyHtml += '<div class="wsec"><div class="wsec-head"><h4>' + (currentLang === 'en' ? 'Email' : '邮件往来') +
+        '</h4><span class="cnt">EMAIL // ' + emailCount + '</span>';
+    if (mailboxBound) {
+        bodyHtml += '<button type="button" class="btn" id="wall-email-refresh" style="margin-left:auto;font-size:11px;padding:4px 10px;">' +
+            (currentLang === 'en' ? 'Refresh' : '刷新邮件') + '</button>';
     }
-    bodyHtml += '</article></div></div>';
+    bodyHtml += '<span class="ddline" aria-hidden="true"></span></div>';
+    bodyHtml += '<div class="wgrid" id="wall-email-grid">';
+    if (!mailboxBound) {
+        bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top">' +
+            (typeof iconHtml === 'function' ? iconHtml('mail', 20) : '') +
+            '<span class="muted">' + (currentLang === 'en' ? 'Addresses on file' : '档案中的邮箱') + '</span></div>';
+        if (fileEmails.length) {
+            fileEmails.forEach(function (em) { bodyHtml += '<p class="mono">' + esc(em) + '</p>'; });
+        } else {
+            bodyHtml += '<p class="muted">' + (currentLang === 'en' ? 'No email on file' : '暂无邮箱') + '</p>';
+        }
+        bodyHtml += '<p class="muted">' + (currentLang === 'en'
+            ? 'Shows addresses only — Trade does not read mail until you bind a mailbox.'
+            : '只显示邮箱地址，不读取邮箱') + '</p>' +
+            '<button type="button" class="primary" id="wall-goto-mailboxes">' +
+            (currentLang === 'en' ? 'Open Mailboxes' : '去绑定邮箱') + '</button></article>';
+    } else if (!mailRecords.length) {
+        bodyHtml += '<div class="wall-empty"' + delay() + '>' +
+            (currentLang === 'en' ? 'No synced emails for this customer yet.' : '暂无已同步的邮件记录') + '</div>';
+    } else {
+        mailRecords.forEach(function (m, idx) {
+            const subj = m.subject || (currentLang === 'en' ? '(no subject)' : '（无主题）');
+            const party = m.from_addr || '';
+            const dt = (m.received_at || '').slice(0, 16).replace('T', ' ');
+            bodyHtml += '<article class="wcard wall-mail-card"' + delay() + ' data-mail-idx="' + idx + '" style="cursor:pointer;">' +
+                '<div class="wc-top"><span class="wc-subj">' + esc(subj) + '</span>' +
+                '<span class="muted" style="margin-left:auto;white-space:nowrap;">' + esc(dt) + '</span></div>' +
+                '<p class="mono muted">' + esc(party) + '</p>' +
+                '<div class="wall-mail-body hidden"><p class="muted" style="white-space:pre-wrap;margin:8px 0 0;">' +
+                esc(m.body_text || m.snippet || '') + '</p></div></article>';
+        });
+    }
+    bodyHtml += '</div></div>';
 
     bodyHtml += secHead(talksTitle, 'TALKS // ' + keyChats.length) + '<div class="wgrid">';
     if (!keyChats.length) {
@@ -452,7 +490,7 @@ async function openCustomerWall(cid) {
             }).join(' · '))
             : (hasAmount ? '0' : '—')) +
         '</b><span>' + (currentLang==='en'?'Order total':'订单总额') + '</span></div>' +
-        '<div class="wstat"' + delay() + '><b>' + (stats.mail_and_talk_count || (emails.length + keyChats.length)) + '</b><span>' + talksStatLabel + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b>' + (stats.mail_and_talk_count || ((mailboxBound ? mailRecords.length : fileEmails.length) + keyChats.length)) + '</b><span>' + talksStatLabel + '</span></div>' +
         '</div>' +
         '<div class="wall-actions">' +
         '<button type="button" class="primary" id="wall-edit">' + (currentLang==='en'?'Edit profile':'编辑档案') + '</button>' +
@@ -494,6 +532,25 @@ async function openCustomerWall(cid) {
         }
         toast(t('toast.saved'));
         filterCustomers();
+        openCustomerWall(cid);
+    });
+
+    $('wall-goto-mailboxes')?.addEventListener('click', function () {
+        closeCustomerWall();
+        navToView('mailboxes');
+    });
+    $('wall-email-grid')?.addEventListener('click', function (e) {
+        const card = e.target.closest('.wall-mail-card');
+        if (!card || e.target.closest('button')) return;
+        const body = card.querySelector('.wall-mail-body');
+        if (body) body.classList.toggle('hidden');
+    });
+    $('wall-email-refresh')?.addEventListener('click', async function () {
+        const btn = $('wall-email-refresh');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = currentLang === 'en' ? 'Pulling…' : '拉取中…';
+        await api('POST', '/api/trade/mailboxes/pull-all');
         openCustomerWall(cid);
     });
 
