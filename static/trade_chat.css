@@ -266,7 +266,7 @@ body {
 .chat-input-inner button:hover { background: var(--primary-dark); }
 .chat-input-inner button:active { transform: scale(0.95); }
 .chat-input-inner button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-#stop-btn { background: var(--accent-red) !important; color: #fff; border-radius: 999px; width: 36px; height: 36px; min-width: 36px; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+/* 停止钮样式见下方 S-01 .chat-stop-btn（mockup 黑红矩形，不再用圆钮） */
 
 /* ── Drag & Drop ──────────────────────────────────────────────────────── */
 .drop-overlay {
@@ -926,10 +926,40 @@ body > #toast-container, body > #customer-wall {
 .chat-input-inner {
     border-radius: 2px !important; border-style: dashed !important; border-color: rgba(20,20,20,.5) !important;
     background: var(--panel) !important; box-shadow: none !important;
+    /* mockup .input：右内边距留给回形针 + 发送 */
+    padding: 0 10px 0 14px !important; min-height: 50px; gap: 10px !important;
 }
 .chat-input-inner:focus-within { border-style: solid !important; border-color: var(--ink) !important; box-shadow: none !important; }
-.chat-input-inner button {
-    border-radius: 2px !important; background: var(--ink) !important;
+.chat-input-inner textarea {
+    font-family: var(--font-mono); font-size: 13px; letter-spacing: .06em;
+}
+/* mockup 右侧：回形针图标钮 + 黑底发送（图标 + 文案） */
+.chat-attach-btn {
+    appearance: none; cursor: pointer; flex: none;
+    width: 30px; height: 30px; min-width: 30px; padding: 0;
+    display: grid; place-items: center;
+    border: 1px solid transparent; border-radius: 2px;
+    background: transparent !important; color: var(--muted) !important;
+}
+.chat-attach-btn:hover { border-color: var(--ink); color: var(--ink) !important; }
+.chat-send-btn {
+    appearance: none; cursor: pointer; flex: none;
+    height: 30px !important; width: auto !important; min-width: auto !important;
+    padding: 0 12px !important; border-radius: 2px !important; border: 1px solid var(--ink) !important;
+    background: var(--ink) !important; color: #fff !important;
+    display: inline-flex !important; align-items: center; gap: 6px;
+    font-size: 12.5px; font-family: inherit; white-space: nowrap;
+}
+.chat-send-btn .i { color: #fff; }
+.chat-send-btn:hover { opacity: .92; }
+.chat-send-btn:disabled { opacity: .4; cursor: not-allowed; }
+.chat-stop-btn {
+    appearance: none; cursor: pointer; flex: none;
+    height: 30px !important; width: auto !important; min-width: auto !important;
+    padding: 0 12px !important; border-radius: 2px !important; border: 1px solid var(--accent) !important;
+    background: var(--accent) !important; color: #fff !important;
+    display: inline-flex !important; align-items: center; gap: 6px;
+    font-size: 12.5px; font-family: inherit; white-space: nowrap;
 }
 .panel-search, .panel-topbar-actions select, .cust-tools .f {
     border-style: dashed !important; border-color: rgba(20,20,20,.5) !important; border-radius: 2px !important;
