@@ -28,7 +28,7 @@ function renderChatViewInto(container, ctx, name) {
         </div>
         <div class="chat-input-area">
             <div class="chat-input-inner">
-                <textarea id="msg-input" aria-label="输入消息" placeholder="AWAITING COMMAND · 输入指令，Enter 发送" rows="1"
+                <textarea id="msg-input" aria-label="${currentLang==='en'?'Message':'输入消息'}" placeholder="AWAITING COMMAND · ${esc(t('chat.ph.' + ctx))}" rows="1"
                     onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"
                     oninput="this.style.height='24px';this.style.height=(this.scrollHeight>80?80:this.scrollHeight)+'px';"></textarea>
                 <button type="button" class="chat-attach-btn" id="attach-btn" title="${currentLang==='en'?'Attach files':'添加文件'}" aria-label="${currentLang==='en'?'Attach files':'添加文件'}">${typeof iconHtml==='function'?iconHtml('paperclip',20):'📎'}</button>

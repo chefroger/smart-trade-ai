@@ -30,7 +30,8 @@
             </select>
         </div>
         <div class="sys-strip">
-            <span aria-live="polite"><span class="dot"></span><span id="sys-status">系统就绪 · SYSTEM READY</span></span>
+            <!-- 轮播状态是装饰性文案，不进 aria-live，避免每 4 秒打断读屏 -->
+            <span><span class="dot" aria-hidden="true"></span><span id="sys-status" aria-hidden="true">系统就绪 · SYSTEM READY</span></span>
             <span id="sys-clock" aria-hidden="true">--:--:--</span>
         </div>
         <div class="fx-toggle-wrap">
