@@ -124,7 +124,8 @@ class TestConversationLimitClamp:
         seen = []
         with patch.object(
             conv_api.chat_memory, "list_by_company",
-            side_effect=lambda cid, limit: seen.append(limit) or [],
+            # customer_id 为 CRM 新增可选参数；mock 用 **kw 接住，仍只断言 limit clamp
+            side_effect=lambda cid, limit, **kw: seen.append(limit) or [],
         ):
             conv_api.list_conversations(limit=raw, x_company_id=1)
 
