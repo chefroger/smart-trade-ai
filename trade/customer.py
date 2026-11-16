@@ -10,7 +10,6 @@ import os
 
 from trade.database import get_connection
 
-
 # CRM 商机阶段白名单（与前端 _CRM_STAGES / API Literal 对齐）
 CRM_STAGES = frozenset({"询盘", "报价", "样品", "订单"})
 
