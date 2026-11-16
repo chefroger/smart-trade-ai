@@ -78,3 +78,6 @@ docs/diagrams/
 docs/superpowers/
 windows-standalone/README.md
 .pre-commit-config.yaml
+
+# Brainstorm visual companion (local)
+.superpowers/
