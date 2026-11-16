@@ -3,17 +3,30 @@ async function renderCustomersViewInto(container) {
     const coName = currentCompanyId ? (companies.find(c => c.id === currentCompanyId)?.name || '') : '';
     container.innerHTML = `
         <div class="panel-topbar">
-            <h2>👥 ${t('customer.title')}${coName ? '<span style="margin-left:10px;padding:3px 10px;background:rgba(59,130,246,0.08);color:var(--primary);border-radius:999px;font-size:12px;font-weight:500;">🏢 '+esc(coName)+'</span>' : ''}</h2>
+            <h2>${typeof iconHtml==='function'?iconHtml('users',20):''} ${t('customer.title')}${coName ? '<span style="margin-left:10px;padding:3px 10px;border:1px solid var(--line);font-size:12px;font-weight:500;">'+esc(coName)+'</span>' : ''}</h2>
             <div class="panel-topbar-actions">
-                <button class="btn btn-danger" id="batch-delete-btn" style="display:none;" onclick="batchDeleteCustomers()">🗑 ${currentLang==='en'?'Batch Delete':'批量删除'}</button>
+                <button class="btn btn-danger" id="batch-delete-btn" style="display:none;" onclick="batchDeleteCustomers()">${typeof iconHtml==='function'?iconHtml('trash',16):''} ${currentLang==='en'?'Batch Delete':'批量删除'}</button>
                 <input class="panel-search" id="cust-search" aria-label="搜索客户" placeholder="${t('customer.search')}" oninput="filterCustomers()">
-                <select id="cust-tier-filter" aria-label="筛选客户等级" onchange="filterCustomers()" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-card);">
+                <select id="cust-tier-filter" aria-label="筛选客户等级" onchange="filterCustomers()" style="padding:7px 10px;font-size:12px;">
                     <option value="">${currentLang==='en'?'All Tiers':'全部等级'}</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="none">${t('cust.field.tier_none')}</option>
                 </select>
-                <select id="cust-sort" aria-label="客户排序方式" onchange="renderCustomersTable(allCustomers)" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-card);">
-                    <option value="name">按名称排序</option><option value="updated_at">按最近跟进</option>
+                <select id="cust-country-filter" aria-label="筛选国家" onchange="filterCustomers()" style="padding:7px 10px;font-size:12px;max-width:120px;">
+                    <option value="">${currentLang==='en'?'All Countries':'全部国家'}</option>
                 </select>
-                <button class="btn btn-primary" onclick="showCustomerEditModal()">+ 添加客户</button>
+                <select id="cust-buyer-filter" aria-label="筛选买家类型" onchange="filterCustomers()" style="padding:7px 10px;font-size:12px;max-width:130px;">
+                    <option value="">${currentLang==='en'?'All Buyer Types':'全部买家类型'}</option>
+                </select>
+                <select id="cust-stage-filter" aria-label="筛选商机阶段" onchange="filterCustomers()" style="padding:7px 10px;font-size:12px;max-width:120px;">
+                    <option value="">${currentLang==='en'?'All Stages':'全部阶段'}</option>
+                    <option value="询盘">询盘</option><option value="报价">报价</option>
+                    <option value="样品">样品</option><option value="订单">订单</option>
+                </select>
+                <select id="cust-sort" aria-label="客户排序方式" onchange="filterCustomers()" style="padding:7px 10px;font-size:12px;">
+                    <option value="follow_up">${currentLang==='en'?'Follow-up first':'待跟进优先'}</option>
+                    <option value="name">${currentLang==='en'?'By name':'按名称排序'}</option>
+                    <option value="updated_at">${currentLang==='en'?'Recently updated':'按最近跟进'}</option>
+                </select>
+                <button class="btn btn-primary" onclick="showCustomerEditModal()">${typeof iconHtml==='function'?iconHtml('plus',16):''} ${currentLang==='en'?'Add':'添加客户'}</button>
             </div>
         </div>
         <div class="panel-body">
@@ -49,11 +62,64 @@ async function loadCustomersData() {
         c._libraries = libs;
     }
     $('customers-loading').classList.add('hidden');
-    renderCustomersTable(allCustomers);
+    _refreshCustomerFilterOptions();
+    filterCustomers();
 }
 
 function _parseExtra1(c) { try { return JSON.parse(c.extra1||'{}'); } catch(e) { return {}; } }
 function _parseExtra2(c) { try { return JSON.parse(c.extra2||'{}'); } catch(e) { return {}; } }
+function _parseExtra3(c) { try { return JSON.parse(c.extra3||'{}'); } catch(e) { return {}; } }
+
+/** 下次跟进日：读 CRM 实列 next_follow_up_date（YYYY-MM-DD）。 */
+function _customerFollowUpDate(c) {
+    const d = String(c.next_follow_up_date || '').trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : '';
+}
+
+/** 今天本地日期 YYYY-MM-DD。 */
+function _todayYmd() {
+    const n = new Date();
+    const m = n.getMonth() + 1, d = n.getDate();
+    return n.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d;
+}
+
+function _isFollowUpOverdue(c) {
+    const d = _customerFollowUpDate(c);
+    return !!(d && d < _todayYmd());
+}
+
+function _customerStage(c) {
+    return String(c.stage || '询盘').trim();
+}
+
+const _CRM_STAGES = ['询盘', '报价', '样品', '订单'];
+
+/** 填充国家 / 买家类型筛选项（来自现有客户 extra）。 */
+function _refreshCustomerFilterOptions() {
+    const countries = new Set();
+    const buyers = new Set();
+    allCustomers.forEach(function (c) {
+        const e1 = _parseExtra1(c);
+        if (e1.country) countries.add(e1.country);
+        if (e1.buyer_type) buyers.add(e1.buyer_type);
+    });
+    const cSel = $('cust-country-filter');
+    const bSel = $('cust-buyer-filter');
+    if (cSel) {
+        const cur = cSel.value;
+        cSel.innerHTML = '<option value="">' + (currentLang === 'en' ? 'All Countries' : '全部国家') + '</option>' +
+            [...countries].sort().map(function (v) {
+                return '<option value="' + esc(v) + '"' + (cur === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+            }).join('');
+    }
+    if (bSel) {
+        const cur = bSel.value;
+        bSel.innerHTML = '<option value="">' + (currentLang === 'en' ? 'All Buyer Types' : '全部买家类型') + '</option>' +
+            [...buyers].sort().map(function (v) {
+                return '<option value="' + esc(v) + '"' + (cur === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+            }).join('');
+    }
+}
 
 function renderCustomersTable(data) {
     const tbody = $('customers-tbody');
@@ -66,44 +132,58 @@ function renderCustomersTable(data) {
     }
     empty.classList.add('hidden');
 
-    const sortBy = ($('cust-sort')?.value) || 'name';
+    const sortBy = ($('cust-sort')?.value) || 'follow_up';
+    const today = _todayYmd();
     const sorted = [...data].sort((a, b) => {
         if (sortBy === 'updated_at') return (b.updated_at || '').localeCompare(a.updated_at || '');
+        if (sortBy === 'follow_up') {
+            const da = _customerFollowUpDate(a) || '9999-99-99';
+            const db = _customerFollowUpDate(b) || '9999-99-99';
+            // 逾期优先，再按跟进日升序，最后名称
+            const oa = da < today ? 0 : 1;
+            const ob = db < today ? 0 : 1;
+            if (oa !== ob) return oa - ob;
+            if (da !== db) return da.localeCompare(db);
+        }
         return (a.name || '').localeCompare(b.name || '');
     });
 
-    tbody.innerHTML = sorted.map(c => {
+    tbody.innerHTML = sorted.map((c, idx) => {
         const ex1 = _parseExtra1(c);
         const ex2 = _parseExtra2(c);
         const tier = ex1['tier'] || '';
         const tierLabel = tier || '--';
-        const tierColor = tier === 'A' ? 'var(--accent-green)' : tier === 'B' ? 'var(--accent)' : tier === 'C' ? 'var(--accent-red)' : 'var(--text-muted)';
         const buyerType = ex1['buyer_type'] || '';
         const mainCategory = ex1['main_category'] || '';
-        const matchScore = ex1['match_score'] || 0;
         const country = ex1['country'] || '';
         const contact = c.contact || '';
         const title = ex2['title'] || '';
         const email = ex2['email'] || '';
-        const phone = ex2['phone'] || ex2['whatsapp'] || '';
         const note = (c.note || '').slice(0, 40);
-        const updated = (c.updated_at || c.created_at || '').slice(0, 10);
-        const subLine = [title, mainCategory, country, email, phone].filter(Boolean).join(' · ');
-        const matchStars = matchScore > 0 ? '★'.repeat(matchScore) + '☆'.repeat(5 - matchScore) : '';
-        return `<tr style="cursor:pointer;" onclick="showCustomerDetail(${c.id})">
+        const follow = _customerFollowUpDate(c);
+        const overdue = follow && follow < today;
+        const stage = _customerStage(c);
+        const stageHtml = _CRM_STAGES.map(function (s) {
+            return '<span class="pill' + (stage === s ? ' on' : '') + (overdue && stage === s ? ' hot' : '') + '">' + s + '</span>';
+        }).join('');
+        const subLine = [title, mainCategory, country, email].filter(Boolean).join(' · ');
+        const followText = overdue
+            ? (currentLang === 'en' ? 'Overdue' : '已逾期')
+            : (follow || (currentLang === 'en' ? 'No follow-up date' : '未设跟进日'));
+        return `<tr class="${overdue ? 'cust-overdue' : ''}" style="cursor:pointer;animation-delay:${(idx * 0.04).toFixed(2)}s;" onclick="openCustomerWall(${c.id})">
             <td style="width:30px;" onclick="event.stopPropagation()"><input type="checkbox" class="cust-checkbox" value="${c.id}" onchange="updateBatchDeleteBtn()"></td>
             <td style="padding:8px 10px;">
-                <div style="font-weight:600;font-size:13px;color:var(--text-primary);">${esc(c.name)}${contact ? '<span style="font-weight:400;color:var(--text-muted);margin-left:6px;">' + esc(contact) + '</span>' : ''}</div>
-                <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span style="color:${tierColor};font-weight:600;">● ${esc(tierLabel)} 级</span>
-                    ${buyerType ? '<span style="background:var(--bg-muted);padding:1px 6px;border-radius:3px;font-size:10px;">' + esc(buyerType) + '</span>' : ''}
-                    ${matchStars ? '<span style="color:var(--accent);font-size:10px;">' + matchStars + '</span>' : ''}
+                <div style="font-weight:600;font-size:13px;">${esc(c.name)}${contact ? '<span style="font-weight:400;color:var(--muted);margin-left:6px;">' + esc(contact) + '</span>' : ''}</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span style="font-weight:600;border:1px solid var(--line-strong);padding:1px 6px;font-family:var(--font-mono);"> ${esc(tierLabel)} </span>
+                    ${buyerType ? '<span class="pill">' + esc(buyerType) + '</span>' : ''}
                     ${subLine ? '<span>' + esc(subLine) + '</span>' : ''}
-                    ${note ? '<span style="color:var(--text-muted);">📝 ' + esc(note) + '</span>' : ''}
-                    <span style="color:var(--text-muted);margin-left:auto;font-size:10px;white-space:nowrap;">${esc(updated)}</span>
+                    ${note ? '<span>' + esc(note) + '</span>' : ''}
+                    <span class="cust-follow" style="margin-left:auto;white-space:nowrap;">${typeof iconHtml==='function'?iconHtml(overdue?'triangle-exclamation-point':'calendar-clock',16):''} ${esc(followText)}${follow && !overdue ? ' · ' + esc(follow) : ''}</span>
                 </div>
+                <div class="stage-pills">${stageHtml}</div>
             </td>
-            <td style="width:50px;text-align:right;padding-right:8px;" onclick="event.stopPropagation()"><button class="btn-xs" onclick="showCustomerEditModal(${c.id})">编辑</button></td>
+            <td style="width:50px;text-align:right;padding-right:8px;" onclick="event.stopPropagation()"><button class="btn-xs" onclick="showCustomerEditModal(${c.id})">${currentLang==='en'?'Edit':'编辑'}</button></td>
         </tr>`;
     }).join('');
 
@@ -139,8 +219,19 @@ async function batchDeleteCustomers() {
 function filterCustomers() {
     const search = ($('cust-search')?.value||'').toLowerCase();
     const tier = $('cust-tier-filter')?.value||'';
+    const country = $('cust-country-filter')?.value||'';
+    const buyer = $('cust-buyer-filter')?.value||'';
+    const stage = $('cust-stage-filter')?.value||'';
     let filtered = allCustomers;
-    if (search) filtered = filtered.filter(c => (c.name||'').toLowerCase().includes(search) || (c.contact||'').toLowerCase().includes(search));
+    if (search) {
+        filtered = filtered.filter(c => {
+            const e1 = _parseExtra1(c); const e2 = _parseExtra2(c);
+            const tags = (_parseExtra3(c).tags || []).join(' ');
+            const blob = [c.name, c.contact, e1.country, e1.buyer_type, e2.email, e2.title, c.note, tags]
+                .join(' ').toLowerCase();
+            return blob.includes(search);
+        });
+    }
     if (tier) {
         filtered = filtered.filter(c => {
             const t = _parseExtra1(c)['tier'] || c.tier || '';
@@ -148,7 +239,230 @@ function filterCustomers() {
             return t === tier;
         });
     }
+    if (country) filtered = filtered.filter(c => (_parseExtra1(c).country || '') === country);
+    if (buyer) filtered = filtered.filter(c => (_parseExtra1(c).buyer_type || '') === buyer);
+    if (stage) filtered = filtered.filter(c => _customerStage(c) === stage);
     renderCustomersTable(filtered);
+}
+
+// ── 客户卡片墙（S-01）────────────────────────────────────────
+let _wallEscBound = false;
+
+function _wallAnimateCount(el, target) {
+    if (!el) return;
+    if (target == null || isNaN(target)) { el.textContent = '—'; return; }
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        el.textContent = '$' + Number(target).toLocaleString('en-US');
+        return;
+    }
+    let start = null;
+    const dur = 750;
+    const goal = Number(target);
+    function step(ts) {
+        if (!start) start = ts;
+        const p = Math.min((ts - start) / dur, 1);
+        const v = Math.round(goal * (1 - Math.pow(1 - p, 3)));
+        el.textContent = '$' + v.toLocaleString('en-US');
+        if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+}
+
+function _orderProgress(status) {
+    const s = status || '';
+    if (s === '已完成') return 100;
+    if (s === '已出货') return 75;
+    if (s === '已下单') return 50;
+    if (s === '报价中') return 25;
+    return 15;
+}
+
+function closeCustomerWall() {
+    const wall = $('customer-wall');
+    if (!wall) return;
+    wall.classList.remove('open');
+    wall.setAttribute('inert', '');
+    wall.setAttribute('aria-hidden', 'true');
+}
+
+async function openCustomerWall(cid) {
+    const wall = $('customer-wall');
+    if (!wall) return;
+    closeCustomerDetail();
+
+    // 任务书：点客户名只调 overview 一个接口
+    const ov = await api('GET', `/api/trade/customers/${cid}/overview`);
+    if (!ov || !ov.customer) return;
+    const c = ov.customer;
+    // 同步本地列表缓存（阶段/跟进日实列）
+    const cached = allCustomers.find(function (x) { return x.id === cid; });
+    if (cached) Object.assign(cached, c);
+    editingCustomerData = c;
+
+    const e1 = _parseExtra1(c);
+    const stage = _customerStage(c);
+    const follow = _customerFollowUpDate(c);
+    const overdue = _isFollowUpOverdue(c);
+    const people = ov.people || [];
+    const orders = ov.orders || [];
+    const emails = ov.emails || [];
+    const keyChats = ov.key_talks || [];
+    const timeline = ov.timeline || [];
+    const stats = ov.stats || {};
+    const orderTotal = stats.order_total_amount;
+    const hasAmount = orderTotal != null;
+
+    let seq = 0;
+    function delay() { return ' style="animation-delay:' + ((seq++) * 0.06).toFixed(2) + 's"'; }
+    function secHead(title, count) {
+        return '<div class="wsec"><div class="wsec-head"><h4>' + title + '</h4><span class="cnt">' +
+            count + '</span><span class="ddline" aria-hidden="true"></span></div>';
+    }
+
+    const stamp = overdue
+        ? (currentLang === 'en' ? 'OVERDUE' : '已逾期')
+        : (stage || (e1.tier ? ('TIER ' + e1.tier) : 'POI'));
+
+    let bodyHtml = '';
+    bodyHtml += secHead(currentLang === 'en' ? 'People' : '关联人物', 'PEOPLE // ' + people.length) + '<div class="wgrid">';
+    people.forEach(function (p) {
+        const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
+        const role = p.role || (currentLang === 'en' ? 'Primary contact' : '主要联系人');
+        bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="avatar">' + esc(ini) +
+            '</span><span><span class="wc-name">' + esc(p.name) + '</span><br /><span class="wc-role">' + esc(role) +
+            '</span></span><span class="tagchip dim" style="margin-left:auto">' + (currentLang==='en'?'Contact':'联系人') +
+            '</span></div>' +
+            (p.note ? '<p class="muted">' + esc(p.note) + '</p>' : '') +
+            (p.email ? '<p class="mono">' + esc(p.email) + '</p>' : '') +
+            ([p.phone, p.whatsapp, p.wechat].filter(Boolean).length
+                ? '<p class="muted">' + esc([p.phone, p.whatsapp ? 'WA '+p.whatsapp : '', p.wechat ? 'WeChat '+p.wechat : ''].filter(Boolean).join(' · ')) + '</p>'
+                : '') +
+            '</article>';
+    });
+    bodyHtml += '</div></div>';
+
+    bodyHtml += secHead(currentLang === 'en' ? 'Orders' : '订单', 'ORDERS // ' + orders.length) + '<div class="wgrid">';
+    if (!orders.length) {
+        bodyHtml += '<div class="wall-empty"' + delay() + '>' + (currentLang==='en'?'No orders yet':'暂无订单记录') + '</div>';
+    } else {
+        orders.forEach(function (o) {
+            const prog = _orderProgress(o.status);
+            const amt = (o.total_amount != null && o.total_amount !== '')
+                ? ((o.currency || 'USD') + ' ' + Number(o.total_amount).toLocaleString('en-US'))
+                : (currentLang==='en'?'Price TBD':'金额待谈');
+            const items = o.items || [];
+            const product = items.length
+                ? (items[0].product_name + (items.length > 1 ? ' 等' + items.length + '项' : ''))
+                : (o.product_name || '');
+            const qty = items.length
+                ? items.map(function (it) { return (it.quantity || '') + (it.unit || ''); }).join(' / ')
+                : ((o.quantity || '') + (o.unit || ''));
+            bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="mono">' + esc(o.order_no || ('#' + o.id)) +
+                '</span><span class="tagchip dim" style="margin-left:auto">' + esc(o.status || '') + '</span></div>' +
+                '<p class="wc-subj">' + esc(product) + '</p><p><span class="wc-amt">' + esc(amt) + '</span> <span class="muted">· ' +
+                esc(qty) + '</span></p><div class="bar"><i style="width:' + prog + '%"></i></div>' +
+                '<p class="muted">' + esc((o.updated_at || o.created_at || '').slice(0, 10)) + ' · ' + prog + '%</p></article>';
+        });
+    }
+    bodyHtml += '</div></div>';
+
+    bodyHtml += secHead(currentLang === 'en' ? 'Email' : '邮件往来', 'EMAIL // 0') + '<div class="wgrid">';
+    bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top">' +
+        (typeof iconHtml==='function'?iconHtml('mail',20):'') +
+        '<span class="muted">' + (currentLang==='en'?'Addresses on file':'档案中的邮箱') + '</span></div>';
+    if (emails.length) {
+        emails.forEach(function (em) { bodyHtml += '<p class="mono">' + esc(em) + '</p>'; });
+        bodyHtml += '<p class="muted">' + (currentLang==='en'?'No mailbox sync yet — inbox binding is a later task.':'暂无邮件记录（邮箱接入另立项）') + '</p>';
+    } else {
+        bodyHtml += '<p class="muted">' + (currentLang==='en'?'No email on file':'暂无邮箱，也无邮件记录') + '</p>';
+    }
+    bodyHtml += '</article></div></div>';
+
+    bodyHtml += secHead(currentLang === 'en' ? 'Key talks' : '重要对话', 'KEY TALKS // ' + keyChats.length) + '<div class="wgrid">';
+    if (!keyChats.length) {
+        bodyHtml += '<div class="wall-empty"' + delay() + '>' + (currentLang==='en'?'No conversations linked to this customer':'暂无关联到该客户的对话') + '</div>';
+    } else {
+        keyChats.forEach(function (conv) {
+            bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="tagchip dim">' +
+                esc(conv.context || 'chat') + '</span><span class="muted">' + esc((conv.created_at || '').slice(0, 16)) +
+                '</span>' + (conv.is_important ? '<span class="tagchip" style="margin-left:auto">' + (currentLang==='en'?'Important':'重要') + '</span>' : '') +
+                '</div><p class="quote">' + esc((conv.query || '').slice(0, 160)) + '</p>' +
+                '<p class="muted">' + esc((conv.response || '').slice(0, 120)) + '</p></article>';
+        });
+    }
+    bodyHtml += '</div></div>';
+
+    bodyHtml += secHead(currentLang === 'en' ? 'Timeline' : '互动时间线', 'TIMELINE') +
+        '<div class="wgrid"><article class="wcard wide"' + delay() + '>';
+    if (!timeline.length) {
+        bodyHtml += '<div class="wall-empty">' + (currentLang==='en'?'No activity yet':'暂无互动记录') + '</div>';
+    } else {
+        bodyHtml += '<ul class="timeline">' + timeline.map(function (t) {
+            return '<li><span class="t">' + esc(t.at || '') + '</span><p>' + esc(t.text || '') + '</p></li>';
+        }).join('') + '</ul>';
+    }
+    bodyHtml += '</article></div></div>';
+
+    wall.innerHTML =
+        '<div class="wall-head">' +
+        '<button type="button" class="wall-back" id="wall-back">' + (currentLang==='en'?'← Back to list':'← 返回客户列表') + '</button>' +
+        '<div class="wall-title"><div><h3>' + esc(c.name) + '</h3>' +
+        '<div class="sub">' + esc([e1.country, e1.buyer_type, e1.main_category].filter(Boolean).join(' · ') || (currentLang==='en'?'Customer file':'客户档案')) +
+        '<br />' + (currentLang==='en'?'Next follow-up: ':'下次跟进：') +
+        (overdue ? '<span style="color:var(--accent);font-weight:700;">' + (currentLang==='en'?'Overdue':'已逾期') + '</span>' : esc(follow || '—')) +
+        '</div></div><span class="wall-stamp">' + esc(stamp) + '</span></div>' +
+        '<div class="wstats">' +
+        '<div class="wstat"' + delay() + '><b>' + (stats.people_count || people.length) + '</b><span>' + (currentLang==='en'?'People':'关联人物') + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b>' + (stats.order_count || orders.length) + '</b><span>' + (currentLang==='en'?'Orders':'订单记录') + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b id="wall-stat-total">' + (hasAmount ? '$0' : '—') + '</b><span>' + (currentLang==='en'?'Order total':'订单总额') + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b>' + (stats.mail_and_talk_count || (emails.length + keyChats.length)) + '</b><span>' + (currentLang==='en'?'Mail + talks':'邮件 + 重要对话') + '</span></div>' +
+        '</div>' +
+        '<div class="wall-actions">' +
+        '<button type="button" class="primary" id="wall-edit">' + (currentLang==='en'?'Edit profile':'编辑档案') + '</button>' +
+        '<button type="button" id="wall-add-order">' + (currentLang==='en'?'Add order':'添加订单') + '</button>' +
+        '<button type="button" id="wall-stage-save">' + (currentLang==='en'?'Save stage / follow-up':'保存阶段与跟进日') + '</button>' +
+        '<label style="font-size:12px;display:inline-flex;align-items:center;gap:6px;">' + (currentLang==='en'?'Stage':'商机阶段') +
+        ' <select id="wall-stage">' + _CRM_STAGES.map(function (s) {
+            return '<option value="' + esc(s) + '"' + (stage === s ? ' selected' : '') + '>' + esc(s) + '</option>';
+        }).join('') + '</select></label>' +
+        '<label style="font-size:12px;display:inline-flex;align-items:center;gap:6px;">' + (currentLang==='en'?'Follow-up':'下次跟进') +
+        ' <input type="date" id="wall-follow" value="' + esc(follow) + '"></label>' +
+        '</div><span class="ddline" aria-hidden="true"></span></div>' +
+        '<div class="wall-scroll" id="wall-body">' + bodyHtml + '</div>';
+
+    wall.classList.add('open');
+    wall.removeAttribute('inert');
+    wall.setAttribute('aria-hidden', 'false');
+    $('wall-back')?.focus();
+    if (hasAmount) _wallAnimateCount($('wall-stat-total'), orderTotal);
+
+    $('wall-back')?.addEventListener('click', closeCustomerWall);
+    $('wall-edit')?.addEventListener('click', function () { closeCustomerWall(); showCustomerDetail(cid); });
+    $('wall-add-order')?.addEventListener('click', function () { showOrderModal(cid); });
+    $('wall-stage-save')?.addEventListener('click', async function () {
+        const nextStage = $('wall-stage')?.value || '询盘';
+        const nextFollow = $('wall-follow')?.value || '';
+        // 实列 stage / next_follow_up_date
+        const saved = await api('PUT', `/api/trade/customers/${cid}`, {
+            stage: nextStage,
+            next_follow_up_date: nextFollow,
+        });
+        if (!saved) return;
+        if (cached) {
+            cached.stage = saved.stage;
+            cached.next_follow_up_date = saved.next_follow_up_date;
+        }
+        toast(t('toast.saved'));
+        filterCustomers();
+        openCustomerWall(cid);
+    });
+
+    if (!_wallEscBound) {
+        _wallEscBound = true;
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') closeCustomerWall();
+        });
+    }
 }
 
 // ── Customer Detail Slide Panel ────────────────────────────────

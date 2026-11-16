@@ -12,19 +12,30 @@
      → marked/DOMPurify 为 undefined → 发消息静默失败（2026-10-29 实测事故）。 -->
 <script src="/static/vendor/marked.umd.js"></script>
 <script src="/static/vendor/purify.min.js"></script>
+<script src="/static/vendor/three.min.js"></script>
 <script>marked.setOptions({ breaks: true, gfm: true });</script>
+<link rel="stylesheet" href="/static/fonts/fonts.css">
 <link rel="stylesheet" href="/static/trade_chat.css">
 <body>
+<canvas id="bg3d" aria-hidden="true"></canvas>
 
 <!-- ═════════════════════ SIDEBAR ═════════════════════ -->
 <aside class="sidebar">
     <div class="sidebar-header">
         <div class="logo-row">
-            <div class="logo">📦 Trade<span>AI</span></div>
+            <div class="logo">TRADE<b>.</b></div>
             <select id="lang-select" aria-label="Language" onchange="switchLang(this.value)" class="lang-select">
                 <option value="zh">中文</option>
                 <option value="en">English</option>
             </select>
+        </div>
+        <div class="sys-strip" aria-live="polite">
+            <span><span class="dot"></span><span id="sys-status">系统就绪</span></span>
+            <span id="sys-clock">--:--:--</span>
+        </div>
+        <div class="fx-toggle-wrap">
+            <span>特效</span>
+            <button type="button" class="fx-switch" id="fx-toggle" role="switch" aria-checked="true" aria-label="three.js 背景特效开关"></button>
         </div>
         <div class="company-select">
             <div class="csel-row">
@@ -40,56 +51,56 @@
         <div class="nav-section">
             <div class="nav-section-title">📊 工作台</div>
             <div class="nav-item active" data-view="chat" data-chat-context="daily" onclick="navToView('chat','daily','今日简报')">
-                <span class="nav-icon">📋</span><span class="nav-label">今日简报</span>
+                <span class="nav-icon" data-icon="message-square"></span><span class="nav-label">今日简报</span>
             </div>
         </div>
 
         <div class="nav-section">
-            <div class="nav-section-title">🔍 获客引流</div>
+            <div class="nav-section-title">获客引流</div>
             <div class="nav-item" data-view="chat" data-chat-context="lead" onclick="navToView('chat','lead','客户开发')">
-                <span class="nav-icon">🎯</span><span class="nav-label">客户开发</span>
+                <span class="nav-icon" data-icon="search"></span><span class="nav-label">客户开发</span>
             </div>
             <div class="nav-item" data-view="chat" data-chat-context="platform" onclick="navToView('chat','platform','平台诊断')">
-                <span class="nav-icon">🏪</span><span class="nav-label">网站诊断</span>
+                <span class="nav-icon" data-icon="globe"></span><span class="nav-label">网站诊断</span>
             </div>
             <div class="nav-item" data-view="chat" data-chat-context="social" onclick="navToView('chat','social','社媒营销')">
-                <span class="nav-icon">📱</span><span class="nav-label">社媒营销</span>
+                <span class="nav-icon" data-icon="messages-square"></span><span class="nav-label">社媒营销</span>
             </div>
             <div class="nav-item" data-view="chat" data-chat-context="linkedin" onclick="navToView('chat','linkedin','LinkedIn 营销')">
-                <span class="nav-icon">💼</span><span class="nav-label">LinkedIn</span>
+                <span class="nav-icon" data-icon="link"></span><span class="nav-label">LinkedIn</span>
             </div>
             <div class="nav-item" data-view="chat" data-chat-context="customs" onclick="navToView('chat','customs','海关数据')">
-                <span class="nav-icon">🛃</span><span class="nav-label">海关数据</span>
+                <span class="nav-icon" data-icon="package"></span><span class="nav-label">海关数据</span>
             </div>
         </div>
 
         <div class="nav-section hidden" data-paid>
-            <div class="nav-section-title">👤 销售转化</div>
+            <div class="nav-section-title">销售转化</div>
             <div class="nav-item" data-view="customers" onclick="navToView('customers')">
-                <span class="nav-icon">👥</span><span class="nav-label">客户管理</span>
+                <span class="nav-icon" data-icon="users"></span><span class="nav-label">客户管理</span>
             </div>
             <div class="nav-item" data-view="chat" data-chat-context="docs" onclick="navToView('chat','docs','文档库')">
-                <span class="nav-icon">📁</span><span class="nav-label">文档库</span>
+                <span class="nav-icon" data-icon="folder"></span><span class="nav-label">文档库</span>
             </div>
             <div class="nav-item" data-view="chat" data-chat-context="docgen" onclick="navToView('chat','docgen','文档生成')">
-                <span class="nav-icon">📄</span><span class="nav-label">文档生成</span>
+                <span class="nav-icon" data-icon="file-text"></span><span class="nav-label">文档生成</span>
             </div>
         </div>
 
         <div class="nav-section hidden" data-paid>
-            <div class="nav-section-title">🛠️ 工具</div>
+            <div class="nav-section-title">工具</div>
             <div class="nav-item" data-view="chat" data-chat-context="osint" onclick="navToView('chat','osint','客户背调')">
-                <span class="nav-icon">🕵️</span><span class="nav-label">客户背调</span>
+                <span class="nav-icon" data-icon="search"></span><span class="nav-label">客户背调</span>
             </div>
             <div class="nav-item" data-view="tasks" onclick="navToView('tasks')">
-                <span class="nav-icon">⏰</span><span class="nav-label">定时任务</span>
+                <span class="nav-icon" data-icon="list-checks"></span><span class="nav-label">定时任务</span>
             </div>
         </div>
 
         <div class="nav-section hidden" data-paid>
-            <div class="nav-section-title">💬 历史</div>
+            <div class="nav-section-title">历史</div>
             <div class="nav-item" data-view="history" onclick="navToView('history')">
-                <span class="nav-icon">🕐</span><span class="nav-label">对话记录</span>
+                <span class="nav-icon" data-icon="rotate-ccw-clock"></span><span class="nav-label">对话记录</span>
             </div>
         </div>
     </nav>
@@ -110,12 +121,15 @@
         <button id="skills-help-btn" onclick="showSkillsHelp()" data-tip="技能帮助">📖</button>
         <button id="skills-update-btn" onclick="updateSkills(event)" data-tip="更新技能" hidden>📚</button>
         <button id="upgrade-help-btn" class="hidden" data-paid onclick="showUpgradeHelp()" data-tip="升级说明">ℹ️</button>
-        <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导">🎓</button>
+        <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导"><span class="i i-20" style="--i:url('/static/icons/lucide-compass.svg')"></span></button>
         <!-- 聊天副驾设置入口暂时隐藏（2026-11-06）；弹窗与接口保留，改回可见只需删掉 hidden。 -->
-        <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾" hidden>⚙️</button>
+        <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-settings.svg')"></span></button>
     </div>
 
 </aside>
+
+<!-- 客户详情卡片墙（S-01）：点客户名展开，Esc / 返回关闭 -->
+<div id="customer-wall" class="wall" inert aria-hidden="true"></div>
 
 <!-- ═════════════════════ MAIN ═════════════════════ -->
 <main class="main" id="main-content">
@@ -320,5 +334,6 @@
 <script src="/static/js/chat.js"></script>
 <script src="/static/js/customers.js"></script>
 <script src="/static/js/views.js"></script>
+<script src="/static/js/fx.js"></script>
 <script src="/static/js/init.js"></script>
 </html>
