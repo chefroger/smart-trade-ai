@@ -34,3 +34,21 @@ def test_secrets_roundtrip_and_chmod(tmp_path, monkeypatch):
 
     ms.delete_secret(1)
     assert ms.get_secret(1) is None
+
+
+def test_secrets_corrupt_json_degrades_empty(tmp_path, monkeypatch):
+    """损坏或非对象 JSON 不抛异常，按空映射降级。"""
+    monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+    from trade import database as db
+
+    db.init_db()
+    from trade import mailbox_store as ms
+
+    path = ms.secrets_path()
+    path.write_text("{not-json", encoding="utf-8")
+    assert ms.get_secret(1) is None
+    path.write_text("[]", encoding="utf-8")
+    assert ms.get_secret(2) is None
+    # 降级后仍可写入
+    ms.set_secret(3, "fake-auth-code-xx")
+    assert ms.get_secret(3) == "fake-auth-code-xx"

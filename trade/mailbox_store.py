@@ -15,12 +15,19 @@ def secrets_path() -> Path:
 
 
 def _load_secrets() -> dict[str, str]:
-    """从磁盘读取凭证映射；缺失或空文件返回空 dict。"""
+    """从磁盘读取凭证映射；缺失、损坏或非对象 JSON 一律返回空 dict。"""
     p = secrets_path()
     # 文件不存在时无需创建，调用方按空映射处理
     if not p.is_file():
         return {}
-    data = json.loads(p.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        # 损坏/半截写入：降级为空，避免绑定/拉取整条链路 500（同 license.py）
+        return {}
+    # 根节点必须是对象；[] / "x" / null 不当成映射
+    if not isinstance(data, dict):
+        return {}
     return {str(k): str(v) for k, v in data.items()}
 
 
