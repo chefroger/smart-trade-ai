@@ -5,6 +5,10 @@
     --accent: #C8102E; --accent-ink: #FFFFFF;
     --line: #E3E3E0; --line-strong: #141414;
     --chip: #F1F1EF; --radius: 2px;
+    /* mockup 格子底：主内容区用；待办横幅用更深实底盖住格子 */
+    --grid-line: rgba(20, 20, 20, 0.045);
+    --bg-field: #F5F5F3;
+    --todo-bar-bg: #EBEBE9;
     --font-ui: "Archivo", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
     --font-mono: "Share Tech Mono", ui-monospace, monospace;
     --ease-s01: cubic-bezier(.22,.9,.3,1);
@@ -171,14 +175,36 @@ body {
 .sidebar-footer button:not([data-tip])::after { display: none; }
 
 /* ── Main ────────────────────────────────────────────────────────────── */
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-main); position: relative; }
+/* #main-content 与 .main 是同一节点（trade_chat.html） */
+.main#main-content, .main {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative;
+    min-height: 0;
+    /* zip .screen：32px 十字格子 + 略冷灰底 */
+    background:
+        linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--bg-field);
+}
+
+/* 顶部待办横幅：实底、比格子区更暗（盖住下方格子） */
+#guidance-bar {
+    flex-shrink: 0; max-height: 20vh; overflow-y: auto;
+    background: var(--todo-bar-bg) !important;
+    border-bottom: 1.5px dashed rgba(20, 20, 20, 0.45) !important;
+    padding: 8px 14px; line-height: 1.4; font-size: 12px;
+    position: relative; z-index: 2;
+}
 
 /* ── Chat View (DeepSeek-style: centered, flat, clean) ──────────────── */
-.chat-view { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
-#main-content > div { height: auto; flex: 1; }
+.chat-view, .panel-view {
+    display: flex; flex-direction: column; flex: 1; overflow: hidden;
+    background: transparent;
+}
+#main-content > div { height: auto; flex: 1; background: transparent; }
 .chat-topbar {
-    padding: 12px 24px; background: var(--bg-chat); border-bottom: 1px solid var(--border-light);
+    padding: 12px 24px; background: rgba(255, 255, 255, 0.82); border-bottom: 1px solid var(--border-light);
     display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 12px;
+    backdrop-filter: blur(2px);
 }
 .chat-topbar h2 { font-size: 15px; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
 .chat-topbar .chat-badges { display: flex; align-items: center; gap: 8px; }
@@ -199,6 +225,7 @@ body {
     flex: 1; overflow-y: auto; padding: 24px 0 120px;
     display: flex; flex-direction: column; gap: 0;
     scroll-behavior: smooth;
+    background: transparent;
 }
 .chat-messages > * {
     width: 98%; margin: 0 auto; padding: 0 24px;
@@ -236,7 +263,7 @@ body {
 .chat-input-area {
     position: absolute; bottom: 0; left: 0; right: 0;
     padding: 0 24px 20px; display: flex; justify-content: center;
-    background: linear-gradient(180deg, transparent 0%, var(--bg-main) 40%);
+    background: linear-gradient(180deg, transparent 0%, rgba(245, 245, 243, 0.92) 40%);
     pointer-events: none;
 }
 .chat-input-area > * { pointer-events: all; }
@@ -302,11 +329,12 @@ body {
 .empty-state button:hover { background: var(--primary-dark); }
 
 /* ── Panel Views (Customers / Tasks / Directory / History) ──────────── */
-.panel-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.panel-view { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: transparent; }
 .panel-topbar {
-    padding: 14px 24px; background: var(--bg-card); border-bottom: 1px solid var(--border-light);
+    padding: 14px 24px; background: rgba(255, 255, 255, 0.88); border-bottom: 1px solid var(--border-light);
     display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 12px;
 }
+.panel-body { background: transparent; }
 .panel-topbar h2 { font-size: 15px; font-weight: 600; }
 .panel-topbar-actions { display: flex; gap: 8px; align-items: center; }
 .panel-search {
@@ -901,7 +929,9 @@ body > #toast-container, body > #customer-wall {
 
 /* 聊天 / 面板 S-01 线语言 */
 .chat-topbar, .panel-topbar {
-    border-bottom: none !important; position: relative; background: var(--panel) !important;
+    border-bottom: none !important; position: relative;
+    /* 半透明实底，让底下格子若隐若现，待办横幅仍用更深的 #guidance-bar */
+    background: rgba(255, 255, 255, 0.88) !important;
 }
 .chat-topbar::after, .panel-topbar::after {
     content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;

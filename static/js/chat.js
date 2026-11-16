@@ -96,7 +96,8 @@ function _renderGuidanceBar(currentTimeStr, completed, pending) {
     const guidance = _getCurrentTaskGuidance(currentTimeStr);
     const doneCount = completed.length, totalPending = pending.length;
 
-    let barHtml = `<div id="guidance-bar" style="flex-shrink:0;max-height:20vh;overflow-y:auto;background:var(--bg-card);border-bottom:1px solid var(--border);padding:6px 12px;line-height:1.4;font-size:12px;">`;
+    // 背景/边框交给 CSS（#guidance-bar：暗实底；主区格子由 .main 铺）
+    let barHtml = `<div id="guidance-bar">`;
 
     // 当前任务行
     if (guidance) {
