@@ -261,3 +261,56 @@ def test_pull_timeout_advances_cursor(tmp_path, monkeypatch):
     assert int(row["last_uid"]) == 62
     assert conn.execute("SELECT COUNT(*) AS c FROM emails").fetchone()["c"] == result["pulled"]
     assert "超时" in (row["last_error"] or "")
+
+
+def test_list_customer_emails_company_scoped(tmp_path, monkeypatch):
+    """两公司客户同邮箱：一封邮件两条 match；list_customer_emails 按公司+客户过滤。"""
+    _init_mailbox_db(tmp_path, monkeypatch)
+    from trade import customer
+    from trade.company import crud as company
+    from trade import mailbox_store as ms
+    from trade.database import get_connection
+
+    co_a = company.create(name="Co A Scope", slug="co-a-scope")
+    co_b = company.create(name="Co B Scope", slug="co-b-scope")
+    cust_a = customer.create(
+        "Buyer A",
+        company_id=co_a["id"],
+        email="shared@example.com",
+    )
+    cust_b = customer.create(
+        "Buyer B",
+        company_id=co_b["id"],
+        email="shared@example.com",
+    )
+
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO mailboxes (provider, preset, email_address, host, port, username) "
+        "VALUES ('imap', '126', 'scope@example.com', 'imap.126.com', 993, 'scope@example.com')"
+    )
+    conn.commit()
+    mailbox_id = conn.execute("SELECT id FROM mailboxes LIMIT 1").fetchone()["id"]
+
+    msg = {
+        "message_id": "<scope-1@example.com>",
+        "uid": 1,
+        "from_addr": "shared@example.com",
+        "to_addrs": [],
+        "subject": "Scoped",
+        "snippet": "s",
+        "body_text": "b",
+        "received_at": "2026-01-05T10:00:00",
+    }
+    pairs = ms.find_customer_matches(msg["from_addr"], msg["to_addrs"])
+    assert len(pairs) == 2
+
+    email_id = ms.insert_email_ignore(conn, mailbox_id, msg)
+    inserted = ms.attach_matches(conn, email_id, pairs)
+    conn.commit()
+
+    assert inserted == 2
+    assert len(ms.list_customer_emails(co_a["id"], cust_a["id"])) == 1
+    assert len(ms.list_customer_emails(co_b["id"], cust_b["id"])) == 1
+    assert ms.list_customer_emails(co_a["id"], cust_b["id"]) == []
+    assert ms.list_customer_emails(co_b["id"], cust_a["id"]) == []
