@@ -85,7 +85,7 @@ When using `read_file`, `memory`, or any tool that returns stored data:
 # `vision_analyze`。而 Hermes 侧的门控当时是开着的（实测 image_input_mode=native、
 # check_vision_requirements()=True，且同一张图直发 deepseek-flash 能逐字读对），
 # 所以问题不在配置，在于**提示词里一条图片规则都没有**：全项目唯一一句图片指令挂在
-# static/trade_chat.js 的「拖拽导入」路径上，而用户是在聊天框里直接给的路径。
+# static/js/chat.js 的「拖拽导入」路径上，而用户是在聊天框里直接给的路径。
 #
 # 这条必须在四档都在 —— 「有时在、有时不在」的提示不构成硬约束。
 TRADE_IMAGE_BLOCK = """

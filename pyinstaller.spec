@@ -16,7 +16,7 @@ _block_cipher = None
 ROOT = Path(SPECPATH)  # SPECPATH = directory where this .spec file lives
 
 # files to bundle with the app — 整个 static/ 目录（html + js + css + 图标）。
-# 以前只捆了 trade_chat.html，HTML 里引用的 /static/trade_chat.js 必然 404，
+# 以前只捆了 trade_chat.html，HTML 里引用的 /static/ 脚本必然 404，
 # 打出来的包界面是空的（2026-10-25 审计 P1-11）。
 _static_files = []
 _static_dir = ROOT / "static"

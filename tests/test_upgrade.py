@@ -645,7 +645,12 @@ class TestNoReleaseVersionBaseline:
 
     def test_confirm_dialog_does_not_show_release_target(self):
         root = Path(__file__).resolve().parent.parent
-        src = (root / "static" / "trade_chat.js").read_text(encoding="utf-8")
+        js_dir = root / "static" / "js"
+        order = (
+            "state.js", "i18n.js", "wizard.js", "api.js", "skills.js",
+            "ui.js", "chat.js", "customers.js", "views.js", "init.js",
+        )
+        src = "".join((js_dir / name).read_text(encoding="utf-8") for name in order)
 
         assert "sys.update_confirm_version" not in src
         assert "d.latest_version" not in src

@@ -429,7 +429,12 @@ class TestLicenseRoutesRequireSession:
         assert "不需要 session token" not in src
 
     def test_frontend_sends_token(self):
-        js = _read_source("static/trade_chat.js")
+        js_dir = ROOT / "static" / "js"
+        order = (
+            "state.js", "i18n.js", "wizard.js", "api.js", "skills.js",
+            "ui.js", "chat.js", "customers.js", "views.js", "init.js",
+        )
+        js = "".join((js_dir / name).read_text(encoding="utf-8") for name in order)
         # 两处 /license/status 都必须带 token。
         # loadLicenseStatus 会把 opts 单独取出来加超时 signal，所以那里不再是
         # 「路径与 _buildApiOpts 同行」；改为按函数体分别断言「请求确实用了

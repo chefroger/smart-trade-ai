@@ -67,7 +67,7 @@ def _cleanup(path: str) -> None:
 def _require_paid_feature() -> None:
     """导入/导出是付费能力：未激活（试用）时不开放。
 
-    与界面门禁一致（static/trade_chat.js 的 _licenseActivated）。界面隐藏是
+    与界面门禁一致（static/js/api.js 的 _licenseActivated）。界面隐藏是
     用户体验，这里才是真正的边界 —— 否则试用用户直接调 API 就能用。
     许可证读取异常时**放行**（可用性优先，不能因为读不到状态就锁住付费用户）。
     """

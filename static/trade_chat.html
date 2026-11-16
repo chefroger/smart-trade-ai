@@ -96,13 +96,13 @@
 
     <div id="license-bar" style="padding:6px 16px;font-size:11px;text-align:center;display:none;"></div>
     <!-- 图标按钮：文字改成悬停时用 data-tip 显示（样式见 trade_chat.css 的
-         .sidebar-footer，文案由 trade_chat.js 的 applyI18n 填）。
+         .sidebar-footer，文案由 i18n.js 的 applyI18n 填）。
          带文字的按钮一行放不下 4 个，会被挤成两行 —— 图标加悬停提示既放得下，
          又不牺牲可发现性。
          ⚠️ 按钮上**不能**再留 title 属性：它和自定义提示会同时弹出来。
          图标刻意两两不同（⬆️/♻️、📖/📚、ℹ️），否则纯图标后用户分不清谁是谁。 -->
     <!-- 今日 token 用量提示（审计 P1-16）：只展示，不拦聊天。
-         文案与配色由 trade_chat.js 的 loadUsageToday() 填。 -->
+         文案与配色由 api.js 的 loadUsageToday() 填。 -->
     <div id="usage-today" class="usage-today" hidden></div>
     <div class="sidebar-footer">
         <button id="system-update-btn" class="hidden" data-paid onclick="doTradeUpdate(event)" data-tip="更新系统">⬆️</button>
@@ -291,7 +291,7 @@
     </div>
 </div>
 
-<!-- Hermes 版本过旧：全屏升级面板。默认隐藏，由 trade_chat.js 按 /system/hermes-compat 显示。
+<!-- Hermes 版本过旧：全屏升级面板。默认隐藏，由 views.js 按 /system/hermes-compat 显示。
      存在的理由：Trade 进程内嵌 Hermes，Hermes 版本过旧时 agent 功能全废；而桌面端
      （tradewin）用户看不到终端，必须有个界面能告诉他们发生了什么、正在做什么。 -->
 <div class="hermes-upgrade-overlay hidden" id="hermes-upgrade-overlay">
@@ -311,5 +311,14 @@
 <div id="toast-container"></div>
 
 <script>let TOKEN = "__TRADE_SESSION_TOKEN__";</script>
-<script src="/static/trade_chat.js"></script>
+<script src="/static/js/state.js"></script>
+<script src="/static/js/i18n.js"></script>
+<script src="/static/js/wizard.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/skills.js"></script>
+<script src="/static/js/ui.js"></script>
+<script src="/static/js/chat.js"></script>
+<script src="/static/js/customers.js"></script>
+<script src="/static/js/views.js"></script>
+<script src="/static/js/init.js"></script>
 </html>
