@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import re
 import threading
 import unicodedata
@@ -120,6 +121,41 @@ class ProfileError(ValueError):
     """画像业务校验错误（路由转 400）。"""
 
 
+def _as_str(value: Any, field: str, default: str = "") -> str:
+    """宽松模型下的字符串校验：非 None 且非 str → 400，而不是 500。"""
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ProfileError(f"{field} 必须是字符串")
+    return value
+
+
+def _as_flag(value: Any, field: str) -> int | None:
+    """隐私开关只认 0/1/true/false；其余 400。"""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int) and value in (0, 1):
+        return value
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("1", "true"):
+            return 1
+        if s in ("0", "false"):
+            return 0
+    raise ProfileError(f"{field} 只能是 0/1/true/false")
+
+
+def _as_int(value: Any, field: str, default: int) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ProfileError(f"{field} 必须是整数") from None
+
+
 class ProfileConflictError(Exception):
     """指纹冲突（路由转 409）。"""
 
@@ -140,7 +176,7 @@ def normalize_attach(
     require_primary: bool = True,
 ) -> tuple[str, int | None]:
     """校验并归一 attach_to / contact_id。失败抛 ProfileError。"""
-    at = (attach_to or "none").strip() or "none"
+    at = _as_str(attach_to, "attach_to", "none").strip() or "none"
     if at not in ATTACH_TO_VALUES:
         raise ProfileError("挂到对象无效，只能是 none / primary / contact")
 
@@ -309,11 +345,11 @@ def create_fact_manual(
     _require_customer(customer_id, company_id)
     if not facts_available():
         raise RuntimeError("表不存在")
-    cat = (category or "").strip()
+    cat = _as_str(category, "category").strip()
     if cat not in FACT_CATEGORIES:
         raise ProfileError("分类无效")
-    subj = (subject or "").strip()
-    cont = (content or "").strip()
+    subj = _as_str(subject, "subject").strip()
+    cont = _as_str(content, "content").strip()
     if not cont:
         raise ProfileError("内容不能为空")
     if _ulen(subj) > _SUBJECT_MAX:
@@ -416,15 +452,15 @@ def update_fact(
     ai_vis = int(existing.get("ai_visible") or 0)
 
     if "category" in updates and updates["category"] is not None:
-        cat = str(updates["category"]).strip()
+        cat = _as_str(updates["category"], "category").strip()
         if cat not in FACT_CATEGORIES:
             raise ProfileError("分类无效")
     if "subject" in updates and updates["subject"] is not None:
-        subj = str(updates["subject"]).strip()
+        subj = _as_str(updates["subject"], "subject").strip()
         if _ulen(subj) > _SUBJECT_MAX:
             raise ProfileError(f"对象最长 {_SUBJECT_MAX} 字")
     if "content" in updates and updates["content"] is not None:
-        cont = str(updates["content"]).strip()
+        cont = _as_str(updates["content"], "content").strip()
         if not cont:
             raise ProfileError("内容不能为空")
         if _ulen(cont) > _CONTENT_MAX:
@@ -436,7 +472,7 @@ def update_fact(
             new_at, new_cid, customer_id=customer_id, company_id=company_id,
         )
     if "ai_visible" in updates and updates["ai_visible"] is not None:
-        ai_vis = 1 if updates["ai_visible"] else 0
+        ai_vis = _as_flag(updates["ai_visible"], "ai_visible") or 0
 
     fp = fact_fingerprint(cat, subj, cont)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -580,10 +616,10 @@ def _validate_gift_fields(
     gift_date: str,
 ) -> tuple[str, str, float | None, str, str]:
     """校验礼物字段。"""
-    d = (direction or "").strip()
+    d = _as_str(direction, "direction").strip()
     if d not in GIFT_DIRECTIONS:
         raise ProfileError("往来方向无效")
-    it = (item or "").strip()
+    it = _as_str(item, "item").strip()
     if not it:
         raise ProfileError("物品不能为空")
     if _ulen(it) > _ITEM_MAX:
@@ -594,12 +630,16 @@ def _validate_gift_fields(
             val = float(approx_value)
         except (TypeError, ValueError):
             raise ProfileError("金额必须是数字") from None
+        if not math.isfinite(val):
+            raise ProfileError("金额必须是有限数字")
         if val < 0:
             raise ProfileError("金额不能为负")
-    cur = (currency or "").strip().upper()
+        if val > 1_000_000_000:
+            raise ProfileError("金额过大")
+    cur = _as_str(currency, "currency").strip().upper()
     if cur and not _CURRENCY_RE.match(cur):
         raise ProfileError("币种必须是 3 位大写字母")
-    gd = (gift_date or "").strip()
+    gd = _as_str(gift_date, "gift_date").strip()
     if gd:
         if not _DATE_RE.match(gd):
             raise ProfileError("日期必须是 YYYY-MM-DD")
@@ -738,19 +778,19 @@ def update_gift(
     ai_vis = int(existing.get("ai_visible") or 0)
 
     if "direction" in updates and updates["direction"] is not None:
-        d = str(updates["direction"]).strip()
+        d = _as_str(updates["direction"], "direction").strip()
     if "item" in updates and updates["item"] is not None:
-        it = str(updates["item"]).strip()
+        it = _as_str(updates["item"], "item").strip()
     if "approx_value" in updates:
         val = updates["approx_value"]
     if "currency" in updates and updates["currency"] is not None:
-        cur = str(updates["currency"])
+        cur = _as_str(updates["currency"], "currency")
     if "gift_date" in updates and updates["gift_date"] is not None:
-        gd = str(updates["gift_date"])
+        gd = _as_str(updates["gift_date"], "gift_date")
     if "occasion" in updates and updates["occasion"] is not None:
-        occ = str(updates["occasion"]).strip()
+        occ = _as_str(updates["occasion"], "occasion").strip()
     if "note" in updates and updates["note"] is not None:
-        nt = str(updates["note"]).strip()
+        nt = _as_str(updates["note"], "note").strip()
     if "attach_to" in updates or "contact_id" in updates:
         new_at = updates["attach_to"] if "attach_to" in updates else at
         new_cid = updates["contact_id"] if "contact_id" in updates else cid
@@ -758,7 +798,7 @@ def update_gift(
             new_at, new_cid, customer_id=customer_id, company_id=company_id,
         )
     if "ai_visible" in updates and updates["ai_visible"] is not None:
-        ai_vis = 1 if updates["ai_visible"] else 0
+        ai_vis = _as_flag(updates["ai_visible"], "ai_visible") or 0
 
     d, it, val, cur, gd = _validate_gift_fields(
         direction=d, item=it, approx_value=val, currency=cur, gift_date=gd,
@@ -1115,7 +1155,7 @@ def extract_from_sources(
     if not facts_available() or not gifts_available():
         raise RuntimeError("表不存在")
 
-    lim = max(1, min(int(limit or 20), 50))
+    lim = max(1, min(_as_int(limit, "limit", 20), 50))
 
     with _EXTRACT_LOCK:
         if customer_id in _EXTRACT_LOCKS:

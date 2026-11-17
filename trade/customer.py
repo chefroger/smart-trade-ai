@@ -14,6 +14,18 @@ from trade.database import get_connection
 CRM_STAGES = frozenset({"询盘", "报价", "样品", "订单"})
 
 
+def _ts_key(value) -> float:
+    """把对话/邮件两种时间格式统一成可比较的 epoch 秒。"""
+    s = str(value or "").strip()
+    if not s:
+        return float("-inf")
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(s.replace(" ", "T")).timestamp()
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
 def _normalize_crm_stage(stage: str | None, *, default: str = "询盘") -> str:
     """非法阶段回落到 default，避免脏值进库。"""
     s = (stage or "").strip()
@@ -404,7 +416,7 @@ def _attach_list_aggregates(
         email_at = last_email.get(cid)
         # 取两者中较新的作为「最近联系」
         if talk_at and email_at:
-            contact_at = talk_at if talk_at >= email_at else email_at
+            contact_at = talk_at if _ts_key(talk_at) >= _ts_key(email_at) else email_at
         else:
             contact_at = talk_at or email_at
         c["order_count"] = count
@@ -555,7 +567,7 @@ def get_timeline(
         return None
 
     window = max(1, min(int(days or 60), 365))
-    cutoff = (date.today() - timedelta(days=window)).isoformat()
+    cutoff = (date.today() - timedelta(days=max(0, window - 1))).isoformat()
     today = date.today().isoformat()
     events: list[dict] = []
     conn = get_connection()
@@ -571,7 +583,7 @@ def get_timeline(
                 "at": (r["created_at"] or "")[:16],
                 "kind": "order_created",
                 "title": f"{ono} 创建",
-                "detail": r["status"] or "",
+                "detail": "",
                 "ref_type": "order",
                 "ref_id": r["id"],
             })
@@ -605,7 +617,28 @@ def get_timeline(
         except Exception:
             pass  # order_events 缺表时跳过
 
-        # 邮件 in/out
+        # 邮件 in/out：客户的全部地址（主/备用/附加联系人），不只主邮箱
+        try:
+            from trade import contacts as contacts_module
+            extras = contacts_module.list_additional(customer_id, company_id=company_id)
+            try:
+                e2_all = json.loads(cust.get("extra2") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                e2_all = {}
+            if not isinstance(e2_all, dict):
+                e2_all = {}
+            addr_set = {
+                str(e2_all.get(k) or "").strip().lower()
+                for k in ("email", "backup_email")
+            }
+            contact_raw = str(cust.get("contact") or "").strip()
+            if "@" in contact_raw:
+                addr_set.add(contact_raw.lower())
+            for p in extras:
+                addr_set.add((p.get("email") or "").strip().lower())
+            addr_set.discard("")
+        except Exception:
+            addr_set = set()
         try:
             for r in conn.execute(
                 "SELECT id, subject, from_addr, to_addrs, received_at "
@@ -614,18 +647,9 @@ def get_timeline(
                 (company_id, customer_id, cutoff),
             ).fetchall():
                 subj = (r["subject"] or "").strip() or "（无主题）"
-                # 粗判方向：from 含客户邮箱 → email_in，否则 email_out
+                # 按客户全部地址判收发：命中任一地址 → email_in，否则 email_out
                 from_addr = (r["from_addr"] or "").lower()
-                kind = "email_in"
-                try:
-                    e2 = json.loads(cust.get("extra2") or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    e2 = {}
-                cust_email = (e2.get("email") or "").lower()
-                if cust_email and cust_email in from_addr:
-                    kind = "email_in"
-                elif cust_email:
-                    kind = "email_out"
+                kind = "email_in" if any(a in from_addr for a in addr_set) else "email_out"
                 events.append({
                     "at": (r["received_at"] or "")[:16],
                     "kind": kind,

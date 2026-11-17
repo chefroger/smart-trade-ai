@@ -1,5 +1,7 @@
 """订单 API 路由。"""
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from trade import order as order_module
@@ -7,6 +9,27 @@ from trade.api.deps import require_company
 from trade.api.models import OrderCreate, OrderUpdate
 
 router = APIRouter(tags=["orders"])
+
+_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def _clean_currency(value) -> str | None:
+    """币种只收 3 位大写字母；HTTP 400（不是 422），并转大写。"""
+    if value is None:
+        return None
+    s = str(value).strip().upper()
+    if not s:
+        return None
+    if not _CURRENCY_RE.fullmatch(s):
+        raise HTTPException(status_code=400, detail="币种必须是 3 位大写字母（如 USD/EUR）。")
+    return s
+
+
+def _clean_item_currencies(items: list[dict]) -> None:
+    for item in items:
+        if "currency" in item:
+            item["currency"] = _clean_currency(item.get("currency")) or ""
+
 
 _NUMERIC_LABELS = {
     "quantity": "数量",
@@ -113,11 +136,12 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
         if not items:
             raise HTTPException(status_code=400, detail="订单至少需要一行商品。")
         _reject_negative_items(items)
+        _clean_item_currencies(items)
         return order_module.create(
             company_id=cid,
             customer_id=payload.customer_id,
             order_no=payload.order_no or "",
-            currency=payload.currency or "USD",
+            currency=_clean_currency(payload.currency) or "USD",
             status=payload.status or "报价中",
             delivery_date=payload.delivery_date or "",
             payment_terms=payload.payment_terms or "",
@@ -194,11 +218,14 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
     for key in list(changes):
         if changes[key] is None and key not in order_module.CLEARABLE_FIELDS:
             changes.pop(key)
+    if "currency" in changes:
+        changes["currency"] = _clean_currency(changes.get("currency")) or ""
     _reject_negatives(changes)
     if items is not None:
         if not items:
             raise HTTPException(status_code=400, detail="订单至少需要一行商品。")
         _reject_negative_items(items)
+        _clean_item_currencies(items)
 
     new_status = changes.get("status")
     if new_status and not order_module.can_transition_status(existing.get("status") or "", new_status):

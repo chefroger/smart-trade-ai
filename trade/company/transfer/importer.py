@@ -632,11 +632,16 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 new_row["attach_to"] = at
                 new_row["contact_id"] = cid
                 new_row["source_ref"] = _remap_source_ref(row)
+                before = conn.total_changes
                 try:
                     _insert(conn, "customer_facts", new_row, or_ignore=True)
-                    facts_inserted += 1
                 except Exception:
                     facts_skipped += 1
+                    continue
+                if conn.total_changes > before:
+                    facts_inserted += 1
+                else:
+                    facts_skipped += 1  # INSERT OR IGNORE 被指纹去重
         else:
             facts_skipped = len(source_tables["customer_facts"])
         report["tables"]["customer_facts"] = {
@@ -665,11 +670,16 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 new_row["attach_to"] = at
                 new_row["contact_id"] = cid
                 new_row["source_ref"] = _remap_source_ref(row)
+                before = conn.total_changes
                 try:
                     _insert(conn, "customer_gifts", new_row, or_ignore=True)
-                    gifts_inserted += 1
                 except Exception:
                     gifts_skipped += 1
+                    continue
+                if conn.total_changes > before:
+                    gifts_inserted += 1
+                else:
+                    gifts_skipped += 1  # INSERT OR IGNORE 被指纹去重
         else:
             gifts_skipped = len(source_tables["customer_gifts"])
         report["tables"]["customer_gifts"] = {

@@ -94,11 +94,13 @@ function _renderCustomerSummaryBar() {
             ? (' ' + t('cust.summary.plus_currencies', { n: curKeys.length - 1 }))
             : '');
     }
+    // 币种来自订单表（用户/AI 可写），必须转义后再进 innerHTML
+    const amtSafe = esc(amtText);
     el.innerHTML =
         '<span><b>' + t('cust.summary.total', { n: s.total || 0 }) + '</b></span>' +
         '<span>' + t('cust.summary.follow_up', { n: s.follow_up_pending || 0 }) + '</span>' +
         '<span>' + t('cust.summary.overdue', { n: s.overdue || 0 }) + '</span>' +
-        '<span>' + t('cust.summary.orders', { amt: amtText }) + '</span>';
+        '<span>' + t('cust.summary.orders', { amt: amtSafe }) + '</span>';
 }
 
 function _parseExtra1(c) { try { return JSON.parse(c.extra1||'{}'); } catch(e) { return {}; } }
@@ -760,7 +762,11 @@ async function openCustomerWall(cid) {
     if (!_wallEscBound) {
         _wallEscBound = true;
         document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') closeCustomerWall();
+            if (e.key !== 'Escape') return;
+            // 画像页打开时由它自己的监听逐层关闭（画像 → 墙 → 列表）
+            const profile = document.getElementById('customer-profile');
+            if (profile && profile.classList.contains('open')) return;
+            closeCustomerWall();
         });
     }
 }
@@ -1912,6 +1918,13 @@ async function openCustomerProfile(cid) {
         '<div class="wall-head">' +
         '<button type="button" class="wall-back" id="profile-back">' + t('profile.back_wall') + '</button>' +
         '<div class="wall-title bracket"><div><h3>' + esc(c.name) + '</h3>' +
+        '<div class="facts2">' +
+        (e1.tier ? '<span class="tagchip">TIER ' + esc(String(e1.tier)) + '</span>' : '') +
+        (_parseExtra3(c).tags || []).map(function (tag) {
+            return '<span class="chip">' + esc(tag) + '</span>';
+        }).join('') +
+        '<span class="star ' + (c.is_starred ? 'on' : 'off') + '">★</span>' +
+        '</div>' +
         '<div class="sub">' + esc([e1.country, e1.city, e1.buyer_type].filter(Boolean).join(' · ') || t('profile.title')) +
         '</div></div></div></div>' +
         '<div class="wall-scroll profile-dossier">' + strip +

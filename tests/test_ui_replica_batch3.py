@@ -156,14 +156,19 @@ class TestTradeJsonBlocks:
         assert clean == "普通回复，没有结构化块。"
         assert blocks is None
 
-    def test_prompt_hint_in_full_tiers(self):
-        """FULL / FULL_DOCGEN 含 trade-json 约定。"""
+    def test_prompt_hint_in_all_reply_tiers(self):
+        """FULL / FULL_DOCGEN / FIRST_TURN / MINIMAL 都含 trade-json 约定。"""
         from trade.prompt import (
+            TRADE_SYSTEM_PROMPT_FIRST_TURN,
             TRADE_SYSTEM_PROMPT_FULL,
             TRADE_SYSTEM_PROMPT_FULL_DOCGEN,
             TRADE_SYSTEM_PROMPT_MINIMAL,
         )
 
-        assert "trade-json" in TRADE_SYSTEM_PROMPT_FULL
-        assert "trade-json" in TRADE_SYSTEM_PROMPT_FULL_DOCGEN
-        assert "trade-json" not in TRADE_SYSTEM_PROMPT_MINIMAL
+        for text in (
+            TRADE_SYSTEM_PROMPT_FULL,
+            TRADE_SYSTEM_PROMPT_FULL_DOCGEN,
+            TRADE_SYSTEM_PROMPT_FIRST_TURN,
+            TRADE_SYSTEM_PROMPT_MINIMAL,
+        ):
+            assert "trade-json" in text

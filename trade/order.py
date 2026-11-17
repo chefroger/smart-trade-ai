@@ -15,6 +15,18 @@ import re
 
 from trade.database import get_connection
 
+_LOGISTICS_FIELDS = frozenset({
+    "incoterm", "port_of_loading", "container", "lead_time_text", "shipped_at",
+})
+
+
+def _is_missing_column(exc: BaseException) -> bool:
+    """SQLite 缺列有两种文案：旧读写的 `no such column: x` 和 INSERT/UPDATE 的
+    `table orders has no column named x`。两种都要认，否则降级分支永远不触发。"""
+    msg = str(exc).lower()
+    return "no such column" in msg or "has no column named" in msg
+
+
 ORDER_STATUSES = ("报价中", "已下单", "已出货", "已完成", "已取消")
 
 # 允许显式清空（写 NULL）的字段。数值字段必须在内：单价"待谈"、总额未定
@@ -366,7 +378,7 @@ def create(
                  lead_time_text or "", shipped_at or ""),
             )
         except Exception as exc:
-            if "no such column" not in str(exc).lower():
+            if not _is_missing_column(exc):
                 raise
             cur = conn.execute(
                 "INSERT INTO orders (company_id, customer_id, order_no, product_name, "
@@ -513,13 +525,28 @@ def update(
 
         old_status = existing["status"] or ""
         if updates:
-            set_clause = ", ".join(f"{k} = ?" for k in updates)
-            values = list(updates.values()) + [order_id, company_id]
-            n = conn.execute(
-                f"UPDATE orders SET {set_clause}, updated_at = datetime('now','localtime') "
-                "WHERE id = ? AND company_id = ?",
-                values,
-            ).rowcount
+            # 未迁移旧库：物流列不存在时丢掉这些键再写，其余字段照常更新。
+            while True:
+                set_clause = ", ".join(f"{k} = ?" for k in updates)
+                values = list(updates.values()) + [order_id, company_id]
+                try:
+                    n = conn.execute(
+                        f"UPDATE orders SET {set_clause}, updated_at = datetime('now','localtime') "
+                        "WHERE id = ? AND company_id = ?",
+                        values,
+                    ).rowcount
+                    break
+                except Exception as exc:
+                    if not _is_missing_column(exc):
+                        raise
+                    dropped = [k for k in updates if k in _LOGISTICS_FIELDS]
+                    if not dropped:
+                        raise
+                    for k in dropped:
+                        updates.pop(k)
+                    if not updates:
+                        n = 1
+                        break
             if n == 0:
                 conn.rollback()
                 return None

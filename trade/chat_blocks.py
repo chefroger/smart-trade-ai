@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 import re
 
+# 贪婪匹配到最后一个结束围栏：草稿正文里含 ``` 时不会被首个围栏截断
 _FENCE_RE = re.compile(
-    r"```trade-json\s*\r?\n(.*?)```",
+    r"```trade-json\s*\r?\n(.*)```\s*$",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -85,6 +86,8 @@ def parse_trade_json_blocks(text: str) -> tuple[str, dict | None]:
         if cleaned_actions:
             blocks["next_actions"] = cleaned_actions
 
-    # 成功才剥除围栏，避免用户气泡里看到原始 JSON
+    # 只有解析出可用块才剥除围栏；块全被过滤时保留原文，避免内容静默消失
+    if not blocks:
+        return text, None
     clean = (text[: match.start()] + text[match.end() :]).rstrip()
-    return clean, (blocks or None)
+    return clean, blocks
