@@ -71,6 +71,7 @@ class CustomerCreate(BaseModel):
     contact: str = Field("", description="联系方式")
     note: str = Field("", description="备注")
     country: str = Field("", description="国家")
+    city: str = Field("", description="城市")
     tier: str = Field("", description="客户等级 (A/B/C)")
     linkedin_url: str = Field("", description="LinkedIn URL")
     company_website: str = Field("", description="公司网站")
@@ -86,6 +87,8 @@ class CustomerCreate(BaseModel):
     follow_up_note: str = Field("", description="AI 跟进建议")
     main_category: str = Field("", description="主营品类 (客户主营产品/行业)")
     match_score: int = Field(0, description="匹配度评分 (0-5)")
+    function: str = Field("", description="主联系人职能（决策人/财务/仓储/其他）")
+    responsibility: str = Field("", description="主联系人职责")
     stage: Literal["询盘", "报价", "样品", "订单"] = Field(
         "询盘", description="商机阶段（询盘/报价/样品/订单）"
     )
@@ -110,6 +113,7 @@ class CustomerUpdate(BaseModel):
     contact: str | None = Field(None, description="联系方式")
     note: str | None = Field(None, description="备注")
     country: str | None = Field(None, description="国家")
+    city: str | None = Field(None, description="城市")
     tier: str | None = Field(None, description="客户等级 (A/B/C)")
     linkedin_url: str | None = Field(None, description="LinkedIn URL")
     company_website: str | None = Field(None, description="公司网站")
@@ -124,6 +128,8 @@ class CustomerUpdate(BaseModel):
     follow_up_note: str | None = Field(None, description="AI 跟进建议")
     main_category: str | None = Field(None, description="主营品类 (客户主营产品/行业)")
     match_score: int | None = Field(None, description="匹配度评分 (0-5)")
+    function: str | None = Field(None, description="主联系人职能（决策人/财务/仓储/其他）")
+    responsibility: str | None = Field(None, description="主联系人职责")
     # CRM 实列（S-01）：stage / next_follow_up_date / is_starred
     stage: Literal["询盘", "报价", "样品", "订单"] | None = Field(
         None, description="商机阶段（询盘/报价/样品/订单）"
@@ -157,6 +163,13 @@ class ConversationRate(BaseModel):
 
 class ConversationImportant(BaseModel):
     important: bool = Field(True, description="是否标记为重要对话")
+
+
+class ConversationNote(BaseModel):
+    """对话标题/摘要（存 conversations.extra3）；字段用 Any，校验在路由层转 400。"""
+
+    title: Any = Field(None, description="标题（≤60 码点）")
+    summary: Any = Field(None, description="摘要（≤200 码点）")
 
 
 # ── Customer Duplicates ────────────────────────────────────────────────────────

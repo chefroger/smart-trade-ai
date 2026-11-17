@@ -24,7 +24,7 @@ import csv
 import io
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from trade import customer as customer_module
@@ -39,10 +39,30 @@ router = APIRouter(tags=["customers"])
 
 @router.get("/customers")
 def list_customers(
+    response: Response,
     cid: int = Depends(require_company),
+    page: int | None = Query(None, ge=1, description="页码（1 起）；不传则全量"),
+    limit: int = Query(50, ge=1, le=200, description="每页条数，仅 page 有值时生效"),
 ):
-    """列出当前公司的所有客户。"""
-    return customer_module.list_by_company(cid)
+    """列出当前公司的客户。
+
+    未传 page 时返回全量数组（现有前端行为不变）；传了 page 才切页，
+    并在响应头写 X-Total-Count。
+    """
+    items, total = customer_module.list_by_company_page(
+        cid, page=page, limit=limit,
+    )
+    response.headers["X-Total-Count"] = str(total)
+    return items
+
+
+@router.get("/customers/summary")
+def customers_summary(cid: int = Depends(require_company)):
+    """公司级客户列表顶栏汇总。
+
+    必须声明在 /customers/{customer_id} 之前，否则 summary 会被当成 id → 422。
+    """
+    return customer_module.get_company_summary(cid)
 
 
 @router.post("/customers")
@@ -53,13 +73,15 @@ def create_customer(
     """创建新客户（归属于当前公司）。"""
     return customer_module.create(
         payload.name, payload.contact, payload.note, company_id=cid,
-        country=payload.country, tier=payload.tier, linkedin_url=payload.linkedin_url,
+        country=payload.country, city=payload.city, tier=payload.tier,
+        linkedin_url=payload.linkedin_url,
         company_website=payload.company_website, social_media=payload.social_media,
         title=payload.title, email=payload.email, backup_email=payload.backup_email,
         phone=payload.phone, whatsapp=payload.whatsapp,
         wechat=payload.wechat, source=payload.source,
         buyer_type=payload.buyer_type, follow_up_note=payload.follow_up_note,
         main_category=payload.main_category, match_score=payload.match_score,
+        function=payload.function, responsibility=payload.responsibility,
         stage=payload.stage,
         next_follow_up_date=payload.next_follow_up_date,
         is_starred=payload.is_starred,
@@ -74,6 +96,7 @@ _CSV_FIELD_MAP = {
     "contact": "contact",
     "title": "title",
     "country": "country",
+    "city": "city",
     "email": "email",
     "phone": "phone",
     "whatsapp": "whatsapp",

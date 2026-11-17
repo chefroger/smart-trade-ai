@@ -30,6 +30,7 @@ async function renderCustomersViewInto(container) {
             </div>
         </div>
         <div class="panel-body">
+            <div id="cust-summary-bar" style="display:flex;flex-wrap:wrap;gap:12px;padding:10px 14px;margin-bottom:10px;font-size:13px;border:1px solid var(--line);background:var(--bg);"></div>
             <div id="cust-import-banner" style="display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:12px;background:var(--bg-muted);border-radius:var(--radius-sm);border:1px dashed var(--border);">
                 <span style="font-size:13px;">📋 批量导入客户？</span>
                 <button class="btn-xs" onclick="downloadCsvTemplate()" style="text-decoration:none;">📥 下载 CSV 模板</button>
@@ -52,10 +53,18 @@ async function renderCustomersViewInto(container) {
 }
 
 let allCustomers = [];
+let _customerSummary = null;
 async function loadCustomersData() {
     if (!currentCompanyId) return;
     $('customers-loading').classList.remove('hidden');
-    allCustomers = await api('GET', '/api/trade/customers') || [];
+    // 列表与顶栏汇总并行；汇总失败不阻断列表
+    const [list, summary] = await Promise.all([
+        api('GET', '/api/trade/customers'),
+        api('GET', '/api/trade/customers/summary'),
+    ]);
+    allCustomers = list || [];
+    _customerSummary = summary || null;
+    _renderCustomerSummaryBar();
     // Enrich with library associations
     for (let c of allCustomers) {
         const libs = await api('GET', `/api/trade/customers/${c.id}/libraries`) || [];
@@ -64,6 +73,32 @@ async function loadCustomersData() {
     $('customers-loading').classList.add('hidden');
     _refreshCustomerFilterOptions();
     filterCustomers();
+}
+
+function _renderCustomerSummaryBar() {
+    const el = $('cust-summary-bar');
+    if (!el) return;
+    const s = _customerSummary || {};
+    const byCur = s.order_totals_by_currency || {};
+    const curKeys = Object.keys(byCur);
+    // 多币种不折算：主显示金额最大的币种，其余用「+N 种」
+    let amtText = '—';
+    if (curKeys.length) {
+        curKeys.sort(function (a, b) { return (byCur[b] || 0) - (byCur[a] || 0); });
+        const main = curKeys[0];
+        const n = Number(byCur[main] || 0);
+        const compact = n >= 1000
+            ? (main + ' ' + (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'K')
+            : (main + ' ' + n.toLocaleString('en-US'));
+        amtText = compact + (curKeys.length > 1
+            ? (' ' + t('cust.summary.plus_currencies', { n: curKeys.length - 1 }))
+            : '');
+    }
+    el.innerHTML =
+        '<span><b>' + t('cust.summary.total', { n: s.total || 0 }) + '</b></span>' +
+        '<span>' + t('cust.summary.follow_up', { n: s.follow_up_pending || 0 }) + '</span>' +
+        '<span>' + t('cust.summary.overdue', { n: s.overdue || 0 }) + '</span>' +
+        '<span>' + t('cust.summary.orders', { amt: amtText }) + '</span>';
 }
 
 function _parseExtra1(c) { try { return JSON.parse(c.extra1||'{}'); } catch(e) { return {}; } }
@@ -239,7 +274,11 @@ function filterCustomers() {
         filtered = filtered.filter(c => {
             const e1 = _parseExtra1(c); const e2 = _parseExtra2(c);
             const tags = (_parseExtra3(c).tags || []).join(' ');
-            const blob = [c.name, c.contact, e1.country, e1.buyer_type, e2.email, e2.title, c.note, tags]
+            // 附加联系人姓名/邮箱也参与关键词命中
+            const extras = (c.extra_contacts || []).map(function (x) {
+                return [x.name, x.email].join(' ');
+            }).join(' ');
+            const blob = [c.name, c.contact, e1.country, e1.city, e1.buyer_type, e2.email, e2.title, c.note, tags, extras]
                 .join(' ').toLowerCase();
             return blob.includes(search);
         });
@@ -331,17 +370,23 @@ async function openCustomerWall(cid) {
     const people = ov.people || [];
     const orders = ov.orders || [];
     const fileEmails = ov.emails || [];
+    const emailDetails = ov.email_details || [];
     const keyChats = ov.key_talks || [];
+    const timeline = ov.timeline || [];
+    const stats = ov.stats || {};
     // 无 is_important 时后端用最近 5 条兜底——标题/统计不能仍写「重要对话」
-    const talksAreImportant = keyChats.some(function (c) { return c.is_important; });
+    const talksAreImportant = keyChats.length > 0 && !keyChats.some(function (c) {
+        return c.is_important_fallback;
+    }) && keyChats.some(function (c) { return c.is_important; });
     const talksTitle = talksAreImportant
         ? (currentLang === 'en' ? 'Key talks' : '重要对话')
         : (currentLang === 'en' ? 'Recent talks' : '最近对话');
+    const emailStatN = (stats.email_count != null) ? stats.email_count : (mailboxBound ? mailRecords.length : fileEmails.length);
+    const talkStatN = (stats.key_talk_count != null) ? stats.key_talk_count : keyChats.length;
     const talksStatLabel = talksAreImportant
-        ? (currentLang === 'en' ? 'Mail + key talks' : '邮件 + 重要对话')
-        : (currentLang === 'en' ? 'Mail + talks' : '邮件 + 对话');
-    const timeline = ov.timeline || [];
-    const stats = ov.stats || {};
+        ? ((currentLang === 'en' ? 'Mail ' : '邮件 ') + emailStatN + (currentLang === 'en' ? ' · Key talks ' : ' · 重要对话 ') + talkStatN)
+        : ((currentLang === 'en' ? 'Mail ' : '邮件 ') + emailStatN + (currentLang === 'en' ? ' · Talks ' : ' · 对话 ') + talkStatN);
+    const quoteCount = stats.quote_count || 0;
     const orderTotal = stats.order_total_amount;
     const orderCurrency = stats.order_total_currency || '';
     const byCurrency = stats.order_totals_by_currency || {};
@@ -372,11 +417,10 @@ async function openCustomerWall(cid) {
     people.forEach(function (p) {
         const isPrimary = !!p.is_primary || p.id == null;
         const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
-        const role = isPrimary
-            ? (p.role || (currentLang === 'en' ? 'Primary contact' : '主要联系人'))
-            // 附加联系人：职务行显示「title · responsibility」，两者皆空才退回职能
-            : ([(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ')
-                || p.function || '');
+        // 主卡与附加联系人统一：职务行显示「title · responsibility」，皆空退回职能
+        const role = ([(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ')
+            || p.function
+            || (isPrimary ? (currentLang === 'en' ? 'Primary contact' : '主要联系人') : ''));
         const badge = isPrimary
             ? ('<span class="tagchip" style="margin-left:auto">' + t('contacts.primary_badge') + '</span>')
             : ('<span class="tagchip dim" style="margin-left:auto">' + t('contacts.extra_badge') + '</span>');
@@ -449,8 +493,17 @@ async function openCustomerWall(cid) {
         bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top">' +
             (typeof iconHtml === 'function' ? iconHtml('mail', 20) : '') +
             '<span class="muted">' + (currentLang === 'en' ? 'Addresses on file' : '档案中的邮箱') + '</span></div>';
-        if (fileEmails.length) {
-            fileEmails.forEach(function (em) { bodyHtml += '<p class="mono">' + esc(em) + '</p>'; });
+        const addrList = emailDetails.length
+            ? emailDetails
+            : fileEmails.map(function (em, i) { return { address: em, is_primary: i === 0 }; });
+        if (addrList.length) {
+            addrList.forEach(function (em) {
+                const addr = typeof em === 'string' ? em : (em.address || '');
+                const isPri = typeof em === 'object' && em.is_primary;
+                bodyHtml += '<p class="mono">' + esc(addr) +
+                    (isPri ? ' <span class="tagchip">' + (currentLang === 'en' ? 'Primary' : '主') + '</span>' : '') +
+                    '</p>';
+            });
         } else {
             bodyHtml += '<p class="muted">' + (currentLang === 'en' ? 'No email on file' : '暂无邮箱') + '</p>';
         }
@@ -482,11 +535,16 @@ async function openCustomerWall(cid) {
         bodyHtml += '<div class="wall-empty"' + delay() + '>' + (currentLang==='en'?'No conversations linked to this customer':'暂无关联到该客户的对话') + '</div>';
     } else {
         keyChats.forEach(function (conv) {
-            bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="tagchip dim">' +
+            const talkTitle = (conv.title || '').trim() || (conv.query || '').slice(0, 160);
+            const talkSummary = (conv.summary || '').trim() || (conv.response || '').slice(0, 120);
+            bodyHtml += '<article class="wcard"' + delay() + ' data-conv-id="' + esc(String(conv.id || '')) + '">' +
+                '<div class="wc-top"><span class="tagchip dim">' +
                 esc(conv.context || 'chat') + '</span><span class="muted">' + esc((conv.created_at || '').slice(0, 16)) +
                 '</span>' + (conv.is_important ? '<span class="tagchip" style="margin-left:auto">' + (currentLang==='en'?'Important':'重要') + '</span>' : '') +
-                '</div><p class="quote">' + esc((conv.query || '').slice(0, 160)) + '</p>' +
-                '<p class="muted">' + esc((conv.response || '').slice(0, 120)) + '</p></article>';
+                '</div><p class="quote wall-talk-title" style="cursor:text;" title="' +
+                esc(currentLang === 'en' ? 'Double-click to edit title' : '双击编辑标题') + '">' +
+                esc(talkTitle) + '</p>' +
+                '<p class="muted wall-talk-summary">' + esc(talkSummary) + '</p></article>';
         });
     }
     bodyHtml += '</div></div>';
@@ -506,13 +564,16 @@ async function openCustomerWall(cid) {
         '<div class="wall-head">' +
         '<button type="button" class="wall-back" id="wall-back">' + (currentLang==='en'?'← Back to list':'← 返回客户列表') + '</button>' +
         '<div class="wall-title bracket"><div><h3>' + esc(c.name) + '</h3>' +
-        '<div class="sub">' + esc([e1.country, e1.buyer_type, e1.main_category].filter(Boolean).join(' · ') || (currentLang==='en'?'Customer file':'客户档案')) +
+        '<div class="sub">' + esc([e1.country, e1.city, e1.buyer_type, e1.main_category].filter(Boolean).join(' · ') || (currentLang==='en'?'Customer file':'客户档案')) +
         '<br />' + (currentLang==='en'?'Next follow-up: ':'下次跟进：') +
         (overdue ? '<span style="color:var(--accent);font-weight:700;">' + (currentLang==='en'?'Overdue':'已逾期') + '</span>' : esc(follow || '—')) +
         '</div></div><span class="wall-stamp">' + esc(stamp) + '</span></div>' +
         '<div class="wstats">' +
         '<div class="wstat"' + delay() + '><b>' + (stats.people_count || people.length) + '</b><span>' + (currentLang==='en'?'People':'关联人物') + '</span></div>' +
-        '<div class="wstat"' + delay() + '><b>' + (stats.order_count || orders.length) + '</b><span>' + (currentLang==='en'?'Orders':'订单记录') + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b>' + (stats.order_count || orders.length) + '</b><span>' +
+        (currentLang==='en'?'Orders':'订单记录') +
+        (quoteCount ? (' · ' + quoteCount + (currentLang==='en'?' quoting':' 单报价中')) : '') +
+        '</span></div>' +
         '<div class="wstat"' + delay() + '><b id="wall-stat-total">' +
         (multiCurrency
             ? esc(Object.keys(byCurrency).map(function (k) {
@@ -520,7 +581,11 @@ async function openCustomerWall(cid) {
             }).join(' · '))
             : (hasAmount ? '0' : '—')) +
         '</b><span>' + (currentLang==='en'?'Order total':'订单总额') + '</span></div>' +
-        '<div class="wstat"' + delay() + '><b>' + (stats.mail_and_talk_count || ((mailboxBound ? mailRecords.length : fileEmails.length) + keyChats.length)) + '</b><span>' + talksStatLabel + '</span></div>' +
+        '<div class="wstat"' + delay() + '><b>' + talksStatLabel + '</b><span>' +
+        (talksAreImportant
+            ? (currentLang==='en'?'Mail · key talks':'邮件 · 重要对话')
+            : (currentLang==='en'?'Mail · talks':'邮件 · 对话')) +
+        '</span></div>' +
         '</div>' +
         '<div class="wall-actions">' +
         '<button type="button" class="primary" id="wall-edit">' + (currentLang==='en'?'Edit profile':'编辑档案') + '</button>' +
@@ -555,6 +620,34 @@ async function openCustomerWall(cid) {
             e.preventDefault();
             closeCustomerWall();
             showCustomerEditModal(cid);
+        });
+    });
+    // 双击重要对话标题 → 改 title/summary
+    wall.querySelectorAll('.wall-talk-title').forEach(function (el) {
+        el.addEventListener('dblclick', async function () {
+            const card = el.closest('[data-conv-id]');
+            const convId = card && card.getAttribute('data-conv-id');
+            if (!convId) return;
+            const curTitle = el.textContent || '';
+            const sumEl = card.querySelector('.wall-talk-summary');
+            const curSummary = sumEl ? (sumEl.textContent || '') : '';
+            const title = window.prompt(
+                currentLang === 'en' ? 'Talk title (max 60)' : '对话标题（最多 60 字）',
+                curTitle
+            );
+            if (title == null) return;
+            const summary = window.prompt(
+                currentLang === 'en' ? 'Talk summary (max 200)' : '对话摘要（最多 200 字）',
+                curSummary
+            );
+            if (summary == null) return;
+            const r = await api('PUT', `/api/trade/conversations/${convId}/note`, {
+                title: title.trim(), summary: summary.trim(),
+            });
+            if (!r) return;
+            el.textContent = title.trim() || curTitle;
+            if (sumEl) sumEl.textContent = summary.trim() || curSummary;
+            toast(currentLang === 'en' ? 'Saved' : '已保存');
         });
     });
     wall.querySelectorAll('.wall-edit-contact').forEach(function (a) {
@@ -1130,7 +1223,10 @@ function showCustomerEditModal(cid) {
         $('cust-edit-id').value = cid;
         $('cust-name').value = c.name||'';
         $('cust-title').value = extra2['title']||'';
+        $('cust-function').value = extra2['function']||'其他';
+        $('cust-responsibility').value = extra2['responsibility']||'';
         $('cust-country').value = extra1['country']||'';
+        $('cust-city').value = extra1['city']||'';
         $('cust-email').value = extra2['email']||c.contact||'';
         $('cust-phone').value = extra2['phone']||'';
         $('cust-whatsapp').value = extra2['whatsapp']||'';
@@ -1147,7 +1243,8 @@ function showCustomerEditModal(cid) {
     } else {
         $('customer-modal-title').textContent = '添加客户';
         $('cust-edit-id').value = '';
-        ['cust-name','cust-contact','cust-title','cust-country','cust-email','cust-phone','cust-whatsapp','cust-linkedin','cust-website','cust-tier','cust-buyer-type','cust-main-category','cust-match-score','cust-backup-email','cust-note','cust-follow-up-note'].forEach(id => $(id).value='');
+        ['cust-name','cust-contact','cust-title','cust-responsibility','cust-country','cust-city','cust-email','cust-phone','cust-whatsapp','cust-linkedin','cust-website','cust-tier','cust-buyer-type','cust-main-category','cust-match-score','cust-backup-email','cust-note','cust-follow-up-note'].forEach(id => $(id).value='');
+        if ($('cust-function')) $('cust-function').value = '其他';
     }
     showModal('customer-modal');
 }
@@ -1159,12 +1256,15 @@ async function saveCustomer() {
     const contact = ($('cust-contact')?.value?.trim() || '');
     const note = $('cust-note').value.trim();
     const country = $('cust-country').value.trim();
+    const city = ($('cust-city')?.value || '').trim();
     const tier = $('cust-tier').value;
     const buyerType = $('cust-buyer-type').value;
     const mainCategory = $('cust-main-category').value.trim();
     const matchScore = parseInt($('cust-match-score').value) || 0;
     const linkedin = $('cust-linkedin').value.trim();
     const title = $('cust-title').value.trim();
+    const functionVal = ($('cust-function')?.value || '其他').trim();
+    const responsibility = ($('cust-responsibility')?.value || '').trim();
     const email = $('cust-email').value.trim();
     const phone = $('cust-phone').value.trim();
     const whatsapp = $('cust-whatsapp').value.trim();
@@ -1172,8 +1272,10 @@ async function saveCustomer() {
     const backupEmail = $('cust-backup-email').value.trim();
     const followUpNote = $('cust-follow-up-note').value.trim();
 
-    const body = {name, contact, note, country, tier, linkedin_url: linkedin,
-        title, email, phone, whatsapp, company_website: website, backup_email: backupEmail, buyer_type: buyerType, follow_up_note: followUpNote, main_category: mainCategory, match_score: matchScore};
+    const body = {name, contact, note, country, city, tier, linkedin_url: linkedin,
+        title, function: functionVal, responsibility, email, phone, whatsapp,
+        company_website: website, backup_email: backupEmail, buyer_type: buyerType,
+        follow_up_note: followUpNote, main_category: mainCategory, match_score: matchScore};
     const saved = editId
         ? await api('PUT', `/api/trade/customers/${editId}`, body)
         : await api('POST', `/api/trade/customers`, body);
