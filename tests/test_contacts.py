@@ -311,10 +311,10 @@ def test_missing_table_degrades(test_db, company_id, monkeypatch):
     text = customer.build_briefing(cust["id"], company_id=company_id)
     assert "Brief" in text or "Deg" in text or "客户简报" in text
 
-    # 写操作 → ContactsUnavailable
-    from trade.contacts import ContactsUnavailable, create
+    # 写操作 → ContactsUnavailableError
+    from trade.contacts import ContactsUnavailableError, create
 
-    with pytest.raises(ContactsUnavailable):
+    with pytest.raises(ContactsUnavailableError):
         create(cust["id"], company_id=company_id, data={"name": "X"})
 
 

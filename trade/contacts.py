@@ -1,7 +1,7 @@
 """附加联系人存取（第 2 人起）。
 
 主联系人唯一真源仍是 customers.contact + extra2；本表永不种子主联系人，
-写操作也不回写 extra2。表缺失时只读路径降级、写路径抛 ContactsUnavailable。
+写操作也不回写 extra2。表缺失时只读路径降级、写路径抛 ContactsUnavailableError。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ _FUNCTIONS = frozenset({"决策人", "财务", "仓储", "其他"})
 _MISSING_MSG = "请重启 Trade 完成升级"
 
 
-class ContactsUnavailable(Exception):
+class ContactsUnavailableError(Exception):
     """contacts 表尚未建好（升级后未重启）。"""
 
 
@@ -227,7 +227,7 @@ def create(customer_id: int, *, company_id: int, data: dict) -> dict:
     except sqlite3.OperationalError as exc:
         conn.rollback()
         if _is_missing_table(exc):
-            raise ContactsUnavailable(_MISSING_MSG) from exc
+            raise ContactsUnavailableError(_MISSING_MSG) from exc
         raise
     except Exception:
         conn.rollback()
@@ -289,7 +289,7 @@ def update(
     except sqlite3.OperationalError as exc:
         conn.rollback()
         if _is_missing_table(exc):
-            raise ContactsUnavailable(_MISSING_MSG) from exc
+            raise ContactsUnavailableError(_MISSING_MSG) from exc
         raise
     except Exception:
         conn.rollback()
@@ -315,7 +315,7 @@ def delete(customer_id: int, contact_id: int, *, company_id: int) -> bool:
     except sqlite3.OperationalError as exc:
         conn.rollback()
         if _is_missing_table(exc):
-            raise ContactsUnavailable(_MISSING_MSG) from exc
+            raise ContactsUnavailableError(_MISSING_MSG) from exc
         raise
     except Exception:
         conn.rollback()

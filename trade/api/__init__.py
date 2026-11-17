@@ -12,10 +12,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from trade.api.chat import router as chat_router
 from trade.api.companies import router as companies_router
+from trade.api.contacts import router as contacts_router
 from trade.api.conversations import router as conversations_router
 from trade.api.copilot import router as copilot_router
 from trade.api.cron import router as cron_router
-from trade.api.contacts import router as contacts_router
 from trade.api.customers import router as customers_router
 from trade.api.deps import opt_company, require_company, require_session
 from trade.api.libraries import router as libraries_router

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from trade import contacts as contacts_module
 from trade.api.deps import require_company
-from trade.contacts import ContactValidationError, ContactsUnavailable
+from trade.contacts import ContactsUnavailableError, ContactValidationError
 
 router = APIRouter(tags=["contacts"])
 
@@ -31,7 +31,7 @@ class ContactWrite(BaseModel):
 
 def _http_from_store(exc: Exception) -> HTTPException:
     """把存取层异常映射为 HTTP。"""
-    if isinstance(exc, ContactsUnavailable):
+    if isinstance(exc, ContactsUnavailableError):
         return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, ContactValidationError):
         return HTTPException(status_code=400, detail=str(exc))
@@ -62,7 +62,7 @@ def create_contact(
         data["name"] = ""
     try:
         return contacts_module.create(customer_id, company_id=cid, data=data)
-    except (ContactsUnavailable, ContactValidationError, LookupError) as exc:
+    except (ContactsUnavailableError, ContactValidationError, LookupError) as exc:
         raise _http_from_store(exc) from exc
 
 
@@ -80,7 +80,7 @@ def update_contact(
         result = contacts_module.update(
             customer_id, contact_id, company_id=cid, data=data
         )
-    except (ContactsUnavailable, ContactValidationError, LookupError) as exc:
+    except (ContactsUnavailableError, ContactValidationError, LookupError) as exc:
         raise _http_from_store(exc) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -96,7 +96,7 @@ def delete_contact(
     """删除附加联系人。"""
     try:
         ok = contacts_module.delete(customer_id, contact_id, company_id=cid)
-    except (ContactsUnavailable, ContactValidationError, LookupError) as exc:
+    except (ContactsUnavailableError, ContactValidationError, LookupError) as exc:
         raise _http_from_store(exc) from exc
     if not ok:
         raise HTTPException(status_code=404, detail="Contact not found")
