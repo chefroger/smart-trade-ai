@@ -149,7 +149,8 @@ class TestChatEndpointHTTP:
         """
         monkeypatch.setenv("TRADE_HOME", str(tmp_path))
         import trade.database as _db
-        _db._get_db_path = lambda p=tmp_path: p / "trade.db"
+        # 必须用 monkeypatch：直接赋值会泄漏到后续用例（mailbox 连到错误 tmp 库）
+        monkeypatch.setattr(_db, "_get_db_path", lambda p=tmp_path: p / "trade.db")
         from trade.database import init_db
         init_db()
 

@@ -25,7 +25,8 @@ def _fresh_db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(db)
     for table in ("companies", "trade_companies", "libraries", "customers",
                   "customer_libraries", "conversations", "orders", "order_items",
-                  "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions"):
+                  "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
+                  "mailboxes", "emails"):
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
     # 迁移 1（订单明细回填）已应用 —— 否则 init_db 会写入，理应备份
@@ -38,6 +39,9 @@ def _fresh_db(tmp_path: Path) -> Path:
     conn.execute("ALTER TABLE customers ADD COLUMN stage TEXT DEFAULT '询盘'")
     conn.execute("ALTER TABLE customers ADD COLUMN next_follow_up_date TEXT DEFAULT ''")
     conn.execute("ALTER TABLE customers ADD COLUMN is_starred INTEGER DEFAULT 0")
+    # emails 两列形态：缺 company_id/customer_id 同样会被 _needs_schema_work 判为待处理
+    conn.execute("ALTER TABLE emails ADD COLUMN company_id INTEGER")
+    conn.execute("ALTER TABLE emails ADD COLUMN customer_id INTEGER")
     conn.commit()
     conn.close()
     return db

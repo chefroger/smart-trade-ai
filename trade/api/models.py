@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+MailboxPreset = Literal["126", "163", "qq", "gmail", "custom"]
+
 # ── Company ────────────────────────────────────────────────────────────────────
 
 class CompanyCreate(BaseModel):
@@ -252,3 +254,23 @@ class ChatRequest(BaseModel):
         if v == "" or v is None:
             return None
         return v
+
+
+# ── 邮箱 IMAP 绑定 ─────────────────────────────────────────────────────────────
+
+
+class MailboxTestRequest(BaseModel):
+    preset: MailboxPreset
+    email_address: str
+    secret: str
+    host: str | None = None
+    port: int | None = None
+    username: str | None = None
+
+
+class MailboxCreateRequest(MailboxTestRequest):
+    display_name: str = ""
+
+
+class MailboxSecretUpdate(BaseModel):
+    secret: str
