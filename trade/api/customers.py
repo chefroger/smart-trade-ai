@@ -294,6 +294,19 @@ def get_customer_overview(
     return overview
 
 
+@router.get("/customers/{customer_id}/timeline")
+def get_customer_timeline(
+    customer_id: int,
+    cid: int = Depends(require_company),
+    days: int = Query(60, ge=1, le=365, description="时间窗口天数"),
+):
+    """客户互动时间线（订单/邮件/对话/今日应回复）。"""
+    items = customer_module.get_timeline(customer_id, company_id=cid, days=days)
+    if items is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return items
+
+
 def _normalize_tags_or_400(raw) -> list[str]:
     """路由层校验 tags：400 + 中文字符串；按 Unicode 码点计长。"""
     if not isinstance(raw, list):

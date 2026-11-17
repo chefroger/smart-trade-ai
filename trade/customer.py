@@ -540,6 +540,142 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
     }
 
 
+def get_timeline(
+    customer_id: int, *, company_id: int, days: int = 60,
+) -> list[dict] | None:
+    """客户互动时间线（W8）：订单创建/状态、邮件、对话、今日应回复。
+
+    返回 [{at, kind, title, detail, ref_type, ref_id}]，按 at 倒序。
+    客户不存在返回 None；days 夹在 1–365。
+    """
+    from datetime import date, timedelta
+
+    cust = get(customer_id, company_id=company_id)
+    if not cust:
+        return None
+
+    window = max(1, min(int(days or 60), 365))
+    cutoff = (date.today() - timedelta(days=window)).isoformat()
+    today = date.today().isoformat()
+    events: list[dict] = []
+    conn = get_connection()
+    try:
+        # 订单创建（SELECT * 兼容未迁移旧库缺物流列）
+        for r in conn.execute(
+            "SELECT * FROM orders "
+            "WHERE company_id = ? AND customer_id = ? AND created_at >= ?",
+            (company_id, customer_id, cutoff),
+        ).fetchall():
+            ono = r["order_no"] or f"#{r['id']}"
+            events.append({
+                "at": (r["created_at"] or "")[:16],
+                "kind": "order_created",
+                "title": f"{ono} 创建",
+                "detail": r["status"] or "",
+                "ref_type": "order",
+                "ref_id": r["id"],
+            })
+
+        # 状态变更（含出货）
+        try:
+            for r in conn.execute(
+                "SELECT e.id, e.order_id, e.from_status, e.to_status, e.at, e.note, "
+                "o.order_no, o.container, o.port_of_loading "
+                "FROM order_events e "
+                "JOIN orders o ON o.id = e.order_id "
+                "WHERE e.company_id = ? AND o.customer_id = ? AND e.at >= ?",
+                (company_id, customer_id, cutoff),
+            ).fetchall():
+                ono = r["order_no"] or f"#{r['order_id']}"
+                to_st = r["to_status"] or ""
+                title = f"{ono} {to_st}" if to_st else f"{ono} 状态变更"
+                detail = r["note"] or ""
+                if to_st == "已出货":
+                    bits = [x for x in (r["container"], r["port_of_loading"]) if x]
+                    detail = (" ".join(bits) + "开船") if bits else (detail or "出货")
+                    title = f"{ono} 出货"
+                events.append({
+                    "at": (r["at"] or "")[:16],
+                    "kind": "order_status",
+                    "title": title,
+                    "detail": detail,
+                    "ref_type": "order",
+                    "ref_id": r["order_id"],
+                })
+        except Exception:
+            pass  # order_events 缺表时跳过
+
+        # 邮件 in/out
+        try:
+            for r in conn.execute(
+                "SELECT id, subject, from_addr, to_addrs, received_at "
+                "FROM emails WHERE company_id = ? AND customer_id = ? "
+                "AND received_at >= ?",
+                (company_id, customer_id, cutoff),
+            ).fetchall():
+                subj = (r["subject"] or "").strip() or "（无主题）"
+                # 粗判方向：from 含客户邮箱 → email_in，否则 email_out
+                from_addr = (r["from_addr"] or "").lower()
+                kind = "email_in"
+                try:
+                    e2 = json.loads(cust.get("extra2") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    e2 = {}
+                cust_email = (e2.get("email") or "").lower()
+                if cust_email and cust_email in from_addr:
+                    kind = "email_in"
+                elif cust_email:
+                    kind = "email_out"
+                events.append({
+                    "at": (r["received_at"] or "")[:16],
+                    "kind": kind,
+                    "title": subj[:80],
+                    "detail": (r["from_addr"] or "")[:80],
+                    "ref_type": "email",
+                    "ref_id": r["id"],
+                })
+        except Exception:
+            pass
+
+        # 对话
+        for r in conn.execute(
+            "SELECT id, query, response, created_at, extra3 FROM conversations "
+            "WHERE company_id = ? AND customer_id = ? AND created_at >= ?",
+            (company_id, customer_id, cutoff),
+        ).fetchall():
+            try:
+                e3 = json.loads(r["extra3"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                e3 = {}
+            title = (e3.get("title") or "").strip() or (r["query"] or "")[:60]
+            detail = (e3.get("summary") or "").strip() or (r["response"] or "")[:80]
+            events.append({
+                "at": (r["created_at"] or "")[:16],
+                "kind": "talk",
+                "title": title,
+                "detail": detail,
+                "ref_type": "conversation",
+                "ref_id": r["id"],
+            })
+    finally:
+        conn.close()
+
+    # 今天应回复
+    follow = (cust.get("next_follow_up_date") or "").strip()
+    if follow == today:
+        events.append({
+            "at": today,
+            "kind": "follow_up_due",
+            "title": "今天 · 应回复",
+            "detail": "",
+            "ref_type": "customer",
+            "ref_id": customer_id,
+        })
+
+    events.sort(key=lambda x: x.get("at") or "", reverse=True)
+    return events
+
+
 def get(customer_id: int, *, company_id: int) -> dict | None:
     """根据 ID 获取单个客户，必须按公司作用域限制。"""
     conn = get_connection()

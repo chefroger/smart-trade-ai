@@ -160,9 +160,27 @@ CREATE TABLE IF NOT EXISTS orders (
     delivery_date   TEXT    DEFAULT '',
     payment_terms   TEXT    DEFAULT '',
     notes           TEXT    DEFAULT '',
+    -- 物流字段（W7 / migration 2；新库直接建齐，旧库靠迁移 ALTER）
+    incoterm        TEXT    DEFAULT '',
+    port_of_loading TEXT    DEFAULT '',
+    container       TEXT    DEFAULT '',
+    lead_time_text  TEXT    DEFAULT '',
+    shipped_at      TEXT    DEFAULT '',
     created_at      TEXT    DEFAULT (datetime('now', 'localtime')),
     updated_at      TEXT    DEFAULT (datetime('now', 'localtime'))
 );
+
+-- 订单状态变更历史（W7）；旧库由 migration 2 建表
+CREATE TABLE IF NOT EXISTS order_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    order_id    INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    from_status TEXT    NOT NULL DEFAULT '',
+    to_status   TEXT    NOT NULL DEFAULT '',
+    at          TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    note        TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_order_at ON order_events(order_id, at);
 
 -- 订单明细行：一张订单可含多种商品（外贸 PI 常态）。
 -- 这里是商品行的事实来源；orders 上的 product_name/quantity/... 是同表摘要列，
@@ -558,9 +576,13 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
 _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
     "customer_libraries", "conversations", "orders", "order_items",
+    "order_events",
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
     "mailboxes", "emails", "contacts",
 })
+
+# 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
+_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2})
 
 
 def _needs_schema_work(conn: sqlite3.Connection) -> bool:
@@ -584,13 +606,14 @@ def _needs_schema_work(conn: sqlite3.Connection) -> bool:
         # 迁移表本身不存在 → 待建
         if "schema_migrations" not in existing:
             return True
-        # 有未应用的迁移 → 会写入数据（如订单明细回填），先备份
+        # 有未应用的迁移 → 会写入数据（如订单明细回填 / 物流列），先备份
         applied = {
             row[0] for row in conn.execute(
                 "SELECT version FROM schema_migrations"
             ).fetchall()
         }
-        if 1 not in applied:  # keep in sync with _apply_pending_migrations
+        # 任一已知版本未应用即需备份（勿再写死「if 1 not in applied」）
+        if not _KNOWN_MIGRATION_VERSIONS <= applied:
             return True
         # 备用列缺失 → ALTER TABLE（清单必须与 _add_spare_columns 保持一致）
         for table in ("companies", "trade_companies", "libraries", "customers",
@@ -705,6 +728,7 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
     """)
 
     # 定义所有已知迁移: (version, name, sql)
+    # 版本号同步进 _KNOWN_MIGRATION_VERSIONS
     migrations: list[tuple[int, str, str]] = [
         # v1：订单加明细行后，把每张历史订单的平铺字段回填成一行明细。
         # 只做一次（schema_migrations 记账）—— 做成每次启动都跑的幂等 SQL 会导致
@@ -721,6 +745,9 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
                 SELECT 1 FROM order_items i WHERE i.order_id = o.id
             );
         """),
+        # v2：订单物流字段 + 状态历史表（W7）。SQL 占位；实际走下方幂等逻辑
+        # （新库 SCHEMA_SQL 已含列时 ALTER 会报 duplicate column，必须逐列吞掉）。
+        (2, "order_logistics_and_events", ""),
     ]
 
     # 获取已应用的版本
@@ -730,15 +757,42 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
 
     applied_count = 0
     for version, name, sql in migrations:
-        if version not in applied:
+        if version in applied:
+            continue
+        if version == 2:
+            _migrate_order_logistics_v2(conn)
+        else:
             conn.executescript(sql)
-            conn.execute(
-                "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
-                (version, name),
-            )
-            applied_count += 1
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
+            (version, name),
+        )
+        applied_count += 1
 
     return applied_count
+
+
+def _migrate_order_logistics_v2(conn: sqlite3.Connection) -> None:
+    """迁移 2：给 orders 补物流列 + 建 order_events（列已存在则跳过）。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
+    for col in ("incoterm", "port_of_loading", "container", "lead_time_text", "shipped_at"):
+        # 新库 SCHEMA_SQL 已建齐时跳过，旧库才 ALTER
+        if col not in cols:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT DEFAULT ''")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS order_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+            order_id    INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+            from_status TEXT    NOT NULL DEFAULT '',
+            to_status   TEXT    NOT NULL DEFAULT '',
+            at          TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+            note        TEXT    NOT NULL DEFAULT ''
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_order_events_order_at ON order_events(order_id, at)"
+    )
 
 
 def init_db() -> Path:

@@ -66,6 +66,16 @@ def _safe_contacts_rows(conn: sqlite3.Connection, company_id: int) -> list[dict]
         raise
 
 
+def _safe_table_rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
+    """任意表导出；缺表时返回 []。"""
+    try:
+        return _rows(conn, sql, params)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+
+
 def _schema_version(conn: sqlite3.Connection) -> int:
     try:
         row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
@@ -244,6 +254,12 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     conn,
                     "SELECT ol.* FROM order_libraries ol JOIN orders o ON o.id = ol.order_id "
                     "WHERE o.company_id = ?",
+                    (company_id,),
+                ),
+                # order_events：缺表时空列表（升级未重启不炸）
+                "order_events": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM order_events WHERE company_id = ?",
                     (company_id,),
                 ),
                 "usage_ledger": _rows(conn, "SELECT * FROM usage_ledger WHERE company_id = ?", (company_id,)),

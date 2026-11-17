@@ -321,7 +321,9 @@ function _wallAnimateCount(el, target, currency) {
 }
 
 function _orderProgress(status) {
+    // 「已取消」不在 4 档进度里，返回 -1 让调用方画取消态
     const s = status || '';
+    if (s === '已取消') return -1;
     if (s === '已完成') return 100;
     if (s === '已出货') return 75;
     if (s === '已下单') return 50;
@@ -342,11 +344,12 @@ async function openCustomerWall(cid) {
     if (!wall) return;
     closeCustomerDetail();
 
-    // 卡片墙：overview + 客户关联邮件 + 是否已绑定邮箱（并行）
-    const [ov, mailRes, mailboxRes] = await Promise.all([
+    // 卡片墙：overview + 邮件 + 邮箱绑定 + 时间线（并行；时间线失败不阻断）
+    const [ov, mailRes, mailboxRes, timelineRes] = await Promise.all([
         api('GET', `/api/trade/customers/${cid}/overview`),
         api('GET', `/api/trade/customers/${cid}/emails`),
         api('GET', '/api/trade/mailboxes'),
+        api('GET', `/api/trade/customers/${cid}/timeline?days=60`),
     ]);
     if (!ov || !ov.customer) {
         toast(currentLang === 'en' ? 'Failed to load customer wall' : '加载客户详情失败');
@@ -357,6 +360,7 @@ async function openCustomerWall(cid) {
         : ((mailRes && mailRes.emails) ? mailRes.emails : []);
     const mailboxes = Array.isArray(mailboxRes) ? mailboxRes : [];
     const mailboxBound = mailboxes.length > 0;
+    const timelineApi = Array.isArray(timelineRes) ? timelineRes : null;
     const c = ov.customer;
     // 同步本地列表缓存（阶段/跟进日实列）
     const cached = allCustomers.find(function (x) { return x.id === cid; });
@@ -372,7 +376,8 @@ async function openCustomerWall(cid) {
     const fileEmails = ov.emails || [];
     const emailDetails = ov.email_details || [];
     const keyChats = ov.key_talks || [];
-    const timeline = ov.timeline || [];
+    // 优先用独立 timeline 接口；失败时回退 overview 内联（旧形状 text）
+    const timeline = timelineApi || ov.timeline || [];
     const stats = ov.stats || {};
     // 无 is_important 时后端用最近 5 条兜底——标题/统计不能仍写「重要对话」
     const talksAreImportant = keyChats.length > 0 && !keyChats.some(function (c) {
@@ -461,6 +466,7 @@ async function openCustomerWall(cid) {
     } else {
         orders.forEach(function (o) {
             const prog = _orderProgress(o.status);
+            const cancelled = prog < 0;
             const amt = (o.total_amount != null && o.total_amount !== '')
                 ? ((o.currency || 'USD') + ' ' + Number(o.total_amount).toLocaleString('en-US'))
                 : (currentLang==='en'?'Price TBD':'金额待谈');
@@ -471,11 +477,32 @@ async function openCustomerWall(cid) {
             const qty = items.length
                 ? items.map(function (it) { return (it.quantity || '') + (it.unit || ''); }).join(' / ')
                 : ((o.quantity || '') + (o.unit || ''));
+            // 物流行：FOB 宁波 / 30/70 T/T / 定金后 25 天；柜型+港口；出货月
+            const logistics = [
+                [o.incoterm, o.port_of_loading].filter(Boolean).join(' '),
+                o.payment_terms || '',
+                o.lead_time_text || '',
+            ].filter(Boolean).join(' / ');
+            const containerLine = [o.container, o.port_of_loading].filter(Boolean).join(' ');
+            let shipLine = '';
+            if (o.shipped_at) {
+                shipLine = String(o.shipped_at).slice(0, 7).replace('-', '.') +
+                    (currentLang === 'en' ? ' shipped' : ' 出货');
+            } else if (o.delivery_date) {
+                shipLine = o.delivery_date;
+            }
             bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="mono">' + esc(o.order_no || ('#' + o.id)) +
-                '</span><span class="tagchip dim" style="margin-left:auto">' + esc(o.status || '') + '</span></div>' +
+                '</span><span class="tagchip' + (cancelled ? '' : ' dim') + ' style="margin-left:auto">' + esc(o.status || '') + '</span></div>' +
                 '<p class="wc-subj">' + esc(product) + '</p><p><span class="wc-amt">' + esc(amt) + '</span> <span class="muted">· ' +
-                esc(qty) + '</span></p><div class="bar"><i style="width:' + prog + '%"></i></div>' +
-                '<p class="muted">' + esc((o.updated_at || o.created_at || '').slice(0, 10)) + ' · ' + prog + '%</p></article>';
+                esc(qty) + '</span></p>' +
+                (logistics ? '<p class="muted">' + esc(logistics) + '</p>' : '') +
+                (containerLine ? '<p class="muted">' + esc(containerLine) + '</p>' : '') +
+                (shipLine ? '<p class="muted">' + esc(shipLine) + '</p>' : '') +
+                (cancelled
+                    ? '<p class="muted">' + (currentLang === 'en' ? 'Cancelled' : '已取消') + '</p>'
+                    : ('<div class="bar"><i style="width:' + prog + '%"></i></div>' +
+                        '<p class="muted">' + esc((o.updated_at || o.created_at || '').slice(0, 10)) + ' · ' + prog + '%</p>')) +
+                '</article>';
         });
     }
     bodyHtml += '</div></div>';
@@ -555,7 +582,17 @@ async function openCustomerWall(cid) {
         bodyHtml += '<div class="wall-empty">' + (currentLang==='en'?'No activity yet':'暂无互动记录') + '</div>';
     } else {
         bodyHtml += '<ul class="timeline">' + timeline.map(function (t) {
-            return '<li><span class="t">' + esc(t.at || '') + '</span><p>' + esc(t.text || '') + '</p></li>';
+            const kind = t.kind || '';
+            // filled=订单出货/状态；空心=对话/邮件；红=今日应回复
+            let dot = 'dim';
+            if (kind === 'follow_up_due') dot = 'hot';
+            else if (kind === 'order_status' || kind === 'order_created') dot = 'on';
+            const title = t.title || t.text || '';
+            const detail = t.detail || '';
+            return '<li class="tl-' + esc(dot) + '"><span class="t">' + esc(t.at || '') +
+                '</span><p><b>' + esc(title) + '</b>' +
+                (detail ? ('<br /><span class="muted">' + esc(detail) + '</span>') : '') +
+                '</p></li>';
         }).join('') + '</ul>';
     }
     bodyHtml += '</article></div></div>';

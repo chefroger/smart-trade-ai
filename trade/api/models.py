@@ -211,6 +211,11 @@ class OrderCreate(BaseModel):
     delivery_date: str | None = Field(None, description="交期")
     payment_terms: str | None = Field(None, description="付款方式")
     notes: str | None = Field(None, description="备注")
+    incoterm: str | None = Field(None, description="贸易术语（FOB/CIF 等）")
+    port_of_loading: str | None = Field(None, description="装运港")
+    container: str | None = Field(None, description="柜型（如 1×20GP）")
+    lead_time_text: str | None = Field(None, description="交期文案（如 定金后 25 天）")
+    shipped_at: str | None = Field(None, description="出货日 YYYY-MM 或 YYYY-MM-DD")
 
 
 class OrderUpdate(BaseModel):
@@ -227,6 +232,11 @@ class OrderUpdate(BaseModel):
     delivery_date: str | None = Field(None, description="交期")
     payment_terms: str | None = Field(None, description="付款方式")
     notes: str | None = Field(None, description="备注")
+    incoterm: str | None = Field(None, description="贸易术语")
+    port_of_loading: str | None = Field(None, description="装运港")
+    container: str | None = Field(None, description="柜型")
+    lead_time_text: str | None = Field(None, description="交期文案")
+    shipped_at: str | None = Field(None, description="出货日")
 
 
 # ── Conversation ───────────────────────────────────────────────────────────────

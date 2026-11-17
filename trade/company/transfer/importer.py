@@ -427,6 +427,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             for name in (
                 "trade_company", "libraries", "customers", "customer_libraries",
                 "conversations", "orders", "order_items", "order_libraries",
+                "order_events",
                 "usage_ledger", "doc_extractions", "contacts",
             )
         }
@@ -604,6 +605,26 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 }, or_ignore=True)
         report["tables"]["orders"] = {
             "inserted": order_inserted, "skipped": order_skipped,
+        }
+
+        # order_events：用 order_map 重映射 order_id；映射不到就跳过；旧包无文件 → []
+        events_inserted = events_skipped = 0
+        for row in source_tables.get("order_events") or []:
+            new_order_id = order_map.get(row.get("order_id"))
+            if not new_order_id:
+                events_skipped += 1
+                continue
+            new_row = _without_id(dict(row))
+            new_row["company_id"] = target_id
+            new_row["order_id"] = new_order_id
+            try:
+                _insert(conn, "order_events", new_row)
+                events_inserted += 1
+            except Exception:
+                # 目标库尚无 order_events 表时跳过
+                events_skipped += 1
+        report["tables"]["order_events"] = {
+            "inserted": events_inserted, "skipped": events_skipped,
         }
 
         # usage / trial / doc cache
