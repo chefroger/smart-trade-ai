@@ -883,6 +883,16 @@ def _create_system_router() -> APIRouter:
             from fastapi import HTTPException
             raise HTTPException(status_code=429, detail="系统端点请求过于频繁，请稍后重试。")
 
+        # 升级线程还在跑时拒绝重启：重启会连带杀掉升级，pip 安装 / 模板同步 /
+        # 数据库检查全部中断，前端却只看到「更新请求失败」的误导性提示
+        # （2026-11-11 实测：用户在 Step 3/7 点重启，升级没跑完）。
+        if _update_lock.locked():
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=409,
+                detail="更新正在进行中，请等更新完成后再点重启。",
+            )
+
         _perform_restart()
         return {"ok": True, "message": "重启指令已发送"}
 

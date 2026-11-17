@@ -13,6 +13,7 @@ triggers:
   - 广交会
   - 行业展
   - 展会邀约
+  - 展会邀请
   - 展位设计
   - 展会准备
   - 展后跟进
@@ -22,7 +23,6 @@ triggers:
   - trade show
   - exhibition
   - canton fair
-  - trade fair
   - exhibition planning
   - show preparation
   - post-show follow-up
@@ -107,6 +107,7 @@ injection_prompt: |
   **展会 ROI 计算公式**：总投入（展位费+装修+差旅+样品运费）÷ 成交订单金额。低于 10% 是健康值。
 
   **语言规则**：客户可见内容用目标客户语言（默认英语）。准备清单和策略可用中文。
+
 ---
 
 # B2B Exhibition Management — 展会全流程管理

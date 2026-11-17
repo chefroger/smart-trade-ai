@@ -17,6 +17,9 @@ triggers:
   - 招标清单匹配
   - 成套图纸归档
   - 文件重命名归档
+  - 投标匹配
+  - 投标文件匹配
+  - 招标匹配
   - match drawings
   - archive by drawing number
 category: 文档管理

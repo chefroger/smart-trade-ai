@@ -10,6 +10,23 @@ import os
 
 from trade.database import get_connection
 
+# CRM 商机阶段白名单（与前端 _CRM_STAGES / API Literal 对齐）
+CRM_STAGES = frozenset({"询盘", "报价", "样品", "订单"})
+
+
+def _normalize_crm_stage(stage: str | None, *, default: str = "询盘") -> str:
+    """非法阶段回落到 default，避免脏值进库。"""
+    s = (stage or "").strip()
+    return s if s in CRM_STAGES else default
+
+
+def _normalize_is_starred(v) -> int:
+    """只认 0/1；其它值视为 0。"""
+    try:
+        return 1 if int(v) == 1 else 0
+    except (TypeError, ValueError):
+        return 0
+
 
 def create(
     name: str,
@@ -33,6 +50,9 @@ def create(
     follow_up_note: str = "",
     main_category: str = "",
     match_score: int = 0,
+    stage: str = "询盘",
+    next_follow_up_date: str = "",
+    is_starred: int = 0,
     _skip_dedup: bool = False,
 ) -> dict:
     """创建一条归属于指定公司的客户记录。返回新行的字典表示。
@@ -40,6 +60,9 @@ def create(
     _skip_dedup 内部参数：bulk_save() 等调用方已在外部做过去重时传入 True，
     跳过本函数内的 O(n) 软去重扫描，避免 N+1 性能退化。
     """
+    stage = _normalize_crm_stage(stage)
+    is_starred = _normalize_is_starred(is_starred)
+    next_follow_up_date = (next_follow_up_date or "").strip()
     extra1 = json.dumps({
         "country": country,
         "tier": tier,
@@ -104,8 +127,14 @@ def create(
             }
 
         cur = conn.execute(
-            "INSERT INTO customers (company_id, name, contact, note, extra1, extra2) VALUES (?, ?, ?, ?, ?, ?)",
-            (company_id, name, contact, note, extra1, extra2),
+            "INSERT INTO customers "
+            "(company_id, name, contact, note, stage, next_follow_up_date, is_starred, "
+            "extra1, extra2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                company_id, name, contact, note,
+                stage, next_follow_up_date, is_starred,
+                extra1, extra2,
+            ),
         )
         conn.commit()
         row = conn.execute(
@@ -124,16 +153,171 @@ def create(
 
 
 def list_by_company(company_id: int) -> list[dict]:
-    """返回指定公司的所有客户，按最新创建排在前面。"""
+    """返回指定公司的所有客户，按最新创建排在前面。
+
+    每条附上列表用聚合字段（前端筛选/排序用，不再另打订单/对话接口）：
+    - order_count / order_total_amount
+    - last_contact_at（conversations 按 customer_id 的 MAX(created_at)；NULL 归属不计入）
+    """
     conn = get_connection()
     try:
         rows = conn.execute(
             "SELECT * FROM customers WHERE company_id = ? ORDER BY id DESC",
             (company_id,),
         ).fetchall()
-        return [_row_to_dict(r) for r in rows]
+        customers = [_row_to_dict(r) for r in rows]
+        _attach_list_aggregates(conn, company_id, customers)
+        return customers
     finally:
         conn.close()
+
+
+def _totals_from_currency_rows(rows) -> tuple[int, float | None, str | None, dict[str, float]]:
+    """把按币种聚合的行收成 (count, single_total|None, single_currency|None, by_currency)。
+
+    多币种时不把金额硬加在一起（审计 P2：混币种 SUM 会错），
+    order_total_amount 只在单一币种时有值。
+    """
+    by_currency: dict[str, float] = {}
+    count = 0
+    for r in rows:
+        count += int(r["order_count"] or 0)
+        cur = (r["currency"] or "USD").strip() or "USD"
+        by_currency[cur] = by_currency.get(cur, 0.0) + float(r["order_total_amount"] or 0)
+    if len(by_currency) == 1:
+        currency, total = next(iter(by_currency.items()))
+        return count, total, currency, by_currency
+    if not by_currency:
+        return 0, 0.0, None, {}
+    return count, None, None, by_currency
+
+
+def _attach_list_aggregates(
+    conn, company_id: int, customers: list[dict]
+) -> None:
+    """就地给客户列表挂上订单数/总额/最近联系时间。
+
+    订单按 (customer_id, currency) 分组，避免跨币种直接相加。
+    """
+    if not customers:
+        return
+    # customer_id -> list of currency rows
+    order_rows: dict[int, list] = {}
+    for r in conn.execute(
+        "SELECT customer_id, COALESCE(NULLIF(TRIM(currency), ''), 'USD') AS currency, "
+        "COUNT(*) AS order_count, "
+        "COALESCE(SUM(total_amount), 0) AS order_total_amount "
+        "FROM orders WHERE company_id = ? GROUP BY customer_id, currency",
+        (company_id,),
+    ).fetchall():
+        order_rows.setdefault(int(r["customer_id"]), []).append(r)
+
+    last_contact = {
+        int(r["customer_id"]): r["last_contact_at"]
+        for r in conn.execute(
+            "SELECT customer_id, MAX(created_at) AS last_contact_at "
+            "FROM conversations WHERE company_id = ? AND customer_id IS NOT NULL "
+            "GROUP BY customer_id",
+            (company_id,),
+        ).fetchall()
+    }
+    for c in customers:
+        cid = int(c["id"])
+        count, total, currency, by_cur = _totals_from_currency_rows(
+            order_rows.get(cid, [])
+        )
+        c["order_count"] = count
+        c["order_total_amount"] = total
+        c["order_total_currency"] = currency
+        c["order_totals_by_currency"] = by_cur
+        c["last_contact_at"] = last_contact.get(cid)
+
+
+def get_overview(customer_id: int, *, company_id: int) -> dict | None:
+    """CRM 卡片墙聚合：统计 + 人物/订单/邮件/重要对话 + 时间线（limit 50）。
+
+    一次返回，前端点客户名只调本接口。人物 v1 = extra2 联系字段；
+    邮件 v1 = 邮箱地址 + 空态，不编造邮件记录。
+    """
+    cust = get(customer_id, company_id=company_id)
+    if not cust:
+        return None
+
+    from trade import chat_memory
+    from trade import order as order_module
+
+    try:
+        e2 = json.loads(cust.get("extra2") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        e2 = {}
+    if not isinstance(e2, dict):
+        e2 = {}
+
+    contact_name = cust.get("contact") or e2.get("title") or cust.get("name") or ""
+    people = [{
+        "name": contact_name,
+        "role": e2.get("title") or "",
+        "email": e2.get("email") or "",
+        "phone": e2.get("phone") or "",
+        "whatsapp": e2.get("whatsapp") or "",
+        "wechat": e2.get("wechat") or "",
+        "note": e2.get("follow_up_note") or cust.get("note") or "",
+    }]
+    emails = [e for e in (e2.get("email"), e2.get("backup_email")) if e]
+
+    orders = order_module.list_by_customer(customer_id, company_id=company_id)
+    # 按币种汇总，禁止跨币种硬加（审计 P2）
+    by_currency: dict[str, float] = {}
+    for o in orders:
+        if o.get("total_amount") is None or o.get("total_amount") == "":
+            continue
+        cur = (o.get("currency") or "USD").strip() or "USD"
+        by_currency[cur] = by_currency.get(cur, 0.0) + float(o["total_amount"] or 0)
+    if len(by_currency) == 1:
+        order_currency, order_total = next(iter(by_currency.items()))
+    elif not by_currency:
+        order_currency, order_total = None, None
+    else:
+        order_currency, order_total = None, None
+
+    chats = chat_memory.list_by_company(
+        company_id, limit=50, customer_id=customer_id
+    )
+    important = [c for c in chats if c.get("is_important")]
+    key_talks = important if important else chats[:5]
+
+    timeline: list[dict] = []
+    for o in orders:
+        timeline.append({
+            "at": (o.get("created_at") or "")[:16],
+            "kind": "order",
+            "text": f"订单 {o.get('order_no') or ('#' + str(o.get('id')))} · {o.get('status') or ''}",
+        })
+    for conv in chats:
+        timeline.append({
+            "at": (conv.get("created_at") or "")[:16],
+            "kind": "talk",
+            "text": (conv.get("query") or "")[:120],
+        })
+    timeline.sort(key=lambda x: x.get("at") or "", reverse=True)
+    timeline = timeline[:50]
+
+    return {
+        "customer": cust,
+        "stats": {
+            "people_count": len(people),
+            "order_count": len(orders),
+            "order_total_amount": order_total,
+            "order_total_currency": order_currency,
+            "order_totals_by_currency": by_currency,
+            "mail_and_talk_count": len(emails) + len(key_talks),
+        },
+        "people": people,
+        "orders": orders,
+        "emails": emails,
+        "key_talks": key_talks,
+        "timeline": timeline,
+    }
 
 
 def get(customer_id: int, *, company_id: int) -> dict | None:
@@ -186,19 +370,33 @@ def update(
 ) -> dict | None:
     """更新客户字段（单事务，部分失败统一回滚）。
 
-    基础字段: name, contact, note
+    基础字段: name, contact, note, stage, next_follow_up_date, is_starred
     extra1 字段: country, tier, linkedin_url, company_website, social_media, buyer_type, main_category, match_score
     extra2 字段: title, email, backup_email, phone, whatsapp, wechat, source, last_contact_at, follow_up_note
+    extra3 字段: tags（列表标签；阶段/跟进日已迁实列，不再写 extra3）
     """
     extra1_keys = {"country", "tier", "linkedin_url", "company_website", "social_media", "buyer_type", "main_category", "match_score"}
     extra2_keys = {"title", "email", "backup_email", "phone", "whatsapp", "wechat", "source", "last_contact_at", "follow_up_note"}
-    basic_allowed = {"name", "contact", "note"}
+    extra3_keys = {"tags"}
+    basic_allowed = {
+        "name", "contact", "note",
+        "stage", "next_follow_up_date", "is_starred",
+    }
 
     extra1_updates = {k: v for k, v in kwargs.items() if k in extra1_keys and v is not None}
     extra2_updates = {k: v for k, v in kwargs.items() if k in extra2_keys and v is not None}
+    # tags：显式传入才更新；None=本次不动
+    extra3_updates = {k: v for k, v in kwargs.items() if k in extra3_keys and v is not None}
     basic_updates = {k: v for k, v in kwargs.items() if k in basic_allowed and v is not None}
+    # CRM 白名单：脏 stage / is_starred 不入库
+    if "stage" in basic_updates:
+        basic_updates["stage"] = _normalize_crm_stage(basic_updates["stage"])
+    if "is_starred" in basic_updates:
+        basic_updates["is_starred"] = _normalize_is_starred(basic_updates["is_starred"])
+    if "next_follow_up_date" in basic_updates and basic_updates["next_follow_up_date"] is not None:
+        basic_updates["next_follow_up_date"] = str(basic_updates["next_follow_up_date"]).strip()
 
-    if not (extra1_updates or extra2_updates or basic_updates):
+    if not (extra1_updates or extra2_updates or extra3_updates or basic_updates):
         return get(customer_id, company_id=company_id)
 
     conn = get_connection()
@@ -213,7 +411,7 @@ def update(
 
         # 读取当前 JSON 用于合并（company_id 贯穿所有写操作）
         row = conn.execute(
-            "SELECT extra1, extra2 FROM customers WHERE id = ? AND company_id = ?",
+            "SELECT extra1, extra2, extra3 FROM customers WHERE id = ? AND company_id = ?",
             (customer_id, company_id),
         ).fetchone()
         if row is None:
@@ -221,6 +419,7 @@ def update(
             return None
         current_extra1 = json.loads(row["extra1"]) if row["extra1"] else {}
         current_extra2 = json.loads(row["extra2"]) if row["extra2"] else {}
+        current_extra3 = json.loads(row["extra3"]) if row["extra3"] else {}
 
         # 合并 extra1
         if extra1_updates:
@@ -238,7 +437,15 @@ def update(
                 (json.dumps(current_extra2, ensure_ascii=False), customer_id, company_id),
             )
 
-        # 基础字段
+        # 合并 extra3（仅 tags）
+        if extra3_updates:
+            current_extra3.update(extra3_updates)
+            conn.execute(
+                "UPDATE customers SET extra3 = ?, updated_at = datetime('now','localtime') WHERE id = ? AND company_id = ?",
+                (json.dumps(current_extra3, ensure_ascii=False), customer_id, company_id),
+            )
+
+        # 基础字段（含 CRM 实列）
         if basic_updates:
             set_clause = ", ".join(f"{k} = ?" for k in basic_updates)
             values = list(basic_updates.values()) + [customer_id, company_id]
@@ -424,6 +631,7 @@ def _json_load(raw):
         return {}
 
 def _row_to_dict(row) -> dict:
+    keys = row.keys()
     result = {
         "id": row["id"],
         "company_id": row["company_id"],
@@ -432,8 +640,16 @@ def _row_to_dict(row) -> dict:
         "note": row["note"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        # CRM 实列：缺列（未迁移）时给默认值，避免前端崩
+        "stage": row["stage"] if "stage" in keys and row["stage"] is not None else "询盘",
+        "next_follow_up_date": (
+            row["next_follow_up_date"]
+            if "next_follow_up_date" in keys and row["next_follow_up_date"] is not None
+            else ""
+        ),
+        "is_starred": int(row["is_starred"] or 0) if "is_starred" in keys else 0,
     }
-    # 扩展字段（JSON 列）：前端依赖 extra1/extra2 展示额外信息
+    # 扩展字段（JSON 列）：前端依赖 extra1/extra2/extra3 展示额外信息
     try:
         result["extra1"] = row["extra1"] or "{}"
     except Exception:
@@ -442,6 +658,10 @@ def _row_to_dict(row) -> dict:
         result["extra2"] = row["extra2"] or "{}"
     except Exception:
         result["extra2"] = "{}"
+    try:
+        result["extra3"] = row["extra3"] or "{}"
+    except Exception:
+        result["extra3"] = "{}"
     return result
 
 

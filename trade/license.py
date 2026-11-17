@@ -17,10 +17,21 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
+
+# 首次试用写盘失败时，进程内暂记起点，避免「每次请求重置试用」；
+# 同时仍放行聊天（可用性优先）。成功写盘后清空。
+_PROCESS_FIRST_LAUNCH: str | None = None
+
+# license.json 写盘失败时记录提示（供 status() 返回给界面/远程支持定位），
+# 成功后清空。不改变「写盘失败仍放行聊天」的可用性取舍。
+_LICENSE_WRITE_ERROR: str = ""
 
 # ── 非对称签名密钥 ──────────────────────────────────────────────────────
 
@@ -65,22 +76,27 @@ except (ValueError, TypeError):
     _TRIAL_DAYS = 30
 
 
-def _machine_id() -> str:
-    """获取本机唯一硬件标识符（首次计算后持久化缓存）。
+# 硬件机器码的**进程内**缓存：付费验签每个请求都会调用 license_state，
+# 不能每次都起 ioreg 子进程。它只在进程生命周期内有效，不落盘，因此
+# license.json 被拷到另一台电脑时，新进程读到的仍是新机器的硬件码。
+_HARDWARE_ID_CACHE: str | None = None
 
-    首次调用时尝试从系统获取最稳定的标识符（macOS IOPlatformUUID 等），
-    成功后立即持久化到 license_data 中。后续调用直接返回缓存值，
-    避免因运行环境不同（终端 vs launchd vs 后台进程）导致结果不一致。
+
+def _read_hardware_machine_id() -> str | None:
+    """只读硬件标识；读不到返回 None（不回退 hostname、不写任何系统位置）。
+
+    与 license.json 缓存分开是为了让付费验签**每次都以本机硬件为准**：
+    license.json 被整份拷到另一台电脑时，文件里的旧 `_machine_id` 不能再
+    冒充本机（2026-11-11 工单 C1）。
     """
-    # 从持久化缓存读取
-    cached = _get_license_data().get("_machine_id")
-    if cached:
-        return cached
+    global _HARDWARE_ID_CACHE
+    if _HARDWARE_ID_CACHE:
+        return _HARDWARE_ID_CACHE
 
     import platform as _plat
     import subprocess as _sp
 
-    mid = ""
+    mid: str | None = None
     sys_name = _plat.system()
     if sys_name == "Darwin":
         try:
@@ -91,17 +107,18 @@ def _machine_id() -> str:
             for line in result.stdout.splitlines():
                 if "IOPlatformUUID" in line:
                     uuid = line.strip().split('"')[-2]
-                    mid = f"mac:{uuid}"
-                    break
+                    if uuid:
+                        mid = f"mac:{uuid}"
+                        break
         except Exception:
             pass
 
     elif sys_name == "Linux":
         for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
             try:
-                mid = Path(path).read_text().strip()
-                if mid:
-                    mid = f"linux:{mid}"
+                value = Path(path).read_text().strip()
+                if value:
+                    mid = f"linux:{value}"
                     break
             except Exception:
                 continue
@@ -109,28 +126,85 @@ def _machine_id() -> str:
     elif sys_name == "Windows":
         try:
             import winreg
+
+            # 只读打开，不写注册表
             key = winreg.OpenKey(
                 winreg.HKEY_LOCAL_MACHINE,
                 r"SOFTWARE\Microsoft\Cryptography",
             )
-            guid, _ = winreg.QueryValueEx(key, "MachineGuid")
-            winreg.CloseKey(key)
+            try:
+                guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            finally:
+                winreg.CloseKey(key)
             if guid:
                 mid = f"win:{guid}"
         except Exception:
             pass
 
-    if not mid:
-        mid = f"host:{_plat.node()}"
+    if mid:
+        _HARDWARE_ID_CACHE = mid
+    return mid
 
-    # 持久化到 license_data，后续调用直接读取
+
+def _is_hostname_fallback(value: str) -> bool:
+    """机器码是不是 hostname 兜底值。
+
+    旧版 `_machine_id()` 在硬件读不到时会把 `host:<hostname>` **持久化**进
+    license.json，付费签名就是签在它上面的。所以它是这台机器的历史合法绑定，
+    不是脏数据（2026-11-11 审计：硬件恢复后覆盖它 → 签名再也验不过 →
+    付费用户被误判成「许可证数据异常」）。
+    """
+    return bool(value) and value.startswith("host:")
+
+
+def _binding_id(data: dict) -> str:
+    """付费签名**绑定**的机器码：license.json 里持久化的那个值。
+
+    它是「签名签在哪台机器上」的凭据，**不能被本机当前机器码覆盖** ——
+    一旦覆盖，就再也分不清「文件是从别的机器拷来的 / 系统重装过」
+    （应回落试用并给申请码）和「文件被篡改」（应报 tampered），
+    付费用户会被误判（2026-11-11 审计）。
+    """
+    return str(data.get("_machine_id") or "").strip()
+
+
+def _machine_id() -> str:
+    """返回**本机当前**机器码：硬件优先，读不到才退回绑定值，最后 hostname 兜底。
+
+    - 硬件可读 → 用硬件（申请码与新激活都基于它）；
+    - 硬件读不到 → 退回绑定值，保证权限/命令异常时不阻断启动；
+    - 两者都没有 → `host:{node}` 兜底并持久化。
+
+    这里**不覆盖**已存在的绑定值（绑定值有付费签名时尤其不能动，见
+    `_binding_id`）。没有签名的试用用户允许迁移到硬件，这样之后的新激活
+    绑的是硬件而不是 hostname。
+    """
+    import platform as _plat
+
+    hardware = _read_hardware_machine_id()
+    data = _get_license_data()
+    cached = _binding_id(data)
+
+    if hardware:
+        if cached != hardware and not data.get("signature"):
+            # 没有付费签名：缓存可以安全迁移到硬件
+            try:
+                data["_machine_id"] = hardware
+                _save_license_data(data)
+            except Exception as exc:
+                _log.warning("机器码缓存回写失败（本次仍以硬件为准）: %s", exc)
+        return hardware
+
+    if cached:
+        _log.warning("硬件机器码读取失败，退回 license.json 缓存值（不会拒绝启动）")
+        return cached
+
+    mid = f"host:{_plat.node()}"
     try:
-        data = _get_license_data()
         data["_machine_id"] = mid
         _save_license_data(data)
     except Exception:
         pass  # 持久化失败不影响使用，只是下次仍需重新检测
-
     return mid
 
 # 暴力破解限流：持久化到 SQLite license_data 中，进程重启不清零
@@ -209,6 +283,74 @@ _SOFT_EXPIRED_TRIAL = (
 _SOFT_EXPIRED_LICENSE = (
     "许可证已到期。历史记录和产品资料仍可查看，起草已暂停；续期后立即恢复。"
 )
+# 付费码绑定的是另一台机器：按「本机未激活」处理，不判篡改、不提盗版
+_MACHINE_MISMATCH_MSG = "这台电脑还没激活，请把申请码发给作者激活。"
+_MACHINE_MISMATCH_EXPIRED = (
+    "这台电脑还没激活，试用已到期。历史记录和产品资料仍可查看，"
+    "请把申请码发给作者激活后继续起草。"
+)
+
+
+def _trial_state(data: dict, now: datetime, *, machine_mismatch: bool = False) -> tuple[str, str]:
+    """按试用起点判断状态；machine_mismatch 只影响到期文案。
+
+    磁盘上的 `first_launch_at` 有三种情况，**判据必须和 `check_license()`
+    一致**（那边是起草门禁，这边是展示状态，两边分裂会出现「界面说试用、
+    一发消息就被拦」）：
+      - 没有 → 用进程内暂记的起点（写盘失败场景），没有就当试用；
+      - 损坏 → 同样退回进程内起点，读不出来就当试用（可用性优先，
+        写路径会尝试重写）；
+      - 正常 → 直接按它算。
+    """
+    def expired_message() -> str:
+        return _MACHINE_MISMATCH_EXPIRED if machine_mismatch else _SOFT_EXPIRED_TRIAL
+
+    def from_stamp(stamp: str) -> tuple[str, str]:
+        try:
+            first = datetime.fromisoformat(stamp).replace(tzinfo=UTC)
+        except (TypeError, ValueError):
+            return "trial", ""
+        if (now - first).days < _TRIAL_DAYS:
+            return "trial", ""
+        return "expired", expired_message()
+
+    first_raw = data.get("first_launch_at")
+    if not first_raw:
+        # 磁盘还没有记录时，沿用进程内暂记的试用起点（写盘失败场景）
+        if _PROCESS_FIRST_LAUNCH:
+            return from_stamp(_PROCESS_FIRST_LAUNCH)
+        return "trial", ""
+    try:
+        first = datetime.fromisoformat(first_raw).replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        # 损坏的时间戳不当成到期——可用性优先按试用处理（写路径会尝试重写）；
+        # 但进程内暂记的起点如果已超期，那才是真实的试用起点，按到期处理
+        if _PROCESS_FIRST_LAUNCH:
+            return from_stamp(_PROCESS_FIRST_LAUNCH)
+        return "trial", ""
+    if (now - first).days < _TRIAL_DAYS:
+        return "trial", ""
+    return "expired", expired_message()
+
+
+def _activation_owned_by_other_machine(data: dict) -> bool:
+    """license.json 里的付费签名是否属于**另一台机器**。
+
+    只有签名对文件里缓存的旧机器码仍然有效、而本机硬件码不同时才成立；
+    签名本身损坏/篡改仍然走 tampered。
+
+    `host:` 兜底绑定不参与比对：它本来就是本机的绑定（见 `_is_hostname_fallback`），
+    与本机硬件码「不同」是正常的，拿它判换机会把付费用户误伤成未激活。
+    """
+    if not (data.get("activated") and data.get("expires_at")):
+        return False
+    cached = str(data.get("_machine_id") or "").strip()
+    if not cached or _is_hostname_fallback(cached):
+        return False
+    hardware = _read_hardware_machine_id()
+    if not hardware or hardware == cached:
+        return False
+    return _verify_license_for(data, cached)
 
 
 def license_state(company_id: int | None = None) -> tuple[str, str]:
@@ -221,6 +363,9 @@ def license_state(company_id: int | None = None) -> tuple[str, str]:
     now = datetime.now(UTC)
 
     if data.get("activated") and data.get("expires_at"):
+        # 换机：付费签名属于另一台电脑 → 按本机未激活继续算试用，不判 tampered
+        if _activation_owned_by_other_machine(data):
+            return _trial_state(data, now, machine_mismatch=True)
         if not _verify_license(data):
             return "tampered", (
                 "许可证数据异常，请使用激活码重新激活。"
@@ -234,16 +379,7 @@ def license_state(company_id: int | None = None) -> tuple[str, str]:
             return "active", ""
         return "expired", _SOFT_EXPIRED_LICENSE
 
-    first_raw = data.get("first_launch_at")
-    if not first_raw:
-        return "trial", ""
-    try:
-        first = datetime.fromisoformat(first_raw).replace(tzinfo=UTC)
-    except (TypeError, ValueError):
-        return "expired", _SOFT_EXPIRED_TRIAL
-    if (now - first).days < _TRIAL_DAYS:
-        return "trial", ""
-    return "expired", _SOFT_EXPIRED_TRIAL
+    return _trial_state(data, now)
 
 
 def ensure_license_state(company_id: int | None = None) -> tuple[str, str]:
@@ -270,22 +406,69 @@ def ensure_license_state(company_id: int | None = None) -> tuple[str, str]:
     return state, message
 
 
+def _stamp_expired(stamp: str, now: datetime) -> bool:
+    """进程内暂记的试用起点是否已经超过试用期。"""
+    try:
+        first = datetime.fromisoformat(stamp).replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return False
+    return (now - first).days >= _TRIAL_DAYS
+
+
+def _record_write_error(exc: Exception) -> None:
+    global _LICENSE_WRITE_ERROR
+    _LICENSE_WRITE_ERROR = f"许可证文件写不进去：{_license_file_path()}（{exc}）"
+
+
 def check_license(company_id: int | None = None) -> tuple[bool, str]:
     """检查是否允许**起草/新查询**（到期后返回 False + 软着陆文案）。
 
     只读浏览不受这里约束：历史/资料/已生成草稿的 GET 接口不经过此函数。
     """
+    global _LICENSE_WRITE_ERROR, _PROCESS_FIRST_LAUNCH
+
     data = _get_license_data(company_id)
     now = datetime.now(UTC)
 
+    # 损坏的试用起点：尽量重写为有效时间；若进程内已知起点已超期，则拒绝
+    raw_first = data.get("first_launch_at")
+    if raw_first is not None:
+        try:
+            datetime.fromisoformat(raw_first)
+        except (TypeError, ValueError):
+            stamp = _PROCESS_FIRST_LAUNCH or now.isoformat()
+            # 与 license_state 保持一致：写盘失败场景下的进程内起点也要判到期
+            if _stamp_expired(stamp, now):
+                return False, _SOFT_EXPIRED_TRIAL
+            data["first_launch_at"] = stamp
+            try:
+                _save_license_data(data, company_id)
+                _PROCESS_FIRST_LAUNCH = None
+                _LICENSE_WRITE_ERROR = ""
+            except Exception as exc:
+                _PROCESS_FIRST_LAUNCH = stamp
+                _record_write_error(exc)
+                _log.warning("license.json 重写损坏的 first_launch_at 失败（聊天仍放行）: %s", exc)
+            return True, ""
+
     # 首次使用：记录时间
     if "first_launch_at" not in data:
-        data["first_launch_at"] = now.isoformat()
+        stamp = _PROCESS_FIRST_LAUNCH or now.isoformat()
+        # 写盘失败后重启重算试用的已知取舍：同一进程内必须按真实起点判到期，
+        # 不能每次请求都提前 return True（2026-11-11 工单 C2）。
+        if _stamp_expired(stamp, now):
+            return False, _SOFT_EXPIRED_TRIAL
+        data["first_launch_at"] = stamp
         try:
             _save_license_data(data, company_id)
-        except Exception:
-            # 写入失败（权限不足/磁盘满等）→ 不应静默通过，否则每次启动都重置试用
-            return False, "License 状态持久化失败，请检查 ~/.trade/ 目录权限"
+            _PROCESS_FIRST_LAUNCH = None
+            _LICENSE_WRITE_ERROR = ""
+        except Exception as exc:
+            # 写盘失败不得挡聊天；进程内记住起点，避免每次请求重置试用
+            _PROCESS_FIRST_LAUNCH = stamp
+            _record_write_error(exc)
+            _log.warning("license.json 写入失败（聊天仍放行）: %s", exc)
+            return True, ""
         return True, ""
 
     # 与中间件共用自恢复路径，避免写接口与聊天门控结论不一致
@@ -306,7 +489,8 @@ def days_remaining(company_id: int | None = None) -> int:
     data = _get_license_data(company_id)
     now = datetime.now(UTC)
 
-    if data.get("activated") and data.get("expires_at"):
+    if (data.get("activated") and data.get("expires_at")
+            and not _activation_owned_by_other_machine(data)):
         expires = datetime.fromisoformat(data["expires_at"]).replace(tzinfo=UTC)
         # 使用日期对比确保到期日当天返回 0 而非 -1
         remaining = (expires.date() - now.date()).days
@@ -334,17 +518,24 @@ def status(company_id: int | None = None) -> dict:
     now = datetime.now(UTC)
     # 与写门控一致：展示前先尝试自恢复，避免 UI 长期显示「异常」而聊天已恢复
     state, _message = ensure_license_state(company_id)
+    machine_mismatch = _activation_owned_by_other_machine(data)
 
     result: dict = {
         "days_remaining": days_remaining(company_id),
-        "activated": data.get("activated", False),
-        "expires_at": data.get("expires_at"),
+        # 换机的付费码不算本机已激活：回落试用，并给出申请码让用户重签
+        "activated": data.get("activated", False) and not machine_mismatch,
+        "expires_at": None if machine_mismatch else data.get("expires_at"),
         "trial_used": 0,
         "trial_total": _TRIAL_DAYS,
         "request_code": "",
         "read_only": state in ("expired", "tampered"),
         "status": state,
+        "machine_mismatch": machine_mismatch,
     }
+    if machine_mismatch:
+        result["message"] = _MACHINE_MISMATCH_MSG
+    if _LICENSE_WRITE_ERROR:
+        result["license_file_error"] = _LICENSE_WRITE_ERROR
 
     if "first_launch_at" in data:
         try:
@@ -399,8 +590,8 @@ def _sign_license(expires_at: str) -> str:
     return base64.urlsafe_b64encode(sig).decode()
 
 
-def _verify_license(data: dict) -> bool:
-    """验签：用公钥验证 license_data 中的 signature 是否匹配 expires_at + machine_hash。
+def _verify_license_for(data: dict, machine_id: str) -> bool:
+    """验签：signature 是否匹配 expires_at + 指定机器码。
 
     返回 True 表示签名有效，False 表示数据被篡改或缺少签名。
     内部静默处理所有异常（cryptography 未安装、签名格式错误等），统一返回 False。
@@ -420,7 +611,7 @@ def _verify_license(data: dict) -> bool:
         # 验签 payload: YYYYMMDD + SHA256(machine_id).hexdigest()
         # 兼容新旧两种格式：优先用完整 256 bit (64 hex)，失败则回退 64 bit (16 hex)
         date_str = expires_at[:10].replace("-", "")
-        full_hash = hashlib.sha256(_machine_id().encode()).hexdigest().upper()
+        full_hash = hashlib.sha256(machine_id.encode()).hexdigest().upper()
         public_key = ed25519.Ed25519PublicKey.from_public_bytes(_PUBLIC_KEY_BYTES)
 
         # 新格式 (256 bit): date(8) + hash(64)
@@ -441,6 +632,17 @@ def _verify_license(data: dict) -> bool:
     except (InvalidSignature, ValueError, TypeError):
         # 签名不匹配 / base64 解码失败 / payload 构造失败 → 篡改证据或数据损坏
         return False
+
+
+def _verify_license(data: dict) -> bool:
+    """按 license.json 里的**绑定机器码**验签。
+
+    绑定值才是签名针对的那台机器 —— 用本机当前机器码验会把「从别的机器
+    拷来的 license.json」误判成篡改（真正的拷机判定由
+    `_activation_owned_by_other_machine` 用「绑定值 vs 本机硬件」来做）。
+    """
+    binding = _binding_id(data)
+    return _verify_license_for(data, binding or _machine_id())
 
 
 def _recover_signature_from_code(data: dict) -> bool:
@@ -543,6 +745,9 @@ def activate(code: str, company_id: int | None = None) -> tuple[bool, str]:
     data["expires_at"] = expires_at
     data["activated_at"] = now.isoformat()
     data["signature"] = base64.urlsafe_b64encode(decoded["signature"]).decode()
+    # 绑定值必须记成本次激活用的机器码：新签名就是针对它签的，
+    # 验签也按绑定值来（见 _binding_id / _verify_license）。
+    data["_machine_id"] = _machine_id()
     _save_license_data(data, company_id)
 
     return True, f"激活成功，有效期至 {expires_at[:10]}"

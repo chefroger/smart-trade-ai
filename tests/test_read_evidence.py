@@ -161,7 +161,7 @@ def test_default_pagination_when_model_omits_args(tmp_path):
 
 
 def test_truncated_without_total_lines_stays_incomplete(tmp_path):
-    """拿不到总行数时不能判定为完整。"""
+    """截断且拿不到总行数时不能判定为完整。"""
     c = ReadEvidenceCollector()
     f = tmp_path / "a.txt"
     c.on_complete("1", "read_file", _read(c, f), _result(truncated=True))
@@ -170,6 +170,23 @@ def test_truncated_without_total_lines_stays_incomplete(tmp_path):
 
     assert entry["complete"] is False
     assert entry["status"] == "partial"
+
+
+def test_eof_without_total_lines_counts_complete(tmp_path):
+    """Hermes 声明 truncated=False（已到 EOF）但未给 total_lines → 仍算读完。
+
+    旧逻辑把「无 total_lines」一律判 partial，会假触发文档门禁顶替正常回答。
+    """
+    c = ReadEvidenceCollector()
+    f = tmp_path / "a.txt"
+    c.on_complete("1", "read_file", _read(c, f, offset=1, limit=2000),
+                  _result(truncated=False))
+
+    entry = c.snapshot()[str(f.resolve())]
+
+    assert entry["complete"] is True
+    assert entry["status"] == "complete"
+    assert entry["total_lines"] is None
 
 
 def test_unknown_path_is_normalized(tmp_path):

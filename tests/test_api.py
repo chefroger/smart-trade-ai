@@ -137,6 +137,102 @@ class TestDeps:
         assert opt_company(None) is None
 
 
+class TestCompanyBinding:
+    """首次 session 绑定必须校验公司存在且激活（可用性不挡正常公司）。"""
+
+    def test_rejects_unknown_company_on_first_bind(self, test_db, setup_mocks):
+        """伪造 / 不存在的 company_id 不得占住 session。"""
+        from fastapi import HTTPException
+
+        from trade.api import deps
+        from trade.api.__init__ import _enforce_company_binding
+
+        deps.set_session_token("bind-token")
+        deps._ACTIVE_COMPANY.pop("bind-token", None)
+
+        class Req:
+            headers = {"X-Hermes-Session-Token": "bind-token"}
+            url = type("U", (), {"path": "/api/trade/customers"})()
+
+        with pytest.raises(HTTPException) as exc:
+            _enforce_company_binding(Req(), x_company_id="999999")
+        assert exc.value.status_code == 401
+        assert "bind-token" not in deps._ACTIVE_COMPANY
+
+    def test_binds_active_company(self, company_id, setup_mocks):
+        """合法激活公司首次请求应绑定 session。"""
+        from trade.api import deps
+        from trade.api.__init__ import _enforce_company_binding
+
+        deps.set_session_token("bind-ok-token")
+        deps._ACTIVE_COMPANY.pop("bind-ok-token", None)
+
+        class Req:
+            headers = {"X-Hermes-Session-Token": "bind-ok-token"}
+            url = type("U", (), {"path": "/api/trade/customers"})()
+
+        _enforce_company_binding(Req(), x_company_id=str(company_id))
+        assert deps._ACTIVE_COMPANY.get("bind-ok-token") == company_id
+        deps._ACTIVE_COMPANY.pop("bind-ok-token", None)
+
+    def test_import_rejects_cross_company_target(self, setup_mocks):
+        """导入指定目标公司时不能绕过 session 绑定（P2-3）。"""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from trade.api import deps
+        from trade.api.transfer import router
+
+        deps.set_session_token("import-token")
+        deps._ACTIVE_COMPANY["import-token"] = 1
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        try:
+            resp = client.post(
+                "/companies/import-package",
+                headers={"X-Hermes-Session-Token": "import-token"},
+                data={"target_company_id": "2"},
+                files={"file": ("x.zip", b"not-a-zip", "application/zip")},
+            )
+        finally:
+            deps._ACTIVE_COMPANY.pop("import-token", None)
+        assert resp.status_code == 403
+        assert "当前绑定" in resp.json()["detail"]
+
+    def test_export_allowed_for_non_active_company(self, setup_mocks):
+        """导出是用户对列表某一行的显式只读操作，不因绑定在别的公司被 403。
+
+        2026-11-11 Windows 反馈：公司列表里看不到导出按钮。根因之一是该按钮
+        只对「当前公司」渲染 —— 现在每行都显示，导出路径也必须放行非当前公司，
+        否则点下去只会得到 403。
+        """
+        from fastapi import HTTPException
+
+        from trade.api import deps
+        from trade.api.__init__ import _enforce_company_binding
+
+        deps.set_session_token("export-token")
+        deps._ACTIVE_COMPANY["export-token"] = 1
+
+        class ExportReq:
+            headers = {"X-Hermes-Session-Token": "export-token"}
+            url = type("U", (), {"path": "/api/trade/companies/2/export"})()
+
+        # 绑定在 1，导出 2：不得抛异常
+        _enforce_company_binding(ExportReq(), x_company_id="2")
+
+        class OrdersReq:
+            headers = {"X-Hermes-Session-Token": "export-token"}
+            url = type("U", (), {"path": "/api/trade/companies/2/orders"})()
+
+        # 普通业务路径仍按绑定拦截（导出是唯一例外）
+        with pytest.raises(HTTPException) as exc:
+            _enforce_company_binding(OrdersReq(), x_company_id="2")
+        assert exc.value.status_code == 403
+        deps._ACTIVE_COMPANY.pop("export-token", None)
+
+
 class TestCronIsMachineLevel:
     """cron 端点是**机器级**资源，没有公司维度。
 
@@ -788,3 +884,66 @@ class TestCustomerSearchBatchFetch:
         assert not conn_calls, (
             f"逐个 get() 被调用了 {len(conn_calls)} 次 —— 应改为一次 get_by_ids()"
         )
+
+
+class TestPaidFeatureGate:
+    """导入/导出是付费能力：未激活（试用）时后端也必须拒绝（2026-11-11）。
+
+    界面隐藏只是体验，边界在后端 —— 否则试用用户直接调 API 就能用。
+    """
+
+    def test_trial_user_gets_402(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import transfer
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        with pytest.raises(HTTPException) as exc:
+            transfer._require_paid_feature()
+        assert exc.value.status_code == 402
+        assert "付费功能" in exc.value.detail
+
+    def test_active_user_passes(self, monkeypatch):
+        from trade.api import transfer
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("active", ""))
+        transfer._require_paid_feature()  # 不抛
+
+    def test_license_read_failure_fails_open(self, monkeypatch):
+        """读不到许可证状态时放行 —— 不能因为状态异常锁住付费用户。"""
+        from trade.api import transfer
+
+        def boom(cid=None):
+            raise RuntimeError("license unreadable")
+
+        monkeypatch.setattr("trade.license.license_state", boom)
+        transfer._require_paid_feature()  # 不抛
+
+    def test_export_endpoint_rejects_trial(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import transfer
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        with pytest.raises(HTTPException) as exc:
+            transfer.export_company_package(company_id=1, cid=1)
+        assert exc.value.status_code == 402
+
+    def test_import_endpoint_rejects_trial(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from trade.api import deps
+        from trade.api.transfer import router
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        deps.set_session_token("paid-gate-token")
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        resp = client.post(
+            "/companies/import-package",
+            headers={"X-Hermes-Session-Token": "paid-gate-token"},
+            files={"file": ("x.zip", b"not-a-zip", "application/zip")},
+        )
+        assert resp.status_code == 402

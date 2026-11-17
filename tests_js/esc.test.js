@@ -1,7 +1,7 @@
 /**
  * esc() / escJs() 的行为测试 —— 零依赖（Node 内置 node:test）。
  *
- * 背景：static/trade_chat.js 是零构建工具的静态资源，没有模块导出。为了在 Node 侧
+ * 背景：static/js 是零构建工具的静态资源，没有模块导出。为了在 Node 侧
  * 测到真实的生产函数（而不是复制一份实现），这里按 `#region html-escape-utils` 标记
  * 从源码里抽出整段工具函数，再用 new Function 重建等价作用域取出来。
  */
@@ -69,7 +69,7 @@ test('esc 对 null / undefined / 空值返回空串（沿用原语义）', () =>
 test('属性上下文：客户名里的引号无法闭合 value="..." 注入新属性', () => {
     const payload = 'x" autofocus onfocus="alert(1)';
 
-    // 复刻 trade_chat.js 客户详情面板的写法
+    // 复刻 customers.js 客户详情面板的写法
     const html = `<input type="text" value="${esc(payload)}">`;
 
     // 注入的引号若生效，就会出现「" + 空格 + autofocus」这种属性边界

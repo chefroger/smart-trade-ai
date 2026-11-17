@@ -732,13 +732,30 @@ async def trade_chat_stream(
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
+    async def _put_critical(item) -> None:
+        """终态事件背压入队，但最多等 30 秒。
+
+        客户端断连后队列没人消费，无超时的 put 会留下永不完成的 task。
+        """
+        try:
+            await asyncio.wait_for(event_queue.put(item), timeout=30)
+        except TimeoutError:
+            _log.warning("SSE critical event dropped after 30s: %s", item[0])
+
     def _emit_threadsafe(event_type: str, data: dict | None = None):
         """工作线程通过 call_soon_threadsafe 投递到 asyncio queue。
 
-        put_nowait 在队列满时抛出 QueueFull，用 call_soon_threadsafe 回调时不好捕获，
-        改为 queue.put_nowait 包装在一次非阻塞 try 中，满则静默丢弃（优先保持 SSE 连接稳定）。
+        进度类事件（tool_* / thinking）队列满可丢，保证 SSE 不堵死。
+        response / error / done / analysis_gate 是终态或门禁结论，改走
+        create_task(put) 背压等待，避免用户只看到「工具跑完了却没有回复」。
         """
+        critical = event_type in ("response", "error", "done", "analysis_gate")
+
         def _safe_put(ev_type, ev_data):
+            if critical:
+                # 终态事件必须送达；队列满时等待空位，但必须有上限
+                asyncio.create_task(_put_critical((ev_type, ev_data)))
+                return
             try:
                 event_queue.put_nowait((ev_type, ev_data))
             except asyncio.QueueFull:
@@ -856,8 +873,8 @@ async def trade_chat_stream(
                         release_read_coverage(request_task_id)
                         release_doc_skip(request_task_id)
                 elif not gate_required:
-                    # 没有门禁的普通请求：回调证据同样可以预热。
-                    _warm_after_read(None, evidence, cid)
+                    # 没有门禁的普通请求：回调证据同样可以预热（有 task_id 时也读快照）。
+                    _warm_after_read(request_task_id, evidence, cid)
 
                 lib_name = ""
                 if payload.library_id:

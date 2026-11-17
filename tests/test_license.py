@@ -47,12 +47,14 @@ class TestMachineId:
         """模拟所有平台检测失败时的 hostname fallback"""
         with mock.patch("trade.license._get_license_data", return_value={}):
             with mock.patch("trade.license._save_license_data"):
-                with mock.patch("platform.system", return_value="SunOS"):
-                    with mock.patch("subprocess.run", side_effect=OSError):
-                        with mock.patch("platform.node", return_value="myhost"):
-                            from trade.license import _machine_id
-                            mid = _machine_id()
-                            assert mid == "host:myhost"
+                # 进程内硬件缓存可能已被前面的用例填充，先清空
+                with mock.patch("trade.license._HARDWARE_ID_CACHE", None):
+                    with mock.patch("platform.system", return_value="SunOS"):
+                        with mock.patch("subprocess.run", side_effect=OSError):
+                            with mock.patch("platform.node", return_value="myhost"):
+                                from trade.license import _machine_id
+                                mid = _machine_id()
+                                assert mid == "host:myhost"
 
 
 class TestRequestCode:
@@ -229,6 +231,56 @@ class TestLicenseCheck:
         assert not ok
         assert "到期" in msg
 
+    def test_save_failure_still_allows_chat(self, monkeypatch):
+        """首次试用写盘失败不得返回 402——进程内记住起点并放行聊天。"""
+        import trade.license as license_mod
+
+        license_mod._PROCESS_FIRST_LAUNCH = None
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+
+        def boom(data, cid=None):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(license_mod, "_save_license_data", boom)
+
+        ok, msg = license_mod.check_license(company_id=1)
+        assert ok is True
+        assert msg == ""
+        assert license_mod._PROCESS_FIRST_LAUNCH  # 进程内已记住试用起点
+
+        # 第二次检查仍应放行，且不得重置试用（同一起点）
+        stamp = license_mod._PROCESS_FIRST_LAUNCH
+        ok2, _ = license_mod.check_license(company_id=1)
+        assert ok2 is True
+        assert license_mod._PROCESS_FIRST_LAUNCH == stamp
+        license_mod._PROCESS_FIRST_LAUNCH = None
+
+    def test_corrupt_first_launch_treated_as_trial(self, monkeypatch):
+        """损坏的 first_launch_at 不得判到期——可用性优先按试用放行。"""
+        import trade.license as license_mod
+
+        license_mod._PROCESS_FIRST_LAUNCH = None
+        saved = {}
+
+        monkeypatch.setattr(
+            license_mod,
+            "_get_license_data",
+            lambda cid=None: saved.get(cid, {"first_launch_at": "not-a-date"}),
+        )
+
+        def mock_save(data, cid=None):
+            saved[cid] = data
+
+        monkeypatch.setattr(license_mod, "_save_license_data", mock_save)
+
+        ok, msg = license_mod.check_license(company_id=1)
+        assert ok is True
+        assert msg == ""
+        # 应尝试重写为合法时间戳
+        assert "first_launch_at" in saved.get(1, {})
+        datetime.datetime.fromisoformat(saved[1]["first_launch_at"])
+        license_mod._PROCESS_FIRST_LAUNCH = None
+
 
 class TestDaysRemaining:
     """剩余天数计算"""
@@ -352,6 +404,282 @@ class TestActivate:
         assert not ok
         # DEADBEEF 哈希不在本地机器码中，会被拒绝（签名无效或机器码不匹配）
         assert not ok
+
+
+class TestMachineBinding:
+    """付费许可绑定本机硬件（工单 C1）。"""
+
+    def test_machine_id_prefers_hardware_and_rewrites_cache(self, monkeypatch):
+        """缓存与硬件不一致时以硬件为准，并把缓存回写成硬件值。
+
+        没有付费签名时允许回写；**有签名时不能回写**（绑定值是「签名签在哪台
+        机器上」的凭据，覆盖了就没法区分拷机与篡改）—— 见下一个用例。
+        """
+        from trade import license as license_mod
+
+        store = {"_machine_id": "test:old"}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+
+        assert license_mod._machine_id() == "test:new"
+        assert store["_machine_id"] == "test:new"
+
+    def test_machine_id_does_not_overwrite_binding_with_signature(self, monkeypatch):
+        """有付费签名时，绑定值不能被本机机器码覆盖。
+
+        覆盖之后就再也分不清「文件从别的机器拷来 / 系统重装过」（应回落试用
+        并给申请码）和「文件被篡改」（应报 tampered），付费用户会被误判
+        （2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        store = {"_machine_id": "test:old", "activated": True, "signature": "sig"}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+
+        assert license_mod._machine_id() == "test:new"   # 本机当前机器码
+        assert store["_machine_id"] == "test:old"        # 绑定值原样保留
+
+    def test_machine_id_migrates_to_hardware_without_signature(self, monkeypatch):
+        """没有付费签名时，hostname 兜底缓存可以迁移到硬件（新激活绑硬件）。"""
+        from trade import license as license_mod
+
+        store = {"_machine_id": "host:myhost"}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:hw")
+
+        assert license_mod._machine_id() == "test:hw"
+        assert store["_machine_id"] == "test:hw"
+
+    def test_machine_id_falls_back_to_cache_when_hardware_fails(self, monkeypatch):
+        """硬件读取失败不抛错、不拒绝启动，退回缓存。"""
+        from trade import license as license_mod
+
+        monkeypatch.setattr(license_mod, "_get_license_data",
+                            lambda cid=None: {"_machine_id": "test:old"})
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: None)
+        assert license_mod._machine_id() == "test:old"
+
+    @_crypto_needed
+    def test_copied_license_is_unactivated_not_tampered(self, monkeypatch):
+        """整份 license.json 拷到另一台机器：按未激活回落试用，不判篡改。"""
+        from trade import license as license_mod
+
+        _setup_temp_ed25519_key(monkeypatch)
+        store: dict = {}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:old")
+
+        future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365)).isoformat()
+        sig = license_mod._sign_license(future)
+        store.update({
+            "activated": True,
+            "expires_at": future,
+            "signature": sig,
+            # _sign_license 已把 test:old 写入缓存
+        })
+        assert license_mod.license_state(1) == ("active", "")
+
+        # 换到另一台机器：硬件码变了
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+        state, _msg = license_mod.license_state(1)
+        assert state == "trial"  # 不是 tampered
+
+        s = license_mod.status(1)
+        assert s["machine_mismatch"] is True
+        assert s["activated"] is False
+        assert s["status"] != "tampered"
+        assert s["request_code"].startswith("TRADE-REQ-")
+        assert "还没激活" in s.get("message", "")
+
+    @_crypto_needed
+    def test_copied_license_stays_trial_not_tampered_on_repeated_status(self, monkeypatch):
+        """拷机后反复查状态，必须一直是「未激活」，不能恶化成 tampered。
+
+        绑定值被本机机器码覆盖过一次之后，原签名再也验不过，状态会从 trial
+        变成「许可证数据异常」——付费用户看到的是被指责篡改（2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        _setup_temp_ed25519_key(monkeypatch)
+        store: dict = {}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:old")
+
+        future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365)).isoformat()
+        sig = license_mod._sign_license(future)
+        store.update({"activated": True, "expires_at": future, "signature": sig})
+
+        # 换到另一台机器：硬件码变了
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:new")
+
+        for _ in range(3):
+            s = license_mod.status(1)
+            assert s["status"] == "trial"          # 不是 tampered
+            assert s["machine_mismatch"] is True
+            assert s["activated"] is False
+        # 绑定值没被本机机器码覆盖 —— 覆盖了就再也验不过原签名
+        assert store["_machine_id"] == "test:old"
+
+    @_crypto_needed
+    def test_hostname_fallback_binding_stays_active_after_hardware_recovers(self, monkeypatch):
+        """硬件恢复后，hostname 兜底绑定的付费用户仍然是 active（不是 tampered）。
+
+        旧版在硬件读不到时会把 `host:<hostname>` 持久化进 license.json，付费
+        签名就签在它上面。硬件恢复后若用机器码覆盖它，签名再也验不过 ——
+        付费用户被误判成「许可证数据异常」（2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        _setup_temp_ed25519_key(monkeypatch)
+        store: dict = {}
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: dict(store))
+        monkeypatch.setattr(license_mod, "_save_license_data",
+                            lambda data, cid=None: store.update(data))
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+
+        # 激活那一刻硬件读不到 → 机器码退回 hostname 兜底
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: None)
+        monkeypatch.setattr("platform.node", lambda: "myhost")
+        assert license_mod._machine_id() == "host:myhost"
+
+        future = (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365)).isoformat()
+        sig = license_mod._sign_license(future)
+        store.update({"activated": True, "expires_at": future, "signature": sig})
+
+        # 之后硬件恢复
+        monkeypatch.setattr(license_mod, "_read_hardware_machine_id", lambda: "test:hw")
+        monkeypatch.setattr(license_mod, "_HARDWARE_ID_CACHE", None)
+
+        for _ in range(3):
+            assert license_mod.license_state(1) == ("active", "")
+            s = license_mod.status(1)
+            assert s["status"] == "active"
+            assert s["activated"] is True
+            assert s["machine_mismatch"] is False
+        # 绑定没被销毁：签名仍然验得过
+        assert store["_machine_id"] == "host:myhost"
+
+
+class TestLicenseWriteFailure:
+    """写盘失败时的试用起点一致性（工单 C2）。"""
+
+    def test_process_start_expired_blocks_check_and_state(self, monkeypatch):
+        """同进程内起点已 31 天：check_license 与 license_state 必须都到期。"""
+        from trade import license as license_mod
+
+        old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=31)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", old)
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+
+        def boom(_data, _cid=None):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(license_mod, "_save_license_data", boom)
+
+        ok, msg = license_mod.check_license(1)
+        assert not ok
+        assert "到期" in msg
+        state, _ = license_mod.license_state(1)
+        assert state == "expired"
+
+    def test_write_error_is_exposed_in_status(self, monkeypatch):
+        """写盘失败仍放行，但 status() 带上可定位的错误提示。"""
+        from trade import license as license_mod
+
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_LICENSE_WRITE_ERROR", "")
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+
+        def boom(_data, _cid=None):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(license_mod, "_save_license_data", boom)
+
+        ok, _msg = license_mod.check_license(1)
+        assert ok  # 未到期时写盘失败不挡聊天
+        s = license_mod.status(1)
+        assert "写不进去" in s.get("license_file_error", "")
+        assert "license.json" in s.get("license_file_error", "")
+
+    def test_corrupt_timestamp_expired_agrees_between_check_and_state(self, monkeypatch):
+        """时间戳损坏时，check_license 与 license_state 必须同一结论。
+
+        之前两边分裂：check_license 看到「进程内起点已超期」就拦起草，
+        license_state 却因为读不出磁盘上的时间戳而按试用处理 —— 用户看到
+        「⏳ 试用」，一发消息就被拦（2026-11-11 审计）。
+        """
+        from trade import license as license_mod
+
+        old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=31)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", old)
+        # 磁盘上的时间戳损坏（读出来不是 ISO 格式）
+        monkeypatch.setattr(license_mod, "_get_license_data",
+                            lambda cid=None: {"first_launch_at": "损坏的时间戳!!!"})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+
+        ok, msg = license_mod.check_license(1)
+        assert not ok
+        assert "到期" in msg
+        state, _ = license_mod.license_state(1)
+        assert state == "expired"
+
+    def test_corrupt_timestamp_within_trial_agrees_between_check_and_state(self, monkeypatch):
+        """时间戳损坏但进程内起点未超期：两边都必须放行（可用性优先）。"""
+        from trade import license as license_mod
+
+        recent = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=5)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", recent)
+        monkeypatch.setattr(license_mod, "_get_license_data",
+                            lambda cid=None: {"first_launch_at": "损坏的时间戳!!!"})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+
+        ok, _msg = license_mod.check_license(1)
+        assert ok
+        state, _ = license_mod.license_state(1)
+        assert state == "trial"
+
+
+class TestDeletedLicenseFile:
+    """license.json 被删除：按试用/到期处理，绝不视为已付费（2026-11-12）。"""
+
+    def test_missing_file_is_trial_and_not_activated(self, monkeypatch):
+        from trade import license as license_mod
+
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+        monkeypatch.setattr(license_mod, "_machine_id", lambda: "test:machine")
+
+        assert license_mod.license_state(1) == ("trial", "")
+        s = license_mod.status(1)
+        assert s["activated"] is False
+        assert s["status"] == "trial"
+
+    def test_missing_file_with_expired_process_start_is_expired(self, monkeypatch):
+        from trade import license as license_mod
+
+        old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=31)).isoformat()
+        monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", old)
+        monkeypatch.setattr(license_mod, "_get_license_data", lambda cid=None: {})
+        monkeypatch.setattr(license_mod, "_save_license_data", lambda data, cid=None: None)
+        monkeypatch.setattr(license_mod, "_machine_id", lambda: "test:machine")
+
+        state, _msg = license_mod.license_state(1)
+        assert state == "expired"
+        assert license_mod.status(1)["activated"] is False
 
 
 class TestLicenseSignature:

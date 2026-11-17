@@ -16,6 +16,16 @@ from trade.api.copilot import (
 from trade.copilot.settings import load_settings
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _read_frontend_js() -> str:
+    """按页面加载顺序拼接 static/js 下的前端脚本。"""
+    js_dir = ROOT / "static" / "js"
+    order = (
+        "state.js", "i18n.js", "wizard.js", "api.js", "skills.js",
+        "ui.js", "chat.js", "customers.js", "views.js", "init.js",
+    )
+    return "".join((js_dir / name).read_text(encoding="utf-8") for name in order)
 # 真实实现留底：个别用例要测 spawn settle，需临时撤掉下方成功桩。
 _REAL_ENSURE_COPILOT = api_mod._ensure_copilot_running
 _REAL_STOP_COPILOT = api_mod._stop_copilot
@@ -181,14 +191,14 @@ class TestCopilotSettingsUi:
         assert "copilot-write-memory" not in modal
 
     def test_js_functions_exist(self):
-        js = (ROOT / "static" / "trade_chat.js").read_text(encoding="utf-8")
+        js = _read_frontend_js()
         assert "function showCopilotSettings()" in js
         assert "function saveCopilotSettings()" in js
         assert "function onCopilotConsentChange()" in js
 
     def test_api_paths_use_trade_prefix(self):
         """api() 直接用传入路径；漏掉 /api/trade 会 404（2026-11-05 实测）。"""
-        js = (ROOT / "static" / "trade_chat.js").read_text(encoding="utf-8")
+        js = _read_frontend_js()
         assert "/api/trade/copilot/settings" in js
         assert "'/copilot/settings'" not in js
 

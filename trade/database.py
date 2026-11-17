@@ -105,11 +105,15 @@ CREATE TABLE IF NOT EXISTS customers (
     name        TEXT    NOT NULL,
     contact     TEXT    DEFAULT '',
     note        TEXT    DEFAULT '',
+    -- CRM 实列（S-01，2026-11-16）：阶段 / 下次跟进 / 标星。旧库由 _add_customer_crm_columns 补列。
+    stage               TEXT    DEFAULT '询盘',  -- 询盘 / 报价 / 样品 / 订单
+    next_follow_up_date TEXT    DEFAULT '',     -- YYYY-MM-DD；空串=未设
+    is_starred          INTEGER DEFAULT 0,      -- 0/1 标星
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     updated_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     extra1      TEXT    DEFAULT '{}',  -- spare: {"country":"","tier":"","linkedin_url":"","company_website":"","social_media":{},"buyer_type":"","main_category":"","match_score":0}
     extra2      TEXT    DEFAULT '{}',  -- spare: {"title":"","email":"","backup_email":"","phone":"","whatsapp":"","wechat":"","source":"","follow_up_note":""}
-    extra3      TEXT    DEFAULT '{}'   -- spare: reserved for future use
+    extra3      TEXT    DEFAULT '{}'   -- spare: {"tags":[]} 客户标签（v1 前端过滤）
 );
 
 CREATE TABLE IF NOT EXISTS customer_libraries (
@@ -132,6 +136,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     response    TEXT    DEFAULT '',
     files_read  TEXT    DEFAULT '[]',  -- JSON array: [{"file":"...","pages":[1,2]}]
     context     TEXT    DEFAULT '',    -- chat context: daily|lead|platform|social|linkedin|customs|docs|docgen|osint
+    -- CRM 卡片墙「重要对话」标记（S-01）。老库由 _add_context_column 补列，默认 0。
+    is_important INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     extra1      TEXT    DEFAULT '{}',  -- spare: {"tokens_used":0, "model":"", "duration_ms":0}
     extra2      TEXT    DEFAULT '{}',  -- spare: {"rating":null, "feedback":"", "rated_at":""}
@@ -217,6 +223,8 @@ CREATE INDEX IF NOT EXISTS idx_trial_events_company ON trial_events(company_id, 
 
 CREATE INDEX IF NOT EXISTS idx_libraries_company   ON libraries(company_id);
 CREATE INDEX IF NOT EXISTS idx_customers_company    ON customers(company_id);
+-- CRM 复合索引不放这里：旧库 CREATE TABLE IF NOT EXISTS 不会加 stage 等列，
+-- executescript 建索引会先炸。索引改在 _add_customer_crm_columns 补列后再建。
 CREATE INDEX IF NOT EXISTS idx_orders_company      ON orders(company_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer     ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order   ON order_items(order_id);
@@ -288,7 +296,7 @@ def _add_spare_columns(conn: sqlite3.Connection) -> None:
 
 
 def _add_context_column(conn: sqlite3.Connection) -> None:
-    """为 conversations 表添加 context / customer_id 列（如果缺少的话）。
+    """为 conversations 表补齐 context / customer_id / is_important 列。
 
     幂等操作 — 先检查列是否存在，避免重复 ALTER TABLE 报错。
     新增安装和升级都会执行，兼容已有数据库。
@@ -307,6 +315,44 @@ def _add_context_column(conn: sqlite3.Connection) -> None:
             "ALTER TABLE conversations ADD COLUMN customer_id INTEGER "
             "REFERENCES customers(id) ON DELETE SET NULL"
         )
+    # CRM 卡片墙需要「重要」标记；旧行保持 0，不影响既有列表/历史注入
+    if "is_important" not in cols:
+        conn.execute(
+            "ALTER TABLE conversations ADD COLUMN is_important INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.commit()
+
+
+def _add_customer_crm_columns(conn: sqlite3.Connection) -> None:
+    """为 customers 表补齐 CRM 实列 + 索引（只加列，不动旧列）。
+
+    幂等：列/索引已存在则跳过。旧行拿默认值（stage='询盘'、跟进日空、未标星）。
+    """
+    if "customers" not in {
+        r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }:
+        return
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)").fetchall()}
+    if "stage" not in cols:
+        conn.execute("ALTER TABLE customers ADD COLUMN stage TEXT DEFAULT '询盘'")
+    if "next_follow_up_date" not in cols:
+        conn.execute(
+            "ALTER TABLE customers ADD COLUMN next_follow_up_date TEXT DEFAULT ''"
+        )
+    if "is_starred" not in cols:
+        conn.execute(
+            "ALTER TABLE customers ADD COLUMN is_starred INTEGER DEFAULT 0"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_customers_company_stage "
+        "ON customers(company_id, stage)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_customers_company_follow_up "
+        "ON customers(company_id, next_follow_up_date)"
+    )
     conn.commit()
 
 
@@ -456,10 +502,15 @@ def _needs_schema_work(conn: sqlite3.Connection) -> bool:
             cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
             if not {"extra1", "extra2", "extra3"} <= cols:
                 return True
-        # conversations 的 context / customer_id 缺失 → ALTER TABLE
+        # conversations 的 context / customer_id / is_important 缺失 → ALTER TABLE
         if "conversations" in existing:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-            if "context" not in cols or "customer_id" not in cols:
+            if "context" not in cols or "customer_id" not in cols or "is_important" not in cols:
+                return True
+        # customers CRM 实列缺失 → ALTER TABLE
+        if "customers" in existing:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)")}
+            if not {"stage", "next_follow_up_date", "is_starred"} <= cols:
                 return True
     except sqlite3.Error:
         # 读不出来（损坏/权限）→ 保守起见当作需要处理，让它照旧备份并报错
@@ -627,6 +678,8 @@ def init_db() -> Path:
             conn.commit()
         # 检查并添加 conversations 表的 context 列（向后兼容）
         _add_context_column(conn)
+        # customers CRM 实列（stage / 跟进日 / 标星）
+        _add_customer_crm_columns(conn)
         # 执行增量迁移（从 schema_migrations 表驱动）
         new_migrations = _apply_pending_migrations(conn)
         conn.commit()

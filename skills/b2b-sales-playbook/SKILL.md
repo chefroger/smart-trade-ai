@@ -44,7 +44,6 @@ triggers:
   - sales playbook
   - sales knowledge base
   - sales SOP
-  - objection handling
   - sales training
 category: 销售转化
 version: 1.1.1
@@ -93,7 +92,7 @@ injection_prompt: |
 
   ### 3. 场景话术库
   每个场景提供：
-  - 英文话术（可直接复制到 WhatsApp/邮件）
+  - 英文话术（草稿可复制，发送必须手动；WhatsApp/邮件都一样）
   - 中文说明（话术背后的逻辑）
   - 适用条件（什么情况下用/什么情况下不能用）
   - 常见变体（根据客户类型微调）
@@ -178,6 +177,7 @@ injection_prompt: |
   - 每个节点附"做对了什么样/做错了什么样"判断标准
   - 所有知识点归位于六大模块体系之中，拒绝碎片化堆砌
   - 每个避坑项必须有反面案例和正确替代方案
+
 ---
 
 # B2B 销冠经验封装器

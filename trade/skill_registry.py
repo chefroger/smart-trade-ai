@@ -284,14 +284,17 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             # Chinese
             "找客户", "开发客户", "客户开发", "找潜在客户", "新客户",
-            "询盘", "报价谈判", "谈判", "成交",
-            "价格谈判", "报价技巧", "报价",
-            "付款方式", "付款条件", "交期",
+            # 裸「询盘/谈判/成交/报价/交期」会抢走 inquiry-*/sales-playbook/
+            # doc-generation/trade-ops；一律用复合词（2026-11-11 冲突收敛）
+            "报价谈判", "价格谈判", "报价技巧", "报价策略", "询盘处理",
+            "谈判技巧", "促成成交", "推进成交", "怎么成交", "交期谈判",
+            "付款方式", "付款条件",
             # 邮件主题 + 多语言
             "邮件主题", "主题行优化", "邮件标题", "邮件标题优化",
             "多语言开发信", "多语言邮件", "阿拉伯语开发信", "西班牙语开发信",
             "开发信优化", "邮件优化", "提升打开率",
-            # 国别只用「xx客户」复合词，禁止裸国名（避免抢走合规/文化禁忌问句）
+            # 国名裸词（西班牙/阿拉伯）会抢走「西班牙语怎么说」→ compliance；
+            # 改为「xx客户」复合形式
             "阿拉伯客户", "阿联酋客户", "中东客户",
             "西班牙客户", "拉美客户", "墨西哥客户", "巴西客户",
             "德国客户", "法国客户", "欧洲客户",
@@ -313,7 +316,7 @@ STOP RULE（防止无效搜索）:
             "japanese email", "korean email",
             # English fragments
             "find buyers", "get customers", "look for customers", "new customers",
-            # Fragments
+            # Fragments — 「帮我写开发信」归 cold-outreach（开发信主战场）
             "有新客户吗", "怎么找客户", "客户资源", "客户名单",
             # 「帮我写开发信」归 b2b-cold-outreach，避免与获客总技能抢写邮件
             "写一封邮件", "客户案例", "帮我找德国的客户", "找德国客户", "找客户给我", "帮我找客户",
@@ -374,7 +377,10 @@ STOP RULE（防止无效搜索）:
 
 > 以上两段方法整理自培训课程，未经 Nancy/Trade 用户实战验证；与客户实际情况冲突时以实际为准。
 
-如果没有明确目标产品或市场，先询问。""",
+如果没有明确目标产品或市场，先询问。
+
+需要三通道潜客搜索、开发信模板、跟进序列、价格谈判框架或报价生成细则时，用 `skill_view` 加载本技能正文。
+""",
     },
     {
         "name": "b2b-document",
@@ -408,7 +414,10 @@ STOP RULE（防止无效搜索）:
 **输出结构**：文档摘要 → 关键数据表（含置信度标签 [确切]/[计算]/[推断]/[不确定]）→ 数据冲突 → 已查找但未找到的信息 → 建议
 
 **置信度标签**：每个关键数字后必标 [确切]/[计算]/[推断]/[不确定]
-**引用格式**：📄 {文件名} | Sheet: {sheet名} | Row: {行号}""",
+**引用格式**：📄 {文件名} | Sheet: {sheet名} | Row: {行号}
+
+需要文档分析的完整流程、严格输出结构、Excel 抽取与术语对照时，用 `skill_view` 加载本技能正文。
+""",
     },
     {
         "name": "b2b-doc-generation",
@@ -480,10 +489,10 @@ STOP RULE（防止无效搜索）:
             "网站诊断", "平台诊断", "阿里国际站优化", "中国制造网", "独立站优化", "官网优化",
             "产品链接分析", "关键词优化", "产品标题", "排名", "曝光",
             "曝光量", "点击率",
-            # English
+            # English — 裸 seo 归 b2b-seo-aeo（文章/AEO）；平台侧用关键词/排名
             "platform diagnosis", "alibaba optimization", "made-in-china",
             "keyword optimization", "product title", "ranking",
-            "search ranking", "seo", "product listing", "alibaba international", "alibaba",
+            "search ranking", "product listing", "alibaba international", "alibaba",
             # Fragments
             "阿里店铺", "阿里国际站", "平台上排名", "关键词排名", "搜索排名",
         ],
@@ -624,7 +633,10 @@ STOP RULE（防止无效搜索）:
    - 不买粉买号、不用自动化群控/非官方客户端；不批量加好友、拉群。
    - 同一条内容不要复制到多个群组/主页；少用短链接和重复链接。
    - 广告与帖子不得虚假宣传、用侵权素材或夸大对比；落地页与广告一致。
-   - 主页/BM 来源要干净，开双因素；被限制后不要反复注册新号。""",
+   - 主页/BM 来源要干净，开双因素；被限制后不要反复注册新号。
+
+需要分平台内容策略、内容日历模板、Hashtag 研究或各平台内容模板时，用 `skill_view` 加载本技能正文。
+""",
     },
     {
         "name": "b2b-customs-data",
@@ -717,17 +729,20 @@ STOP RULE（防止无效搜索）:
 4. 返回：
    - 完整部署文档路径
    - 接下来7天行动计划（每天做什么）
-   - 30天里程碑""",
+   - 30天里程碑
+
+需要竞品差异化分析、LinkedIn 主页完整配置或营销策略模板时，用 `skill_view` 加载本技能正文。
+""",
     },
     {
         "name": "b2b-daily-automation",
         "triggers": [
             # Chinese
-            "每日任务", "自动化", "定时任务", "定时发布", "Cron",
+            "每日任务", "自动化", "定时任务", "Cron",
             "早安简报", "工作总结", "晚间总结", "周报", "日报", "每日简报", "设置每日简报", "每日早报",
             "定时提醒", "自动发送",
             # English
-            "daily tasks", "automation", "scheduled tasks", "scheduled posting",
+            "daily tasks", "automation", "scheduled tasks",
             "morning brief", "daily summary", "weekly report", "daily report",
             "cron job", "recurring task", "automated workflow", "exchange rate", "market news",
             # Fragments
@@ -736,23 +751,25 @@ STOP RULE（防止无效搜索）:
             "每天早上", "发简报", "daily brief",
         ],
         "aliases": [],
-        "input_fmt": "任务类型（早报/晚报/定时发布/周报）+ 发送频率 + 目标平台",
+        "input_fmt": "任务类型（早报/晚报/LinkedIn或社媒文案/周报）+ 执行频率（本地交付）",
         "output_fmt": (
             "Cron 任务配置 + 任务执行脚本内容 + "
-            "触发时间（UTC）+ 预期输出描述"
+            "触发时间（UTC）+ 预期输出描述（deliver=local）"
         ),
-        "augment_prompt": """你是 b2b-daily-automation 技能。当用户需要设置每日自动化任务（如早安简报、定时发布、周报自动生成）时，请执行以下步骤：
+        "augment_prompt": """你是 b2b-daily-automation 技能。当用户需要设置每日自动化任务（如早安简报、晚间总结、周报自动生成）时，请执行以下步骤：
+
+**创建纪律：** 只有用户明确要求才创建定时任务；不创建提醒和催办类任务。cron 产出只留 trade 本地（deliver=local），不投递到任何外部平台。
 
 1. 加载 skill: b2b-daily-automation
 2. 确认任务需求：
    - 早安简报：当日汇率 + 天气 + 目标市场动态 + 今日待办
-   - 定时发布：指定平台（LinkedIn/FB/Ins）+ 发布时间
+   - LinkedIn/社媒内容生成：生成可复制粘贴的文案（本地交付，用户手动发布）
    - 晚间总结：今日新询盘/客户互动/订单进度
    - 周报：本周数据汇总 + 下周行动计划
 3. 使用 cronjob 工具创建任务：
    - 指定 schedule（如 "0 8 * * *" 对应每天UTC 8点）
-   - 指定 skills（如 b2b-linkedin-marketing 用于内容发布）
-   - 指定 deliver 目标（当前对话 origin 或指定平台）
+   - 指定 skills（如 b2b-linkedin-marketing 用于内容生成）
+   - deliver 固定为 local（只留 trade 本地）
 4. 返回：
    - 已创建的任务 ID
    - 下次执行时间（换算为用户本地时间）
@@ -792,7 +809,10 @@ STOP RULE（防止无效搜索）:
 3. 返回格式：
    - 客户列表表格：名称 | 分级 | 国家 | 最近跟进 | 当前阶段 | 待办事项
    - 客户详情卡片：联系信息 + 交易历史 + 跟进记录时间线
-   - 下一步行动建议（基于客户当前阶段）""",
+   - 下一步行动建议（基于客户当前阶段）
+
+需要联系人管理 / 报价管理 / 订单管理 / 客户健康度监控 / 大客户计划的详细流程与模板时，用 `skill_view` 加载本技能正文。
+""",
     },
     {
         "name": "b2b-data-directory",
@@ -847,12 +867,19 @@ STOP RULE（防止无效搜索）:
         "triggers": ["之前", "上次", "以前", "那天", "昨天", "前天",
                      "上周", "上礼拜", "上上周", "上个月", "上个月初", "上个月底",
                      "今年", "今年年初", "去年", "前几个月", "几个月前", "再上一周",
-                     "历史", "记录", "对话", "说过", "聊过", "讨论过",
-                     "还记得", "记不记得", "回忆", "翻看", "回去看", "过去", "往事", "旧", "曾经",
+                     # 裸「历史/记录/对话/过去/帮我查/旧…」会劫持无关问法
+                     # （记录一下 / WhatsApp 发过去 / 帮我查邮箱）；只用复合词
+                     "说过", "聊过", "讨论过",
+                     "还记得", "记不记得", "回去看",
                      "上次聊天", "上次对话", "之前提到", "之前说过", "历史记录", "历史对话",
                      "聊天记录", "对话记录", "聊天历史", "查一下之前", "看到过", "查一下之前说过的",
                      "上次推荐", "这周谈过",
-                     # 禁止裸「帮我查」——会误吞「帮我查一下公司/邮箱」未完成输入
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            # 「帮我找」按本项目既有惯例收窄为带宾语的长词 —— 裸短词会把
+            # 「帮我找招标 / 帮我找供应商」这类请求全部劫持到本技能（见
+            # tests/test_skill_router_logic.py 的供应商搜索守护用例）
+            "帮我找之前", "帮我找上次", "帮我找历史", "本月", "这个月",
+            # 禁止裸「帮我查」——会误吞「帮我查一下公司/邮箱」未完成输入
             # English
             "yesterday", "last week", "this week", "last month", "this month",
             "last year", "this year", "a few months ago", "early this year",
@@ -916,7 +943,7 @@ STOP RULE（防止无效搜索）:
             "邀请客户来展会",
             # Chinese — 验厂
             "验厂", "客户要来工厂", "验厂邀请", "工厂审核", "audit",
-            "来厂考察",
+            "来厂考察", "厂里来验", "来验厂", "来厂验",
             # Chinese — 节日
             "节日问候", "节日祝福", "发个祝福", "过节",
             # Chinese — 样品
@@ -927,6 +954,9 @@ STOP RULE（防止无效搜索）:
             # Chinese — 售后/满意度/年度
             "售后", "收货跟进", "满意度调查", "客户反馈",
             "年度总结", "年终", "合作回顾", "年度合作",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "催一下", "交期确认", "售后维护", "物流异常", "货到哪里了",
+            # 「展会邀请」归 b2b-exhibition（那里已有「展会邀约」），这里不并入
             # English
             "payment reminder", "overdue", "chase payment",
             "claim", "complaint", "refund", "compensation",
@@ -981,20 +1011,31 @@ STOP RULE（防止无效搜索）:
             # Chinese — 翻译
             "翻译二审", "母语审阅", "翻译检查", "翻译对不对",
             "这个翻译对吗", "阿拉伯语翻译", "西班牙语翻译",
-            # Chinese — 投标合规（裸「招标/投标」归 tender-info，避免与招标族抢夺）
-            "招标合规", "投标合规", "标书检查", "标书审查", "投标文件检查",
+            # 翻译语种词（不用国名裸词，避免与 lead-generation「xx客户」冲突）
+            "西班牙语", "阿拉伯语", "怎么翻译", "翻译成",
+            # Chinese — 投标合规检查（裸「招标/投标/标书/tender」归 tender-* 运营技能）
+            "投标检查", "标书检查", "招标合规", "检查标书", "投标规范", "写标书检查",
+            # 复合词同属本技能（裸「招标/投标」归 tender-info）
+            "投标合规", "标书审查", "投标文件检查",
             # Chinese — 电商上架
             "Amazon上架", "违禁词", "亚马逊合规", "跨境电商上架",
             "上架检查", "listing检查",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "合规检查", "电商上架", "小语种翻译",
             # English
             "cultural taboo", "cultural check", "color taboo",
             "number taboo", "gesture taboo",
             "incoterms", "trade terms", "FOB CIF EXW",
             "abbreviation", "full form", "acronym",
             "translation review", "native speaker review",
-            "tender compliance", "bidding compliance", "RFP compliance",
+            "tender compliance", "bid check", "bidding checklist",
+            "bidding compliance", "RFP compliance",
             "Amazon listing", "prohibited word", "compliance check",
         ],
+        # 仅短付款缩写加分：压过 "payment terms"（"LC payment terms"）。
+        # 不要把 FOB/CIF 等 Incoterms 放进来——会压过「价值 BOM + CIF」这类单据生成意图
+        # （b2b-doc-generation 已有自己的 priority_keywords）。
+        "priority_keywords": ["lc", "bl", "dp", "da"],
         "aliases": [],
         "input_fmt": "检查内容类型 + 目标市场/客户地区 + 需要检查的文本/文档",
         "output_fmt": (
@@ -1022,7 +1063,7 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-cold-outreach",
         "triggers": [
-            # Chinese
+            # Chinese — 「帮我写开发信」从 lead-generation 收回（开发信主战场在此）
             "开发信", "产品推广信", "推广邮件", "跟进信",
             "写开发信", "帮我写开发信", "写一封开发信", "帮我写一封冷邮件", "写一封冷邮件",
             "产品推广", "写推广邮件", "写跟进邮件",
@@ -1081,6 +1122,8 @@ STOP RULE（防止无效搜索）:
             "客户开发流水线", "自动开发客户", "全流程客户开发",
             "编排客户开发", "一条龙开发客户", "帮我跑一轮客户开发",
             "跑一批客户", "全自动开发", "全自动化客户开发",
+            # 口语省略「全/一键」时仍归本技能，避免被「客户开发」抢走
+            "自动化客户开发",
             # English
             "auto customer development", "end to end lead generation", "auto lead generation",
             "full pipeline outreach", "automated outreach pipeline", "orchestrated lead gen",
@@ -1241,6 +1284,8 @@ STOP RULE（防止无效搜索）:
             "KOL分析", "分析这个号", "模仿这个账号",
             "kol imitation", "follow style", "imitate influencer",
             "learn from this profile", "copy writing style",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "thought leader style", "学这个人的风格",
         ],
         "aliases": ["b2b-linkedin-marketing"],
         "input_fmt": "KOL 的 LinkedIn/社媒账号链接或 3-5 篇代表性帖子 + 自家公司/产品信息",
@@ -1254,6 +1299,9 @@ STOP RULE（防止无效搜索）:
             "Reddit", "红迪", "社区评论", "写Reddit评论",
             "发Reddit帖子", "专业评论", "行业讨论",
             "reddit post", "reddit comment", "community engagement",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "industry discussion", "subreddit", "value comment",
+            "社区互动", "论坛评论", "评论引流",
         ],
         "aliases": ["b2b-social-media"],
         "input_fmt": "产品/行业描述 + 目标帖子链接或话题方向",
@@ -1267,8 +1315,17 @@ STOP RULE（防止无效搜索）:
             "SEO文章", "AEO文章", "搜索引擎优化", "AI搜索优化",
             "写文章", "博客文章", "行业文章", "关键词文章",
             "seo article", "aeo article", "blog post", "seo writing",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "aeo写作", "answer engine optimization", "content marketing",
+            "pillar page", "search engine optimization", "seo写作",
+            "topic cluster", "主题集群", "内容营销", "长尾关键词",
+            # 从 platform 收回裸 seo；补「SEO优化」自然说法
+            # 大小写不敏感，只保留一种写法（避免自重复）
+            "seo优化", "做SEO", "seo",
         ],
         "aliases": [],
+        # 不用裸 seo 做 priority：否则「平台seo」类问法会被 +4 压过 platform
+        "priority_keywords": ["aeo", "搜索引擎优化", "search engine optimization", "topic cluster"],
         "input_fmt": "行业/产品描述 + 目标关键词 + 文章类型",
         "output_fmt": "SEO+AEO 优化的完整文章（含元数据/FAQ）",
         "augment_prompt": "",
@@ -1281,6 +1338,9 @@ STOP RULE（防止无效搜索）:
             "视频文案", "拍摄脚本", "产品视频", "工厂视频",
             "short video", "tiktok script", "youtube shorts",
             "video script", "b2b video",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "instagram reels", "product video", "video content",
+            "外贸视频", "抖音视频", "短视频脚本", "营销视频", "视频内容",
         ],
         "aliases": ["b2b-social-media"],
         "input_fmt": "产品名称 + 目标市场 + 视频主题 + 目标平台",
@@ -1291,9 +1351,12 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-exhibition",
         "triggers": [
-            "展会", "参展", "广交会", "行业展", "展会邀约",
+            "展会", "参展", "广交会", "行业展", "展会邀约", "展会邀请",
             "展位设计", "展会准备", "展后跟进",
             "trade show", "exhibition", "canton fair",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "exhibition planning", "post-show follow-up", "show preparation",
+            "参展计划", "展会物料", "展前准备",
         ],
         "aliases": ["b2b-trade-ops"],
         "input_fmt": "展会名称/日期/地点 + 参展产品 + 客户列表（可选）",
@@ -1308,6 +1371,9 @@ STOP RULE（防止无效搜索）:
             "销售资料", "产品卖点", "产品说明",
             "product description", "product copy", "sales kit",
             "value proposition", "product selling points",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "product brochure", "product features", "sales material",
+            "产品话术", "帮我写产品", "描述产品",
         ],
         "aliases": [],
         "input_fmt": "产品名称/规格 + 认证资质 + 目标市场 + 内容类型",
@@ -1322,6 +1388,9 @@ STOP RULE（防止无效搜索）:
             "怎么决定", "利弊分析", "选择困难",
             "six thinking hats", "decision making",
             "risk analysis", "business decision",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "decision framework", "pros and cons", "strategic choice",
+            "做决策", "关键决策", "决策", "方案选择",
         ],
         "aliases": [],
         "input_fmt": "需要决策的具体问题（如选供应商/是否参展/付款条件变更等）",
@@ -1334,10 +1403,13 @@ STOP RULE（防止无效搜索）:
         "triggers": [
             "客户画像", "深度画像", "客户分析", "分析一下这个客户", "了解客户",
             "客户情报", "怎么跟这个客户谈",
-            "客户偏好", "送礼建议", "回扣怎么给", "记住客户",
+            # 「记住客户」会抢走 chat-memory；「客户偏好」裸词亦易误触——用复合词
+            "分析客户偏好", "客户偏好分析", "送礼建议", "回扣怎么给",
             "客户家底", "客户决策风格", "深入了解客户",
             "customer intel", "customer dossier", "customer insight", "client analysis", "what do we know about", "know your customer",
             "deep profile", "buyer intelligence",
+            # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
+            "客户的决策风格", "客户重要日期", "这个客户什么性格",
         ],
         "aliases": ["b2b-customer-mgmt", "b2b-buyer-persona"],
         "input_fmt": "客户的任何已知信息（公司名/LinkedIn/名片/聊天记录/展会记录）",
@@ -1375,6 +1447,11 @@ STOP RULE（防止无效搜索）:
             # 2026-11-10 收窄：短词会子串误伤（客户回款/回国、直接发过去…），改为带宾语的长词
             "客户这样回", "这封怎么回", "卡在哪一步",
             "客户说太贵", "客户回了一句", "客户回：", "客户一直不回",
+            # 只加完整说法：单独的「回了句」「咋整」会把「客户回款」等误伤。
+            # 两句都保留：带主语的长句在三词加成下才压得过获客侧的裸词
+            # "too expensive"（2026-11-11 复审 O-1）。
+            "回了句 too expensive",
+            "客户回了一句 too expensive",
             "WhatsApp 直接发过去",
             "how should i reply to this customer", "how to reply to this customer",
             "where are we stuck", "which stage are we stuck at",
@@ -1382,6 +1459,10 @@ STOP RULE（防止无效搜索）:
             "close the deal", "closing follow up", "customer not responding",
             "sales playbook", "sales knowledge base", "sales SOP",
             "sales training",
+            # 2026-11-11 审计：SKILL.md 的裸词「not responding」不并入 ——
+            # 已有带宾语的 "customer is not responding" / "customer not responding"
+            # 覆盖同一意图，而裸词会把 "the shipment is not responding" 也劫持进来
+            #（见 tests/test_skill_ppt_gap.py::test_short_triggers_do_not_hijack_unrelated_queries）
         ],
         "aliases": ["b2b-inquiry-training", "b2b-lead-generation"],
         "input_fmt": "行业/产品线 + 客户画像 + 具体场景（首回/报价/异议/逼单/激活/售后）",
@@ -1511,6 +1592,7 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
             "download email attachments",
         ],
         "aliases": [],
+        "priority_keywords": ["招标邮件", "tender email", "imap"],
         "input_fmt": "邮箱 IMAP 配置（用户按示例文件填写）+ 时间窗口 + 落盘根目录",
         "output_fmt": "按天归档的邮件正文与附件 + 抓取统计（含跳过原因）",
         "augment_prompt": "",
@@ -1528,6 +1610,7 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
             "rfq sheet", "quotation sheet",
         ],
         "aliases": [],
+        "priority_keywords": ["询价单", "整理招标", "招标整理"],
         "input_fmt": "邮件归档目录或招标编号 + 主文件与附件 + 交付根目录",
         "output_fmt": "标准项目文件夹（主文件 + 编号附件）+ 11 列询价单 xlsx + 验证报告",
         "augment_prompt": "",
@@ -1538,10 +1621,13 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
             # Chinese — 只给复合词，避免与「邮件附件下载」抢
             "大文件下载", "分块下载", "断点续传", "下载招标文件",
             "下载压缩包", "对象存储下载", "按清单下载",
+            # 2026-11-11：从 compliance 收回招标下载自然语言
+            "招标下载", "招标文件下载", "下载标书",
             # English
             "download tender package", "resumable download",
         ],
         "aliases": [],
+        "priority_keywords": ["下载招标", "招标下载", "resumable"],
         "input_fmt": "对象清单（名称/地址/大小/校验值）+ 目标目录 + 凭据（当次提供）",
         "output_fmt": "完整文件（大小与校验值双对上）+ 失败清单与原因",
         "augment_prompt": "",
@@ -1549,13 +1635,17 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
     {
         "name": "b2b-tender-archive",
         "triggers": [
-            # Chinese — 解压类只归本技能
-            "解压", "压缩包", "批量解压", "解压压缩包", "解压并删包", "包中包",
+            # Chinese — 不用裸「解压」（会劫持「解压文件」等非招标场景）；
+            # 「解压这些压缩包」靠「压缩包」子串兜住（见 tender 自然语言用例）
+            "压缩包", "批量解压", "解压压缩包", "解压并删包", "包中包",
             "嵌套压缩包", "归档清理", "解压到所在目录",
+            # 招标包解压自然说法（含「解压这个招标包」→ 招标包）
+            "解压招标包", "解压招标", "招标压缩包", "招标包",
             # English
             "unzip", "extract archives", "batch unzip",
         ],
         "aliases": [],
+        "priority_keywords": ["解压招标", "招标压缩包", "招标包", "unzip"],
         "input_fmt": "压缩包所在目录 + 模式（A 删包归档 / B 就地解压）",
         "output_fmt": "解压产物 + 报告（成功/失败/进回收站数/残留数）",
         "augment_prompt": "",
@@ -1566,10 +1656,13 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
             # Chinese — 裸「招标/投标」归本技能（发现招标）；合规检查用「招标合规」等复合词。
             "招标", "投标", "找招标", "查招标", "招标信息", "招标机会", "发现招标",
             "招标公告", "招标动态", "国际招标",
+            # 2026-11-11：补「招标文件/投标文件」等曾被 compliance 裸词截胡的说法
+            "招标文件", "投标文件", "公开招标", "招标项目", "查投标",
             # English
             "tender", "bidding", "find public tenders", "tender opportunities",
         ],
         "aliases": [],
+        "priority_keywords": ["招标信息", "招标公告", "公开招标", "tender opportunities"],
         "input_fmt": "品类/产品（可附 HS 编码）+ 目标国家/区域 + 时间窗口 + 搜索语言",
         "output_fmt": "概览表 + 逐条 13 字段详情（含来源 URL 与发布日期）+ 机会评估 + 建议行动",
         "augment_prompt": "",
@@ -1580,10 +1673,13 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
             # Chinese — 文件匹配类只归本技能
             "按清单归档", "文件匹配归档", "图纸匹配", "按编号匹配",
             "招标清单匹配", "成套图纸归档", "文件重命名归档",
+            # 2026-11-11：投标匹配自然说法
+            "投标匹配", "投标文件匹配", "招标匹配",
             # English
             "match drawings", "archive drawings", "archive by drawing number",
         ],
         "aliases": [],
+        "priority_keywords": ["匹配归档", "图纸匹配", "投标匹配"],
         "input_fmt": "招标清单（序号/名称/编号）+ 本地文件库目录 + 归档根目录",
         "output_fmt": "归档目录（单文件平放 / 成套项整夹）+ 匹配报告与未匹配清单",
         "augment_prompt": "",

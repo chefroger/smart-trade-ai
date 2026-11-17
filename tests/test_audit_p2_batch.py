@@ -124,7 +124,8 @@ class TestConversationLimitClamp:
         seen = []
         with patch.object(
             conv_api.chat_memory, "list_by_company",
-            side_effect=lambda cid, limit: seen.append(limit) or [],
+            # customer_id 为 CRM 新增可选参数；mock 用 **kw 接住，仍只断言 limit clamp
+            side_effect=lambda cid, limit, **kw: seen.append(limit) or [],
         ):
             conv_api.list_conversations(limit=raw, x_company_id=1)
 
@@ -429,8 +430,24 @@ class TestLicenseRoutesRequireSession:
         assert "不需要 session token" not in src
 
     def test_frontend_sends_token(self):
-        js = _read_source("static/trade_chat.js")
-        assert js.count("'/api/trade/license/status', _buildApiOpts('GET', null, TOKEN, currentCompanyId)") >= 2
+        js_dir = ROOT / "static" / "js"
+        order = (
+            "state.js", "i18n.js", "wizard.js", "api.js", "skills.js",
+            "ui.js", "chat.js", "customers.js", "views.js", "init.js",
+        )
+        js = "".join((js_dir / name).read_text(encoding="utf-8") for name in order)
+        # 两处 /license/status 都必须带 token。
+        # loadLicenseStatus 会把 opts 单独取出来加超时 signal，所以那里不再是
+        # 「路径与 _buildApiOpts 同行」；改为按函数体分别断言「请求确实用了
+        # 带 TOKEN 的 opts」。
+        assert js.count("/api/trade/license/status") >= 2
+        assert js.count("_buildApiOpts('GET', null, TOKEN, currentCompanyId)") >= 2
+
+        start = js.index("async function loadLicenseStatus()")
+        body = js[start:js.index("function showLicenseExpired", start)]
+        assert "_buildApiOpts('GET', null, TOKEN, currentCompanyId)" in body
+        assert "fetch('/api/trade/license/status', opts)" in body
+
         assert "_buildApiOpts('POST', {code}, TOKEN, currentCompanyId)" in js
 
 
