@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from trade.api.brief import router as brief_router
 from trade.api.chat import router as chat_router
 from trade.api.companies import router as companies_router
 from trade.api.contacts import router as contacts_router
@@ -98,6 +99,7 @@ router.include_router(conversations_router)
 router.include_router(chat_router)
 router.include_router(memory_router)
 router.include_router(cron_router)
+router.include_router(brief_router)
 router.include_router(templates_router)
 router.include_router(transfer_router)
 router.include_router(copilot_router)
