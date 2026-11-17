@@ -318,8 +318,9 @@ STOP RULE（防止无效搜索）:
             "find buyers", "get customers", "look for customers", "new customers",
             # Fragments — 「帮我写开发信」归 cold-outreach（开发信主战场）
             "有新客户吗", "怎么找客户", "客户资源", "客户名单",
+            # 「帮我写开发信」归 b2b-cold-outreach，避免与获客总技能抢写邮件
             "写一封邮件", "客户案例", "帮我找德国的客户", "找德国客户", "找客户给我", "帮我找客户",
-            "purchasing manager", "procurement",
+            "buyer", "purchasing manager", "procurement",
             "帮我回复", "怎么回这封", "怎么报价", "报多少",
             "能便宜点吗", "目标价", "怎么谈",
             # 询盘首响（2026-11-04 并入）
@@ -421,7 +422,8 @@ STOP RULE（防止无效搜索）:
     {
         "name": "b2b-doc-generation",
         "triggers": [
-            "做报价单", "报价单", "报价模板", "生成PI", "形式发票", "出合同", "外贸合同",
+            "做报价单", "报价单", "报价模板", "生成PI", "形式发票",
+            "出合同", "出一份合同", "生成合同", "做合同", "写合同", "外贸合同",
             "PI检查", "检查PI", "检查这份PI", "形式发票检查", "check this PI", "proforma invoice check",
             "装箱单模板", "报价单模板", "外贸单证", "生成商业计划书",
             # 价值 BOM 报价（2026-11-09 PPT 差距 B2）
@@ -877,6 +879,7 @@ STOP RULE（防止无效搜索）:
             # 「帮我找招标 / 帮我找供应商」这类请求全部劫持到本技能（见
             # tests/test_skill_router_logic.py 的供应商搜索守护用例）
             "帮我找之前", "帮我找上次", "帮我找历史", "本月", "这个月",
+            # 禁止裸「帮我查」——会误吞「帮我查一下公司/邮箱」未完成输入
             # English
             "yesterday", "last week", "this week", "last month", "this month",
             "last year", "this year", "a few months ago", "early this year",
@@ -997,6 +1000,7 @@ STOP RULE（防止无效搜索）:
             # Chinese — 文化禁忌
             "文化禁忌", "忌讳", "这个客户那里忌讳什么", "颜色禁忌",
             "数字禁忌", "手势禁忌", "送礼禁忌", "送礼注意",
+            "市场注意事项", "阿拉伯市场", "西班牙市场", "中东禁忌", "拉美禁忌",
             # Chinese — 缩写
             "缩写", "全称", "ETA", "ETD", "LC", "BL", "DP", "DA",
             "外贸术语", "贸易术语缩写",
@@ -1011,6 +1015,8 @@ STOP RULE（防止无效搜索）:
             "西班牙语", "阿拉伯语", "怎么翻译", "翻译成",
             # Chinese — 投标合规检查（裸「招标/投标/标书/tender」归 tender-* 运营技能）
             "投标检查", "标书检查", "招标合规", "检查标书", "投标规范", "写标书检查",
+            # 复合词同属本技能（裸「招标/投标」归 tender-info）
+            "投标合规", "标书审查", "投标文件检查",
             # Chinese — 电商上架
             "Amazon上架", "违禁词", "亚马逊合规", "跨境电商上架",
             "上架检查", "listing检查",
@@ -1022,7 +1028,8 @@ STOP RULE（防止无效搜索）:
             "incoterms", "trade terms", "FOB CIF EXW",
             "abbreviation", "full form", "acronym",
             "translation review", "native speaker review",
-            "tender compliance", "bid check", "bidding checklist", "RFP",
+            "tender compliance", "bid check", "bidding checklist",
+            "bidding compliance", "RFP compliance",
             "Amazon listing", "prohibited word", "compliance check",
         ],
         # 仅短付款缩写加分：压过 "payment terms"（"LC payment terms"）。
@@ -1057,8 +1064,8 @@ STOP RULE（防止无效搜索）:
         "name": "b2b-cold-outreach",
         "triggers": [
             # Chinese — 「帮我写开发信」从 lead-generation 收回（开发信主战场在此）
-            "开发信", "产品推广信", "推广邮件", "跟进信", "写一封开发信", "帮我写开发信",
-            "帮我写一封冷邮件", "写一封冷邮件",
+            "开发信", "产品推广信", "推广邮件", "跟进信",
+            "写开发信", "帮我写开发信", "写一封开发信", "帮我写一封冷邮件", "写一封冷邮件",
             "产品推广", "写推广邮件", "写跟进邮件",
             # English
             "cold email", "development letter", "promotion letter",
@@ -1646,14 +1653,13 @@ b2b-cold-outreach），加载后按其正文流程继续 —— 一次只注入�
     {
         "name": "b2b-tender-info",
         "triggers": [
-            # Chinese — 裸「招标/投标」已从 compliance 收回；仍用 ≥3 字复合词，
-            # 避免「招标邮件/整理招标」被本技能以短词抢走。
-            "找招标", "查招标", "招标信息", "招标机会", "发现招标",
+            # Chinese — 裸「招标/投标」归本技能（发现招标）；合规检查用「招标合规」等复合词。
+            "招标", "投标", "找招标", "查招标", "招标信息", "招标机会", "发现招标",
             "招标公告", "招标动态", "国际招标",
             # 2026-11-11：补「招标文件/投标文件」等曾被 compliance 裸词截胡的说法
             "招标文件", "投标文件", "公开招标", "招标项目", "查投标",
             # English
-            "find public tenders", "tender opportunities",
+            "tender", "bidding", "find public tenders", "tender opportunities",
         ],
         "aliases": [],
         "priority_keywords": ["招标信息", "招标公告", "公开招标", "tender opportunities"],
