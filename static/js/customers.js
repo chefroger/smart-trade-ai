@@ -372,9 +372,11 @@ async function openCustomerWall(cid) {
     people.forEach(function (p) {
         const isPrimary = !!p.is_primary || p.id == null;
         const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
-        const role = p.role || (isPrimary
-            ? (currentLang === 'en' ? 'Primary contact' : '主要联系人')
-            : (p.function || ''));
+        const role = isPrimary
+            ? (p.role || (currentLang === 'en' ? 'Primary contact' : '主要联系人'))
+            // 附加联系人：职务行显示「title · responsibility」，两者皆空才退回职能
+            : ([(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ')
+                || p.function || '');
         const badge = isPrimary
             ? ('<span class="tagchip" style="margin-left:auto">' + t('contacts.primary_badge') + '</span>')
             : ('<span class="tagchip dim" style="margin-left:auto">' + t('contacts.extra_badge') + '</span>');
@@ -1349,6 +1351,9 @@ function _showContactModal(cid, person) {
         }).join('') + '</select></label>' +
         '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.title_f')) +
         '<input id="c-title" style="width:100%;margin-top:2px;" value="' + esc(p.title || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.responsibility')) +
+        '<input id="c-responsibility" style="width:100%;margin-top:2px;" value="' +
+        esc(p.responsibility || '') + '" /></label>' +
         '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.email')) +
         '<input id="c-email" style="width:100%;margin-top:2px;" value="' + esc(p.email || '') + '" /></label>' +
         '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.phone')) +
@@ -1373,6 +1378,7 @@ function _showContactModal(cid, person) {
             name: ($('c-name')?.value || '').trim(),
             function: $('c-function')?.value || '其他',
             title: ($('c-title')?.value || '').trim(),
+            responsibility: ($('c-responsibility')?.value || '').trim(),
             email: ($('c-email')?.value || '').trim(),
             phone: ($('c-phone')?.value || '').trim(),
             whatsapp: ($('c-whatsapp')?.value || '').trim(),

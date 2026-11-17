@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import sqlite3
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -348,7 +346,7 @@ def test_briefing_other_contacts(test_db, company_id):
 
 def test_missing_table_degrades(test_db, company_id, monkeypatch):
     """缺表时 overview / 匹配 / 简报不 500。"""
-    from trade import customer, database, mailbox_store
+    from trade import customer, mailbox_store
     from trade.database import get_connection
 
     cust = customer.create(
