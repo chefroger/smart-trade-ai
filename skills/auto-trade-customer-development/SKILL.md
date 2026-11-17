@@ -20,6 +20,7 @@ triggers:
   - 一条龙开发客户
   - 帮我跑一轮客户开发
   - 跑一批客户
+  - 自动化客户开发
 category: 自动化
 version: 1.2.2
 author: Trade

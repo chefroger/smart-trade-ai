@@ -15,8 +15,6 @@ triggers:
   - 贸易数据挖掘
   - 采购商分析
   - 供应商分析
-  - 市场调研
-  - 竞争对手分析
   - 查采购商
   - 找买家
   # ... (see skill_registry.py for full list)
