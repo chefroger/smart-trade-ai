@@ -225,6 +225,44 @@ def _ingest_message(
     return is_new, matched
 
 
+def rematch_unmatched_emails(mailbox_id: int | None = None) -> int:
+    """对尚未挂客户的已入库邮件重新跑匹配（改客户邮箱后无需等新信）。
+
+    只填 ``customer_id IS NULL`` 的行，不覆盖已有关联。返回新挂上的封数。
+    """
+    conn = get_connection()
+    if mailbox_id is not None:
+        rows = conn.execute(
+            """
+            SELECT id, from_addr, to_addrs FROM emails
+            WHERE mailbox_id = ? AND customer_id IS NULL
+            """,
+            (mailbox_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, from_addr, to_addrs FROM emails
+            WHERE customer_id IS NULL
+            """
+        ).fetchall()
+    fixed = 0
+    for row in rows:
+        try:
+            tos = json.loads(row["to_addrs"] or "[]")
+        except json.JSONDecodeError:
+            tos = []
+        if not isinstance(tos, list):
+            tos = []
+        pairs = find_customer_matches(row["from_addr"] or "", tos)
+        if not pairs:
+            continue
+        if attach_matches(conn, int(row["id"]), pairs):
+            fixed += 1
+    conn.commit()
+    return fixed
+
+
 # ==== Mailbox CRUD ====
 
 
@@ -400,6 +438,9 @@ def pull_one(mailbox_id: int) -> dict[str, Any]:
             if uid_i is not None:
                 if max_ingested_uid is None or uid_i > max_ingested_uid:
                     max_ingested_uid = uid_i
+
+    # 改客户邮箱后：增量拉取可能 0 封新信，仍需回填未挂客户的已入库邮件
+    matched_total += rematch_unmatched_emails(mailbox_id)
 
     now = datetime.now().astimezone().replace(microsecond=0).isoformat()
 

@@ -502,3 +502,48 @@ def test_pull_all_isolates_single_mailbox_failure(tmp_path, monkeypatch):
     assert out["results"][0]["mailbox_id"] == ids[0]
     assert "boom" in (out["results"][0].get("error") or "")
     assert out["results"][1]["pulled"] == 1
+
+
+def test_rematch_unmatched_after_customer_email_change(tmp_path, monkeypatch):
+    """先入库未匹配，后改客户邮箱，rematch 应挂上。"""
+    _init_mailbox_db(tmp_path, monkeypatch)
+    from trade import customer
+    from trade import mailbox_store as ms
+    from trade.company import crud as company
+    from trade.database import get_connection
+
+    co = company.create(name="Rematch Co", slug="rematch-co")
+    cust = customer.create("R", company_id=co["id"], email="old@example.com")
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO mailboxes (provider, preset, email_address, host, port, username) "
+        "VALUES ('imap', '126', 'rm@example.com', 'imap.126.com', 993, 'rm@example.com')"
+    )
+    conn.commit()
+    mid = conn.execute("SELECT id FROM mailboxes LIMIT 1").fetchone()["id"]
+    eid = ms.insert_email_ignore(
+        conn,
+        mid,
+        {
+            "message_id": "<rm-1>",
+            "uid": 1,
+            "from_addr": "Sender <later@example.com>",
+            "to_addrs": [],
+            "subject": "hi",
+            "snippet": "hi",
+            "body_text": "hi",
+            "received_at": "2026-01-01T00:00:00",
+        },
+    )
+    conn.commit()
+    assert conn.execute(
+        "SELECT customer_id FROM emails WHERE id=?", (eid,)
+    ).fetchone()["customer_id"] is None
+
+    customer.update(cust["id"], company_id=co["id"], email="later@example.com")
+    n = ms.rematch_unmatched_emails(mid)
+    assert n == 1
+    row = conn.execute("SELECT company_id, customer_id FROM emails WHERE id=?", (eid,)).fetchone()
+    assert row["company_id"] == co["id"]
+    assert row["customer_id"] == cust["id"]
+    assert len(ms.list_customer_emails(co["id"], cust["id"])) == 1
