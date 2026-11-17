@@ -44,7 +44,6 @@ triggers:
   - sales playbook
   - sales knowledge base
   - sales SOP
-  - objection handling
   - sales training
 category: 销售转化
 version: 1.1.1
@@ -178,6 +177,7 @@ injection_prompt: |
   - 每个节点附"做对了什么样/做错了什么样"判断标准
   - 所有知识点归位于六大模块体系之中，拒绝碎片化堆砌
   - 每个避坑项必须有反面案例和正确替代方案
+
 ---
 
 # B2B 销冠经验封装器

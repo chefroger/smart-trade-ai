@@ -278,9 +278,19 @@ for _idx, _skill in enumerate(_SKILLS):
             # 防劫持靠词表收敛（删裸「招标/记录/seo」），不靠禁中文子串。
             # 3 字符的英文缩写（FOB/CIF/ETA）保留子串，以支持 "FOB上海" 混排场景。
             _disable_substring = len(_kw) <= 2 and _kw.isascii()
+            # 短 ASCII 缩写不用 \b：Python 默认 UNICODE 下中文也算 \w，
+            # "DA是什么意思" / "LC是什么" 会因 A/C 与汉字之间没有 \b 而漏匹配。
+            # 改成只以 ASCII 字母数字下划线为边界，兼容中英混排问法。
+            if _kw.isascii() and _kw.isalnum():
+                _boundary = re.compile(
+                    rf'(?<![A-Za-z0-9_]){_esc}(?![A-Za-z0-9_])',
+                    re.IGNORECASE,
+                )
+            else:
+                _boundary = re.compile(r'\b' + _esc + r'\b', re.IGNORECASE)
             _patterns.append((
                 _kw,
-                re.compile(r'\b' + _esc + r'\b', re.IGNORECASE),
+                _boundary,
                 None if _disable_substring else re.compile(_esc, re.IGNORECASE),
             ))
         _PRECOMPILED.append((_idx, _skill["name"], _patterns))

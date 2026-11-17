@@ -69,52 +69,24 @@ def _registry_triggers() -> dict[str, set[str]]:
 # 原因只写「为什么不并入注册表」，不写「以后再说」。
 _ALLOWED_DIVERGENCE: dict[str, dict[str, str]] = {
     # ── 归属冲突：另一个 skill 已经拥有这个词，两个都加会靠打分器抢 ──
-    "b2b-buyer-persona": {"客户画像": "归 b2b-customer-intel（画像主战场在那里）"},
-    "b2b-customer-finder": {
-        "帮我找客户": "归 b2b-lead-generation（找客户全链路）",
-        "怎么找客户": "归 b2b-lead-generation",
-    },
-    "b2b-customer-intel": {
-        "customer profile": "归 b2b-customer-mgmt",
-        "客户档案": "归 b2b-customer-mgmt（档案管理 vs 深度画像）",
-    },
-    "b2b-customs-data": {
-        "市场调研": "归 b2b-market-analysis",
-        "竞争对手分析": "归 b2b-market-analysis",
-    },
-    "b2b-doc-generation": {"商业提案": "归 b2b-guarantee-proposal"},
-    "b2b-email-intel": {"背景调查": "归 b2b-osint（完整背调）"},
-    "b2b-exhibition": {"trade fair": "归 b2b-trade-ops"},
-    "b2b-inquiry-training": {"sales training": "归 b2b-sales-playbook"},
-    "b2b-lead-generation": {
-        "客户分析": "归 b2b-customer-intel",
-        "客户跟进": "归 b2b-sales-pipeline",
-        "开发信": "归 b2b-cold-outreach",
-    },
+    # 注（2026-11-17，合并 cursor/skill-trigger-conflicts-6c95）：
+    # 下列词原属「SKILL.md 声明了、注册表没有」的分歧登记，现已从对应 SKILL.md
+    # 的 triggers 声明里删掉（归属已收敛到别的 skill），分歧本身不存在了；
+    # 登记若留着，test_allowed_divergence_still_needed 会判为过期。
+    # 已删除的词：客户画像 / 帮我找客户 / 怎么找客户 / customer profile /
+    # 客户档案 / 市场调研 / 竞争对手分析（customs-data 与 onboarding 各一）/
+    # 商业提案 / 背景调查 / trade fair / sales training / 客户分析 /
+    # 客户跟进 / 开发信 / 产品介绍 / 产品推广 / 产品目录 /
+    # objection handling / 风险评估 / 参展 / 展会邀约 / 广交会 / 展会邀请
+    #
     # 注：询盘/报价/谈判 裸词已从 SKILL.md 声明与注册表同步删掉（2026-11-11），
     # 改用「询盘处理/报价策略/谈判技巧」等复合词，避免抢 inquiry/doc-gen 等技能。
-    "b2b-onboarding": {
-        "产品介绍": "归 b2b-product-description",
-        "竞争对手分析": "归 b2b-market-analysis",
-    },
-    "b2b-product-description": {
-        "产品推广": "归 b2b-cold-outreach",
-        "产品目录": "归 b2b-data-directory",
-    },
     "b2b-sales-playbook": {
-        "objection handling": "归 b2b-inquiry-training",
         # 有意收窄：裸短词会把无关问法劫持进来
         "not responding": (
             "裸词会把 'the shipment is not responding' 也劫持进来；"
             "注册表用带宾语的 'customer is not responding' 覆盖同一意图"
         ),
-    },
-    "b2b-six-thinking-hats": {"风险评估": "归 b2b-osint"},
-    "b2b-trade-ops": {
-        "参展": "归 b2b-exhibition",
-        "展会邀约": "归 b2b-exhibition",
-        "广交会": "归 b2b-exhibition",
-        "展会邀请": "归 b2b-exhibition（那里已有「展会邀约」）",
     },
     "chat-memory": {
         "帮我找": (

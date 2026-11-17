@@ -26,7 +26,6 @@ triggers:
   - practice reply
   - role play buyer
   - objection handling
-  - sales training
   - improve reply
 category: 销售转化
 version: 1.3.1
@@ -188,6 +187,7 @@ injection_prompt: |
   - 60% 篇幅是否在解决客户问题，而不是介绍产品？
   - 价格/认证/交期/参数是否都有出处？无出处的是否已删或标注「待确认」？
   - 买家视角评分是否 ≥9 分？
+
 ---
 
 # B2B Inquiry Response Training
