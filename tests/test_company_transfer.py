@@ -795,3 +795,41 @@ def test_contacts_roundtrip_export_import(desktop, tmp_path):
         assert rows == []
     report2 = import_company(bare_pkg, force_new=True)
     assert report2["tables"]["contacts"]["inserted"] == 0
+
+
+def test_import_old_package_without_contacts_json(desktop, tmp_path):
+    """旧包确实没有 contacts.json：删文件并改 checksums 后仍可导入。"""
+    from trade import contacts, customer
+
+    source = crud.create(_unique("Old Pkg Src"))
+    cust = customer.create(
+        company_id=source["id"],
+        name="Legacy Ltd",
+        contact="Main",
+        email="main@legacy.com",
+    )
+    contacts.create(
+        cust["id"],
+        company_id=source["id"],
+        data={"name": "Extra", "email": "e@legacy.com"},
+    )
+    full_pkg = tmp_path / "full.zip"
+    export_company(source["id"], full_pkg)
+
+    old_pkg = tmp_path / "old-no-contacts.zip"
+    with zipfile.ZipFile(full_pkg) as src, zipfile.ZipFile(old_pkg, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename == "db/contacts.json":
+                continue
+            if info.filename == "checksums.sha256":
+                lines = data.decode("utf-8").splitlines()
+                lines = [ln for ln in lines if "db/contacts.json" not in ln]
+                data = ("\n".join(lines) + "\n").encode("utf-8")
+            dst.writestr(info, data)
+
+    with zipfile.ZipFile(old_pkg) as zf:
+        assert "db/contacts.json" not in zf.namelist()
+
+    report = import_company(old_pkg, force_new=True)
+    assert report["tables"]["contacts"] == {"inserted": 0, "skipped": 0}

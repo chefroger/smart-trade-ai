@@ -15,18 +15,18 @@ router = APIRouter(tags=["contacts"])
 
 
 class ContactWrite(BaseModel):
-    """附加联系人写入体；function 用 str 以便存取层归一脏值。"""
+    """附加联系人写入体；字段用 Any，类型校验在存取层转 400。"""
 
-    name: str | None = None
-    function: str | None = None
-    title: str | None = None
-    responsibility: str | None = None
-    is_primary: int | bool | None = None
-    email: str | None = None
-    phone: str | None = None
-    whatsapp: str | None = None
-    wechat: str | None = None
-    note: str | None = None
+    name: Any = None
+    function: Any = None
+    title: Any = None
+    responsibility: Any = None
+    is_primary: Any = None
+    email: Any = None
+    phone: Any = None
+    whatsapp: Any = None
+    wechat: Any = None
+    note: Any = None
 
 
 def _http_from_store(exc: Exception) -> HTTPException:

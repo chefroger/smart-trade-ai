@@ -394,3 +394,164 @@ def test_no_seed_into_contacts(api_client):
         assert n == 0
     finally:
         conn.close()
+
+
+def test_same_company_cross_customer_contact_404(api_client):
+    """同公司客户 B 不能改/删客户 A 的联系人。"""
+    client, token, cid = api_client
+    a = _make_customer(cid, name="Cust A", contact="A", email="a@x.com")
+    b = _make_customer(cid, name="Cust B", contact="B", email="b@x.com")
+    h = _h(token, cid)
+    r = client.post(
+        f"/api/trade/customers/{a['id']}/contacts",
+        headers=h,
+        json={"name": "X", "email": "x@x.com", "phone": "111"},
+    )
+    assert r.status_code == 201
+    xid = r.json()["id"]
+    r = client.put(
+        f"/api/trade/customers/{b['id']}/contacts/{xid}",
+        headers=h,
+        json={"name": "Hacked"},
+    )
+    assert r.status_code == 404
+    r = client.delete(
+        f"/api/trade/customers/{b['id']}/contacts/{xid}",
+        headers=h,
+    )
+    assert r.status_code == 404
+    r = client.get(f"/api/trade/customers/{a['id']}/contacts", headers=h)
+    assert r.status_code == 200
+    extras = r.json()["contacts"]
+    assert len(extras) == 1
+    assert extras[0]["name"] == "X"
+    assert extras[0]["phone"] == "111"
+
+
+def test_purge_company_clears_contacts(test_db, company_id):
+    from trade import contacts, customer
+    from trade.company import crud
+    from trade.database import get_connection
+
+    cust = customer.create(
+        company_id=company_id, name="Purge Me", contact="A", email="a@p.com"
+    )
+    contacts.create(
+        cust["id"],
+        company_id=company_id,
+        data={"name": "Extra", "email": "e@p.com"},
+    )
+    assert crud.purge(company_id) is True
+    conn = get_connection()
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM contacts WHERE company_id = ?",
+            (company_id,),
+        ).fetchone()["n"]
+        assert n == 0
+    finally:
+        conn.close()
+
+
+def test_api_missing_table_degrades(api_client):
+    """DROP contacts 后 GET 200 降级，写操作 503。"""
+    from trade.database import get_connection
+
+    client, token, cid = api_client
+    cust = _make_customer(cid, contact="A", email="a@d.com")
+    h = _h(token, cid)
+    # 先建一个附加人，拿到 id，再丢表
+    r = client.post(
+        f"/api/trade/customers/{cust['id']}/contacts",
+        headers=h,
+        json={"name": "X", "email": "x@d.com"},
+    )
+    xid = r.json()["id"]
+    conn = get_connection()
+    try:
+        conn.execute("DROP TABLE contacts")
+        conn.commit()
+    finally:
+        conn.close()
+
+    r = client.get(f"/api/trade/customers/{cust['id']}/contacts", headers=h)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["contacts"] == []
+    assert body["primary"] is not None
+    assert body["primary"]["name"] == "A"
+
+    r = client.get(f"/api/trade/customers/{cust['id']}/overview", headers=h)
+    assert r.status_code == 200
+
+    r = client.post(
+        f"/api/trade/customers/{cust['id']}/contacts",
+        headers=h,
+        json={"name": "Y"},
+    )
+    assert r.status_code == 503
+    assert "请重启 Trade 完成升级" in r.json()["detail"]
+
+    r = client.put(
+        f"/api/trade/customers/{cust['id']}/contacts/{xid}",
+        headers=h,
+        json={"name": "Y"},
+    )
+    assert r.status_code == 503
+
+    r = client.delete(
+        f"/api/trade/customers/{cust['id']}/contacts/{xid}",
+        headers=h,
+    )
+    assert r.status_code == 503
+
+
+def test_email_shaped_contact_primary(api_client):
+    """contact 含 @：name 未命名；email 优先 e2，否则用 contact。"""
+    from trade import customer
+
+    client, token, cid = api_client
+    h = _h(token, cid)
+
+    c1 = customer.create(
+        company_id=cid,
+        name="Email Shape 1",
+        contact="boss@y.com",
+        email="other@y.com",
+    )
+    r = client.get(f"/api/trade/customers/{c1['id']}/overview", headers=h)
+    ov = r.json()
+    assert ov["people"][0]["name"] == "未命名联系人"
+    assert ov["people"][0]["email"] == "other@y.com"
+    assert ov["emails"][0] == "other@y.com"
+    assert "boss@y.com" not in ov["emails"]
+
+    c2 = customer.create(
+        company_id=cid,
+        name="Email Shape 2",
+        contact="boss2@y.com",
+    )
+    r = client.get(f"/api/trade/customers/{c2['id']}/overview", headers=h)
+    ov = r.json()
+    assert ov["people"][0]["name"] == "未命名联系人"
+    assert ov["people"][0]["email"] == "boss2@y.com"
+    assert ov["emails"][0] == "boss2@y.com"
+
+
+def test_contact_write_wrong_types_400(api_client):
+    client, token, cid = api_client
+    cust = _make_customer(cid, contact="A", email="a@t.com")
+    h = _h(token, cid)
+    url = f"/api/trade/customers/{cust['id']}/contacts"
+
+    r = client.post(url, headers=h, json={"name": 123})
+    assert r.status_code == 400
+    assert isinstance(r.json()["detail"], str)
+
+    r = client.post(url, headers=h, json={"name": "Ok", "email": []})
+    assert r.status_code == 400
+    assert isinstance(r.json()["detail"], str)
+
+    r = client.post(url, headers=h, json={"name": "Ok", "is_primary": "x"})
+    assert r.status_code == 400
+    assert isinstance(r.json()["detail"], str)

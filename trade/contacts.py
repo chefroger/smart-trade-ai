@@ -47,42 +47,73 @@ def _trim(raw: Any) -> str:
     return str(raw or "").strip()
 
 
+_STR_FIELDS = (
+    "name",
+    "function",
+    "title",
+    "responsibility",
+    "email",
+    "phone",
+    "whatsapp",
+    "wechat",
+    "note",
+)
+_PRIMARY_OK = (None, 0, 1, True, False, "0", "1")
+
+
+def _require_str_or_none(key: str, raw: Any) -> str | None:
+    """字符串字段只接受 str 或 None，禁止 str(数字) 悄悄转换。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ContactValidationError(f"字段 {key} 必须是字符串")
+    return raw
+
+
 def _validate_payload(data: dict, *, partial: bool = False) -> dict:
     """校验并规范化写入字段；partial=True 时只处理传入的键。"""
     out: dict[str, Any] = {}
 
-    # is_primary=1 一律拒绝（主联系人不在本表）
-    if "is_primary" in data and data["is_primary"] not in (None, 0, False, "0"):
-        if data["is_primary"] in (1, True, "1") or str(data["is_primary"]).strip() == "1":
+    # is_primary：只接受布尔/0/1/"0"/"1"/None；=1 仍拒绝
+    if "is_primary" in data:
+        raw_p = data["is_primary"]
+        if raw_p not in _PRIMARY_OK:
+            raise ContactValidationError("字段 is_primary 必须是 0 或 1")
+        if raw_p in (1, True, "1"):
             raise ContactValidationError(
                 "主联系人请在客户资料中编辑，contacts 只存附加联系人"
             )
 
     if not partial or "name" in data:
-        name = _trim(data.get("name"))
+        name = _trim(_require_str_or_none("name", data.get("name")))
         if not name:
             raise ContactValidationError("姓名不能为空")
         out["name"] = name
 
     if not partial or "email" in data:
-        email = _trim(data.get("email"))
+        email = _trim(_require_str_or_none("email", data.get("email")))
         if email and "@" not in email:
             raise ContactValidationError("邮箱格式不正确（需包含 @）")
         out["email"] = email
 
     if not partial or "function" in data:
-        out["function"] = _normalize_function(data.get("function"))
+        fn = _require_str_or_none("function", data.get("function"))
+        out["function"] = _normalize_function(fn if fn is not None else "")
 
     for key in ("title", "responsibility", "phone", "whatsapp", "wechat", "note"):
         if not partial or key in data:
-            out[key] = _trim(data.get(key))
+            out[key] = _trim(_require_str_or_none(key, data.get(key)))
 
     out["is_primary"] = 0
     return out
 
 
 def build_primary_person(cust: dict) -> dict | None:
-    """从 customers.contact + extra2 拼装主联系人；无可展示信息时返回 None。"""
+    """从 customers.contact + extra2 拼装主联系人；无可展示信息时返回 None。
+
+    contact 含 @ 时 name 一律为空（显示「未命名联系人」）；
+    email 优先 extra2.email，为空才用 contact 里的地址。只读拼装，不改库。
+    """
     try:
         import json
 
@@ -104,11 +135,12 @@ def build_primary_person(cust: dict) -> dict | None:
     if not any((contact_raw, title, email, backup, phone, whatsapp, wechat)):
         return None
 
-    # contact 形如邮箱时放入 email，name 留空（前端显示「未命名联系人」）
+    # contact 形如邮箱：name 一律空；e2.email 空时才用 contact 当 email
     name = contact_raw
-    if contact_raw and "@" in contact_raw and not email:
-        email = contact_raw
+    if contact_raw and "@" in contact_raw:
         name = ""
+        if not email:
+            email = contact_raw
 
     display_name = name if name else "未命名联系人"
     return {
@@ -340,7 +372,11 @@ def delete_for_customer(
 
 
 def collect_email_addrs(cust: dict, extras: list[dict]) -> list[str]:
-    """主 email + backup + 附加联系人 email；lower/strip 去重，主优先。"""
+    """主 email + backup + 附加联系人 email；lower/strip 去重，主优先。
+
+    e2.email 为空且 contact 形如邮箱时，把 contact 当地址放在首位；
+    e2.email 有值时 contact 里的地址不进列表。
+    """
     try:
         import json
 
@@ -360,7 +396,12 @@ def collect_email_addrs(cust: dict, extras: list[dict]) -> list[str]:
         seen.add(s)
         ordered.append(s)
 
-    _add(e2.get("email"))
+    e2_email = _trim(e2.get("email"))
+    contact_raw = _trim(cust.get("contact"))
+    if e2_email:
+        _add(e2_email)
+    elif contact_raw and "@" in contact_raw:
+        _add(contact_raw)
     _add(e2.get("backup_email"))
     for p in extras:
         _add(p.get("email"))

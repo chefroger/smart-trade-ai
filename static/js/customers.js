@@ -404,7 +404,7 @@ async function openCustomerWall(cid) {
         '<div class="wgrid"><article class="wcard"' + delay() + ' id="wall-tags-card">' +
         '<div id="wall-tags-chips" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"></div>' +
         '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;">' +
-        '<input type="text" id="wall-tag-input" maxlength="20" placeholder="' + esc(t('contacts.tags_ph')) +
+        '<input type="text" id="wall-tag-input" placeholder="' + esc(t('contacts.tags_ph')) +
         '" style="flex:1;min-width:120px;font-size:12px;padding:4px 8px;" />' +
         '<button type="button" class="btn-xs" id="wall-tag-add">' + t('contacts.tags_add') + '</button>' +
         '</div></article></div></div>';
