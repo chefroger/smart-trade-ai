@@ -223,7 +223,13 @@ def _message_id_from_headers(msg: Message, uidvalidity: int, uid: int) -> str:
 
 
 def _send_imap_id(client: imaplib.IMAP4_SSL) -> None:
-    """登录后发送 RFC2971 ID，自报 Trade（网易必需，其他厂商无害）。"""
+    """登录后发送 RFC2971 ID，自报 Trade（网易必需，其他厂商无害）。
+
+    CPython ``imaplib.Commands`` 默认不含 ID；不注册就 ``KeyError``，异常被吞掉后
+    网易会在 SELECT/EXAMINE 上返回 ``Unsafe Login``，表现为「无法打开收件箱」。
+    """
+    # 注册到 AUTH 状态即可（登录后、选箱前）
+    imaplib.Commands.setdefault("ID", ("AUTH",))
     try:
         client._simple_command("ID", _ID_ARG)  # noqa: SLF001 — imaplib 无公开 ID API
     except Exception:
@@ -338,9 +344,18 @@ def fetch_new(mailbox_row: dict, secret: str) -> tuple[list[dict], dict]:
 
     try:
         client = _imap_connect(host, port, username, secret)
-        # 真实 imaplib 无 examine()；select(readonly=True) 等价只读、不置 \\Seen
-        typ, _data = client.select(_INBOX, readonly=True)
+        # 真实 imaplib 无 examine()；select(readonly=True) 发协议 EXAMINE，只读不置 \\Seen
+        typ, data = client.select(_INBOX, readonly=True)
         if typ != "OK":
+            # 带上服务器原文便于区分「未发 ID / Unsafe Login」与真打不开
+            detail = ""
+            if data and data[0]:
+                raw = data[0]
+                if isinstance(raw, (bytes, bytearray)):
+                    raw = raw.decode("utf-8", errors="replace")
+                detail = str(raw).strip()
+            if detail:
+                raise MailboxError(f"无法打开收件箱（只读）：{detail}")
             raise MailboxError("无法打开收件箱（只读）")
         uidvalidity = _uidvalidity(client)
 

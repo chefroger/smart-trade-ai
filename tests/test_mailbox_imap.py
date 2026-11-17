@@ -111,6 +111,8 @@ def test_extract_body_html_fallback():
 @patch("trade.mailbox.imaplib.IMAP4_SSL")
 def test_test_connection_login_id_logout(mock_ssl):
     """测通路径：login → ID → logout；建连带 socket 超时。"""
+    import imaplib
+
     client = MagicMock()
     mock_ssl.return_value = client
     client.login.return_value = ("OK", [b"Logged in"])
@@ -121,10 +123,24 @@ def test_test_connection_login_id_logout(mock_ssl):
         "imap.126.com", 993, timeout=mb.IMAP_SOCKET_TIMEOUT_SEC
     )
     client.login.assert_called_once_with(FAKE_USER, FAKE_SECRET)
+    # 必须注册 ID，否则网易 SELECT 会 Unsafe Login
+    assert "ID" in imaplib.Commands
     client._simple_command.assert_any_call(
         "ID", '("name" "Trade" "version" "1.0" "vendor" "smart-trade-ai")'
     )
     client.logout.assert_called_once()
+
+
+def test_send_imap_id_registers_command():
+    """_send_imap_id 把 ID 注册进 imaplib.Commands，避免 KeyError 被静默吞掉。"""
+    import imaplib
+
+    imaplib.Commands.pop("ID", None)
+    client = MagicMock()
+    client._simple_command.return_value = ("OK", [b"ID completed"])
+    mb._send_imap_id(client)
+    assert imaplib.Commands.get("ID") == ("AUTH",)
+    client._simple_command.assert_called_once_with("ID", mb._ID_ARG)
 
 
 @patch("trade.mailbox.imaplib.IMAP4_SSL")
