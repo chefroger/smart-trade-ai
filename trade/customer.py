@@ -1498,6 +1498,16 @@ def build_briefing(customer_id: int, *, company_id: int) -> str:
     if last_contact:
         lines.append(f"**最近联系时间**：{last_contact}")
 
+    # 3b. 客户画像（已确认 + ai_visible；失败静默，不挡聊天）
+    try:
+        from trade.profile import briefing_profile_section
+
+        section = briefing_profile_section(customer_id, company_id=company_id)
+        if section:
+            lines.append(section)
+    except Exception:
+        pass
+
     # 4. 最近订单（5 笔）
     from trade.order import list_by_customer as _list_orders
     orders = _list_orders(customer_id, company_id=company_id)

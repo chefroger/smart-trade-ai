@@ -270,6 +270,18 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                 ),
                 # 附加联系人；缺表时导出空列表（升级未重启不炸）
                 "contacts": _safe_contacts_rows(conn, company_id),
+                # 客户画像：facts 全量；gifts 排除「客户索要」
+                "customer_facts": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM customer_facts WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "customer_gifts": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM customer_gifts WHERE company_id = ? "
+                    "AND direction != '客户索要'",
+                    (company_id,),
+                ),
             }
             schema_version = _schema_version(conn)
         finally:
@@ -318,6 +330,7 @@ def export_company(company_id: int, dest_zip: Path | None = None,
             "excluded": [
                 "license_data", "vec_customers", "vec_meta", "cron_job_companies",
                 "*.pid", "caches", "~/.hermes/config.yaml", "~/.hermes/skills",
+                "customer_gifts(客户索要)",
             ],
         }
 

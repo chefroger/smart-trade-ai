@@ -1182,3 +1182,25 @@ body > #toast-container, body > #customer-wall {
 @media (max-width: 720px) {
     .chat-facts { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── W12 独立画像页 ── */
+#customer-profile.profile-wall { z-index: 60; }
+.profile-dossier .people-strip {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.profile-dossier .ps-card {
+    display: flex; gap: 8px; align-items: center;
+    border: 1.5px dashed rgba(20,20,20,.35); padding: 8px 10px; min-width: 140px;
+}
+.profile-dossier .ps-card .avatar {
+    width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+    background: var(--ink, #141414); color: #fff; font-size: 11px; font-weight: 700;
+}
+.profile-cols {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start;
+}
+.profile-pending { font-size: 12px; margin-top: 8px; line-height: 1.7; }
+.profile-ai-lab { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+@media (max-width: 1100px) {
+    .profile-cols { grid-template-columns: 1fr; }
+}

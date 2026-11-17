@@ -121,6 +121,7 @@ class TestW7OrderLogistics:
             "customer_libraries", "conversations", "orders", "order_items",
             "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
             "mailboxes", "emails", "contacts",
+            "customer_facts", "customer_gifts",
         ):
             if table == "orders":
                 conn.execute(

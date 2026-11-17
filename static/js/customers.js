@@ -344,12 +344,14 @@ async function openCustomerWall(cid) {
     if (!wall) return;
     closeCustomerDetail();
 
-    // 卡片墙：overview + 邮件 + 邮箱绑定 + 时间线（并行；时间线失败不阻断）
-    const [ov, mailRes, mailboxRes, timelineRes] = await Promise.all([
+    // 卡片墙：overview + 邮件 + 邮箱 + 时间线 + 画像（并行；画像失败不阻断）
+    const [ov, mailRes, mailboxRes, timelineRes, factsRes, giftsRes] = await Promise.all([
         api('GET', `/api/trade/customers/${cid}/overview`),
         api('GET', `/api/trade/customers/${cid}/emails`),
         api('GET', '/api/trade/mailboxes'),
         api('GET', `/api/trade/customers/${cid}/timeline?days=60`),
+        api('GET', `/api/trade/customers/${cid}/facts`),
+        api('GET', `/api/trade/customers/${cid}/gifts`),
     ]);
     if (!ov || !ov.customer) {
         toast(currentLang === 'en' ? 'Failed to load customer wall' : '加载客户详情失败');
@@ -459,6 +461,12 @@ async function openCustomerWall(cid) {
         '" style="flex:1;min-width:120px;font-size:12px;padding:4px 8px;" />' +
         '<button type="button" class="btn-xs" id="wall-tag-add">' + t('contacts.tags_add') + '</button>' +
         '</div></article></div></div>';
+
+    // 画像两张卡（人物圈 / 喜好禁忌与往来）—— 可被独立画像页复用
+    const factsPayload = (factsRes && typeof factsRes === 'object') ? factsRes : { available: false, items: [] };
+    const giftsPayload = (giftsRes && typeof giftsRes === 'object') ? giftsRes : { available: false, items: [] };
+    bodyHtml += renderProfileCircleSection(cid, factsPayload, people, delay, mailboxBound);
+    bodyHtml += renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, delay, mailboxBound);
 
     bodyHtml += secHead(currentLang === 'en' ? 'Orders' : '订单', 'ORDERS // ' + orders.length) + '<div class="wgrid">';
     if (!orders.length) {
@@ -626,6 +634,7 @@ async function openCustomerWall(cid) {
         '</div>' +
         '<div class="wall-actions">' +
         '<button type="button" class="primary" id="wall-edit">' + (currentLang==='en'?'Edit profile':'编辑档案') + '</button>' +
+        '<button type="button" id="wall-open-profile">' + t('profile.open') + '</button>' +
         '<button type="button" id="wall-add-order">' + (currentLang==='en'?'Add order':'添加订单') + '</button>' +
         '<button type="button" id="wall-stage-save">' + (currentLang==='en'?'Save stage / follow-up':'保存阶段与跟进日') + '</button>' +
         '<label style="font-size:12px;display:inline-flex;align-items:center;gap:6px;">' + (currentLang==='en'?'Stage':'商机阶段') +
@@ -648,7 +657,9 @@ async function openCustomerWall(cid) {
 
     $('wall-back')?.addEventListener('click', closeCustomerWall);
     $('wall-edit')?.addEventListener('click', function () { closeCustomerWall(); showCustomerDetail(cid); });
+    $('wall-open-profile')?.addEventListener('click', function () { openCustomerProfile(cid); });
     $('wall-add-order')?.addEventListener('click', function () { showOrderModal(cid); });
+    _bindProfileCardActions(cid, wall, mailboxBound);
     $('wall-add-contact')?.addEventListener('click', function () {
         _showContactModal(cid, null);
     });
@@ -1541,3 +1552,382 @@ function _showContactModal(cid, person) {
     });
 }
 
+
+// ═════════════════════ 客户画像卡片（墙内 + W12 复用）═════════════════════
+
+const _PROFILE_CIRCLE_CATS = ['家庭', '其他供应商或竞品'];
+const _PROFILE_PREFS_CATS = ['喜好', '禁忌', '重要日期'];
+
+function _profilePersonLabel(item, people) {
+    /** 挂人展示小字。 */
+    const at = item.attach_to || 'none';
+    if (at === 'primary') {
+        const p = (people || []).find(function (x) { return x.id == null || x.is_primary; });
+        const nm = p && p.name ? p.name : (currentLang === 'en' ? 'Primary' : '主联系人');
+        return ' · ' + (currentLang === 'en' ? 'Primary ' : '主联系人 ') + nm;
+    }
+    if (at === 'contact' && item.contact_id != null) {
+        const p = (people || []).find(function (x) { return x.id === item.contact_id; });
+        return p && p.name ? (' · ' + p.name) : '';
+    }
+    return '';
+}
+
+function _profileFactCardsHtml(items, people, delayFn) {
+    /** 已确认事实卡片 HTML。 */
+    let html = '';
+    (items || []).forEach(function (f) {
+        const src = f.source_type === 'chat'
+            ? (currentLang === 'en' ? 'Talk' : '对话')
+            : (f.source_type === 'email'
+                ? (currentLang === 'en' ? 'Email' : '邮件')
+                : (currentLang === 'en' ? 'Manual' : '手工'));
+        html += '<article class="wcard profile-fact"' + delayFn() + ' data-fact-id="' + esc(String(f.id)) + '">' +
+            '<div class="wc-name">' + esc(f.subject || f.category) +
+            '<span class="muted">' + esc(_profilePersonLabel(f, people)) + '</span></div>' +
+            '<p>' + esc(f.content || '') + '</p>' +
+            '<p class="muted profile-src">' + esc(src) +
+            (f.source_quote ? (' · <a href="#" class="profile-toggle-quote">' + t('profile.show_quote') + '</a>') : '') +
+            '</p>' +
+            (f.source_quote ? ('<p class="profile-quote muted" hidden>' + esc(f.source_quote) + '</p>') : '') +
+            '<p class="muted"><a href="#" class="profile-void-fact">' + t('profile.void') + '</a>' +
+            (f.source_type === 'manual' ? (' · <a href="#" class="profile-del-fact">' + t('profile.delete') + '</a>') : '') +
+            ' · <label class="profile-ai-lab"><input type="checkbox" class="profile-ai-vis"' +
+            (f.ai_visible ? ' checked' : '') + '> ' + t('profile.ai_use') + '</label></p>' +
+            '</article>';
+    });
+    return html;
+}
+
+function _profilePendingHtml(items, kind) {
+    /** 待确认小字列表。 */
+    const pending = (items || []).filter(function (x) { return x.status === '待确认'; });
+    if (!pending.length) return '';
+    let html = '<div class="profile-pending muted">';
+    pending.forEach(function (f) {
+        const q = (f.source_quote || f.content || '').slice(0, 40);
+        const idAttr = kind === 'gift' ? ('data-gift-id="' + esc(String(f.id)) + '"') : ('data-fact-id="' + esc(String(f.id)) + '"');
+        html += '<div ' + idAttr + '>' + esc(q) +
+            ' · <a href="#" class="profile-confirm-' + kind + '">' + t('profile.confirm') + '</a>' +
+            ' · <a href="#" class="profile-void-' + kind + '">' + t('profile.void') + '</a></div>';
+    });
+    html += '</div>';
+    return html;
+}
+
+function renderProfileCircleSection(cid, factsPayload, people, delayFn, mailboxBound) {
+    /** 「人物圈」区块 HTML。 */
+    const avail = !!(factsPayload && factsPayload.available);
+    const items = avail ? (factsPayload.items || []) : [];
+    const confirmed = items.filter(function (f) {
+        return f.status === '已确认' && _PROFILE_CIRCLE_CATS.indexOf(f.category) >= 0;
+    });
+    // 按挂人分组：primary → contact id → none
+    confirmed.sort(function (a, b) {
+        const ra = a.attach_to === 'primary' ? 0 : (a.attach_to === 'contact' ? 1 : 2);
+        const rb = b.attach_to === 'primary' ? 0 : (b.attach_to === 'contact' ? 1 : 2);
+        if (ra !== rb) return ra - rb;
+        return (a.contact_id || 0) - (b.contact_id || 0);
+    });
+    let html = '<div class="wsec profile-circle" data-cid="' + cid + '"><div class="wsec-head"><h4>' +
+        t('profile.circle') + '</h4><span class="cnt">CIRCLE // ' + confirmed.length +
+        '</span><span class="ddline" aria-hidden="true"></span></div>';
+    html += '<div style="margin:-4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button type="button" class="btn-xs profile-add-fact" data-cats="circle">' + t('profile.add') + '</button>' +
+        '<button type="button" class="btn-xs profile-extract-chat">' + t('profile.extract_chat') + '</button>' +
+        (mailboxBound ? ('<button type="button" class="btn-xs profile-extract-email">' + t('profile.extract_email') + '</button>') : '') +
+        '</div><div class="wgrid">';
+    if (!avail) {
+        html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.restart') + '</div>';
+    } else if (!confirmed.length) {
+        html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.empty_circle') + '</div>';
+    } else {
+        html += _profileFactCardsHtml(confirmed, people, delayFn);
+    }
+    html += '</div>';
+    if (avail) html += _profilePendingHtml(items.filter(function (f) {
+        return _PROFILE_CIRCLE_CATS.indexOf(f.category) >= 0;
+    }), 'fact');
+    html += '</div>';
+    return html;
+}
+
+function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, delayFn, mailboxBound) {
+    /** 「喜好禁忌与往来」区块 HTML。 */
+    const fAvail = !!(factsPayload && factsPayload.available);
+    const gAvail = !!(giftsPayload && giftsPayload.available);
+    const facts = fAvail ? (factsPayload.items || []) : [];
+    const gifts = gAvail ? (giftsPayload.items || []) : [];
+    const confirmedFacts = facts.filter(function (f) {
+        return f.status === '已确认' && _PROFILE_PREFS_CATS.indexOf(f.category) >= 0;
+    });
+    const confirmedGifts = gifts.filter(function (g) { return g.status === '已确认'; });
+    const n = confirmedFacts.length + confirmedGifts.length;
+    let html = '<div class="wsec profile-prefs" data-cid="' + cid + '"><div class="wsec-head"><h4>' +
+        t('profile.prefs') + '</h4><span class="cnt">PREFS // ' + n +
+        '</span><span class="ddline" aria-hidden="true"></span></div>';
+    html += '<div style="margin:-4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button type="button" class="btn-xs profile-add-fact" data-cats="prefs">' + t('profile.add') + '</button>' +
+        '<button type="button" class="btn-xs profile-add-gift">' + t('profile.add_gift') + '</button>' +
+        '<button type="button" class="btn-xs profile-extract-chat">' + t('profile.extract_chat') + '</button>' +
+        (mailboxBound ? ('<button type="button" class="btn-xs profile-extract-email">' + t('profile.extract_email') + '</button>') : '') +
+        '</div><div class="wgrid">';
+    if (!fAvail && !gAvail) {
+        html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.restart') + '</div>';
+    } else if (!n) {
+        html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.empty_prefs') + '</div>';
+    } else {
+        html += _profileFactCardsHtml(confirmedFacts, people, delayFn);
+        confirmedGifts.forEach(function (g) {
+            const isAsk = g.direction === '客户索要';
+            html += '<article class="wcard profile-gift"' + delayFn() + ' data-gift-id="' + esc(String(g.id)) + '">' +
+                '<div class="wc-name">' + (isAsk ? ('⚠ ' + t('profile.ask') + ' · ') : '') +
+                esc(g.direction || '') + ' · ' + esc(g.item || '') +
+                '<span class="muted">' + esc(_profilePersonLabel(g, people)) + '</span></div>' +
+                (g.occasion || g.gift_date
+                    ? ('<p class="muted">' + esc([g.gift_date, g.occasion].filter(Boolean).join(' · ')) + '</p>')
+                    : '') +
+                '<p class="muted"><a href="#" class="profile-void-gift">' + t('profile.void') + '</a>' +
+                (g.source_type === 'manual' ? (' · <a href="#" class="profile-del-gift">' + t('profile.delete') + '</a>') : '') +
+                (isAsk ? '' : (' · <label class="profile-ai-lab"><input type="checkbox" class="profile-ai-vis-gift"' +
+                    (g.ai_visible ? ' checked' : '') + '> ' + t('profile.ai_use') + '</label>')) +
+                '</p></article>';
+        });
+    }
+    html += '</div>';
+    if (fAvail) html += _profilePendingHtml(facts.filter(function (f) {
+        return _PROFILE_PREFS_CATS.indexOf(f.category) >= 0;
+    }), 'fact');
+    if (gAvail) html += _profilePendingHtml(gifts, 'gift');
+    html += '</div>';
+    return html;
+}
+
+function _bindProfileCardActions(cid, root, mailboxBound, refreshFn) {
+    /** 绑定画像卡上的确认/作废/提取等操作。 */
+    if (!root) return;
+    root.querySelectorAll('.profile-toggle-quote').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+            e.preventDefault();
+            const q = a.closest('.wcard')?.querySelector('.profile-quote');
+            if (q) q.hidden = !q.hidden;
+        });
+    });
+    async function refresh() {
+        if (typeof refreshFn === 'function') refreshFn();
+        else openCustomerWall(cid);
+    }
+    root.querySelectorAll('.profile-confirm-fact').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            const id = a.closest('[data-fact-id]')?.getAttribute('data-fact-id');
+            if (!id) return;
+            const r = await api('POST', `/api/trade/customers/${cid}/facts/${id}/confirm`);
+            if (r) { toast(t('profile.confirmed')); refresh(); }
+        });
+    });
+    root.querySelectorAll('.profile-void-fact').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            const id = a.closest('[data-fact-id]')?.getAttribute('data-fact-id');
+            if (!id) return;
+            const r = await api('POST', `/api/trade/customers/${cid}/facts/${id}/void`);
+            if (r) refresh();
+        });
+    });
+    root.querySelectorAll('.profile-del-fact').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            if (!confirm(t('profile.delete_confirm'))) return;
+            const id = a.closest('[data-fact-id]')?.getAttribute('data-fact-id');
+            if (!id) return;
+            const r = await api('DELETE', `/api/trade/customers/${cid}/facts/${id}`);
+            if (r) refresh();
+        });
+    });
+    root.querySelectorAll('.profile-ai-vis').forEach(function (inp) {
+        inp.addEventListener('change', async function () {
+            const id = inp.closest('[data-fact-id]')?.getAttribute('data-fact-id');
+            if (!id) return;
+            await api('PUT', `/api/trade/customers/${cid}/facts/${id}`, { ai_visible: inp.checked ? 1 : 0 });
+        });
+    });
+    root.querySelectorAll('.profile-confirm-gift').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            const id = a.closest('[data-gift-id]')?.getAttribute('data-gift-id');
+            if (!id) return;
+            const r = await api('POST', `/api/trade/customers/${cid}/gifts/${id}/confirm`);
+            if (r) { toast(t('profile.confirmed')); refresh(); }
+        });
+    });
+    root.querySelectorAll('.profile-void-gift').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            const id = a.closest('[data-gift-id]')?.getAttribute('data-gift-id');
+            if (!id) return;
+            const r = await api('POST', `/api/trade/customers/${cid}/gifts/${id}/void`);
+            if (r) refresh();
+        });
+    });
+    root.querySelectorAll('.profile-del-gift').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            if (!confirm(t('profile.delete_confirm'))) return;
+            const id = a.closest('[data-gift-id]')?.getAttribute('data-gift-id');
+            if (!id) return;
+            const r = await api('DELETE', `/api/trade/customers/${cid}/gifts/${id}`);
+            if (r) refresh();
+        });
+    });
+    root.querySelectorAll('.profile-ai-vis-gift').forEach(function (inp) {
+        inp.addEventListener('change', async function () {
+            const id = inp.closest('[data-gift-id]')?.getAttribute('data-gift-id');
+            if (!id) return;
+            await api('PUT', `/api/trade/customers/${cid}/gifts/${id}`, { ai_visible: inp.checked ? 1 : 0 });
+        });
+    });
+    root.querySelectorAll('.profile-extract-chat').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            btn.disabled = true;
+            const r = await api('POST', `/api/trade/customers/${cid}/facts/extract`, { source: 'chat', limit: 20 });
+            btn.disabled = false;
+            if (!r) return;
+            toast(t('profile.extract_done', {
+                f: r.added_facts || 0, g: r.added_gifts || 0, d: r.dropped_invalid || 0,
+            }));
+            refresh();
+        });
+    });
+    root.querySelectorAll('.profile-extract-email').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            btn.disabled = true;
+            const r = await api('POST', `/api/trade/customers/${cid}/facts/extract`, { source: 'email', limit: 20 });
+            btn.disabled = false;
+            if (!r) return;
+            toast(t('profile.extract_done', {
+                f: r.added_facts || 0, g: r.added_gifts || 0, d: r.dropped_invalid || 0,
+            }));
+            refresh();
+        });
+    });
+    root.querySelectorAll('.profile-add-fact').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const mode = btn.getAttribute('data-cats') || 'prefs';
+            const cats = mode === 'circle' ? _PROFILE_CIRCLE_CATS : _PROFILE_PREFS_CATS;
+            _showProfileFactModal(cid, cats);
+        });
+    });
+    root.querySelectorAll('.profile-add-gift').forEach(function (btn) {
+        btn.addEventListener('click', function () { _showProfileGiftModal(cid); });
+    });
+}
+
+function _showProfileFactModal(cid, cats) {
+    /** 简易添加事实弹窗。 */
+    const cat = window.prompt(t('profile.pick_category') + '\n' + cats.join(' / '), cats[0]);
+    if (cat == null) return;
+    if (cats.indexOf(cat) < 0) { toast(t('profile.bad_category')); return; }
+    const subject = window.prompt(t('profile.subject_ph'), '') || '';
+    const content = window.prompt(t('profile.content_ph'), '');
+    if (content == null || !content.trim()) return;
+    api('POST', `/api/trade/customers/${cid}/facts`, {
+        category: cat, subject: subject.trim(), content: content.trim(), attach_to: 'none',
+    }).then(function (r) {
+        if (r) { toast(t('profile.saved')); openCustomerWall(cid); }
+    });
+}
+
+function _showProfileGiftModal(cid) {
+    /** 简易添加礼物弹窗。 */
+    const direction = window.prompt(
+        t('profile.pick_direction') + '\n我方赠送 / 客户赠送 / 客户索要', '我方赠送'
+    );
+    if (direction == null) return;
+    const item = window.prompt(t('profile.item_ph'), '');
+    if (item == null || !item.trim()) return;
+    api('POST', `/api/trade/customers/${cid}/gifts`, {
+        direction: direction.trim(), item: item.trim(), attach_to: 'none',
+    }).then(function (r) {
+        if (r) { toast(t('profile.saved')); openCustomerWall(cid); }
+    });
+}
+
+// ── W12 独立画像页 ──────────────────────────────────────────────────────────
+
+let _profileEscHandler = null;
+
+function closeCustomerProfile() {
+    /** 关闭画像页，回到卡片墙。 */
+    const panel = $('customer-profile');
+    if (!panel) return;
+    panel.classList.remove('open');
+    panel.setAttribute('inert', '');
+    panel.setAttribute('aria-hidden', 'true');
+    if (_profileEscHandler) {
+        document.removeEventListener('keydown', _profileEscHandler);
+        _profileEscHandler = null;
+    }
+}
+
+async function openCustomerProfile(cid) {
+    /** W12：独立画像页（两栏 dossier；窄屏单列）。 */
+    const panel = $('customer-profile');
+    if (!panel) return;
+    const [ov, factsRes, giftsRes, mailboxRes] = await Promise.all([
+        api('GET', `/api/trade/customers/${cid}/overview`),
+        api('GET', `/api/trade/customers/${cid}/facts`),
+        api('GET', `/api/trade/customers/${cid}/gifts`),
+        api('GET', '/api/trade/mailboxes'),
+    ]);
+    if (!ov || !ov.customer) {
+        toast(currentLang === 'en' ? 'Failed to load profile' : '加载客户画像失败');
+        return;
+    }
+    const c = ov.customer;
+    const e1 = _parseExtra1(c);
+    const people = ov.people || [];
+    const mailboxBound = (Array.isArray(mailboxRes) ? mailboxRes : []).length > 0;
+    const factsPayload = (factsRes && typeof factsRes === 'object') ? factsRes : { available: false, items: [] };
+    const giftsPayload = (giftsRes && typeof giftsRes === 'object') ? giftsRes : { available: false, items: [] };
+    let seq = 0;
+    function delay() { return ' style="animation-delay:' + ((seq++) * 0.05).toFixed(2) + 's"'; }
+
+    // people-strip
+    let strip = '<div class="people-strip">';
+    people.forEach(function (p) {
+        const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
+        strip += '<div class="ps-card"><span class="avatar">' + esc(ini) + '</span>' +
+            '<div><b>' + esc(p.name || '') + '</b><div class="muted">' +
+            esc(p.title || p.function || '') + '</div></div></div>';
+    });
+    if (!people.length) strip += '<div class="muted">' + t('contacts.empty') + '</div>';
+    strip += '</div>';
+
+    const left = renderProfileCircleSection(cid, factsPayload, people, delay, mailboxBound);
+    const right = renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, delay, mailboxBound);
+
+    panel.innerHTML =
+        '<div class="wall-head">' +
+        '<button type="button" class="wall-back" id="profile-back">' + t('profile.back_wall') + '</button>' +
+        '<div class="wall-title bracket"><div><h3>' + esc(c.name) + '</h3>' +
+        '<div class="sub">' + esc([e1.country, e1.city, e1.buyer_type].filter(Boolean).join(' · ') || t('profile.title')) +
+        '</div></div></div></div>' +
+        '<div class="wall-scroll profile-dossier">' + strip +
+        '<div class="profile-cols">' + left + right + '</div></div>';
+
+    panel.classList.add('open');
+    panel.removeAttribute('inert');
+    panel.setAttribute('aria-hidden', 'false');
+    $('profile-back')?.addEventListener('click', closeCustomerProfile);
+    _bindProfileCardActions(cid, panel, mailboxBound, function () { openCustomerProfile(cid); });
+    if (_profileEscHandler) document.removeEventListener('keydown', _profileEscHandler);
+    _profileEscHandler = function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            closeCustomerProfile();
+        }
+    };
+    document.addEventListener('keydown', _profileEscHandler);
+}

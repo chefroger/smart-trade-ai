@@ -330,6 +330,57 @@ CREATE TABLE IF NOT EXISTS contacts (
 );
 CREATE INDEX IF NOT EXISTS idx_contacts_customer ON contacts(customer_id, is_primary);
 
+
+-- 客户画像事实登记（§1）
+CREATE TABLE IF NOT EXISTS customer_facts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id   INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    attach_to     TEXT    NOT NULL DEFAULT 'none',
+    contact_id    INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+    category      TEXT    NOT NULL,
+    subject       TEXT    NOT NULL DEFAULT '',
+    content       TEXT    NOT NULL,
+    source_type   TEXT    NOT NULL DEFAULT 'manual',
+    source_ref    INTEGER,
+    source_quote  TEXT    NOT NULL DEFAULT '',
+    status        TEXT    NOT NULL DEFAULT '待确认',
+    ai_visible    INTEGER NOT NULL DEFAULT 0,
+    fingerprint   TEXT    NOT NULL,
+    created_at    TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at    TEXT DEFAULT (datetime('now', 'localtime')),
+    confirmed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_facts_customer ON customer_facts(company_id, customer_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_facts_fingerprint ON customer_facts(customer_id, fingerprint);
+
+-- 客户礼物往来（§9）
+CREATE TABLE IF NOT EXISTS customer_gifts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id   INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    attach_to     TEXT    NOT NULL DEFAULT 'none',
+    contact_id    INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+    direction     TEXT    NOT NULL,
+    item          TEXT    NOT NULL,
+    approx_value  REAL,
+    currency      TEXT    NOT NULL DEFAULT '',
+    gift_date     TEXT    NOT NULL DEFAULT '',
+    occasion      TEXT    NOT NULL DEFAULT '',
+    note          TEXT    NOT NULL DEFAULT '',
+    source_type   TEXT    NOT NULL DEFAULT 'manual',
+    source_ref    INTEGER,
+    source_quote  TEXT    NOT NULL DEFAULT '',
+    status        TEXT    NOT NULL DEFAULT '待确认',
+    ai_visible    INTEGER NOT NULL DEFAULT 0,
+    fingerprint   TEXT    NOT NULL,
+    created_at    TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at    TEXT DEFAULT (datetime('now', 'localtime')),
+    confirmed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_gifts_customer ON customer_gifts(company_id, customer_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gifts_fingerprint ON customer_gifts(customer_id, fingerprint);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
@@ -579,6 +630,7 @@ _EXPECTED_TABLES = frozenset({
     "order_events",
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
     "mailboxes", "emails", "contacts",
+    "customer_facts", "customer_gifts",
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
@@ -846,6 +898,12 @@ def init_db() -> Path:
             print(f"  📋 Applied {new_migrations} new schema migration(s)")
     finally:
         conn.close()
+    # 建表后清画像探表缓存，避免升级后仍以为缺表
+    try:
+        from trade.profile import invalidate_table_cache
+        invalidate_table_cache()
+    except Exception:
+        pass
     return _get_db_path()
 
 

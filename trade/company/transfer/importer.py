@@ -115,12 +115,18 @@ def _load_table(root: Path, name: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def _contacts_table_exists(conn: sqlite3.Connection) -> bool:
-    """目标库是否已有 contacts 表。"""
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """目标库是否已有指定表。"""
     row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contacts'"
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
     ).fetchone()
     return row is not None
+
+
+def _contacts_table_exists(conn: sqlite3.Connection) -> bool:
+    """目标库是否已有 contacts 表。"""
+    return _table_exists(conn, "contacts")
 
 
 def _find_targets(conn: sqlite3.Connection, name: str) -> list[dict]:
@@ -429,6 +435,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "conversations", "orders", "order_items", "order_libraries",
                 "order_events",
                 "usage_ledger", "doc_extractions", "contacts",
+                "customer_facts", "customer_gifts",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -484,8 +491,9 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             link_added += 1
         report["tables"]["customer_libraries"] = {"inserted": link_added, "skipped": 0}
 
-        # 附加联系人：按 (lower(email), name) 去重合并
+        # 附加联系人：按 (lower(email), name) 去重合并；并建旧 id→新 id 映射（画像用）
         contact_inserted = contact_skipped = 0
+        contact_map: dict[int, int] = {}
         has_contacts = _contacts_table_exists(conn)
         if has_contacts:
             existing_contacts = _rows(
@@ -493,14 +501,16 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "SELECT * FROM contacts WHERE company_id = ?",
                 (target_id,),
             )
-            existing_keys: set[tuple[int, str, str]] = set()
+            existing_by_key: dict[tuple[int, str, str], int] = {}
             for er in existing_contacts:
-                existing_keys.add((
+                k = (
                     int(er["customer_id"]),
                     (er.get("email") or "").strip().lower(),
                     (er.get("name") or "").strip(),
-                ))
+                )
+                existing_by_key[k] = int(er["id"])
             for row in source_tables["contacts"]:
+                old_contact_id = row.get("id")
                 mapped_cid = customer_map.get(row.get("customer_id"))
                 if not mapped_cid:
                     contact_skipped += 1
@@ -510,7 +520,10 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                     (row.get("email") or "").strip().lower(),
                     (row.get("name") or "").strip(),
                 )
-                if key in existing_keys:
+                if key in existing_by_key:
+                    # 判重跳过：映射到目标库已有行
+                    if old_contact_id is not None:
+                        contact_map[int(old_contact_id)] = existing_by_key[key]
                     contact_skipped += 1
                     continue
                 new_row = _without_id(dict(row))
@@ -518,11 +531,13 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 new_row["customer_id"] = mapped_cid
                 new_row["is_primary"] = 0
                 try:
-                    _insert(conn, "contacts", new_row)
+                    new_cid = _insert(conn, "contacts", new_row)
                 except Exception:
                     contact_skipped += 1
                     continue
-                existing_keys.add(key)
+                existing_by_key[key] = int(new_cid)
+                if old_contact_id is not None:
+                    contact_map[int(old_contact_id)] = int(new_cid)
                 contact_inserted += 1
         else:
             contact_skipped = len(source_tables["contacts"])
@@ -530,14 +545,19 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             "inserted": contact_inserted, "skipped": contact_skipped,
         }
 
-        # 对话
+        # 对话（补旧 id→新 id 映射，供画像 source_ref 重映射）
+        existing_conv_rows = _rows(
+            conn, "SELECT * FROM conversations WHERE company_id = ?", (target_id,),
+        )
         existing_conv = {
-            merge_mod.conversation_key(row)
-            for row in _rows(conn, "SELECT * FROM conversations WHERE company_id = ?", (target_id,))
+            merge_mod.conversation_key(row): int(row["id"])
+            for row in existing_conv_rows
         }
+        conversation_map: dict[int, int] = {}
         inserted_convs: list[dict] = []
         conv_inserted = conv_skipped = 0
         for row in source_tables["conversations"]:
+            old_conv_id = row.get("id")
             new_row = _without_id(dict(row))
             new_row["company_id"] = target_id
             new_row["customer_id"] = customer_map.get(row.get("customer_id"))
@@ -546,15 +566,115 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 new_row["files_read"] = mapper.rewrite_files_read(row.get("files_read"))
             key = merge_mod.conversation_key(new_row)
             if key in existing_conv:
+                if old_conv_id is not None:
+                    conversation_map[int(old_conv_id)] = existing_conv[key]
                 conv_skipped += 1
                 continue
             new_id = _insert(conn, "conversations", new_row)
-            existing_conv.add(key)
+            existing_conv[key] = int(new_id)
+            if old_conv_id is not None:
+                conversation_map[int(old_conv_id)] = int(new_id)
             conv_inserted += 1
             new_row["_new_id"] = new_id
             inserted_convs.append(new_row)
         report["tables"]["conversations"] = {
             "inserted": conv_inserted, "skipped": conv_skipped,
+        }
+
+        # 客户画像 facts / gifts（旧包缺表文件时 _load_table 已返回 []）
+        def _remap_attach(row: dict) -> tuple[str, int | None, bool]:
+            """返回 (attach_to, contact_id, unmapped)。"""
+            at = row.get("attach_to")
+            old_cid = row.get("contact_id")
+            # 旧包缺 attach_to：有 contact_id 当 contact，否则 none
+            if at is None or at == "":
+                at = "contact" if old_cid is not None else "none"
+            at = str(at)
+            if at == "primary":
+                return "primary", None, False
+            if at == "none":
+                return "none", None, False
+            if at == "contact":
+                if old_cid is None:
+                    return "none", None, True
+                mapped = contact_map.get(int(old_cid))
+                if mapped is None:
+                    return "none", None, True
+                return "contact", int(mapped), False
+            return "none", None, True
+
+        def _remap_source_ref(row: dict) -> int | None:
+            """chat 重映射；email 一律 NULL。"""
+            st = (row.get("source_type") or "").strip()
+            ref = row.get("source_ref")
+            if ref is None:
+                return None
+            if st == "email":
+                return None
+            if st == "chat":
+                return conversation_map.get(int(ref))
+            return None
+
+        contact_unmapped = 0
+        facts_inserted = facts_skipped = 0
+        if _table_exists(conn, "customer_facts"):
+            for row in source_tables["customer_facts"]:
+                mapped_cust = customer_map.get(row.get("customer_id"))
+                if not mapped_cust:
+                    facts_skipped += 1
+                    continue
+                at, cid, unmapped = _remap_attach(row)
+                if unmapped:
+                    contact_unmapped += 1
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["customer_id"] = mapped_cust
+                new_row["attach_to"] = at
+                new_row["contact_id"] = cid
+                new_row["source_ref"] = _remap_source_ref(row)
+                try:
+                    _insert(conn, "customer_facts", new_row, or_ignore=True)
+                    facts_inserted += 1
+                except Exception:
+                    facts_skipped += 1
+        else:
+            facts_skipped = len(source_tables["customer_facts"])
+        report["tables"]["customer_facts"] = {
+            "inserted": facts_inserted, "skipped": facts_skipped,
+            "contact_unmapped": contact_unmapped,
+        }
+
+        gifts_inserted = gifts_skipped = 0
+        gifts_unmapped = 0
+        if _table_exists(conn, "customer_gifts"):
+            for row in source_tables["customer_gifts"]:
+                # 导出已排除客户索要；防御性再跳过
+                if (row.get("direction") or "") == "客户索要":
+                    gifts_skipped += 1
+                    continue
+                mapped_cust = customer_map.get(row.get("customer_id"))
+                if not mapped_cust:
+                    gifts_skipped += 1
+                    continue
+                at, cid, unmapped = _remap_attach(row)
+                if unmapped:
+                    gifts_unmapped += 1
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["customer_id"] = mapped_cust
+                new_row["attach_to"] = at
+                new_row["contact_id"] = cid
+                new_row["source_ref"] = _remap_source_ref(row)
+                try:
+                    _insert(conn, "customer_gifts", new_row, or_ignore=True)
+                    gifts_inserted += 1
+                except Exception:
+                    gifts_skipped += 1
+        else:
+            gifts_skipped = len(source_tables["customer_gifts"])
+        report["tables"]["customer_gifts"] = {
+            "inserted": gifts_inserted, "skipped": gifts_skipped,
+            "contact_unmapped": gifts_unmapped,
         }
 
         # 订单

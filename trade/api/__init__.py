@@ -24,6 +24,7 @@ from trade.api.mailboxes import router as mailboxes_router
 from trade.api.memory import router as memory_router
 from trade.api.onboarding import router as onboarding_router
 from trade.api.orders import router as orders_router
+from trade.api.profile import router as profile_router
 from trade.api.templates import router as templates_router
 from trade.api.transfer import router as transfer_router
 
@@ -93,6 +94,7 @@ router.include_router(onboarding_router)
 router.include_router(orders_router)
 router.include_router(libraries_router)
 router.include_router(customers_router)
+router.include_router(profile_router)
 router.include_router(contacts_router)
 router.include_router(mailboxes_router)
 router.include_router(conversations_router)

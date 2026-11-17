@@ -27,7 +27,8 @@ def _fresh_db(tmp_path: Path) -> Path:
                   "customer_libraries", "conversations", "orders", "order_items",
                   "order_events",
                   "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
-                  "mailboxes", "emails", "contacts"):
+                  "mailboxes", "emails", "contacts",
+                  "customer_facts", "customer_gifts"):
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
     # 迁移 1/2 已应用 —— 否则 init_db 会写入，理应备份
