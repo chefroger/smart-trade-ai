@@ -292,6 +292,26 @@ CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at);
 CREATE INDEX IF NOT EXISTS idx_emails_company_customer_time
     ON emails(company_id, customer_id, received_at);
 
+-- 附加联系人（第 2 人起；主联系人仍在 customers.contact + extra2）
+CREATE TABLE IF NOT EXISTS contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT '',
+    function TEXT NOT NULL DEFAULT '其他',
+    title TEXT NOT NULL DEFAULT '',
+    responsibility TEXT NOT NULL DEFAULT '',
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    email TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    whatsapp TEXT NOT NULL DEFAULT '',
+    wechat TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_customer ON contacts(customer_id, is_primary);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
@@ -539,7 +559,7 @@ _EXPECTED_TABLES = frozenset({
     "companies", "trade_companies", "libraries", "customers",
     "customer_libraries", "conversations", "orders", "order_items",
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
-    "mailboxes", "emails",
+    "mailboxes", "emails", "contacts",
 })
 
 

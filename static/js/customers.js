@@ -363,20 +363,37 @@ async function openCustomerWall(cid) {
         : (e1.tier ? ('TIER ' + e1.tier) : 'POI');
 
     let bodyHtml = '';
-    bodyHtml += secHead(currentLang === 'en' ? 'People' : '关联人物', 'PEOPLE // ' + people.length) + '<div class="wgrid">';
+    bodyHtml += secHead(currentLang === 'en' ? 'People' : '关联人物', 'PEOPLE // ' + people.length) +
+        '<div style="margin:-4px 0 8px;"><button type="button" class="btn-xs" id="wall-add-contact">' +
+        t('contacts.add') + '</button></div><div class="wgrid">';
+    if (!people.length) {
+        bodyHtml += '<div class="wall-empty"' + delay() + '>' + t('contacts.empty') + '</div>';
+    }
     people.forEach(function (p) {
+        const isPrimary = !!p.is_primary || p.id == null;
         const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
-        const role = p.role || (currentLang === 'en' ? 'Primary contact' : '主要联系人');
-        bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="avatar">' + esc(ini) +
+        const role = p.role || (isPrimary
+            ? (currentLang === 'en' ? 'Primary contact' : '主要联系人')
+            : (p.function || ''));
+        const badge = isPrimary
+            ? ('<span class="tagchip" style="margin-left:auto">' + t('contacts.primary_badge') + '</span>')
+            : ('<span class="tagchip dim" style="margin-left:auto">' + t('contacts.extra_badge') + '</span>');
+        const actions = isPrimary
+            ? ('<p class="muted"><a href="#" class="wall-edit-primary">' + t('contacts.edit') + '</a></p>')
+            : ('<p class="muted"><a href="#" class="wall-edit-contact" data-id="' + esc(String(p.id)) + '">' +
+                t('contacts.edit') + '</a> · <a href="#" class="wall-del-contact" data-id="' +
+                esc(String(p.id)) + '" data-name="' + esc(p.name || '') + '">' + t('contacts.delete') + '</a></p>');
+        bodyHtml += '<article class="wcard"' + delay() + ' data-contact-id="' +
+            (p.id != null ? esc(String(p.id)) : '') + '" data-primary="' + (isPrimary ? '1' : '0') + '">' +
+            '<div class="wc-top"><span class="avatar">' + esc(ini) +
             '</span><span><span class="wc-name">' + esc(p.name) + '</span><br /><span class="wc-role">' + esc(role) +
-            '</span></span><span class="tagchip dim" style="margin-left:auto">' +
-            (currentLang==='en'?'ASSET · PRIMARY CONTACT':'ASSET · 主要联系人') +
-            '</span></div>' +
+            '</span></span>' + badge + '</div>' +
             (p.note ? '<p class="muted">' + esc(p.note) + '</p>' : '') +
             (p.email ? '<p class="mono">' + esc(p.email) + '</p>' : '') +
             ([p.phone, p.whatsapp, p.wechat].filter(Boolean).length
                 ? '<p class="muted">' + esc([p.phone, p.whatsapp ? 'WA '+p.whatsapp : '', p.wechat ? 'WeChat '+p.wechat : ''].filter(Boolean).join(' · ')) + '</p>'
                 : '') +
+            actions +
             '</article>';
     });
     bodyHtml += '</div></div>';
@@ -517,6 +534,36 @@ async function openCustomerWall(cid) {
     $('wall-back')?.addEventListener('click', closeCustomerWall);
     $('wall-edit')?.addEventListener('click', function () { closeCustomerWall(); showCustomerDetail(cid); });
     $('wall-add-order')?.addEventListener('click', function () { showOrderModal(cid); });
+    $('wall-add-contact')?.addEventListener('click', function () {
+        _showContactModal(cid, null);
+    });
+    wall.querySelectorAll('.wall-edit-primary').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+            e.preventDefault();
+            closeCustomerWall();
+            showCustomerEditModal(cid);
+        });
+    });
+    wall.querySelectorAll('.wall-edit-contact').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+            e.preventDefault();
+            const id = parseInt(a.getAttribute('data-id'), 10);
+            const person = people.find(function (p) { return p.id === id; });
+            _showContactModal(cid, person || { id: id });
+        });
+    });
+    wall.querySelectorAll('.wall-del-contact').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            const id = parseInt(a.getAttribute('data-id'), 10);
+            const nm = a.getAttribute('data-name') || '';
+            if (!confirm(t('contacts.delete_confirm').replace('{name}', nm))) return;
+            const r = await api('DELETE', `/api/trade/customers/${cid}/contacts/${id}`);
+            if (!r || !r.ok) return;
+            toast(t('contacts.deleted'));
+            openCustomerWall(cid);
+        });
+    });
     $('wall-stage-save')?.addEventListener('click', async function () {
         const nextStage = $('wall-stage')?.value || '询盘';
         const nextFollow = $('wall-follow')?.value || '';
@@ -1191,5 +1238,73 @@ async function downloadCsvTemplate() {
     } catch(e) {
         toast('下载模板失败: ' + e.message);
     }
+}
+
+// ── 附加联系人弹窗 ───────────────────────────────────
+function _showContactModal(cid, person) {
+    document.querySelectorAll('.contact-modal-backdrop').forEach(function (el) { el.remove(); });
+    const isEdit = !!(person && person.id);
+    const p = person || {};
+    const funcs = ['决策人', '财务', '仓储', '其他'];
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop contact-modal-backdrop';
+    backdrop.style.cssText = 'display:flex;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;align-items:center;justify-content:center;';
+    backdrop.innerHTML =
+        '<div class="modal" style="max-width:420px;width:92%;background:var(--bg);padding:16px;border:1px solid var(--line-strong);">' +
+        '<h3 style="margin:0 0 12px;">' + esc(isEdit ? t('contacts.edit_title') : t('contacts.add_title')) + '</h3>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.name')) +
+        '<input id="c-name" style="width:100%;margin-top:2px;" value="' + esc(p.name || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.function')) +
+        '<select id="c-function" style="width:100%;margin-top:2px;">' +
+        funcs.map(function (f) {
+            return '<option value="' + esc(f) + '"' + ((p.function || '其他') === f ? ' selected' : '') + '>' + esc(f) + '</option>';
+        }).join('') + '</select></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.title_f')) +
+        '<input id="c-title" style="width:100%;margin-top:2px;" value="' + esc(p.title || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.email')) +
+        '<input id="c-email" style="width:100%;margin-top:2px;" value="' + esc(p.email || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.phone')) +
+        '<input id="c-phone" style="width:100%;margin-top:2px;" value="' + esc(p.phone || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.whatsapp')) +
+        '<input id="c-whatsapp" style="width:100%;margin-top:2px;" value="' + esc(p.whatsapp || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.wechat')) +
+        '<input id="c-wechat" style="width:100%;margin-top:2px;" value="' + esc(p.wechat || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('contacts.note')) +
+        '<input id="c-note" style="width:100%;margin-top:2px;" value="' + esc(p.note || '') + '" /></label>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
+        '<button type="button" id="c-cancel">' + esc(t('btn.cancel')) + '</button>' +
+        '<button type="button" class="primary" id="c-save">' + esc(t('btn.save')) + '</button>' +
+        '</div></div>';
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('#c-cancel').addEventListener('click', function () { backdrop.remove(); });
+    backdrop.addEventListener('click', function (e) {
+        if (e.target === backdrop) backdrop.remove();
+    });
+    backdrop.querySelector('#c-save').addEventListener('click', async function () {
+        const body = {
+            name: ($('c-name')?.value || '').trim(),
+            function: $('c-function')?.value || '其他',
+            title: ($('c-title')?.value || '').trim(),
+            email: ($('c-email')?.value || '').trim(),
+            phone: ($('c-phone')?.value || '').trim(),
+            whatsapp: ($('c-whatsapp')?.value || '').trim(),
+            wechat: ($('c-wechat')?.value || '').trim(),
+            note: ($('c-note')?.value || '').trim(),
+        };
+        if (!body.name) {
+            toast(t('contacts.name_required'));
+            return;
+        }
+        let saved;
+        if (isEdit) {
+            saved = await api('PUT', `/api/trade/customers/${cid}/contacts/${person.id}`, body);
+        } else {
+            saved = await api('POST', `/api/trade/customers/${cid}/contacts`, body);
+        }
+        if (!saved) return;
+        backdrop.remove();
+        toast(t('contacts.saved'));
+        openCustomerWall(cid);
+    });
 }
 

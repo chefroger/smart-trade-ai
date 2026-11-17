@@ -253,17 +253,17 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
     if not isinstance(e2, dict):
         e2 = {}
 
-    contact_name = cust.get("contact") or e2.get("title") or cust.get("name") or ""
-    people = [{
-        "name": contact_name,
-        "role": e2.get("title") or "",
-        "email": e2.get("email") or "",
-        "phone": e2.get("phone") or "",
-        "whatsapp": e2.get("whatsapp") or "",
-        "wechat": e2.get("wechat") or "",
-        "note": e2.get("follow_up_note") or cust.get("note") or "",
-    }]
-    emails = [e for e in (e2.get("email"), e2.get("backup_email")) if e]
+    # 主联系人真源 = contact + extra2；附加联系人来自 contacts 表（缺表降级为空）
+    from trade import contacts as contacts_module
+
+    primary = contacts_module.build_primary_person(cust)
+    extras = contacts_module.list_additional(customer_id, company_id=company_id)
+    people: list[dict] = []
+    if primary is not None:
+        # overview 不暴露 backup_email
+        people.append({k: v for k, v in primary.items() if k != "backup_email"})
+    people.extend(extras)
+    emails = contacts_module.collect_email_addrs(cust, extras)
 
     orders = order_module.list_by_customer(customer_id, company_id=company_id)
     # 按币种汇总，禁止跨币种硬加（审计 P2）
@@ -472,6 +472,11 @@ def delete(customer_id: int, *, company_id: int) -> bool:
     """按公司作用域删除客户。如果删除了行则返回 True。"""
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        # 双保险：显式清 contacts（外键 CASCADE 也会清；缺表静默）
+        from trade.contacts import delete_for_customer
+
+        delete_for_customer(conn, customer_id, company_id)
         cur = conn.execute(
             "DELETE FROM customers WHERE id = ? AND company_id = ?",
             (customer_id, company_id),
@@ -482,6 +487,9 @@ def delete(customer_id: int, *, company_id: int) -> bool:
             # 语义索引：同步移除，避免删掉的客户仍被搜出来
             _delete_customer_index_best_effort(conn, customer_id)
         return deleted
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -1092,6 +1100,24 @@ def build_briefing(customer_id: int, *, company_id: int) -> str:
         contact_parts.append(f"LinkedIn: {linkedin}")
     if contact_parts:
         lines.append("**联系方式**：" + "，".join(contact_parts))
+
+    # 2b. 其他联系人（contacts 表；缺表静默省略，不挡聊天）
+    try:
+        from trade import contacts as contacts_module
+
+        extras = contacts_module.list_additional(customer_id, company_id=company_id)
+        other_bits = []
+        for p in extras:
+            bit = (p.get("name") or "").strip() or "未命名"
+            role = (p.get("title") or p.get("function") or "").strip()
+            em = (p.get("email") or "").strip()
+            detail = "/".join(x for x in (bit, role, em) if x)
+            if detail:
+                other_bits.append(detail)
+        if other_bits:
+            lines.append("**其他联系人**：" + "；".join(other_bits))
+    except Exception:
+        pass
 
     # 3. 历史互动
     note = (cust.get("note") or "").strip()

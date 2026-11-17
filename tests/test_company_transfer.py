@@ -743,3 +743,55 @@ def test_memory_blocks_are_appended_once(desktop, tmp_path, monkeypatch):
     again = import_company(package, target_company_id=target["id"])
     assert again["memory"]["added"] == 0
     assert again["memory"]["skipped"] >= 1
+
+
+def test_contacts_roundtrip_export_import(desktop, tmp_path):
+    """附加联系人随公司包往返；旧包无 contacts.json 不炸。"""
+    from trade import contacts, customer
+
+    source = crud.create(_unique("Contacts Src"))
+    cust = customer.create(
+        company_id=source["id"],
+        name="Buyer Ltd",
+        contact="Main",
+        email="main@buyer.com",
+    )
+    contacts.create(
+        cust["id"],
+        company_id=source["id"],
+        data={"name": "Extra", "email": "extra@buyer.com", "title": "CFO"},
+    )
+    package = tmp_path / "with-contacts.zip"
+    export_company(source["id"], package)
+
+    with zipfile.ZipFile(package) as zf:
+        assert "db/contacts.json" in zf.namelist()
+        rows = json.loads(zf.read("db/contacts.json").decode("utf-8"))
+        assert len(rows) == 1
+        assert rows[0]["email"] == "extra@buyer.com"
+
+    # force_new 导入到新公司
+    report = import_company(package, force_new=True)
+    assert report["tables"]["contacts"]["inserted"] >= 1
+    new_cid = report["target"]["id"]
+    conn = database.get_connection()
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM contacts WHERE company_id = ?", (new_cid,)
+        ).fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+    # 无附加联系人的包：contacts.json 为空列表，导入 inserted=0
+    bare = crud.create(_unique("Contacts Bare"))
+    customer.create(
+        company_id=bare["id"], name="Solo Ltd", contact="Only", email="only@x.com"
+    )
+    bare_pkg = tmp_path / "bare-contacts.zip"
+    export_company(bare["id"], bare_pkg)
+    with zipfile.ZipFile(bare_pkg) as zf:
+        rows = json.loads(zf.read("db/contacts.json").decode("utf-8"))
+        assert rows == []
+    report2 = import_company(bare_pkg, force_new=True)
+    assert report2["tables"]["contacts"]["inserted"] == 0

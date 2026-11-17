@@ -95,8 +95,9 @@ def normalize_addr(s: str) -> str:
 
 
 def find_customer_matches(from_addr: str, to_addrs: list[str]) -> list[tuple[int, int]]:
-    """扫全部公司 customers.extra2 的 email/backup_email，与 From/To 不区分大小写匹配。
+    """扫 extra2.email/backup_email + contacts.email，与 From/To 不区分大小写匹配。
 
+    contacts 表缺失时只扫 extra2（降级，不抛错）。
     返回按 customers.id 升序扫描到的 (company_id, customer_id) 列表；
     两列形态下调用方只取 pairs[0]（一封邮件只挂一个客户）。
     """
@@ -114,23 +115,49 @@ def find_customer_matches(from_addr: str, to_addrs: list[str]) -> list[tuple[int
     conn = get_connection()
     pairs: list[tuple[int, int]] = []
     seen: set[tuple[int, int]] = set()
-    # 按 id 升序，保证 pairs[0] 稳定可测
-    rows = conn.execute(
-        "SELECT company_id, id, extra2 FROM customers ORDER BY id ASC"
-    ).fetchall()
-    for row in rows:
-        try:
-            e2 = json.loads(row["extra2"] or "{}")
-        except json.JSONDecodeError:
-            e2 = {}
-        for key in ("email", "backup_email"):
-            val = normalize_addr(str(e2.get(key) or ""))
-            if val and val in want:
+    try:
+        # 按 id 升序，保证 pairs[0] 稳定可测
+        rows = conn.execute(
+            "SELECT company_id, id, extra2 FROM customers ORDER BY id ASC"
+        ).fetchall()
+        for row in rows:
+            try:
+                e2 = json.loads(row["extra2"] or "{}")
+            except json.JSONDecodeError:
+                e2 = {}
+            hit = False
+            for key in ("email", "backup_email"):
+                val = normalize_addr(str(e2.get(key) or ""))
+                if val and val in want:
+                    hit = True
+                    break
+            if hit:
                 pair = (int(row["company_id"]), int(row["id"]))
                 if pair not in seen:
                     seen.add(pair)
                     pairs.append(pair)
-                break
+
+        # 附加联系人邮箱（缺表静默跳过）
+        try:
+            crows = conn.execute(
+                "SELECT company_id, customer_id, email FROM contacts "
+                "WHERE email IS NOT NULL AND email != '' ORDER BY customer_id ASC"
+            ).fetchall()
+            for crow in crows:
+                val = normalize_addr(str(crow["email"] or ""))
+                if val and val in want:
+                    pair = (int(crow["company_id"]), int(crow["customer_id"]))
+                    if pair not in seen:
+                        seen.add(pair)
+                        pairs.append(pair)
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if not ("no such table" in msg and "contacts" in msg):
+                raise
+    finally:
+        conn.close()
+    # 再按 customer_id 稳定排序（extra2 命中优先保持先插入顺序，整体按 id）
+    pairs.sort(key=lambda p: p[1])
     return pairs
 
 
