@@ -269,6 +269,67 @@ def test_mail_match_contacts_email(test_db, company_id):
     assert (company_id, cust["id"]) in pairs
 
 
+def test_mail_match_extra2_beats_contacts_same_address(test_db, company_id):
+    """C1 附加人邮箱 = C2 主邮箱时，pairs[0] 必须是 C2（extra2 优先）。"""
+    from trade import contacts, customer, mailbox_store
+    from trade.database import get_connection
+
+    c1 = customer.create(
+        company_id=company_id,
+        name="C1 First",
+        contact="P1",
+        email="p1@x.com",
+    )
+    c2 = customer.create(
+        company_id=company_id,
+        name="C2 Second",
+        contact="P2",
+        email="shared@x.com",
+    )
+    assert c1["id"] < c2["id"]
+    contacts.create(
+        c1["id"],
+        company_id=company_id,
+        data={"name": "Extra", "email": "SHARED@x.com"},
+    )
+    pairs = mailbox_store.find_customer_matches("shared@x.com", [])
+    assert pairs[0] == (company_id, c2["id"])
+    assert (company_id, c1["id"]) in pairs
+    assert pairs.index((company_id, c1["id"])) > 0
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO mailboxes (provider, preset, email_address, host, port, username) "
+            "VALUES ('imap', '126', 'box@x.com', 'imap.126.com', 993, 'box@x.com')"
+        )
+        conn.commit()
+        mid = conn.execute("SELECT id FROM mailboxes LIMIT 1").fetchone()["id"]
+        eid = mailbox_store.insert_email_ignore(
+            conn,
+            mid,
+            {
+                "message_id": "<shared-1>",
+                "uid": 1,
+                "from_addr": "Someone <shared@x.com>",
+                "to_addrs": [],
+                "subject": "hi",
+                "snippet": "hi",
+                "body_text": "hi",
+                "received_at": "2026-01-01T00:00:00",
+            },
+        )
+        conn.commit()
+        n = mailbox_store.rematch_unmatched_emails(mid)
+        assert n == 1
+        row = conn.execute(
+            "SELECT customer_id FROM emails WHERE id=?", (eid,)
+        ).fetchone()
+        assert row["customer_id"] == c2["id"]
+    finally:
+        conn.close()
+
+
 def test_briefing_other_contacts(test_db, company_id):
     from trade import contacts, customer
 

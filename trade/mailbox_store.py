@@ -97,9 +97,11 @@ def normalize_addr(s: str) -> str:
 def find_customer_matches(from_addr: str, to_addrs: list[str]) -> list[tuple[int, int]]:
     """扫 extra2.email/backup_email + contacts.email，与 From/To 不区分大小写匹配。
 
+    返回两段拼接、之后不再整体排序（调用方只取 pairs[0]）：
+    1. extra2（email/backup_email）命中的客户，按 customers.id 升序；
+    2. 仅在 contacts.email 命中、且不在第 1 段的客户，按
+       (contacts.customer_id ASC, contacts.id ASC)，同一客户只出现一次。
     contacts 表缺失时只扫 extra2（降级，不抛错）。
-    返回按 customers.id 升序扫描到的 (company_id, customer_id) 列表；
-    两列形态下调用方只取 pairs[0]（一封邮件只挂一个客户）。
     """
     want: set[str] = set()
     nf = normalize_addr(from_addr)
@@ -113,10 +115,10 @@ def find_customer_matches(from_addr: str, to_addrs: list[str]) -> list[tuple[int
         return []
 
     conn = get_connection()
-    pairs: list[tuple[int, int]] = []
+    primary_pairs: list[tuple[int, int]] = []
     seen: set[tuple[int, int]] = set()
     try:
-        # 按 id 升序，保证 pairs[0] 稳定可测
+        # 第一段：extra2 命中，按 customers.id 升序
         rows = conn.execute(
             "SELECT company_id, id, extra2 FROM customers ORDER BY id ASC"
         ).fetchall()
@@ -135,13 +137,15 @@ def find_customer_matches(from_addr: str, to_addrs: list[str]) -> list[tuple[int
                 pair = (int(row["company_id"]), int(row["id"]))
                 if pair not in seen:
                     seen.add(pair)
-                    pairs.append(pair)
+                    primary_pairs.append(pair)
 
-        # 附加联系人邮箱（缺表静默跳过）
+        # 第二段：仅 contacts.email 命中且不在第一段（缺表静默跳过）
+        contact_pairs: list[tuple[int, int]] = []
         try:
             crows = conn.execute(
                 "SELECT company_id, customer_id, email FROM contacts "
-                "WHERE email IS NOT NULL AND email != '' ORDER BY customer_id ASC"
+                "WHERE email IS NOT NULL AND email != '' "
+                "ORDER BY customer_id ASC, id ASC"
             ).fetchall()
             for crow in crows:
                 val = normalize_addr(str(crow["email"] or ""))
@@ -149,16 +153,14 @@ def find_customer_matches(from_addr: str, to_addrs: list[str]) -> list[tuple[int
                     pair = (int(crow["company_id"]), int(crow["customer_id"]))
                     if pair not in seen:
                         seen.add(pair)
-                        pairs.append(pair)
+                        contact_pairs.append(pair)
         except sqlite3.OperationalError as exc:
             msg = str(exc).lower()
             if not ("no such table" in msg and "contacts" in msg):
                 raise
+        return primary_pairs + contact_pairs
     finally:
         conn.close()
-    # 再按 customer_id 稳定排序（extra2 命中优先保持先插入顺序，整体按 id）
-    pairs.sort(key=lambda p: p[1])
-    return pairs
 
 
 # ==== 邮件入库 ====
@@ -202,7 +204,8 @@ def attach_matches(
 ) -> int:
     """把匹配结果写到 emails.company_id / customer_id。
 
-    一封邮件只挂一对：取 pairs[0]（customers.id 升序第一对）；多命中其余丢弃。
+    一封邮件只挂一对：取 pairs[0]（extra2 命中段优先，段内再按 customer id；
+    见 find_customer_matches）；多命中其余丢弃。
     无匹配则两列保持 NULL。返回 1 表示写入了一对，0 表示未写。
     """
     if not pairs:
