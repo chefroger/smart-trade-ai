@@ -8,6 +8,12 @@
 
 **Tech Stack:** Python 标准库 `imaplib` / `email`、FastAPI、SQLite、vanilla JS SPA（S-01）。零新 pip 依赖。
 
+> **实现变更（2026-11-17，审计后）**：存储形态已从本文的「三表 + `email_matches`
+> 关联表」改为 **`emails` 两列**（`company_id` / `customer_id`，均可空）。
+> 决策：Lau 2026-11-17 定。`email_matches` 表不再创建；一封邮件只挂一个客户
+> （多命中时取 `find_customer_matches()` 的第一对），未匹配到客户的邮件照样入库、
+> 两列留 NULL。下方凡写 `email_matches` 的段落均按此理解。
+
 **Spec:** `docs/mailbox-imap-binding-design-2026-11-16.md`  
 **Branch:** `feat/mailbox-imap-binding`（从当前 main 检出）  
 **Author:** `Roger Lau <chefrogerlau@126.com>`；提交须含 `Touched outside task scope:` 行；禁止 Co-Authored-By。

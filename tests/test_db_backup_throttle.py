@@ -39,6 +39,9 @@ def _fresh_db(tmp_path: Path) -> Path:
     conn.execute("ALTER TABLE customers ADD COLUMN stage TEXT DEFAULT '询盘'")
     conn.execute("ALTER TABLE customers ADD COLUMN next_follow_up_date TEXT DEFAULT ''")
     conn.execute("ALTER TABLE customers ADD COLUMN is_starred INTEGER DEFAULT 0")
+    # emails 两列形态：缺 company_id/customer_id 同样会被 _needs_schema_work 判为待处理
+    conn.execute("ALTER TABLE emails ADD COLUMN company_id INTEGER")
+    conn.execute("ALTER TABLE emails ADD COLUMN customer_id INTEGER")
     conn.commit()
     conn.close()
     return db
