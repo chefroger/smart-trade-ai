@@ -7,7 +7,7 @@ Trade AI Assistant — API 请求/响应模型（Pydantic）。
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -130,7 +130,8 @@ class CustomerUpdate(BaseModel):
     )
     next_follow_up_date: str | None = Field(None, description="下次跟进日 YYYY-MM-DD")
     is_starred: Literal[0, 1] | None = Field(None, description="是否标星 0/1")
-    tags: list[str] | None = Field(None, description="客户标签（写入 extra3.tags）")
+    # Any：非法类型放到路由层转 400 字符串，避免 pydantic 422 → 前端 [object Object]
+    tags: Any = Field(None, description="客户标签（写入 extra3.tags）")
 
     @field_validator("next_follow_up_date")
     @classmethod

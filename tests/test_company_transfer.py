@@ -743,3 +743,93 @@ def test_memory_blocks_are_appended_once(desktop, tmp_path, monkeypatch):
     again = import_company(package, target_company_id=target["id"])
     assert again["memory"]["added"] == 0
     assert again["memory"]["skipped"] >= 1
+
+
+def test_contacts_roundtrip_export_import(desktop, tmp_path):
+    """附加联系人随公司包往返；旧包无 contacts.json 不炸。"""
+    from trade import contacts, customer
+
+    source = crud.create(_unique("Contacts Src"))
+    cust = customer.create(
+        company_id=source["id"],
+        name="Buyer Ltd",
+        contact="Main",
+        email="main@buyer.com",
+    )
+    contacts.create(
+        cust["id"],
+        company_id=source["id"],
+        data={"name": "Extra", "email": "extra@buyer.com", "title": "CFO"},
+    )
+    package = tmp_path / "with-contacts.zip"
+    export_company(source["id"], package)
+
+    with zipfile.ZipFile(package) as zf:
+        assert "db/contacts.json" in zf.namelist()
+        rows = json.loads(zf.read("db/contacts.json").decode("utf-8"))
+        assert len(rows) == 1
+        assert rows[0]["email"] == "extra@buyer.com"
+
+    # force_new 导入到新公司
+    report = import_company(package, force_new=True)
+    assert report["tables"]["contacts"]["inserted"] >= 1
+    new_cid = report["target"]["id"]
+    conn = database.get_connection()
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM contacts WHERE company_id = ?", (new_cid,)
+        ).fetchone()[0]
+        assert n == 1
+    finally:
+        conn.close()
+
+    # 无附加联系人的包：contacts.json 为空列表，导入 inserted=0
+    bare = crud.create(_unique("Contacts Bare"))
+    customer.create(
+        company_id=bare["id"], name="Solo Ltd", contact="Only", email="only@x.com"
+    )
+    bare_pkg = tmp_path / "bare-contacts.zip"
+    export_company(bare["id"], bare_pkg)
+    with zipfile.ZipFile(bare_pkg) as zf:
+        rows = json.loads(zf.read("db/contacts.json").decode("utf-8"))
+        assert rows == []
+    report2 = import_company(bare_pkg, force_new=True)
+    assert report2["tables"]["contacts"]["inserted"] == 0
+
+
+def test_import_old_package_without_contacts_json(desktop, tmp_path):
+    """旧包确实没有 contacts.json：删文件并改 checksums 后仍可导入。"""
+    from trade import contacts, customer
+
+    source = crud.create(_unique("Old Pkg Src"))
+    cust = customer.create(
+        company_id=source["id"],
+        name="Legacy Ltd",
+        contact="Main",
+        email="main@legacy.com",
+    )
+    contacts.create(
+        cust["id"],
+        company_id=source["id"],
+        data={"name": "Extra", "email": "e@legacy.com"},
+    )
+    full_pkg = tmp_path / "full.zip"
+    export_company(source["id"], full_pkg)
+
+    old_pkg = tmp_path / "old-no-contacts.zip"
+    with zipfile.ZipFile(full_pkg) as src, zipfile.ZipFile(old_pkg, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename == "db/contacts.json":
+                continue
+            if info.filename == "checksums.sha256":
+                lines = data.decode("utf-8").splitlines()
+                lines = [ln for ln in lines if "db/contacts.json" not in ln]
+                data = ("\n".join(lines) + "\n").encode("utf-8")
+            dst.writestr(info, data)
+
+    with zipfile.ZipFile(old_pkg) as zf:
+        assert "db/contacts.json" not in zf.namelist()
+
+    report = import_company(old_pkg, force_new=True)
+    assert report["tables"]["contacts"] == {"inserted": 0, "skipped": 0}

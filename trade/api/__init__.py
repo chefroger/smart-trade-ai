@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from trade.api.chat import router as chat_router
 from trade.api.companies import router as companies_router
+from trade.api.contacts import router as contacts_router
 from trade.api.conversations import router as conversations_router
 from trade.api.copilot import router as copilot_router
 from trade.api.cron import router as cron_router
@@ -91,6 +92,7 @@ router.include_router(onboarding_router)
 router.include_router(orders_router)
 router.include_router(libraries_router)
 router.include_router(customers_router)
+router.include_router(contacts_router)
 router.include_router(mailboxes_router)
 router.include_router(conversations_router)
 router.include_router(chat_router)

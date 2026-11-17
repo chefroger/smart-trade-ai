@@ -50,6 +50,22 @@ def _rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
     return [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
 
 
+def _safe_contacts_rows(conn: sqlite3.Connection, company_id: int) -> list[dict]:
+    """导出附加联系人；contacts 表缺失时返回 []（不炸导出）。"""
+    try:
+        return _rows(
+            conn,
+            "SELECT ct.* FROM contacts ct "
+            "JOIN customers c ON c.id = ct.customer_id WHERE c.company_id = ?",
+            (company_id,),
+        )
+    except sqlite3.OperationalError as exc:
+        msg = str(exc).lower()
+        if "no such table" in msg and "contacts" in msg:
+            return []
+        raise
+
+
 def _schema_version(conn: sqlite3.Connection) -> int:
     try:
         row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
@@ -236,6 +252,8 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                 "doc_extractions": _rows(
                     conn, "SELECT * FROM doc_extractions WHERE tenant_id = ?", (str(company_id),)
                 ),
+                # 附加联系人；缺表时导出空列表（升级未重启不炸）
+                "contacts": _safe_contacts_rows(conn, company_id),
             }
             schema_version = _schema_version(conn)
         finally:

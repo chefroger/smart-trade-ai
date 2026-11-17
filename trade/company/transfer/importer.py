@@ -115,6 +115,14 @@ def _load_table(root: Path, name: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _contacts_table_exists(conn: sqlite3.Connection) -> bool:
+    """目标库是否已有 contacts 表。"""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contacts'"
+    ).fetchone()
+    return row is not None
+
+
 def _find_targets(conn: sqlite3.Connection, name: str) -> list[dict]:
     target = merge_mod.norm_name(name)
     rows = _rows(conn, "SELECT id, name, slug, is_active FROM companies")
@@ -419,7 +427,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             for name in (
                 "trade_company", "libraries", "customers", "customer_libraries",
                 "conversations", "orders", "order_items", "order_libraries",
-                "usage_ledger", "doc_extractions",
+                "usage_ledger", "doc_extractions", "contacts",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -474,6 +482,52 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             }, or_ignore=True)
             link_added += 1
         report["tables"]["customer_libraries"] = {"inserted": link_added, "skipped": 0}
+
+        # 附加联系人：按 (lower(email), name) 去重合并
+        contact_inserted = contact_skipped = 0
+        has_contacts = _contacts_table_exists(conn)
+        if has_contacts:
+            existing_contacts = _rows(
+                conn,
+                "SELECT * FROM contacts WHERE company_id = ?",
+                (target_id,),
+            )
+            existing_keys: set[tuple[int, str, str]] = set()
+            for er in existing_contacts:
+                existing_keys.add((
+                    int(er["customer_id"]),
+                    (er.get("email") or "").strip().lower(),
+                    (er.get("name") or "").strip(),
+                ))
+            for row in source_tables["contacts"]:
+                mapped_cid = customer_map.get(row.get("customer_id"))
+                if not mapped_cid:
+                    contact_skipped += 1
+                    continue
+                key = (
+                    int(mapped_cid),
+                    (row.get("email") or "").strip().lower(),
+                    (row.get("name") or "").strip(),
+                )
+                if key in existing_keys:
+                    contact_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["customer_id"] = mapped_cid
+                new_row["is_primary"] = 0
+                try:
+                    _insert(conn, "contacts", new_row)
+                except Exception:
+                    contact_skipped += 1
+                    continue
+                existing_keys.add(key)
+                contact_inserted += 1
+        else:
+            contact_skipped = len(source_tables["contacts"])
+        report["tables"]["contacts"] = {
+            "inserted": contact_inserted, "skipped": contact_skipped,
+        }
 
         # 对话
         existing_conv = {
