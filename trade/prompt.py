@@ -454,5 +454,23 @@ TRADE_DOC_GENERATION_BLOCK = """## General Rules for Any Generated File (PPTX / 
 
 """
 
+# 结构化回复块（报价/邮件草稿/下一步）—— 仅注入文档/报价相关档（FULL / FULL_DOCGEN）
+TRADE_JSON_BLOCKS_HINT = """
+# Structured Reply Blocks (trade-json)
+When your reply includes a quotation summary, an email draft, or clear next steps,
+append ONE fenced block at the very end of the reply (never in the middle):
+
+```trade-json
+{"facts":[{"label":"数量","value":"2000 pcs"},{"label":"建议单价 FOB","value":"USD 3.50"},{"label":"交期","value":"25 days"},{"label":"历史成交价","value":"USD 3.20"}],"draft":{"lang":"en","subject":"...","body":"..."},"next_actions":[{"label":"按这份报价生成 PI","action":"gen_pi"},{"label":"查海关进口记录","action":"customs_lookup"}]}
+```
+
+Rules:
+- `facts`: up to 4 key-value cards when you have numbers (quantity / unit price / lead time / historical price).
+- `draft`: optional email draft; never claim it was sent.
+- `next_actions[].action` may only be `gen_pi` or `customs_lookup`. Do **not** emit `add_todo`.
+- Outside the fence, write normal prose. Only one fence, at the end.
+"""
+
 # 文档生成任务 = FULL + 生成专用段
+TRADE_SYSTEM_PROMPT_FULL = TRADE_SYSTEM_PROMPT_FULL + "\n\n" + TRADE_JSON_BLOCKS_HINT
 TRADE_SYSTEM_PROMPT_FULL_DOCGEN = TRADE_SYSTEM_PROMPT_FULL + "\n\n" + TRADE_DOC_GENERATION_BLOCK

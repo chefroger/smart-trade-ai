@@ -19,6 +19,7 @@ from trade import library as library_module
 from trade.api.deps import require_company
 from trade.api.models import (
     ConversationImportant,
+    ConversationNote,
     ConversationRate,
     ConversationSave,
     ConversationUpdate,
@@ -152,6 +153,34 @@ def mark_conversation_important(
     """标记 / 取消标记对话为重要（CRM 卡片墙）。"""
     result = chat_memory.set_important(
         x_company_id, conversation_id, payload.important,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True, "conversation": result}
+
+
+@router.put("/conversations/{conversation_id}/note")
+def set_conversation_note(
+    conversation_id: int,
+    payload: ConversationNote,
+    x_company_id: int = Depends(require_company),
+):
+    """设置对话标题与摘要（存 extra3；路由层 400 字符串）。"""
+    # 校验类型与码点长度，避免 pydantic 422 → 前端 [object Object]
+    title = payload.title if payload.title is not None else ""
+    summary = payload.summary if payload.summary is not None else ""
+    if not isinstance(title, str):
+        raise HTTPException(status_code=400, detail="标题必须是字符串")
+    if not isinstance(summary, str):
+        raise HTTPException(status_code=400, detail="摘要必须是字符串")
+    title = title.strip()
+    summary = summary.strip()
+    if len(title) > 60:
+        raise HTTPException(status_code=400, detail="标题最多 60 个字符")
+    if len(summary) > 200:
+        raise HTTPException(status_code=400, detail="摘要最多 200 个字符")
+    result = chat_memory.set_conversation_note(
+        x_company_id, conversation_id, title=title, summary=summary,
     )
     if not result:
         raise HTTPException(status_code=404, detail="Conversation not found")

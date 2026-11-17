@@ -195,6 +195,45 @@ def set_important(
         conn.close()
 
 
+def set_conversation_note(
+    company_id: int,
+    conversation_id: int,
+    *,
+    title: str = "",
+    summary: str = "",
+) -> dict | None:
+    """写入对话标题/摘要到 conversations.extra3（合并，保留 skill 等既有键）。"""
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT extra3 FROM conversations WHERE id = ? AND company_id = ?",
+            (conversation_id, company_id),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        try:
+            e3 = json.loads(row["extra3"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            e3 = {}
+        if not isinstance(e3, dict):
+            e3 = {}
+        e3["title"] = title
+        e3["summary"] = summary
+        conn.execute(
+            "UPDATE conversations SET extra3 = ? WHERE id = ? AND company_id = ?",
+            (json.dumps(e3, ensure_ascii=False), conversation_id, company_id),
+        )
+        conn.commit()
+        return get(company_id, conversation_id)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def list_by_library(
     company_id: int, library_id: int, limit: int = 50
 ) -> list[dict]:
@@ -737,6 +776,10 @@ def _row_to_dict(row) -> dict:
             result[col] = json.loads(raw) if isinstance(raw, str) else (raw or {})
         except (json.JSONDecodeError, TypeError, KeyError, IndexError):
             result[col] = {}
+    # 标题/摘要从 extra3 提升到顶层，方便 overview / 列表直接用
+    e3 = result.get("extra3") if isinstance(result.get("extra3"), dict) else {}
+    result["title"] = str((e3 or {}).get("title") or "")
+    result["summary"] = str((e3 or {}).get("summary") or "")
     return result
 
 

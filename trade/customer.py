@@ -35,6 +35,7 @@ def create(
     *,
     company_id: int,
     country: str = "",
+    city: str = "",
     tier: str = "",
     linkedin_url: str = "",
     company_website: str = "",
@@ -50,6 +51,8 @@ def create(
     follow_up_note: str = "",
     main_category: str = "",
     match_score: int = 0,
+    function: str = "",
+    responsibility: str = "",
     stage: str = "询盘",
     next_follow_up_date: str = "",
     is_starred: int = 0,
@@ -60,11 +63,18 @@ def create(
     _skip_dedup 内部参数：bulk_save() 等调用方已在外部做过去重时传入 True，
     跳过本函数内的 O(n) 软去重扫描，避免 N+1 性能退化。
     """
+    from trade.contacts import _normalize_function
+
     stage = _normalize_crm_stage(stage)
     is_starred = _normalize_is_starred(is_starred)
     next_follow_up_date = (next_follow_up_date or "").strip()
+    # 主联系人职能白名单归一；城市进 extra1
+    function = _normalize_function(function)
+    responsibility = (responsibility or "").strip()
+    city = (city or "").strip()
     extra1 = json.dumps({
         "country": country,
+        "city": city,
         "tier": tier,
         "linkedin_url": linkedin_url,
         "company_website": company_website,
@@ -82,6 +92,8 @@ def create(
         "wechat": wechat,
         "source": source,
         "follow_up_note": follow_up_note,
+        "function": function,
+        "responsibility": responsibility,
     }, ensure_ascii=False)
 
     conn = get_connection()
@@ -152,22 +164,148 @@ def create(
         conn.close()
 
 
-def list_by_company(company_id: int) -> list[dict]:
-    """返回指定公司的所有客户，按最新创建排在前面。
+def list_by_company(
+    company_id: int,
+    *,
+    page: int | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """返回指定公司的客户，按最新创建排在前面。
 
     每条附上列表用聚合字段（前端筛选/排序用，不再另打订单/对话接口）：
     - order_count / order_total_amount
-    - last_contact_at（conversations 按 customer_id 的 MAX(created_at)；NULL 归属不计入）
+    - last_talk_at / last_email_at / last_contact_at（两者取较新）
+    - extra_contacts: [{id, name, email}]
+
+    page 为 None 时返回全量（兼容现有前端）；传了 page（1 起）才切页。
+    需要 total 时用 list_by_company_page。
     """
+    items, _total = list_by_company_page(company_id, page=page, limit=limit)
+    return items
+
+
+def list_by_company_page(
+    company_id: int,
+    *,
+    page: int | None = None,
+    limit: int = 50,
+) -> tuple[list[dict], int]:
+    """同 list_by_company，额外返回 total_count（供 X-Total-Count）。"""
+    lim = max(1, min(int(limit or 50), 200))
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT * FROM customers WHERE company_id = ? ORDER BY id DESC",
+        total = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM customers WHERE company_id = ?",
             (company_id,),
-        ).fetchall()
+        ).fetchone()["c"])
+        if page is None:
+            # 未传 page：全量返回，保持旧行为
+            rows = conn.execute(
+                "SELECT * FROM customers WHERE company_id = ? ORDER BY id DESC",
+                (company_id,),
+            ).fetchall()
+        else:
+            # 传了 page 才 LIMIT/OFFSET
+            p = max(1, int(page))
+            offset = (p - 1) * lim
+            rows = conn.execute(
+                "SELECT * FROM customers WHERE company_id = ? "
+                "ORDER BY id DESC LIMIT ? OFFSET ?",
+                (company_id, lim, offset),
+            ).fetchall()
         customers = [_row_to_dict(r) for r in rows]
         _attach_list_aggregates(conn, company_id, customers)
-        return customers
+        return customers, total
+    finally:
+        conn.close()
+
+
+def get_company_summary(company_id: int) -> dict:
+    """公司级客户列表顶栏汇总（不折算多币种）。
+
+    follow_up_pending = next_follow_up_date 非空且 ≥ 今天（逾期不计入）。
+    """
+    from datetime import date
+
+    today = date.today().isoformat()
+    conn = get_connection()
+    try:
+        total = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM customers WHERE company_id = ?",
+            (company_id,),
+        ).fetchone()["c"])
+        follow_up_pending = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM customers WHERE company_id = ? "
+            "AND TRIM(COALESCE(next_follow_up_date, '')) != '' "
+            "AND next_follow_up_date >= ?",
+            (company_id, today),
+        ).fetchone()["c"])
+        overdue = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM customers WHERE company_id = ? "
+            "AND TRIM(COALESCE(next_follow_up_date, '')) != '' "
+            "AND next_follow_up_date < ?",
+            (company_id, today),
+        ).fetchone()["c"])
+
+        stage_counts = {"询盘": 0, "报价": 0, "样品": 0, "订单": 0}
+        for r in conn.execute(
+            "SELECT COALESCE(NULLIF(TRIM(stage), ''), '询盘') AS stage, COUNT(*) AS c "
+            "FROM customers WHERE company_id = ? GROUP BY stage",
+            (company_id,),
+        ).fetchall():
+            key = r["stage"] if r["stage"] in stage_counts else "询盘"
+            stage_counts[key] = stage_counts.get(key, 0) + int(r["c"])
+
+        tier_counts = {"A": 0, "B": 0, "C": 0, "未分级": 0}
+        for r in conn.execute(
+            "SELECT COALESCE(NULLIF(TRIM(json_extract(extra1, '$.tier')), ''), '') AS tier, "
+            "COUNT(*) AS c FROM customers WHERE company_id = ? GROUP BY tier",
+            (company_id,),
+        ).fetchall():
+            t = (r["tier"] or "").strip().upper()
+            if t in ("A", "B", "C"):
+                tier_counts[t] += int(r["c"])
+            else:
+                tier_counts["未分级"] += int(r["c"])
+
+        order_totals_by_currency: dict[str, float] = {}
+        for r in conn.execute(
+            "SELECT COALESCE(NULLIF(TRIM(currency), ''), 'USD') AS currency, "
+            "COALESCE(SUM(total_amount), 0) AS total "
+            "FROM orders WHERE company_id = ? GROUP BY currency",
+            (company_id,),
+        ).fetchall():
+            order_totals_by_currency[r["currency"]] = float(r["total"] or 0)
+
+        # 公司级最近联系：对话与邮件取较新
+        last_talk = conn.execute(
+            "SELECT MAX(created_at) AS t FROM conversations "
+            "WHERE company_id = ? AND customer_id IS NOT NULL",
+            (company_id,),
+        ).fetchone()["t"]
+        last_email = None
+        try:
+            last_email = conn.execute(
+                "SELECT MAX(received_at) AS t FROM emails "
+                "WHERE company_id = ? AND customer_id IS NOT NULL",
+                (company_id,),
+            ).fetchone()["t"]
+        except Exception:
+            last_email = None
+        if last_talk and last_email:
+            last_contact_at = last_talk if last_talk >= last_email else last_email
+        else:
+            last_contact_at = last_talk or last_email
+
+        return {
+            "total": total,
+            "follow_up_pending": follow_up_pending,
+            "overdue": overdue,
+            "stage_counts": stage_counts,
+            "tier_counts": tier_counts,
+            "order_totals_by_currency": order_totals_by_currency,
+            "last_contact_at": last_contact_at,
+        }
     finally:
         conn.close()
 
@@ -195,9 +333,10 @@ def _totals_from_currency_rows(rows) -> tuple[int, float | None, str | None, dic
 def _attach_list_aggregates(
     conn, company_id: int, customers: list[dict]
 ) -> None:
-    """就地给客户列表挂上订单数/总额/最近联系时间。
+    """就地给客户列表挂上订单数/总额/最近联系时间/附加联系人。
 
     订单按 (customer_id, currency) 分组，避免跨币种直接相加。
+    last_contact_at = max(last_talk_at, last_email_at)；同时返回拆分字段。
     """
     if not customers:
         return
@@ -212,25 +351,70 @@ def _attach_list_aggregates(
     ).fetchall():
         order_rows.setdefault(int(r["customer_id"]), []).append(r)
 
-    last_contact = {
-        int(r["customer_id"]): r["last_contact_at"]
+    last_talk = {
+        int(r["customer_id"]): r["last_talk_at"]
         for r in conn.execute(
-            "SELECT customer_id, MAX(created_at) AS last_contact_at "
+            "SELECT customer_id, MAX(created_at) AS last_talk_at "
             "FROM conversations WHERE company_id = ? AND customer_id IS NOT NULL "
             "GROUP BY customer_id",
             (company_id,),
         ).fetchall()
     }
+    # emails 表可能尚未建好（升级后未重启）——缺表时邮件最近联系视为空
+    last_email: dict[int, str] = {}
+    try:
+        for r in conn.execute(
+            "SELECT customer_id, MAX(received_at) AS last_email_at "
+            "FROM emails WHERE company_id = ? AND customer_id IS NOT NULL "
+            "GROUP BY customer_id",
+            (company_id,),
+        ).fetchall():
+            last_email[int(r["customer_id"])] = r["last_email_at"]
+    except Exception:
+        last_email = {}
+
+    # 附加联系人一次 IN 查询，不做 N+1；contacts 缺表时降级为空
+    extra_by_cust: dict[int, list[dict]] = {int(c["id"]): [] for c in customers}
+    try:
+        ids = list(extra_by_cust.keys())
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                f"SELECT id, customer_id, name, email FROM contacts "
+                f"WHERE company_id = ? AND customer_id IN ({placeholders})",
+                (company_id, *chunk),
+            ).fetchall():
+                cid = int(r["customer_id"])
+                extra_by_cust.setdefault(cid, []).append({
+                    "id": int(r["id"]),
+                    "name": r["name"] or "",
+                    "email": r["email"] or "",
+                })
+    except Exception:
+        # contacts 表缺失时列表仍可用
+        pass
+
     for c in customers:
         cid = int(c["id"])
         count, total, currency, by_cur = _totals_from_currency_rows(
             order_rows.get(cid, [])
         )
+        talk_at = last_talk.get(cid)
+        email_at = last_email.get(cid)
+        # 取两者中较新的作为「最近联系」
+        if talk_at and email_at:
+            contact_at = talk_at if talk_at >= email_at else email_at
+        else:
+            contact_at = talk_at or email_at
         c["order_count"] = count
         c["order_total_amount"] = total
         c["order_total_currency"] = currency
         c["order_totals_by_currency"] = by_cur
-        c["last_contact_at"] = last_contact.get(cid)
+        c["last_talk_at"] = talk_at
+        c["last_email_at"] = email_at
+        c["last_contact_at"] = contact_at
+        c["extra_contacts"] = extra_by_cust.get(cid, [])
 
 
 def get_overview(customer_id: int, *, company_id: int) -> dict | None:
@@ -263,12 +447,16 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
         # overview 不暴露 backup_email
         people.append({k: v for k, v in primary.items() if k != "backup_email"})
     people.extend(extras)
-    emails = contacts_module.collect_email_addrs(cust, extras)
+    email_details = contacts_module.collect_email_details(cust, extras)
+    emails = [d["address"] for d in email_details]
 
     orders = order_module.list_by_customer(customer_id, company_id=company_id)
     # 按币种汇总，禁止跨币种硬加（审计 P2）
     by_currency: dict[str, float] = {}
+    quote_count = 0
     for o in orders:
+        if (o.get("status") or "") == "报价中":
+            quote_count += 1
         if o.get("total_amount") is None or o.get("total_amount") == "":
             continue
         cur = (o.get("currency") or "USD").strip() or "USD"
@@ -284,7 +472,35 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
         company_id, limit=50, customer_id=customer_id
     )
     important = [c for c in chats if c.get("is_important")]
-    key_talks = important if important else chats[:5]
+    # 无标记时用最近 5 条兜底；前端靠 is_important_fallback 改标题
+    is_important_fallback = not bool(important)
+    key_talks_raw = important if important else chats[:5]
+    key_talks: list[dict] = []
+    for conv in key_talks_raw:
+        item = dict(conv)
+        # title/summary 存 conversations.extra3；缺省空串
+        e3 = conv.get("extra3") if isinstance(conv.get("extra3"), dict) else {}
+        item["title"] = str((e3 or {}).get("title") or "")
+        item["summary"] = str((e3 or {}).get("summary") or "")
+        item["is_important_fallback"] = is_important_fallback
+        key_talks.append(item)
+
+    # emails 表行数（邮件条数，不是地址数）；缺表降级 0
+    email_count = 0
+    try:
+        from trade.database import get_connection as _gc
+
+        _conn = _gc()
+        try:
+            email_count = int(_conn.execute(
+                "SELECT COUNT(*) AS c FROM emails "
+                "WHERE company_id = ? AND customer_id = ?",
+                (company_id, customer_id),
+            ).fetchone()["c"])
+        finally:
+            _conn.close()
+    except Exception:
+        email_count = 0
 
     timeline: list[dict] = []
     for o in orders:
@@ -311,13 +527,153 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
             "order_total_currency": order_currency,
             "order_totals_by_currency": by_currency,
             "mail_and_talk_count": len(emails) + len(key_talks),
+            "email_count": email_count,
+            "key_talk_count": len(key_talks),
+            "quote_count": quote_count,
         },
         "people": people,
         "orders": orders,
         "emails": emails,
+        "email_details": email_details,
         "key_talks": key_talks,
         "timeline": timeline,
     }
+
+
+def get_timeline(
+    customer_id: int, *, company_id: int, days: int = 60,
+) -> list[dict] | None:
+    """客户互动时间线（W8）：订单创建/状态、邮件、对话、今日应回复。
+
+    返回 [{at, kind, title, detail, ref_type, ref_id}]，按 at 倒序。
+    客户不存在返回 None；days 夹在 1–365。
+    """
+    from datetime import date, timedelta
+
+    cust = get(customer_id, company_id=company_id)
+    if not cust:
+        return None
+
+    window = max(1, min(int(days or 60), 365))
+    cutoff = (date.today() - timedelta(days=window)).isoformat()
+    today = date.today().isoformat()
+    events: list[dict] = []
+    conn = get_connection()
+    try:
+        # 订单创建（SELECT * 兼容未迁移旧库缺物流列）
+        for r in conn.execute(
+            "SELECT * FROM orders "
+            "WHERE company_id = ? AND customer_id = ? AND created_at >= ?",
+            (company_id, customer_id, cutoff),
+        ).fetchall():
+            ono = r["order_no"] or f"#{r['id']}"
+            events.append({
+                "at": (r["created_at"] or "")[:16],
+                "kind": "order_created",
+                "title": f"{ono} 创建",
+                "detail": r["status"] or "",
+                "ref_type": "order",
+                "ref_id": r["id"],
+            })
+
+        # 状态变更（含出货）
+        try:
+            for r in conn.execute(
+                "SELECT e.id, e.order_id, e.from_status, e.to_status, e.at, e.note, "
+                "o.order_no, o.container, o.port_of_loading "
+                "FROM order_events e "
+                "JOIN orders o ON o.id = e.order_id "
+                "WHERE e.company_id = ? AND o.customer_id = ? AND e.at >= ?",
+                (company_id, customer_id, cutoff),
+            ).fetchall():
+                ono = r["order_no"] or f"#{r['order_id']}"
+                to_st = r["to_status"] or ""
+                title = f"{ono} {to_st}" if to_st else f"{ono} 状态变更"
+                detail = r["note"] or ""
+                if to_st == "已出货":
+                    bits = [x for x in (r["container"], r["port_of_loading"]) if x]
+                    detail = (" ".join(bits) + "开船") if bits else (detail or "出货")
+                    title = f"{ono} 出货"
+                events.append({
+                    "at": (r["at"] or "")[:16],
+                    "kind": "order_status",
+                    "title": title,
+                    "detail": detail,
+                    "ref_type": "order",
+                    "ref_id": r["order_id"],
+                })
+        except Exception:
+            pass  # order_events 缺表时跳过
+
+        # 邮件 in/out
+        try:
+            for r in conn.execute(
+                "SELECT id, subject, from_addr, to_addrs, received_at "
+                "FROM emails WHERE company_id = ? AND customer_id = ? "
+                "AND received_at >= ?",
+                (company_id, customer_id, cutoff),
+            ).fetchall():
+                subj = (r["subject"] or "").strip() or "（无主题）"
+                # 粗判方向：from 含客户邮箱 → email_in，否则 email_out
+                from_addr = (r["from_addr"] or "").lower()
+                kind = "email_in"
+                try:
+                    e2 = json.loads(cust.get("extra2") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    e2 = {}
+                cust_email = (e2.get("email") or "").lower()
+                if cust_email and cust_email in from_addr:
+                    kind = "email_in"
+                elif cust_email:
+                    kind = "email_out"
+                events.append({
+                    "at": (r["received_at"] or "")[:16],
+                    "kind": kind,
+                    "title": subj[:80],
+                    "detail": (r["from_addr"] or "")[:80],
+                    "ref_type": "email",
+                    "ref_id": r["id"],
+                })
+        except Exception:
+            pass
+
+        # 对话
+        for r in conn.execute(
+            "SELECT id, query, response, created_at, extra3 FROM conversations "
+            "WHERE company_id = ? AND customer_id = ? AND created_at >= ?",
+            (company_id, customer_id, cutoff),
+        ).fetchall():
+            try:
+                e3 = json.loads(r["extra3"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                e3 = {}
+            title = (e3.get("title") or "").strip() or (r["query"] or "")[:60]
+            detail = (e3.get("summary") or "").strip() or (r["response"] or "")[:80]
+            events.append({
+                "at": (r["created_at"] or "")[:16],
+                "kind": "talk",
+                "title": title,
+                "detail": detail,
+                "ref_type": "conversation",
+                "ref_id": r["id"],
+            })
+    finally:
+        conn.close()
+
+    # 今天应回复
+    follow = (cust.get("next_follow_up_date") or "").strip()
+    if follow == today:
+        events.append({
+            "at": today,
+            "kind": "follow_up_due",
+            "title": "今天 · 应回复",
+            "detail": "",
+            "ref_type": "customer",
+            "ref_id": customer_id,
+        })
+
+    events.sort(key=lambda x: x.get("at") or "", reverse=True)
+    return events
 
 
 def get(customer_id: int, *, company_id: int) -> dict | None:
@@ -371,12 +727,14 @@ def update(
     """更新客户字段（单事务，部分失败统一回滚）。
 
     基础字段: name, contact, note, stage, next_follow_up_date, is_starred
-    extra1 字段: country, tier, linkedin_url, company_website, social_media, buyer_type, main_category, match_score
-    extra2 字段: title, email, backup_email, phone, whatsapp, wechat, source, last_contact_at, follow_up_note
+    extra1 字段: country, city, tier, linkedin_url, company_website, social_media, buyer_type, main_category, match_score
+    extra2 字段: title, email, backup_email, phone, whatsapp, wechat, source, last_contact_at, follow_up_note, function, responsibility
     extra3 字段: tags（列表标签；阶段/跟进日已迁实列，不再写 extra3）
     """
-    extra1_keys = {"country", "tier", "linkedin_url", "company_website", "social_media", "buyer_type", "main_category", "match_score"}
-    extra2_keys = {"title", "email", "backup_email", "phone", "whatsapp", "wechat", "source", "last_contact_at", "follow_up_note"}
+    from trade.contacts import _normalize_function
+
+    extra1_keys = {"country", "city", "tier", "linkedin_url", "company_website", "social_media", "buyer_type", "main_category", "match_score"}
+    extra2_keys = {"title", "email", "backup_email", "phone", "whatsapp", "wechat", "source", "last_contact_at", "follow_up_note", "function", "responsibility"}
     extra3_keys = {"tags"}
     basic_allowed = {
         "name", "contact", "note",
@@ -395,6 +753,13 @@ def update(
         basic_updates["is_starred"] = _normalize_is_starred(basic_updates["is_starred"])
     if "next_follow_up_date" in basic_updates and basic_updates["next_follow_up_date"] is not None:
         basic_updates["next_follow_up_date"] = str(basic_updates["next_follow_up_date"]).strip()
+    # 主联系人职能脏值归一「其他」；职责 trim
+    if "function" in extra2_updates:
+        extra2_updates["function"] = _normalize_function(extra2_updates["function"])
+    if "responsibility" in extra2_updates and extra2_updates["responsibility"] is not None:
+        extra2_updates["responsibility"] = str(extra2_updates["responsibility"]).strip()
+    if "city" in extra1_updates and extra1_updates["city"] is not None:
+        extra1_updates["city"] = str(extra1_updates["city"]).strip()
 
     if not (extra1_updates or extra2_updates or extra3_updates or basic_updates):
         return get(customer_id, company_id=company_id)
@@ -700,10 +1065,10 @@ def bulk_save(
     Args:
         company_id: 公司 ID
         customers: 客户字典列表，每个可含:
-            name (必填), contact, note, country, tier, linkedin_url,
+            name (必填), contact, note, country, city, tier, linkedin_url,
             company_website, social_media (dict), email, backup_email,
             phone, whatsapp, wechat, source, buyer_type, follow_up_note,
-            main_category, match_score
+            main_category, match_score, function, responsibility
         library_id: 如果从文档库扫描提取，自动关联此文档库
 
     Returns:
@@ -756,6 +1121,7 @@ def bulk_save(
             note=cust.get("note", ""),
             company_id=company_id,
             country=cust.get("country", ""),
+            city=cust.get("city", ""),
             tier=cust.get("tier", ""),
             linkedin_url=cust.get("linkedin_url", ""),
             company_website=cust.get("company_website", ""),
@@ -771,6 +1137,8 @@ def bulk_save(
             follow_up_note=cust.get("follow_up_note", ""),
             main_category=cust.get("main_category", ""),
             match_score=cust.get("match_score", 0),
+            function=cust.get("function", ""),
+            responsibility=cust.get("responsibility", ""),
             _skip_dedup=True,
         )
 
@@ -1129,6 +1497,16 @@ def build_briefing(customer_id: int, *, company_id: int) -> str:
         lines.append(f"**AI 跟进建议**：{follow_up}")
     if last_contact:
         lines.append(f"**最近联系时间**：{last_contact}")
+
+    # 3b. 客户画像（已确认 + ai_visible；失败静默，不挡聊天）
+    try:
+        from trade.profile import briefing_profile_section
+
+        section = briefing_profile_section(customer_id, company_id=company_id)
+        if section:
+            lines.append(section)
+    except Exception:
+        pass
 
     # 4. 最近订单（5 笔）
     from trade.order import list_by_customer as _list_orders

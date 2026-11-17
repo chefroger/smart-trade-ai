@@ -1,2 +1,2 @@
-﻿name,contact,title,country,email,phone,whatsapp,wechat,linkedin_url,company_website,tier,buyer_type,main_category,match_score,note
-示例公司,张三,采购经理,Italy,zhangsan@example.com,+39 123 4567890,+39 123 4567890,example_wechat,https://linkedin.com/company/example,https://example.com,A,品牌商,宠物用品,5,有新品需求
+﻿name,contact,title,country,city,email,phone,whatsapp,wechat,linkedin_url,company_website,tier,buyer_type,main_category,match_score,note
+示例公司,张三,采购经理,Italy,Milan,zhangsan@example.com,+39 123 4567890,+39 123 4567890,example_wechat,https://linkedin.com/company/example,https://example.com,A,品牌商,宠物用品,5,有新品需求

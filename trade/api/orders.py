@@ -1,6 +1,6 @@
 """订单 API 路由。"""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from trade import order as order_module
 from trade.api.deps import require_company
@@ -69,9 +69,13 @@ def _reject_negative_items(items: list[dict]) -> None:
 
 
 @router.get("/orders")
-def list_orders(cid: int = Depends(require_company)):
-    """列出当前公司的所有订单。"""
-    return order_module.list_by_company(cid)
+def list_orders(
+    cid: int = Depends(require_company),
+    status: str | None = Query(None, description="按状态过滤"),
+    limit: int = Query(200, ge=1, le=500, description="条数上限，默认 200"),
+):
+    """列出当前公司的订单（可按 status 过滤）。"""
+    return order_module.list_by_company(cid, limit=limit, status=status)
 
 
 @router.get("/customers/{customer_id}/orders")
@@ -118,6 +122,11 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
             delivery_date=payload.delivery_date or "",
             payment_terms=payload.payment_terms or "",
             notes=payload.notes or "",
+            incoterm=payload.incoterm or "",
+            port_of_loading=payload.port_of_loading or "",
+            container=payload.container or "",
+            lead_time_text=payload.lead_time_text or "",
+            shipped_at=payload.shipped_at or "",
             items=items,
         )
 
@@ -148,6 +157,11 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
         delivery_date=payload.delivery_date or "",
         payment_terms=payload.payment_terms or "",
         notes=payload.notes or "",
+        incoterm=payload.incoterm or "",
+        port_of_loading=payload.port_of_loading or "",
+        container=payload.container or "",
+        lead_time_text=payload.lead_time_text or "",
+        shipped_at=payload.shipped_at or "",
     )
 
 

@@ -23,6 +23,7 @@ ORDER_STATUSES = ("报价中", "已下单", "已出货", "已完成", "已取消
 CLEARABLE_FIELDS = frozenset({
     "order_no", "unit", "currency", "delivery_date", "payment_terms", "notes",
     "quantity", "unit_price", "total_amount",
+    "incoterm", "port_of_loading", "container", "lead_time_text", "shipped_at",
 })
 
 # 状态机：只允许沿业务链前进；取消只能在发货前；已完成 / 已取消为终态。
@@ -323,6 +324,11 @@ def create(
     delivery_date: str = "",
     payment_terms: str = "",
     notes: str = "",
+    incoterm: str = "",
+    port_of_loading: str = "",
+    container: str = "",
+    lead_time_text: str = "",
+    shipped_at: str = "",
     items: list[dict] | None = None,
 ) -> dict:
     """创建一条订单（订单头 + 明细行）。校验 customer 必须属于指定公司。
@@ -344,16 +350,34 @@ def create(
             }]
         prepared = _prepare_items(items, currency)
         conn.execute("BEGIN IMMEDIATE")
-        cur = conn.execute(
-            "INSERT INTO orders (company_id, customer_id, order_no, product_name, "
-            "quantity, unit, unit_price, currency, total_amount, status, "
-            "delivery_date, payment_terms, notes) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (company_id, customer_id, order_no, prepared[0]["product_name"],
-             prepared[0]["quantity"], prepared[0]["unit"], prepared[0]["unit_price"],
-             currency, prepared[0]["total_amount"], status,
-             delivery_date, payment_terms, notes),
-        )
+        # 物流列可能尚未迁移（升级后未重启）——缺列时降级不写，不 500
+        try:
+            cur = conn.execute(
+                "INSERT INTO orders (company_id, customer_id, order_no, product_name, "
+                "quantity, unit, unit_price, currency, total_amount, status, "
+                "delivery_date, payment_terms, notes, "
+                "incoterm, port_of_loading, container, lead_time_text, shipped_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (company_id, customer_id, order_no, prepared[0]["product_name"],
+                 prepared[0]["quantity"], prepared[0]["unit"], prepared[0]["unit_price"],
+                 currency, prepared[0]["total_amount"], status,
+                 delivery_date, payment_terms, notes,
+                 incoterm or "", port_of_loading or "", container or "",
+                 lead_time_text or "", shipped_at or ""),
+            )
+        except Exception as exc:
+            if "no such column" not in str(exc).lower():
+                raise
+            cur = conn.execute(
+                "INSERT INTO orders (company_id, customer_id, order_no, product_name, "
+                "quantity, unit, unit_price, currency, total_amount, status, "
+                "delivery_date, payment_terms, notes) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (company_id, customer_id, order_no, prepared[0]["product_name"],
+                 prepared[0]["quantity"], prepared[0]["unit"], prepared[0]["unit_price"],
+                 currency, prepared[0]["total_amount"], status,
+                 delivery_date, payment_terms, notes),
+            )
         order_id = cur.lastrowid
         _insert_items(conn, order_id, prepared)
         _sync_order_summary(conn, order_id)
@@ -385,14 +409,30 @@ def list_by_customer(customer_id: int, *, company_id: int | None = None) -> list
         conn.close()
 
 
-def list_by_company(company_id: int, limit: int = 50) -> list[dict]:
-    """返回指定公司的所有订单，按创建时间倒序。"""
+def list_by_company(
+    company_id: int,
+    limit: int = 200,
+    *,
+    status: str | None = None,
+) -> list[dict]:
+    """返回指定公司的订单，按创建时间倒序。
+
+    limit 夹在 1–500，默认 200；status 非空时按状态过滤。
+    """
+    lim = max(1, min(int(limit or 200), 500))
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT * FROM orders WHERE company_id = ? ORDER BY created_at DESC LIMIT ?",
-            (company_id, limit),
-        ).fetchall()
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM orders WHERE company_id = ? AND status = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (company_id, status, lim),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM orders WHERE company_id = ? ORDER BY created_at DESC LIMIT ?",
+                (company_id, lim),
+            ).fetchall()
         return _attach_items(conn, [_row_to_dict(r) for r in rows])
     finally:
         conn.close()
@@ -430,7 +470,8 @@ def update(
         return None
     allowed = {"order_no", "product_name", "quantity", "unit", "unit_price",
                "currency", "total_amount", "status", "delivery_date",
-               "payment_terms", "notes", "customer_id"}
+               "payment_terms", "notes", "customer_id",
+               "incoterm", "port_of_loading", "container", "lead_time_text", "shipped_at"}
     # None 对可清空字段表示「显式清空」，对其它字段表示「未提供」——两者必须区分
     updates = {
         k: v for k, v in kwargs.items()
@@ -470,6 +511,7 @@ def update(
             # 兼容旧 UI：平铺金额落到明细行（0/1/多行三种情形见函数说明）
             _apply_flat_fields_to_items(conn, order_id, existing, updates)
 
+        old_status = existing["status"] or ""
         if updates:
             set_clause = ", ".join(f"{k} = ?" for k in updates)
             values = list(updates.values()) + [order_id, company_id]
@@ -481,6 +523,12 @@ def update(
             if n == 0:
                 conn.rollback()
                 return None
+            # 状态变化时写 order_events；表缺失时静默跳过
+            new_status = updates.get("status")
+            if new_status is not None and new_status != old_status:
+                _record_status_event(
+                    conn, company_id, order_id, old_status, new_status,
+                )
 
         _sync_order_summary(conn, order_id)
         conn.commit()
@@ -490,6 +538,22 @@ def update(
         raise
     finally:
         conn.close()
+
+
+def _record_status_event(
+    conn, company_id: int, order_id: int, from_status: str, to_status: str, note: str = "",
+) -> None:
+    """写入一行 order_events；表不存在时静默跳过。"""
+    try:
+        conn.execute(
+            "INSERT INTO order_events (company_id, order_id, from_status, to_status, note) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (company_id, order_id, from_status or "", to_status or "", note or ""),
+        )
+    except Exception as exc:
+        if "no such table" in str(exc).lower():
+            return
+        raise
 
 
 def delete(order_id: int, *, company_id: int | None = None) -> bool:

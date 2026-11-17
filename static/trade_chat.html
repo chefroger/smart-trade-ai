@@ -53,6 +53,7 @@
             <div class="nav-section-title">📊 工作台</div>
             <div class="nav-item active" data-view="chat" data-chat-context="daily" onclick="navToView('chat','daily','今日简报')">
                 <span class="nav-icon" data-icon="message-square"></span><span class="nav-label">今日简报</span>
+                <span class="nav-badge" id="daily-brief-badge" hidden>0</span>
             </div>
         </div>
 
@@ -134,6 +135,7 @@
 
 <!-- 客户详情卡片墙（S-01）：点客户名展开，Esc / 返回关闭 -->
 <div id="customer-wall" class="wall" inert aria-hidden="true"></div>
+<div id="customer-profile" class="wall profile-wall" inert aria-hidden="true"></div>
 
 <!-- ═════════════════════ MAIN ═════════════════════ -->
 <main class="main" id="main-content">
@@ -231,7 +233,19 @@
         <div class="form-row">
             <div class="form-group"><label for="cust-contact">联系人</label><input type="text" id="cust-contact" placeholder="联系人姓名"></div>
             <div class="form-group"><label for="cust-title">职位</label><input type="text" id="cust-title" placeholder="CEO / Purchasing Manager"></div>
+            <div class="form-group"><label for="cust-function">职能</label>
+                <select id="cust-function">
+                    <option value="决策人">决策人</option>
+                    <option value="财务">财务</option>
+                    <option value="仓储">仓储</option>
+                    <option value="其他" selected>其他</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label for="cust-responsibility">职责</label><input type="text" id="cust-responsibility" placeholder="如：主要对接人"></div>
             <div class="form-group"><label for="cust-country">国家</label><input type="text" id="cust-country" placeholder="如 Italy"></div>
+            <div class="form-group"><label for="cust-city">城市</label><input type="text" id="cust-city" placeholder="如 Hamburg"></div>
         </div>
         <div class="form-row">
             <div class="form-group"><label for="cust-email">邮箱</label><input type="text" id="cust-email" placeholder="contact@company.com"></div>

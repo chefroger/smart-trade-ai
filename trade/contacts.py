@@ -142,14 +142,18 @@ def build_primary_person(cust: dict) -> dict | None:
         if not email:
             email = contact_raw
 
+    # 主联系人职能/职责存 extra2；空/脏值归一「其他」（与附加联系人白名单一致）
+    function = _normalize_function(e2.get("function"))
+    responsibility = _trim(e2.get("responsibility"))
+
     display_name = name if name else "未命名联系人"
     return {
         "id": None,
         "name": display_name,
         "role": title,
         "title": title,
-        "function": "其他",
-        "responsibility": "",
+        "function": function,
+        "responsibility": responsibility,
         "email": email,
         "phone": phone,
         "whatsapp": whatsapp,
@@ -371,11 +375,12 @@ def delete_for_customer(
         raise
 
 
-def collect_email_addrs(cust: dict, extras: list[dict]) -> list[str]:
-    """主 email + backup + 附加联系人 email；lower/strip 去重，主优先。
+def collect_email_details(cust: dict, extras: list[dict]) -> list[dict]:
+    """主 / backup / 附加联系人邮箱的结构化列表（去重，主优先）。
 
-    e2.email 为空且 contact 形如邮箱时，把 contact 当地址放在首位；
-    e2.email 有值时 contact 里的地址不进列表。
+    每项：{address, is_primary, contact_id|null, source: primary|backup|contact}。
+    e2.email 为空且 contact 形如邮箱时，把 contact 当主地址；e2.email 有值时
+    contact 里的地址不进列表。
     """
     try:
         import json
@@ -386,23 +391,42 @@ def collect_email_addrs(cust: dict, extras: list[dict]) -> list[str]:
     if not isinstance(e2, dict):
         e2 = {}
 
-    ordered: list[str] = []
+    details: list[dict] = []
     seen: set[str] = set()
 
-    def _add(raw: Any) -> None:
+    def _add(raw: Any, *, is_primary: bool, contact_id: int | None, source: str) -> None:
+        # 空串或已见过的地址跳过，保持主邮箱优先顺序
         s = _trim(raw).lower()
         if not s or s in seen:
             return
         seen.add(s)
-        ordered.append(s)
+        details.append({
+            "address": s,
+            "is_primary": is_primary,
+            "contact_id": contact_id,
+            "source": source,
+        })
 
     e2_email = _trim(e2.get("email"))
     contact_raw = _trim(cust.get("contact"))
     if e2_email:
-        _add(e2_email)
+        _add(e2_email, is_primary=True, contact_id=None, source="primary")
     elif contact_raw and "@" in contact_raw:
-        _add(contact_raw)
-    _add(e2.get("backup_email"))
+        _add(contact_raw, is_primary=True, contact_id=None, source="primary")
+    _add(e2.get("backup_email"), is_primary=False, contact_id=None, source="backup")
     for p in extras:
-        _add(p.get("email"))
-    return ordered
+        cid = p.get("id")
+        try:
+            cid_int = int(cid) if cid is not None else None
+        except (TypeError, ValueError):
+            cid_int = None
+        _add(p.get("email"), is_primary=False, contact_id=cid_int, source="contact")
+    return details
+
+
+def collect_email_addrs(cust: dict, extras: list[dict]) -> list[str]:
+    """主 email + backup + 附加联系人 email；lower/strip 去重，主优先。
+
+    兼容旧调用方；新代码优先用 collect_email_details。
+    """
+    return [d["address"] for d in collect_email_details(cust, extras)]

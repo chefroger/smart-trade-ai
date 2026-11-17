@@ -66,6 +66,16 @@ def _safe_contacts_rows(conn: sqlite3.Connection, company_id: int) -> list[dict]
         raise
 
 
+def _safe_table_rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
+    """任意表导出；缺表时返回 []。"""
+    try:
+        return _rows(conn, sql, params)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+
+
 def _schema_version(conn: sqlite3.Connection) -> int:
     try:
         row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
@@ -246,6 +256,12 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     "WHERE o.company_id = ?",
                     (company_id,),
                 ),
+                # order_events：缺表时空列表（升级未重启不炸）
+                "order_events": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM order_events WHERE company_id = ?",
+                    (company_id,),
+                ),
                 "usage_ledger": _rows(conn, "SELECT * FROM usage_ledger WHERE company_id = ?", (company_id,)),
                 # trial_events 是许可证试用统计，不属于公司业务数据；导入会虚增
                 # 新公司的「试用价值小结」计数，因此不导出（2026-11-11 审计 P3）。
@@ -254,6 +270,18 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                 ),
                 # 附加联系人；缺表时导出空列表（升级未重启不炸）
                 "contacts": _safe_contacts_rows(conn, company_id),
+                # 客户画像：facts 全量；gifts 排除「客户索要」
+                "customer_facts": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM customer_facts WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "customer_gifts": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM customer_gifts WHERE company_id = ? "
+                    "AND direction != '客户索要'",
+                    (company_id,),
+                ),
             }
             schema_version = _schema_version(conn)
         finally:
@@ -302,6 +330,7 @@ def export_company(company_id: int, dest_zip: Path | None = None,
             "excluded": [
                 "license_data", "vec_customers", "vec_meta", "cron_job_companies",
                 "*.pid", "caches", "~/.hermes/config.yaml", "~/.hermes/skills",
+                "customer_gifts(客户索要)",
             ],
         }
 

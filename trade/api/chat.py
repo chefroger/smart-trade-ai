@@ -25,6 +25,7 @@ from trade import usage as usage_module
 from trade.agent_context import bind_company, extract_user_paths
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
+from trade.chat_blocks import parse_trade_json_blocks
 from trade.database import get_connection
 from trade.doc_extract import resolve_extraction_model, warm_cache
 from trade.doc_scope import (
@@ -620,6 +621,10 @@ async def trade_chat(
 
     # 失败兜底文案（超时 / 模块未加载 / Agent 异常）不写入历史：
     # 它们不是对用户的回答，存档后会被后续轮次当作上下文注入（审计 P1-21）。
+    # W10：剥除 trade-json 围栏后再入库/回传，避免气泡里露出原始 JSON。
+    response_blocks = None
+    if agent_ok and response:
+        response, response_blocks = parse_trade_json_blocks(response)
     conv = None
     if agent_ok:
         conv = chat_memory.save_with_context(
@@ -632,6 +637,8 @@ async def trade_chat(
             skill=current_skill or "",
         )
     payload_out = {"response": response, "conversation": conv}
+    if response_blocks:
+        payload_out["blocks"] = response_blocks
     if cache_evidence and not gate_required:
         # 概览/定位用了哪些文件的缓存摘要（不是“已读”，只是上下文来源）
         payload_out["analysis_cache_context"] = sorted(
@@ -887,12 +894,20 @@ async def trade_chat_stream(
                 if cancel_event.is_set():
                     return None
 
+                # W10：先剥 trade-json 围栏，再入库并推 SSE（失败静默为纯文本）
+                reply_text = result or "Agent 返回了空响应。"
+                reply_blocks = None
+                try:
+                    reply_text, reply_blocks = parse_trade_json_blocks(reply_text)
+                except Exception:
+                    reply_blocks = None
+
                 # 先保存对话，再发送响应 —— 确保前端能拿到 conversation_id 做评分
                 conv_id = None
                 try:
                     conv = chat_memory.save_with_context(
                         company_id=cid, library_id=payload.library_id,
-                        query=query, response=result or "",
+                        query=query, response=reply_text,
                         library_name=lib_name,
                         customer_id=payload.customer_id,
                         files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
@@ -911,11 +926,14 @@ async def trade_chat_stream(
                                    "本轮无法评分或后续引用。",
                     })
 
-                _emit_threadsafe("response", {
-                    "text": result or "Agent 返回了空响应。",
+                resp_payload = {
+                    "text": reply_text,
                     "elapsed_sec": round(elapsed, 1),
                     "conversation_id": conv_id,
-                })
+                }
+                if reply_blocks:
+                    resp_payload["blocks"] = reply_blocks
+                _emit_threadsafe("response", resp_payload)
                 return result
             except ImportError:
                 _emit_threadsafe("error", {"message": "AI Agent 模块未加载。"})

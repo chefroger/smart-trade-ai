@@ -57,10 +57,69 @@ function renderChatViewInto(container, ctx, name) {
     if (ctx === 'lead' && !isOnboardingCompleted()) {
         setTimeout(function() { showWizardInLeadView(); }, 300);
     }
-    // 每日简报视图：额外拉取一次 cron 状态（全局轮询已覆盖）
+    // 每日简报视图：额外拉取一次 cron 状态（全局轮询已覆盖）+ 今日 KPI
     if (ctx === 'daily') {
         _shownCronOutputs = new Set();
         loadCronStatus(false);
+        loadTodayBrief();
+    }
+}
+
+async function loadTodayBrief() {
+    /** 拉取 /brief/today，渲染 KPI 卡并刷新侧栏逾期角标。 */
+    if (!currentCompanyId) return;
+    const data = await api('GET', '/api/trade/brief/today');
+    if (!data) return;
+    _updateDailyBriefBadge(data.overdue_followups);
+    if (currentChatContext !== 'daily' || !currentChatContainer) return;
+    const container = currentChatContainer.querySelector('#chat-messages');
+    if (!container) return;
+    const ni = data.new_inquiries;
+    const niText = (ni === null || ni === undefined) ? t('brief.dash') : String(ni);
+    const overdue = data.overdue_followups || 0;
+    const pending = data.pending_shipments || 0;
+    const summaryText = (data.summary && data.summary.text)
+        ? data.summary.text
+        : t('brief.summary_empty');
+    const dateLabel = (data.date || '').slice(5).replace('-', '.') || '';
+    let html = '<div class="brief-kpi-card">';
+    html += '<div class="brief-kpi-head"><span class="brief-kpi-title">' + esc(t('brief.title')) + '</span>';
+    html += '<span class="brief-kpi-date">BRIEF' + (dateLabel ? ' · ' + esc(dateLabel) : '') + '</span></div>';
+    html += '<div class="brief-kpis">';
+    html += '<div><div class="n">' + esc(niText) + '</div><div class="lbl">' + esc(t('brief.new_inquiries')) + '</div></div>';
+    html += '<div><div class="n' + (overdue ? ' r' : '') + '">' + overdue + '</div><div class="lbl">' + esc(t('brief.overdue')) + '</div></div>';
+    html += '<div><div class="n">' + pending + '</div><div class="lbl">' + esc(t('brief.pending_ship')) + '</div></div>';
+    html += '</div>';
+    html += '<p class="brief-line">' + esc(summaryText) + '</p></div>';
+    let card = container.querySelector('.brief-kpi-card');
+    if (card) {
+        card.outerHTML = html;
+    } else {
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        const node = wrap.firstChild;
+        const cron = container.querySelector('.cron-panel');
+        if (cron) cron.insertAdjacentElement('beforebegin', node);
+        else {
+            const emptyEl = container.querySelector('.empty-state');
+            if (emptyEl) emptyEl.insertAdjacentElement('afterend', node);
+            else container.insertAdjacentElement('afterbegin', node);
+        }
+    }
+}
+
+function _updateDailyBriefBadge(overdue) {
+    /** 侧栏「今日简报」角标 = 逾期客户数（口径 §4-4）。 */
+    const badge = document.getElementById('daily-brief-badge');
+    if (!badge) return;
+    const n = Number(overdue) || 0;
+    if (n > 0) {
+        badge.textContent = String(n);
+        badge.hidden = false;
+        badge.style.display = 'inline-block';
+    } else {
+        badge.hidden = true;
+        badge.style.display = 'none';
     }
 }
 
@@ -232,6 +291,9 @@ async function loadCronStatus(isPoll = false) {
     } else {
         main.insertAdjacentHTML('afterbegin', barHtml);
     }
+
+    // 顺带刷新简报 KPI / 侧栏逾期角标（失败静默）
+    loadTodayBrief().catch(function () {});
 
     // 在今日简报视图更新 cron 面板；在任意聊天视图追加 cron 输出
     const ct = currentChatContainer;
@@ -591,7 +653,7 @@ async function clearChat() {
 }
 
 // ═════════════════════ CHAT MESSAGES ═════════════════════
-function addMsg(role, content, files, save, convId) {
+function addMsg(role, content, files, save, convId, blocks) {
     const ct = currentChatContainer;
     if (!ct) return;
     const container = ct.querySelector('#chat-messages');
@@ -616,6 +678,11 @@ function addMsg(role, content, files, save, convId) {
         const s = document.createElement('div'); s.className = 'sources';
         s.innerHTML = '<div class="sources-title">📄 '+(currentLang==='en'?'References':'参考文件')+'</div>' + files.map(f => '<div>📎 '+esc(f.file||f)+(f.status==='cached' ? ' <span class="muted">（'+(currentLang==='en'?'from cached extraction':'来自缓存提取')+'）</span>' : '')+'</div>').join('');
         body.appendChild(s);
+    }
+    // W10：结构化块（四格卡 / 草稿 / NEXT chips）—— 无 blocks 时保持纯文本
+    if (role === 'assistant' && blocks) {
+        const blocksEl = _renderChatBlocks(blocks);
+        if (blocksEl) body.appendChild(blocksEl);
     }
     div.appendChild(avatar); div.appendChild(body);
 
@@ -665,6 +732,95 @@ function addMsg(role, content, files, save, convId) {
     container.appendChild(div);
     // 只在用户发消息或新 AI 回复流式到达时自动滚到底部
     // 历史加载和手动浏览不强制滚动
+}
+
+function _renderChatBlocks(blocks) {
+    /** 渲染 SSE blocks：facts 四格卡 + 邮件草稿 + NEXT chips。 */
+    if (!blocks || typeof blocks !== 'object') return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-blocks';
+
+    if (Array.isArray(blocks.facts) && blocks.facts.length) {
+        const grid = document.createElement('div');
+        grid.className = 'chat-facts';
+        blocks.facts.slice(0, 4).forEach(function (f) {
+            const cell = document.createElement('div');
+            cell.innerHTML = '<div class="lbl">' + esc(f.label || '') + '</div>'
+                + '<div class="v">' + esc(f.value || '') + '</div>';
+            grid.appendChild(cell);
+        });
+        wrap.appendChild(grid);
+    }
+
+    if (blocks.draft && typeof blocks.draft === 'object') {
+        const d = blocks.draft;
+        const box = document.createElement('div');
+        box.className = 'chat-draft';
+        const lang = (d.lang || 'en').toUpperCase();
+        box.innerHTML = '<div class="bar"><span class="lbl">DRAFT · EMAIL · ' + esc(lang) + '</span>'
+            + '<span class="warn">' + esc(t('chat.blocks.draft_warn')) + '</span></div>'
+            + (d.subject ? '<div class="subj">' + esc(d.subject) + '</div>' : '')
+            + '<pre class="body">' + esc(d.body || '') + '</pre>'
+            + '<button type="button" class="draft-copy">' + esc(t('chat.blocks.copy_draft')) + '</button>';
+        const btn = box.querySelector('.draft-copy');
+        if (btn) {
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                const text = (d.subject ? ('Subject: ' + d.subject + '\n\n') : '') + (d.body || '');
+                navigator.clipboard.writeText(text).then(function () {
+                    btn.textContent = t('chat.blocks.copied');
+                    setTimeout(function () { btn.textContent = t('chat.blocks.copy_draft'); }, 1500);
+                }).catch(function () {});
+            });
+        }
+        wrap.appendChild(box);
+    }
+
+    if (Array.isArray(blocks.next_actions) && blocks.next_actions.length) {
+        const row = document.createElement('div');
+        row.className = 'chat-next';
+        row.innerHTML = '<span class="lbl">' + esc(t('chat.blocks.next')) + '</span>';
+        blocks.next_actions.forEach(function (a) {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'chip';
+            chip.textContent = a.label || a.action || '';
+            chip.addEventListener('click', function (e) {
+                e.stopPropagation();
+                _handleNextAction(a);
+            });
+            row.appendChild(chip);
+        });
+        wrap.appendChild(row);
+    }
+
+    return wrap.childNodes.length ? wrap : null;
+}
+
+function _handleNextAction(action) {
+    /** NEXT chip：把动作写成可编辑的聊天指令，不自动外发。 */
+    const ct = currentChatContainer;
+    if (!ct) return;
+    const input = ct.querySelector('#msg-input');
+    if (!input) return;
+    const act = (action && action.action) || '';
+    let prompt = (action && action.label) || '';
+    if (act === 'gen_pi') {
+        prompt = prompt || (currentLang === 'en'
+            ? 'Generate a PI from this quotation'
+            : '按这份报价生成 PI');
+    } else if (act === 'customs_lookup') {
+        prompt = prompt || (currentLang === 'en'
+            ? 'Look up customs import records for this customer'
+            : '查这家客户的海关进口记录');
+    } else {
+        // add_todo 等未接线动作：不填入
+        return;
+    }
+    input.value = prompt;
+    input.focus();
+    input.style.height = '24px';
+    input.style.height = (input.scrollHeight > 80 ? 80 : input.scrollHeight) + 'px';
 }
 
 async function loadChatHistory() {
@@ -738,9 +894,9 @@ async function sendMsg() {
     const ownerCid = currentCompanyId;
     const streamCtl = _beginChatStream(ownerCid);
     // 切公司后旧流的输出必须丢弃：addMsg 写的是全局 currentChatContainer
-    function deliver(role, text, save, convId) {
+    function deliver(role, text, save, convId, blocks) {
         if (!_chatStreamBelongsTo(ownerCid)) return;
-        addMsg(role, text, null, save, convId);
+        addMsg(role, text, null, save, convId, blocks);
     }
     const stopBtn = ct.querySelector('#stop-btn');
     if (stopBtn) {
@@ -769,6 +925,7 @@ async function sendMsg() {
     let progressDiv = null;
     let responseText = '';
     let responseConvId = null;
+    let responseBlocks = null;
     let sawDone = false;  // 服务端是否发过 done（区分「服务端没内容」与「连接断了」）
     _currentConvId = null;
 
@@ -869,7 +1026,12 @@ async function sendMsg() {
                         progDiv.appendChild(note);
                         break;
                     }
-                    case 'response': responseText = data.text||''; responseConvId = data.conversation_id || null; _currentConvId = data.conversation_id || null; break;
+                    case 'response':
+                        responseText = data.text||'';
+                        responseConvId = data.conversation_id || null;
+                        _currentConvId = data.conversation_id || null;
+                        responseBlocks = data.blocks || null;
+                        break;
                     case 'warning': if (data.message) toast('⚠️ ' + data.message); break;
                     case 'done': sawDone = true; break;  // 服务端正常收尾的标记（用于区分「服务端没内容」与「连接断了」）
                     case 'error': progDiv.innerHTML=`<div class="msg-avatar" style="background:var(--accent-red);color:#fff;">⚠</div><div class="msg-body" style="color:var(--accent-red);">${esc(data.message)}</div>`; sendBtn.disabled = false; return;
@@ -880,7 +1042,7 @@ async function sendMsg() {
         }
         progDiv.remove();
         const outcome = _sseStreamOutcome(!!responseText, sawDone);
-        if (outcome.kind === 'response') deliver('assistant', responseText, true, responseConvId);
+        if (outcome.kind === 'response') deliver('assistant', responseText, true, responseConvId, responseBlocks);
         else deliver('assistant', outcome.message, true, null);
     } catch(e) {
         progDiv.remove();

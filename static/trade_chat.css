@@ -1132,3 +1132,75 @@ body > #toast-container, body > #customer-wall {
     #customer-wall.wall { transition: none; }
     .wcard:hover { transform: none; }
 }
+
+/* ── W9 今日简报 KPI ── */
+.brief-kpi-card {
+    background: var(--bg-card, #fff); border: 1.5px dashed rgba(20,20,20,.35);
+    padding: 14px 16px; margin-bottom: 12px;
+}
+.brief-kpi-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.brief-kpi-title { font-weight: 700; font-size: 13px; letter-spacing: .04em; }
+.brief-kpi-date { font-size: 11px; color: var(--muted, #888); letter-spacing: .08em; }
+.brief-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.brief-kpis .n { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.brief-kpis .n.r { color: var(--accent, #c0392b); }
+.brief-kpis .lbl { font-size: 11px; color: var(--muted, #888); margin-top: 2px; }
+.brief-line { margin: 10px 0 0; font-size: 12.5px; line-height: 1.7; color: var(--ink-2, #333); }
+
+/* ── W10 聊天结构化块 ── */
+.chat-blocks { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.chat-facts {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--ink, #141414); background: var(--paper, #fff);
+}
+.chat-facts > div { padding: 8px 12px; border-left: 1px dashed var(--ink, #141414); min-width: 0; }
+.chat-facts > div:first-child { border-left: none; }
+.chat-facts .lbl { font-size: 11px; color: var(--muted, #888); }
+.chat-facts .v { font-size: 14px; font-weight: 600; margin-top: 2px; word-break: break-word; }
+.chat-draft {
+    border: 1.5px dashed rgba(20,20,20,.35); padding: 10px 12px; background: var(--bg-card, #fff);
+}
+.chat-draft .bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; }
+.chat-draft .warn { color: var(--accent, #c0392b); }
+.chat-draft .subj { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.chat-draft .body {
+    white-space: pre-wrap; font-family: inherit; font-size: 12.5px; line-height: 1.6;
+    margin: 0 0 8px; max-height: 220px; overflow: auto;
+}
+.chat-draft .draft-copy {
+    appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+    padding: 6px 10px; border: 1.5px solid var(--ink, #141414); background: var(--ink, #141414); color: #fff;
+}
+.chat-next { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chat-next .lbl { font-size: 11px; color: var(--muted, #888); letter-spacing: .06em; margin-right: 4px; }
+.chat-next .chip {
+    appearance: none; cursor: pointer; font: inherit; font-size: 12px;
+    padding: 5px 10px; border: 1.5px dashed rgba(20,20,20,.45); background: transparent; color: var(--ink, #141414);
+}
+.chat-next .chip:hover { border-style: solid; }
+
+@media (max-width: 720px) {
+    .chat-facts { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── W12 独立画像页 ── */
+#customer-profile.profile-wall { z-index: 60; }
+.profile-dossier .people-strip {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.profile-dossier .ps-card {
+    display: flex; gap: 8px; align-items: center;
+    border: 1.5px dashed rgba(20,20,20,.35); padding: 8px 10px; min-width: 140px;
+}
+.profile-dossier .ps-card .avatar {
+    width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+    background: var(--ink, #141414); color: #fff; font-size: 11px; font-weight: 700;
+}
+.profile-cols {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start;
+}
+.profile-pending { font-size: 12px; margin-top: 8px; line-height: 1.7; }
+.profile-ai-lab { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+@media (max-width: 1100px) {
+    .profile-cols { grid-template-columns: 1fr; }
+}

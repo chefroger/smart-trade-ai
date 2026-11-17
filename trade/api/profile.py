@@ -1,0 +1,360 @@
+"""客户画像 API：facts + gifts。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from trade import profile as profile_mod
+from trade.api.deps import require_company
+
+router = APIRouter(tags=["profile"])
+
+
+class LooseBody(BaseModel):
+    """宽松请求体：类型校验一律在路由/存取层转 400。"""
+
+    category: Any = None
+    subject: Any = None
+    content: Any = None
+    attach_to: Any = None
+    contact_id: Any = None
+    ai_visible: Any = None
+    direction: Any = None
+    item: Any = None
+    approx_value: Any = None
+    currency: Any = None
+    gift_date: Any = None
+    occasion: Any = None
+    note: Any = None
+    source: Any = None
+    limit: Any = None
+
+
+def _map_err(exc: Exception) -> None:
+    """把存取层异常映射成 HTTP。"""
+    if isinstance(exc, profile_mod.ProfileNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc) or "不存在") from exc
+    if isinstance(exc, profile_mod.ProfileConflictError):
+        raise HTTPException(status_code=409, detail=str(exc) or "冲突") from exc
+    if isinstance(exc, profile_mod.ProfileError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, RuntimeError) and "表不存在" in str(exc):
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        ) from exc
+    if isinstance(exc, RuntimeError) and str(exc).startswith("提取失败"):
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    raise exc
+
+
+def _ensure_customer(customer_id: int, company_id: int) -> None:
+    """客户归属校验。"""
+    try:
+        profile_mod._require_customer(customer_id, company_id)
+    except profile_mod.ProfileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="客户不存在") from exc
+
+
+# ── Facts ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/customers/{customer_id}/facts")
+def get_facts(
+    customer_id: int,
+    status: str | None = None,
+    cid: int = Depends(require_company),
+):
+    """列出客户事实。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.facts_available():
+        return {"available": False, "items": []}
+    try:
+        items = profile_mod.list_facts(
+            customer_id, company_id=cid, status=status,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+    return {"available": True, "items": items}
+
+
+@router.post("/customers/{customer_id}/facts")
+def post_fact(
+    customer_id: int,
+    body: LooseBody,
+    cid: int = Depends(require_company),
+):
+    """手工新建事实。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.facts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        return profile_mod.create_fact_manual(
+            customer_id,
+            company_id=cid,
+            category=body.category,
+            content=body.content,
+            subject=body.subject or "",
+            attach_to=body.attach_to or "none",
+            contact_id=body.contact_id,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.put("/customers/{customer_id}/facts/{fact_id}")
+def put_fact(
+    customer_id: int,
+    fact_id: int,
+    body: LooseBody,
+    cid: int = Depends(require_company),
+):
+    """更新事实。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.facts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    updates = body.model_dump(exclude_unset=True)
+    try:
+        return profile_mod.update_fact(
+            fact_id, customer_id=customer_id, company_id=cid, updates=updates,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.post("/customers/{customer_id}/facts/{fact_id}/confirm")
+def confirm_fact(
+    customer_id: int, fact_id: int, cid: int = Depends(require_company),
+):
+    """确认事实。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.facts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        return profile_mod.confirm_fact(
+            fact_id, customer_id=customer_id, company_id=cid,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.post("/customers/{customer_id}/facts/{fact_id}/void")
+def void_fact(
+    customer_id: int, fact_id: int, cid: int = Depends(require_company),
+):
+    """作废事实。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.facts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        return profile_mod.void_fact(
+            fact_id, customer_id=customer_id, company_id=cid,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.delete("/customers/{customer_id}/facts/{fact_id}")
+def delete_fact(
+    customer_id: int, fact_id: int, cid: int = Depends(require_company),
+):
+    """删除手工事实。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.facts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        profile_mod.delete_fact(
+            fact_id, customer_id=customer_id, company_id=cid,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+    return {"ok": True}
+
+
+@router.post("/customers/{customer_id}/facts/extract")
+def extract_facts(
+    customer_id: int,
+    body: LooseBody,
+    cid: int = Depends(require_company),
+):
+    """从聊天/邮件手动提取。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.facts_available() or not profile_mod.gifts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        return profile_mod.extract_from_sources(
+            customer_id,
+            company_id=cid,
+            source=body.source,
+            limit=body.limit if body.limit is not None else 20,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+# ── Gifts ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/customers/{customer_id}/gifts")
+def get_gifts(
+    customer_id: int,
+    status: str | None = None,
+    cid: int = Depends(require_company),
+):
+    """列出礼物。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.gifts_available():
+        return {"available": False, "items": []}
+    try:
+        items = profile_mod.list_gifts(
+            customer_id, company_id=cid, status=status,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+    return {"available": True, "items": items}
+
+
+@router.post("/customers/{customer_id}/gifts")
+def post_gift(
+    customer_id: int,
+    body: LooseBody,
+    cid: int = Depends(require_company),
+):
+    """手工新建礼物。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.gifts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        return profile_mod.create_gift_manual(
+            customer_id,
+            company_id=cid,
+            direction=body.direction,
+            item=body.item,
+            approx_value=body.approx_value,
+            currency=body.currency or "",
+            gift_date=body.gift_date or "",
+            occasion=body.occasion or "",
+            note=body.note or "",
+            attach_to=body.attach_to or "none",
+            contact_id=body.contact_id,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.put("/customers/{customer_id}/gifts/{gift_id}")
+def put_gift(
+    customer_id: int,
+    gift_id: int,
+    body: LooseBody,
+    cid: int = Depends(require_company),
+):
+    """更新礼物。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.gifts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    updates = body.model_dump(exclude_unset=True)
+    try:
+        return profile_mod.update_gift(
+            gift_id, customer_id=customer_id, company_id=cid, updates=updates,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.post("/customers/{customer_id}/gifts/{gift_id}/confirm")
+def confirm_gift(
+    customer_id: int, gift_id: int, cid: int = Depends(require_company),
+):
+    """确认礼物。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.gifts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        return profile_mod.confirm_gift(
+            gift_id, customer_id=customer_id, company_id=cid,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.post("/customers/{customer_id}/gifts/{gift_id}/void")
+def void_gift(
+    customer_id: int, gift_id: int, cid: int = Depends(require_company),
+):
+    """作废礼物。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.gifts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        return profile_mod.void_gift(
+            gift_id, customer_id=customer_id, company_id=cid,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+
+
+@router.delete("/customers/{customer_id}/gifts/{gift_id}")
+def delete_gift(
+    customer_id: int, gift_id: int, cid: int = Depends(require_company),
+):
+    """删除手工礼物。"""
+    _ensure_customer(customer_id, cid)
+    if not profile_mod.gifts_available():
+        raise HTTPException(
+            status_code=503,
+            detail="客户画像功能需要重启 Trade 后才能使用",
+        )
+    try:
+        profile_mod.delete_gift(
+            gift_id, customer_id=customer_id, company_id=cid,
+        )
+    except Exception as exc:
+        _map_err(exc)
+        raise
+    return {"ok": True}
