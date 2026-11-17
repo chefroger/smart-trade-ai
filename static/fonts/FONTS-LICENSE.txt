@@ -1,0 +1,5 @@
+Fonts bundled for offline Trade UI (SIL Open Font License 1.1):
+• Archivo — see Archivo-OFL.txt
+• Share Tech Mono — see ShareTechMono-OFL.txt
+• Noto Sans SC — see NotoSansSC-OFL.txt (weights 400/500/700 only)
+Downloaded via jsDelivr fontsource / Google Fonts OFL mirrors; no runtime CDN.

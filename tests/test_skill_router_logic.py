@@ -242,6 +242,67 @@ class TestChinaLeadsRouting:
         )
 
 
+class TestTriggerConflictConvergence:
+    """短词/泛词劫持收敛回归（2026-11-11）。
+
+    精确重复触发词已清零；真实故障是裸短词子串抢走专用 skill。
+    本类钉住那次收敛后的归属，新增裸短词前先过这里。
+    """
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            ("招标文件", "b2b-tender-info"),
+            ("招标下载", "b2b-tender-download"),
+            ("投标匹配", "b2b-tender-doc-match"),
+            ("解压招标包", "b2b-tender-archive"),
+            ("标书检查", "b2b-trade-compliance"),
+            ("投标检查", "b2b-trade-compliance"),
+            ("西班牙语怎么说", "b2b-trade-compliance"),
+            ("西班牙客户", "b2b-lead-generation"),
+            ("SEO优化", "b2b-seo-aeo"),
+            ("SEO文章怎么写", "b2b-seo-aeo"),
+            ("帮我写开发信", "b2b-cold-outreach"),
+            ("生成报价单", "b2b-doc-generation"),
+            ("分析报价单", "b2b-document"),
+            ("询盘怎么回", "b2b-lead-generation"),
+            ("怎么报价", "b2b-lead-generation"),
+            ("buyer persona", "b2b-buyer-persona"),
+        ],
+    )
+    def test_converged_queries_route_to_owner(self, query, expected):
+        from trade.skill_router import match_skill
+
+        matched = match_skill(query)
+        assert matched is not None, f"{query!r} 没命中任何技能"
+        assert matched["name"] == expected, (
+            f"{query!r} → {matched['name']}，应为 {expected}"
+        )
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "记录一下",
+            "报价",  # 裸词已删；生成走「报价单」，谈判走「报价怎么谈」
+            "解压这个文件",  # 裸「解压」已删，不得进 tender-archive
+            "记住客户",  # 曾绑 customer-intel，实际是记忆意图
+        ],
+    )
+    def test_removed_bare_triggers_no_longer_hijack(self, query):
+        """被删掉的裸短词不应再单独把查询绑到错误技能。"""
+        from trade.skill_router import match_skill
+
+        matched = match_skill(query)
+        # 允许无命中；若命中也绝不能是曾持有该裸词的泛技能误伤路径
+        if matched is not None:
+            assert matched["name"] not in {
+                "chat-memory",  # 曾靠「记录」劫持
+                "b2b-lead-generation",  # 曾靠裸「报价」与 doc-gen 打平
+                "b2b-tender-archive",  # 曾靠裸「解压」劫持普通文件
+                "b2b-customer-intel",  # 曾靠「记住客户」抢记忆意图
+            }, f"{query!r} 仍被 {matched['name']} 劫持"
+
+
 class TestTriggerMutualExclusivity:
     """跨技能触发词互斥性审计（2026-10-20，意图路由加固第一项）。
 
@@ -458,3 +519,27 @@ class TestQualityGateIsSelfContained:
         ):
             skill = get_skill_by_name(name)
             assert "自检" in self._active_prompt(skill), f"{name} 的生效注入里没有自检条目"
+
+
+def test_when_to_use_reaches_the_model():
+    """SKILL.md 的 when_to_use 必须作为注入下发（2026-11-11 审计）。
+
+    这个字段原先没有任何代码消费：Trade 只注入 injection_prompt，Hermes 只读
+    name + description —— 「什么时候用 / 不要用于」写在文件里却永远到不了模型。
+    """
+    from trade.skill_router import augment_query, load_when_to_use
+
+    items = load_when_to_use("chat-memory")
+    assert items, "chat-memory 的 when_to_use 应能读到"
+    assert any("不要用于" in item for item in items), "「不要用于」也要下发"
+
+    out = augment_query("查询上次讨论", skill_name="chat-memory")
+    assert "适用场景（用户这样说时启用本技能）" in out
+    assert items[0] in out
+
+
+def test_when_to_use_absent_for_unknown_skill():
+    """未知 skill 读不到 when_to_use 时返回空元组，不抛异常。"""
+    from trade.skill_router import load_when_to_use
+
+    assert load_when_to_use("__no_such_skill__") == ()

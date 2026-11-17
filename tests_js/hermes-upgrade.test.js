@@ -9,7 +9,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { loadRegion } = require('./_extract');
+const { loadRegion, SRC } = require('./_extract');
 
 /** 造一个最小的 DOM 替身：只需 getElementById + appendChild/innerHTML。 */
 function makeDom() {
@@ -73,10 +73,9 @@ test('界面认识后端给的 rebuild_trade_venv 方向', () => {
     // 这里直接核对两个文件之间的契约字符串（本地 require，不依赖文件后半段的声明顺序）。
     const fs = require('node:fs');
     const path = require('node:path');
-    const js = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.js'), 'utf8');
     const py = fs.readFileSync(path.join(__dirname, '..', 'trade', 'hermes_compat.py'), 'utf8');
 
-    assert.ok(js.includes('rebuild_trade_venv'), 'trade_chat.js 未处理 rebuild_trade_venv');
+    assert.ok(SRC.includes('rebuild_trade_venv'), 'static/js 未处理 rebuild_trade_venv');
     assert.ok(py.includes('"rebuild_trade_venv"'), '后端未产出 rebuild_trade_venv');
 });
 
@@ -142,7 +141,7 @@ const path = require('node:path');
 
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.css'), 'utf8');
-const JS = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.js'), 'utf8');
+const JS = SRC;
 
 test('JS 引用的每个面板元素 id 都存在于 HTML', () => {
     const used = new Set(
@@ -158,7 +157,7 @@ test('HTML 里的面板元素都被 JS 用到（避免留下死节点）', () =>
     const declared = [...HTML.matchAll(/id="(hermes-upgrade-[a-z-]+)"/g)].map((m) => m[1]);
     assert.ok(declared.length > 0, 'HTML 未声明任何面板元素');
     for (const id of declared) {
-        assert.ok(JS.includes(`'${id}'`), `trade_chat.js 未使用 id="${id}"`);
+        assert.ok(JS.includes(`'${id}'`), `static/js 未使用 id="${id}"`);
     }
 });
 

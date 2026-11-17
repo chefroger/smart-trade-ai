@@ -532,11 +532,16 @@ class TestProbe6Archive:
         assert (root / "outer.zip").read_bytes() == before, "停手前动了文件"
 
     def test_prompt_defaults_to_keep_for_generic_unzip(self):
-        """裸「解压」会把普通文件也路由到本技能 —— prompt 必须默认不删原包。
+        """即便误触本技能，prompt 也必须默认不删原包。
 
-        2026-11-02 实测：`解压这个文件` → b2b-tender-archive，而技能默认模式 A
-        会把用户原包移进回收站。非招标场景默认 B（保留原包），招标批量场景才按 A。
+        裸「解压」已从触发词移除（「解压这个文件」不再路由到本技能）；
+        仍保留 prompt 护栏：非招标场景默认 B，招标批量才按 A。
         """
+        from trade.skill_router import match_skill
+
+        hit = match_skill("解压这个文件")
+        assert hit is None or hit["name"] != "b2b-tender-archive"
+
         text = (SKILL_DIRS["b2b-tender-archive"] / "SKILL.md").read_text(encoding="utf-8")
 
         assert "单文件 / 非招标" in text, "缺「非招标场景」的默认模式说明"
@@ -748,7 +753,11 @@ class TestProbe8Registration:
         assert hits[0] == "b2b-tender-download", hits
 
     def test_tender_discovery_does_not_inject_compliance(self):
-        """「找招标」注入的必须是 G1 —— 裸「招标」归合规技能，但注入只看 top1。"""
+        """「找招标」注入的必须是 G1（tender-info）。
+
+        2026-11-11：裸「招标/投标」已从 compliance 收回；合规侧改用
+        「投标检查/标书检查」等复合词，运营问法走 tender-*。
+        """
         from trade.skill_router import augment_query
 
         injected = augment_query("帮我找招标")

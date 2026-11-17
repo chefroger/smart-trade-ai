@@ -16,6 +16,9 @@ triggers:
   - 下载压缩包
   - 对象存储下载
   - 按清单下载
+  - 招标下载
+  - 招标文件下载
+  - 下载标书
   - download tender package
   - resumable download
 category: 自动化

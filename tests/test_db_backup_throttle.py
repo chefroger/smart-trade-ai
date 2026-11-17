@@ -32,6 +32,12 @@ def _fresh_db(tmp_path: Path) -> Path:
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'backfill_order_items')")
     conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")
     conn.execute("ALTER TABLE conversations ADD COLUMN customer_id INTEGER")
+    # 与 _needs_schema_work / _add_context_column 对齐：缺 is_important 也会触发备份
+    conn.execute("ALTER TABLE conversations ADD COLUMN is_important INTEGER NOT NULL DEFAULT 0")
+    # customers CRM 实列齐全，否则 _needs_schema_work 恒为 True
+    conn.execute("ALTER TABLE customers ADD COLUMN stage TEXT DEFAULT '询盘'")
+    conn.execute("ALTER TABLE customers ADD COLUMN next_follow_up_date TEXT DEFAULT ''")
+    conn.execute("ALTER TABLE customers ADD COLUMN is_starred INTEGER DEFAULT 0")
     conn.commit()
     conn.close()
     return db

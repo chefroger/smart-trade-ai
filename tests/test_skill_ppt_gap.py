@@ -105,7 +105,7 @@ class TestEvidenceDisciplineBlock:
 
 
 class TestOutboundActionBan:
-    """Trade 不代发、不写发件箱；四个档位都必须常驻。"""
+    """Trade 不代发、不写发件箱；所有在用档位都必须常驻。"""
 
     def test_all_tiers_forbid_sending_and_outbox(self):
         prompt = _load_prompt_module()
@@ -114,6 +114,7 @@ class TestOutboundActionBan:
             "TRADE_SYSTEM_PROMPT_MINIMAL",
             "TRADE_SYSTEM_PROMPT_OSINT",
             "TRADE_SYSTEM_PROMPT_FULL",
+            "TRADE_SYSTEM_PROMPT_FULL_DOCGEN",
         ):
             text = getattr(prompt, tier)
             for token in ("发件箱", "smtplib", "帮我发出去", "存到邮箱", "草稿，需你手动发送"):
@@ -174,10 +175,30 @@ class TestValueBom:
         for token in ("中国", "德国", "美国", "上海", "宁波", "Hamburg", "Shanghai"):
             assert token not in section, f"价值 BOM 段落出现具体国家/城市：{token}"
 
+    @staticmethod
+    def _negated_in_clause(line: str, word: str) -> bool:
+        """该词所在分句内、且仅词前的部分出现否定标记，才算禁令语境。
+
+        2026-11-10 审计：不能整行豁免 —— 「不含任何其他费用，但 cost 已包含
+        在单价里。」整行含「不」，旧实现会放行一条真实违规。改为按标点切分句，
+        只检查该词**之前**的文本。
+        """
+        import re
+
+        idx = line.lower().find(word.lower())
+        if idx < 0:
+            return False
+        # 「且/但/不过」这类转折会把前半句的否定断掉
+        prefix = re.split(r"[。；;！!，,、]", line[:idx])[-1]
+        prefix = re.split(r"但|不过|然而", prefix)[-1]
+        return any(marker in prefix for marker in ("不", "禁", "勿", "免"))
+
     def test_external_cost_words_outside_prohibition_absent(self):
         """P2-4 / P2-B：价值 BOM 全段（含散文，不只代码块）不得出现英文成本词。
 
-        禁令句本身允许出现这些词；除禁令行外，任何一行出现即失败。
+        禁令句本身允许出现这些词；判定按「该词所在分句 + 词前否定标记」，
+        不再整行豁免。`\\b` 在中英紧邻（如「含cost结构」）时不成立，改用
+        ASCII 前后瞻。
         """
         import re
 
@@ -185,11 +206,13 @@ class TestValueBom:
         offenders = []
         for line in section.splitlines():
             for word in ("cost", "profit", "margin", "markup"):
-                if not re.search(rf"\b{word}s?\b", line, re.IGNORECASE):
+                if not re.search(
+                    rf"(?<![A-Za-z]){word}s?(?![A-Za-z])", line, re.IGNORECASE
+                ):
                     continue
-                # 只允许出现在「不得 / 不出现 / 禁止」这类禁令语境里
-                if not any(marker in line for marker in ("不", "禁", "勿", "免")):
-                    offenders.append((word, line.strip()))
+                if self._negated_in_clause(line, word):
+                    continue
+                offenders.append((word, line.strip()))
         assert not offenders, f"对外说明出现未加禁令的成本词：{offenders}"
         # 禁令本身必须写清楚英文词，不能只有中文「成本」
         assert "cost / costs / profit / margin / markup" in section

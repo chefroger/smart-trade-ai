@@ -112,6 +112,8 @@ injection_prompt: |
   更不要写出它没给出的判定。详细步骤见正文 Phase 3。
 
   **情报铁律**：每条情报标注 `来源: [工具名] [URL]（查询日期: YYYY-MM-DD）`。不标注来源的情报不算完成。禁止编造公司背景/规模/采购能力/业务模式。无证据→标注"未检索到有效公开信息"。
+
+  需要关键联系人字段表（name/title/email/LinkedIn/WhatsApp/是否决策人）与邮箱推测模式时，用 `skill_view` 加载本技能正文。
 ---
 
 # b2b-osint 详细规则（skill_view 按需加载）

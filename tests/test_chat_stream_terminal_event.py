@@ -12,7 +12,7 @@ Hermes 的 `hermes_bootstrap.py` 把 server.py 重新 exec 到它自带的 store
    （`Future exception was never retrieved`）；
 2. `_event_stream` 在队列等待超时后只判断 `agent_task.done()` 就 break，
    **从不取 `agent_task.exception()`** → 异常被彻底吞掉；
-3. `finally` 只补发 `done`，而前端 `trade_chat.js` 的 switch 没有 `done` 分支；
+3. `finally` 只补发 `done`，而前端 `static/js/chat.js` 的 switch 没有 `done` 分支；
 4. 前端 `responseText` 为空，落到兜底文案 —— 网络断、agent 崩、被丢弃，
    三类完全不同的问题长得一模一样。
 

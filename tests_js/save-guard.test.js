@@ -67,11 +67,24 @@ for (const w of WRITES) {
     });
 }
 
-test('公司切换的 /switch 是唯一允许丢弃返回值的写点', () => {
-    // 它包在 try/catch 里，且失败会在后续业务请求上以 403 显式暴露，不属于"假成功"
+test('公司切换的 /switch 失败必须回滚前端选中', () => {
+    // 旧写法 try/catch 吞掉失败后 currentCompanyId 已切到新公司，后续请求 403；
+    // 现要求检查 api() 返回值，失败时回滚 currentCompanyId / 下拉，并 toast。
+    const idx = SRC.indexOf('async function onCompanyChange(cid)');
+    assert.ok(idx !== -1, '找不到 onCompanyChange');
+    const body = SRC.slice(idx, idx + 2500);
+
     assert.ok(
-        /try \{ await api\('POST', '\/api\/trade\/companies\/.+\/switch'\); \} catch\(_\) \{\}/.test(SRC),
-        '/switch 调用点应保持 try/catch 包裹（切换失败由后续请求的 403 暴露）',
+        /const switched = await api\('POST', '\/api\/trade\/companies\/' \+ newCid \+ '\/switch'\)/.test(body),
+        '/switch 必须接住 api() 返回值（不能再 try/catch 丢弃）',
+    );
+    assert.ok(
+        /if\s*\(\s*!switched\s*\)\s*\{[\s\S]*?currentCompanyId\s*=\s*prevCid/.test(body),
+        '切换失败必须把 currentCompanyId 回滚到 prevCid',
+    );
+    assert.ok(
+        /if\s*\(\s*!switched\s*\)\s*\{[\s\S]*?toast\('切换公司失败/.test(body),
+        '切换失败必须 toast 提示用户重试',
     );
 });
 

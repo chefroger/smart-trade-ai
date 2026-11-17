@@ -76,3 +76,16 @@ injection_prompt: |
   - 不编造价格、认证、客户、MOQ、交期；缺失写「待填」或「待核实」。
   - 不声称「已发送」「已联系」「已确认」，除非用户刚说过是他自己做的。
 ---
+
+<!-- 维护提示：本技能的全部规则都在上方 frontmatter 的 injection_prompt 里
+     （路由命中时由 Trade 注入，日常实际生效的就是它）。正文不再重复一遍规则，
+     改流程/数字只改 injection_prompt 一处。 -->
+
+# b2b-data-directory — 公司知识库目录管理
+
+规则见上方 `injection_prompt`，包含三块：目录层级（`~/.trade/{slug}/companies/{slug}/`）、
+八夹地图与 `00-index.md` 格式、初始化/体检/回答公司问题三条操作流与禁止事项。
+
+回答具体公司问题时，**以用户库里 `~/.trade/{slug}/companies/{slug}/` 的实际文件为准**，
+不要凭本技能的记忆补写字段值；缺文件的写「待填」或「待核实」。
+
