@@ -17,9 +17,11 @@ jobs:
       - run: pip install ruff
       - name: Python syntax check
         run: |
-          python -m compileall -q trade/ server.py
+          python -m compileall -q trade/ server.py tests/
           echo "✓ All files compile successfully"
-      - run: ruff check trade/ server.py
+      # tests/ 也要 lint：2026-11-17 审计发现 PR #10 的「ruff 清零」只覆盖了
+      # trade/，tests/test_contacts.py 里的 3 个 F401 因 CI 不扫 tests/ 而漏网。
+      - run: ruff check trade/ server.py tests/
       - name: Frontend utils tests (node:test, 零依赖)
         run: node --test "tests_js/**/*.test.js"
 
