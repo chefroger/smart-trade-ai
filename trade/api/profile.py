@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from trade.api.deps import require_company
 from trade import profile as profile_mod
+from trade.api.deps import require_company
 
 router = APIRouter(tags=["profile"])
 
@@ -35,9 +35,9 @@ class LooseBody(BaseModel):
 
 def _map_err(exc: Exception) -> None:
     """把存取层异常映射成 HTTP。"""
-    if isinstance(exc, profile_mod.ProfileNotFound):
+    if isinstance(exc, profile_mod.ProfileNotFoundError):
         raise HTTPException(status_code=404, detail=str(exc) or "不存在") from exc
-    if isinstance(exc, profile_mod.ProfileConflict):
+    if isinstance(exc, profile_mod.ProfileConflictError):
         raise HTTPException(status_code=409, detail=str(exc) or "冲突") from exc
     if isinstance(exc, profile_mod.ProfileError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -55,7 +55,7 @@ def _ensure_customer(customer_id: int, company_id: int) -> None:
     """客户归属校验。"""
     try:
         profile_mod._require_customer(customer_id, company_id)
-    except profile_mod.ProfileNotFound as exc:
+    except profile_mod.ProfileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="客户不存在") from exc
 
 

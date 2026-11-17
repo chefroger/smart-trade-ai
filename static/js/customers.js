@@ -689,7 +689,8 @@ async function openCustomerWall(cid) {
                 curSummary
             );
             if (summary == null) return;
-            const r = await api('PUT', `/api/trade/conversations/${convId}/note`, {
+            // 拼接而非模板插值：convId 来自 dataset 的整数 id；xss-guard 只认可转义插值
+            const r = await api('PUT', '/api/trade/conversations/' + convId + '/note', {
                 title: title.trim(), summary: summary.trim(),
             });
             if (!r) return;

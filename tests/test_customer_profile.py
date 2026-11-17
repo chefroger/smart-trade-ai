@@ -259,7 +259,8 @@ class TestDegrade:
 class TestCascade:
     def test_delete_customer_clears_facts(self, company_id, customer_id, test_db):
         """删客户级联清画像。"""
-        from trade import customer, profile as p
+        from trade import customer
+        from trade import profile as p
         from trade.database import get_connection
 
         p.create_fact_manual(
@@ -281,7 +282,8 @@ class TestCascade:
 class TestExtractMock:
     def test_quote_must_be_substring(self, company_id, customer_id, test_db):
         """原句不是原文子串 → 丢弃。"""
-        from trade import chat_memory, profile as p
+        from trade import chat_memory
+        from trade import profile as p
 
         chat_memory.save_with_context(
             company_id=company_id, library_id=None,

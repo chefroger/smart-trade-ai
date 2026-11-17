@@ -120,11 +120,11 @@ class ProfileError(ValueError):
     """画像业务校验错误（路由转 400）。"""
 
 
-class ProfileConflict(Exception):
+class ProfileConflictError(Exception):
     """指纹冲突（路由转 409）。"""
 
 
-class ProfileNotFound(Exception):
+class ProfileNotFoundError(Exception):
     """条目或客户不存在（路由转 404）。"""
 
 
@@ -160,7 +160,7 @@ def normalize_attach(
 
             cust = customer_module.get(customer_id, company_id=company_id)
             if not cust:
-                raise ProfileNotFound("客户不存在")
+                raise ProfileNotFoundError("客户不存在")
             primary = contacts_module.build_primary_person(cust)
             if primary is None:
                 raise ProfileError("该客户没有主联系人")
@@ -211,7 +211,7 @@ def _customer_in_company(customer_id: int, company_id: int) -> bool:
 def _require_customer(customer_id: int, company_id: int) -> None:
     """客户不存在则 404。"""
     if not _customer_in_company(customer_id, company_id):
-        raise ProfileNotFound("客户不存在")
+        raise ProfileNotFoundError("客户不存在")
 
 
 # ── Facts CRUD ──────────────────────────────────────────────────────────────
@@ -339,7 +339,7 @@ def create_fact_manual(
             st = existing["status"]
             if st == "已确认":
                 conn.rollback()
-                raise ProfileConflict("已有相同条目")
+                raise ProfileConflictError("已有相同条目")
             # 已作废 / 待确认 → 复活为已确认
             conn.execute(
                 "UPDATE customer_facts SET status='已确认', subject=?, content=?, "
@@ -364,14 +364,14 @@ def create_fact_manual(
         )
         if cur.rowcount == 0:
             conn.rollback()
-            raise ProfileConflict("已有相同条目")
+            raise ProfileConflictError("已有相同条目")
         new_id = cur.lastrowid
         conn.commit()
         row = conn.execute(
             "SELECT * FROM customer_facts WHERE id=?", (new_id,)
         ).fetchone()
         return _fact_row(row)
-    except (ProfileConflict, ProfileError, ProfileNotFound):
+    except (ProfileConflictError, ProfileError, ProfileNotFoundError):
         raise
     except Exception:
         conn.rollback()
@@ -406,7 +406,7 @@ def update_fact(
     _require_customer(customer_id, company_id)
     existing = get_fact(fact_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
 
     cat = existing["category"]
     subj = existing["subject"]
@@ -449,7 +449,7 @@ def update_fact(
         ).fetchone()
         if clash:
             conn.rollback()
-            raise ProfileConflict("已有相同条目")
+            raise ProfileConflictError("已有相同条目")
         conn.execute(
             "UPDATE customer_facts SET category=?, subject=?, content=?, "
             "attach_to=?, contact_id=?, ai_visible=?, fingerprint=?, updated_at=? "
@@ -457,7 +457,7 @@ def update_fact(
             (cat, subj, cont, at, cid, ai_vis, fp, now, fact_id, company_id, customer_id),
         )
         conn.commit()
-    except (ProfileConflict, ProfileError):
+    except (ProfileConflictError, ProfileError):
         raise
     except Exception:
         conn.rollback()
@@ -466,7 +466,7 @@ def update_fact(
         conn.close()
     out = get_fact(fact_id, customer_id=customer_id, company_id=company_id)
     if not out:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     return out
 
 
@@ -474,7 +474,7 @@ def confirm_fact(fact_id: int, *, customer_id: int, company_id: int) -> dict:
     """待确认 → 已确认。"""
     existing = get_fact(fact_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     if existing["status"] != "待确认":
         raise ProfileError("只有待确认条目可以确认")
     cat = existing["category"]
@@ -497,7 +497,7 @@ def void_fact(fact_id: int, *, customer_id: int, company_id: int) -> dict:
     """任意状态 → 已作废。"""
     existing = get_fact(fact_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_connection()
     try:
@@ -516,7 +516,7 @@ def delete_fact(fact_id: int, *, customer_id: int, company_id: int) -> None:
     """物理删除，仅 manual。"""
     existing = get_fact(fact_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     if existing.get("source_type") != "manual":
         raise ProfileError("AI 提取的条目只能作废，不能删除")
     conn = get_connection()
@@ -656,7 +656,7 @@ def create_gift_manual(
         if existing:
             if existing["status"] == "已确认":
                 conn.rollback()
-                raise ProfileConflict("已有相同条目")
+                raise ProfileConflictError("已有相同条目")
             conn.execute(
                 "UPDATE customer_gifts SET status='已确认', direction=?, item=?, "
                 "approx_value=?, currency=?, gift_date=?, occasion=?, note=?, "
@@ -682,14 +682,14 @@ def create_gift_manual(
         )
         if cur_r.rowcount == 0:
             conn.rollback()
-            raise ProfileConflict("已有相同条目")
+            raise ProfileConflictError("已有相同条目")
         new_id = cur_r.lastrowid
         conn.commit()
         row = conn.execute(
             "SELECT * FROM customer_gifts WHERE id=?", (new_id,)
         ).fetchone()
         return _gift_row(row)
-    except (ProfileConflict, ProfileError, ProfileNotFound):
+    except (ProfileConflictError, ProfileError, ProfileNotFoundError):
         raise
     except Exception:
         conn.rollback()
@@ -724,7 +724,7 @@ def update_gift(
     _require_customer(customer_id, company_id)
     existing = get_gift(gift_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
 
     d = existing["direction"]
     it = existing["item"]
@@ -778,7 +778,7 @@ def update_gift(
         ).fetchone()
         if clash:
             conn.rollback()
-            raise ProfileConflict("已有相同条目")
+            raise ProfileConflictError("已有相同条目")
         conn.execute(
             "UPDATE customer_gifts SET direction=?, item=?, approx_value=?, currency=?, "
             "gift_date=?, occasion=?, note=?, attach_to=?, contact_id=?, ai_visible=?, "
@@ -787,7 +787,7 @@ def update_gift(
              gift_id, company_id, customer_id),
         )
         conn.commit()
-    except (ProfileConflict, ProfileError):
+    except (ProfileConflictError, ProfileError):
         raise
     except Exception:
         conn.rollback()
@@ -796,7 +796,7 @@ def update_gift(
         conn.close()
     out = get_gift(gift_id, customer_id=customer_id, company_id=company_id)
     if not out:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     return out
 
 
@@ -804,7 +804,7 @@ def confirm_gift(gift_id: int, *, customer_id: int, company_id: int) -> dict:
     """待确认 → 已确认；礼物默认 ai_visible=0。"""
     existing = get_gift(gift_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     if existing["status"] != "待确认":
         raise ProfileError("只有待确认条目可以确认")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -825,7 +825,7 @@ def void_gift(gift_id: int, *, customer_id: int, company_id: int) -> dict:
     """任意状态 → 已作废。"""
     existing = get_gift(gift_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_connection()
     try:
@@ -844,7 +844,7 @@ def delete_gift(gift_id: int, *, customer_id: int, company_id: int) -> None:
     """物理删除，仅 manual。"""
     existing = get_gift(gift_id, customer_id=customer_id, company_id=company_id)
     if not existing:
-        raise ProfileNotFound("条目不存在")
+        raise ProfileNotFoundError("条目不存在")
     if existing.get("source_type") != "manual":
         raise ProfileError("AI 提取的条目只能作废，不能删除")
     conn = get_connection()
@@ -1119,7 +1119,7 @@ def extract_from_sources(
 
     with _EXTRACT_LOCK:
         if customer_id in _EXTRACT_LOCKS:
-            raise ProfileConflict("正在提取，请稍候")
+            raise ProfileConflictError("正在提取，请稍候")
         _EXTRACT_LOCKS.add(customer_id)
 
     try:
