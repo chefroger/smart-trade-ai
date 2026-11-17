@@ -271,6 +271,30 @@ def get_customer_overview(
     return overview
 
 
+def _normalize_tags_or_400(raw) -> list[str]:
+    """路由层校验 tags：400 + 中文字符串；按 Unicode 码点计长。"""
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="标签必须是字符串数组")
+    cleaned: list[str] = []
+    seen_lower: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            raise HTTPException(status_code=400, detail="每个标签必须是字符串")
+        s = item.strip()
+        if not s:
+            continue
+        if len(s) > 20:
+            raise HTTPException(status_code=400, detail="单个标签最多 20 个字符")
+        key = s.lower()
+        if key in seen_lower:
+            continue
+        seen_lower.add(key)
+        cleaned.append(s)
+    if len(cleaned) > 20:
+        raise HTTPException(status_code=400, detail="标签最多 20 个")
+    return cleaned
+
+
 @router.put("/customers/{customer_id}")
 def update_customer(
     customer_id: int,
@@ -279,6 +303,9 @@ def update_customer(
 ):
     """更新客户字段（必须属于当前公司）。"""
     kwargs = payload.model_dump(exclude_none=True)
+    # tags 显式传入（含空数组）才校验；None 表示不改
+    if "tags" in kwargs:
+        kwargs["tags"] = _normalize_tags_or_400(kwargs["tags"])
     result = customer_module.update(customer_id, company_id=cid, **kwargs)
     if not result:
         raise HTTPException(status_code=404, detail="Customer not found")

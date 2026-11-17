@@ -277,6 +277,12 @@ const I18N = {
         'contacts.note':'备注',
         'contacts.name_required':'请填写姓名',
         'contacts.saved':'联系人已保存',
+        'contacts.tags_title':'标签',
+        'contacts.tags_ph':'输入标签，回车或逗号添加',
+        'contacts.tags_add':'添加',
+        'contacts.tags_empty':'暂无标签',
+        'contacts.tags_too_long':'单个标签最多 20 个字符',
+        'contacts.tags_too_many':'标签最多 20 个',
     },
     en: {
         'nav.daily':'Daily Briefing','nav.lead':'Lead Gen','nav.platform':'Site Audit',
@@ -524,6 +530,12 @@ const I18N = {
         'contacts.note':'Note',
         'contacts.name_required':'Name is required',
         'contacts.saved':'Contact saved',
+        'contacts.tags_title':'Tags',
+        'contacts.tags_ph':'Type a tag, Enter or comma to add',
+        'contacts.tags_add':'Add',
+        'contacts.tags_empty':'No tags yet',
+        'contacts.tags_too_long':'Each tag max 20 characters',
+        'contacts.tags_too_many':'At most 20 tags',
     }
 };
 

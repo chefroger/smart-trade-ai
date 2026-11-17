@@ -398,6 +398,17 @@ async function openCustomerWall(cid) {
     });
     bodyHtml += '</div></div>';
 
+    // 标签编辑（墙内）
+    const wallTags = (_parseExtra3(c).tags || []).slice();
+    bodyHtml += secHead(t('contacts.tags_title'), 'TAGS // ' + wallTags.length) +
+        '<div class="wgrid"><article class="wcard"' + delay() + ' id="wall-tags-card">' +
+        '<div id="wall-tags-chips" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"></div>' +
+        '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;">' +
+        '<input type="text" id="wall-tag-input" maxlength="20" placeholder="' + esc(t('contacts.tags_ph')) +
+        '" style="flex:1;min-width:120px;font-size:12px;padding:4px 8px;" />' +
+        '<button type="button" class="btn-xs" id="wall-tag-add">' + t('contacts.tags_add') + '</button>' +
+        '</div></article></div></div>';
+
     bodyHtml += secHead(currentLang === 'en' ? 'Orders' : '订单', 'ORDERS // ' + orders.length) + '<div class="wgrid">';
     if (!orders.length) {
         bodyHtml += '<div class="wall-empty"' + delay() + '>' + (currentLang==='en'?'No orders yet':'暂无订单记录') + '</div>';
@@ -564,6 +575,7 @@ async function openCustomerWall(cid) {
             openCustomerWall(cid);
         });
     });
+    _bindWallTags(cid, wallTags);
     $('wall-stage-save')?.addEventListener('click', async function () {
         const nextStage = $('wall-stage')?.value || '询盘';
         const nextFollow = $('wall-follow')?.value || '';
@@ -1240,7 +1252,83 @@ async function downloadCsvTemplate() {
     }
 }
 
-// ── 附加联系人弹窗 ───────────────────────────────────
+// ── 附加联系人弹窗 + 墙内标签 ───────────────────────
+function _renderWallTagChips(tags) {
+    const box = $('wall-tags-chips');
+    if (!box) return;
+    box.innerHTML = (tags || []).map(function (tag, idx) {
+        return '<span class="tagchip" data-tag-idx="' + idx + '">' + esc(tag) +
+            ' <a href="#" class="wall-tag-x" data-idx="' + idx + '" style="margin-left:4px;">×</a></span>';
+    }).join('') || ('<span class="muted">' + esc(t('contacts.tags_empty')) + '</span>');
+}
+
+function _bindWallTags(cid, initialTags) {
+    let tags = (initialTags || []).slice();
+    _renderWallTagChips(tags);
+
+    async function persist() {
+        const saved = await api('PUT', `/api/trade/customers/${cid}`, { tags: tags });
+        if (!saved) return false;
+        const cached = allCustomers.find(function (x) { return x.id === cid; });
+        if (cached) {
+            try {
+                const e3 = JSON.parse(cached.extra3 || '{}');
+                e3.tags = tags;
+                cached.extra3 = JSON.stringify(e3);
+            } catch (e) {
+                cached.extra3 = JSON.stringify({ tags: tags });
+            }
+        }
+        return true;
+    }
+
+    $('wall-tags-chips')?.addEventListener('click', async function (e) {
+        const a = e.target.closest('.wall-tag-x');
+        if (!a) return;
+        e.preventDefault();
+        const idx = parseInt(a.getAttribute('data-idx'), 10);
+        if (isNaN(idx)) return;
+        tags.splice(idx, 1);
+        _renderWallTagChips(tags);
+        await persist();
+    });
+
+    async function addFromInput() {
+        const input = $('wall-tag-input');
+        if (!input) return;
+        const raw = String(input.value || '');
+        const parts = raw.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean);
+        let changed = false;
+        for (let i = 0; i < parts.length; i++) {
+            const s = parts[i];
+            if (Array.from(s).length > 20) {
+                toast(t('contacts.tags_too_long'));
+                continue;
+            }
+            const key = s.toLowerCase();
+            if (tags.some(function (x) { return x.toLowerCase() === key; })) continue;
+            if (tags.length >= 20) {
+                toast(t('contacts.tags_too_many'));
+                break;
+            }
+            tags.push(s);
+            changed = true;
+        }
+        input.value = '';
+        if (!changed) return;
+        _renderWallTagChips(tags);
+        await persist();
+    }
+
+    $('wall-tag-add')?.addEventListener('click', addFromInput);
+    $('wall-tag-input')?.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addFromInput();
+        }
+    });
+}
+
 function _showContactModal(cid, person) {
     document.querySelectorAll('.contact-modal-backdrop').forEach(function (el) { el.remove(); });
     const isEdit = !!(person && person.id);
