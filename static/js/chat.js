@@ -265,29 +265,39 @@ async function loadCronStatus(isPoll = false) {
     // 常驻右栏：今日待办 + 定时任务输出（所有主视图；详情页由 CSS 隐藏）
     const railTodo = document.getElementById('rail-todo');
     if (railTodo) {
-        // 当前时间落到条目时段内 → 红字（每次 30s 轮询按“现在”重新判定）
-        const _nowMin = (function () { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); })();
-        function _taskIsNow(timeStr) {
-            const m = String(timeStr || '').match(/(\d{1,2}):(\d{2})(?:\s*-\s*(\d{1,2}):(\d{2}))?/);
-            if (!m) return false;
-            const s = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-            if (m[3] != null) {
-                const e = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
-                return _nowMin >= s && _nowMin <= e;
-            }
-            return _nowMin >= s && _nowMin < s + 60;
+        // 标红：当前时间落到条目执行窗口内（与后端同一口径）
+        // - 用后端 current_time（不是浏览器 new Date），避免两套时间源在跨分钟时打架
+        // - missed（已过窗口终点）/ unknown_schedule 一律不红：漏做的任务不是「当前」
+        // - 单点任务「15:30」窗口就是该分钟；范围「09:00-10:30」窗口为区间
+        function _toMin(hhmm) {
+            const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})/);
+            return m ? (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) : null;
+        }
+        let _nowMin = _toMin(current_time);
+        if (_nowMin == null) { const d = new Date(); _nowMin = d.getHours() * 60 + d.getMinutes(); }
+        function _taskIsNow(task) {
+            if (!task || task.unknown_schedule || task.missed) return false;
+            const parts = String(task.time || '').split('-');
+            const s = _toMin(parts[0]);
+            if (s == null) return false;
+            const e = (parts.length > 1) ? _toMin(parts[1]) : s;
+            if (e == null) return false;
+            return _nowMin >= s && _nowMin <= e;
         }
         let todoHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.todo')) +
             '</span><span class="lbl">TODO · ' + (pending.length + completed.length) + '</span></div>';
         for (const task of pending) {
-            todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task.time) ? ' now' : '') + '"><span class="tx">' +
+            todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task) ? ' now' : '') + '"><span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
         for (const task of completed) {
             todoHtml += '<div class="rail-todo-item done"><span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
+        // 轮询每 30s 会重建列表：保留用户滚动位置，避免跳回顶部
+        const _todoScroll = railTodo.scrollTop;
         railTodo.innerHTML = todoHtml;
+        railTodo.scrollTop = _todoScroll;
         const railCron = document.getElementById('rail-cron');
         if (railCron) {
             let cronHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.cron')) +
