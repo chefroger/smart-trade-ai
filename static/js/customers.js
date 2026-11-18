@@ -140,7 +140,71 @@ function _customerStage(c) {
     return String(c.stage || '询盘').trim();
 }
 
+function _customerStageAuto(c) {
+    // stage_auto true / 缺省 = 自动推导；false = 手动 override
+    return c && c.stage_auto !== false;
+}
+
 const _CRM_STAGES = ['询盘', '报价', '样品', '订单'];
+
+// #region wall-inquiries
+/** 列表 pill：有效阶段高亮；手动锁定时当前 pill 加「手」角标。 */
+function _stagePillsHtml(stage, stageAuto, overdue) {
+    return _CRM_STAGES.map(function (s) {
+        const on = stage === s;
+        let html = '<span class="pill' + (on ? ' on' : '') + (overdue && on ? ' hot' : '') +
+            '" style="position:relative">' + esc(s);
+        if (on && !stageAuto) {
+            html += '<span class="stage-manual-badge" title="' + esc(t('inquiry.manual_title')) +
+                '">' + esc(t('inquiry.manual_badge')) + '</span>';
+        }
+        return html + '</span>';
+    }).join('');
+}
+
+/** 墙内询盘区 HTML（人物之下、订单之上）。 */
+function renderWallInquiriesSection(inquiries, delayFn) {
+    const list = Array.isArray(inquiries) ? inquiries : [];
+    let html = '<div class="wsec"><div class="wsec-head"><h4>' + t('inquiry.section') +
+        '</h4><span class="cnt">INQUIRIES // ' + list.length +
+        '</span><span class="ddline" aria-hidden="true"></span></div>';
+    html += '<div class="wgrid" id="wall-inq-list">';
+    if (!list.length) {
+        html += '<div class="wall-empty"' + delayFn() + '>' + t('inquiry.empty') + '</div>';
+    } else {
+        list.forEach(function (inq) {
+            const st = String(inq.stage || '询盘');
+            const stageOpts = _CRM_STAGES.map(function (s) {
+                return '<option value="' + esc(s) + '"' + (st === s ? ' selected' : '') +
+                    '>' + esc(s) + '</option>';
+            }).join('');
+            html += '<article class="wcard"' + delayFn() + ' data-inquiry-id="' +
+                esc(String(inq.id)) + '">' +
+                '<div class="wc-top"><span class="wc-name">' + esc(inq.title || '') +
+                '</span><span class="pill on">' + esc(st) + '</span></div>' +
+                '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+                '<select class="wall-inq-stage" data-id="' + esc(String(inq.id)) + '">' +
+                stageOpts + '</select>' +
+                '<button type="button" class="btn-xs wall-inq-del" data-id="' +
+                esc(String(inq.id)) + '">' + t('inquiry.delete') + '</button>' +
+                '</div></article>';
+        });
+    }
+    html += '</div>';
+    html += '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+        '<input type="text" id="wall-inq-title" placeholder="' + esc(t('inquiry.title_ph')) +
+        '" style="flex:1;min-width:120px;font-size:12px;padding:4px 8px;" />' +
+        '<select id="wall-inq-stage-new">' +
+        _CRM_STAGES.map(function (s) {
+            return '<option value="' + esc(s) + '"' + (s === '询盘' ? ' selected' : '') +
+                '>' + esc(s) + '</option>';
+        }).join('') +
+        '</select>' +
+        '<button type="button" class="btn-xs" id="wall-inq-create">' + t('inquiry.create') +
+        '</button></div></div>';
+    return html;
+}
+// #endregion wall-inquiries
 
 /** 填充国家 / 买家类型筛选项（来自现有客户 extra）。 */
 function _refreshCustomerFilterOptions() {
@@ -211,10 +275,7 @@ function renderCustomersTable(data) {
         const follow = _customerFollowUpDate(c);
         const overdue = follow && follow < today;
         const stage = _customerStage(c);
-        // 正文只拼 _CRM_STAGES 常量（再走 esc）；用户 stage 仅参与 class 比较
-        const stageHtml = _CRM_STAGES.map(function (s) {
-            return '<span class="pill' + (stage === s ? ' on' : '') + (overdue && stage === s ? ' hot' : '') + '">' + esc(s) + '</span>';
-        }).join('');
+        const stageHtml = _stagePillsHtml(stage, _customerStageAuto(c), overdue);
         const subLine = [title, mainCategory, country, email].filter(Boolean).join(' · ');
         const followText = overdue
             ? (currentLang === 'en' ? 'Overdue' : '已逾期')
@@ -347,13 +408,14 @@ async function openCustomerWall(cid) {
     closeCustomerDetail();
 
     // 卡片墙：overview + 邮件 + 邮箱 + 时间线 + 画像（并行；画像失败不阻断）
-    const [ov, mailRes, mailboxRes, timelineRes, factsRes, giftsRes] = await Promise.all([
+    const [ov, mailRes, mailboxRes, timelineRes, factsRes, giftsRes, inqRes] = await Promise.all([
         api('GET', `/api/trade/customers/${cid}/overview`),
         api('GET', `/api/trade/customers/${cid}/emails`),
         api('GET', '/api/trade/mailboxes'),
         api('GET', `/api/trade/customers/${cid}/timeline?days=60`),
         api('GET', `/api/trade/customers/${cid}/facts`),
         api('GET', `/api/trade/customers/${cid}/gifts`),
+        api('GET', `/api/trade/customers/${cid}/inquiries`),
     ]);
     if (!ov || !ov.customer) {
         toast(currentLang === 'en' ? 'Failed to load customer wall' : '加载客户详情失败');
@@ -452,6 +514,10 @@ async function openCustomerWall(cid) {
             '</article>';
     });
     bodyHtml += '</div></div>';
+
+    // 询盘区（人物之下、订单之上）
+    const inquiries = Array.isArray(inqRes) ? inqRes : [];
+    bodyHtml += renderWallInquiriesSection(inquiries, delay);
 
     // 标签编辑（墙内）
     const wallTags = (_parseExtra3(c).tags || []).slice();
@@ -640,9 +706,15 @@ async function openCustomerWall(cid) {
         '<button type="button" id="wall-add-order">' + (currentLang==='en'?'Add order':'添加订单') + '</button>' +
         '<button type="button" id="wall-stage-save">' + (currentLang==='en'?'Save stage / follow-up':'保存阶段与跟进日') + '</button>' +
         '<label style="font-size:12px;display:inline-flex;align-items:center;gap:6px;">' + (currentLang==='en'?'Stage':'商机阶段') +
-        ' <select id="wall-stage">' + _CRM_STAGES.map(function (s) {
-            return '<option value="' + esc(s) + '"' + (stage === s ? ' selected' : '') + '>' + esc(s) + '</option>';
-        }).join('') + '</select></label>' +
+        ' <select id="wall-stage">' + (function () {
+            // 自动推导时选「自动」；手动 override 时选有效阶段
+            const wallSel = _customerStageAuto(c) ? '自动' : stage;
+            return _CRM_STAGES.map(function (s) {
+                return '<option value="' + esc(s) + '"' + (wallSel === s ? ' selected' : '') + '>' + esc(s) + '</option>';
+            }).join('') +
+            '<option value="自动"' + (wallSel === '自动' ? ' selected' : '') + '>' +
+            esc(t('inquiry.stage_auto')) + '</option>';
+        })() + '</select></label>' +
         '<label style="font-size:12px;display:inline-flex;align-items:center;gap:6px;">' + (currentLang==='en'?'Follow-up':'下次跟进') +
         ' <input type="date" id="wall-follow" value="' + esc(follow) + '"></label>' +
         '</div><span class="ddline" aria-hidden="true"></span></div>' +
@@ -725,7 +797,7 @@ async function openCustomerWall(cid) {
     $('wall-stage-save')?.addEventListener('click', async function () {
         const nextStage = $('wall-stage')?.value || '询盘';
         const nextFollow = $('wall-follow')?.value || '';
-        // 实列 stage / next_follow_up_date
+        // stage 新语义：四值=override；「自动」=清 override
         const saved = await api('PUT', `/api/trade/customers/${cid}`, {
             stage: nextStage,
             next_follow_up_date: nextFollow,
@@ -733,11 +805,44 @@ async function openCustomerWall(cid) {
         if (!saved) return;
         if (cached) {
             cached.stage = saved.stage;
+            cached.stage_auto = saved.stage_auto;
+            cached.stage_override = saved.stage_override;
             cached.next_follow_up_date = saved.next_follow_up_date;
         }
         toast(t('toast.saved'));
         filterCustomers();
         openCustomerWall(cid);
+    });
+    $('wall-inq-create')?.addEventListener('click', async function () {
+        const title = ($('wall-inq-title')?.value || '').trim();
+        const st = $('wall-inq-stage-new')?.value || '询盘';
+        const r = await api('POST', `/api/trade/customers/${cid}/inquiries`, {
+            title: title, stage: st,
+        });
+        if (!r) return;
+        toast(t('inquiry.created'));
+        openCustomerWall(cid);
+        filterCustomers();
+    });
+    wall.querySelectorAll('.wall-inq-stage').forEach(function (sel) {
+        sel.addEventListener('change', async function () {
+            const id = sel.getAttribute('data-id');
+            const r = await api('PUT', '/api/trade/inquiries/' + id, { stage: sel.value });
+            if (!r) return;
+            toast(t('inquiry.updated'));
+            openCustomerWall(cid);
+            filterCustomers();
+        });
+    });
+    wall.querySelectorAll('.wall-inq-del').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const id = btn.getAttribute('data-id');
+            const r = await api('DELETE', '/api/trade/inquiries/' + id);
+            if (!r || !r.ok) return;
+            toast(t('inquiry.deleted'));
+            openCustomerWall(cid);
+            filterCustomers();
+        });
     });
 
     $('wall-goto-mailboxes')?.addEventListener('click', function () {

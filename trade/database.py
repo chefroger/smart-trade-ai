@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS customers (
     stage               TEXT    DEFAULT '询盘',  -- 询盘 / 报价 / 样品 / 订单
     next_follow_up_date TEXT    DEFAULT '',     -- YYYY-MM-DD；空串=未设
     is_starred          INTEGER DEFAULT 0,      -- 0/1 标星
+    -- N4：手动阶段 override；NULL=按询盘自动推导。旧库由 _add_customer_crm_columns ADD COLUMN。
+    stage_override      TEXT,
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     updated_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     extra1      TEXT    DEFAULT '{}',  -- spare: {"country":"","tier":"","linkedin_url":"","company_website":"","social_media":{},"buyer_type":"","main_category":"","match_score":0}
@@ -331,6 +333,22 @@ CREATE TABLE IF NOT EXISTS contacts (
 CREATE INDEX IF NOT EXISTS idx_contacts_customer ON contacts(customer_id, is_primary);
 
 
+
+-- 询盘实体（N4）
+CREATE TABLE IF NOT EXISTS inquiries (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    stage TEXT NOT NULL DEFAULT '询盘',
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_id INTEGER,
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_inquiries_customer ON inquiries(customer_id, stage);
+CREATE INDEX IF NOT EXISTS idx_inquiries_company_customer ON inquiries(company_id, customer_id);
+
 -- 客户画像事实登记（§1）
 CREATE TABLE IF NOT EXISTS customer_facts (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -472,6 +490,13 @@ def _add_customer_crm_columns(conn: sqlite3.Connection) -> None:
     if "is_starred" not in cols:
         conn.execute(
             "ALTER TABLE customers ADD COLUMN is_starred INTEGER DEFAULT 0"
+        )
+    # N4：手动阶段 override；旧非默认 stage 回填为 override，避免首询盘重算覆盖
+    if "stage_override" not in cols:
+        conn.execute("ALTER TABLE customers ADD COLUMN stage_override TEXT")
+        conn.execute(
+            "UPDATE customers SET stage_override = stage "
+            "WHERE stage_override IS NULL AND stage IS NOT NULL AND stage <> '询盘'"
         )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_customers_company_stage "
@@ -630,7 +655,7 @@ _EXPECTED_TABLES = frozenset({
     "order_events",
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
     "mailboxes", "emails", "contacts",
-    "customer_facts", "customer_gifts",
+    "customer_facts", "customer_gifts", "inquiries",
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
@@ -678,10 +703,12 @@ def _needs_schema_work(conn: sqlite3.Connection) -> bool:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
             if "context" not in cols or "customer_id" not in cols or "is_important" not in cols:
                 return True
-        # customers CRM 实列缺失 → ALTER TABLE
+        # customers CRM 实列缺失 → ALTER TABLE（含 N4 stage_override）
         if "customers" in existing:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)")}
-            if not {"stage", "next_follow_up_date", "is_starred"} <= cols:
+            if not {
+                "stage", "next_follow_up_date", "is_starred", "stage_override"
+            } <= cols:
                 return True
         # emails 两列形态：缺 company_id/customer_id 或仍有空 email_matches → 需处理
         if "emails" in existing:

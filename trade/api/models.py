@@ -130,9 +130,9 @@ class CustomerUpdate(BaseModel):
     match_score: int | None = Field(None, description="匹配度评分 (0-5)")
     function: str | None = Field(None, description="主联系人职能（决策人/财务/仓储/其他）")
     responsibility: str | None = Field(None, description="主联系人职责")
-    # CRM 实列（S-01）：stage / next_follow_up_date / is_starred
-    stage: Literal["询盘", "报价", "样品", "订单"] | None = Field(
-        None, description="商机阶段（询盘/报价/样品/订单）"
+    # CRM 实列（S-01）+ N4：「自动」= 清 override 按询盘重算
+    stage: Literal["询盘", "报价", "样品", "订单", "自动"] | None = Field(
+        None, description="商机阶段；四值=锁定 override；自动=清 override"
     )
     next_follow_up_date: str | None = Field(None, description="下次跟进日 YYYY-MM-DD")
     is_starred: Literal[0, 1] | None = Field(None, description="是否标星 0/1")

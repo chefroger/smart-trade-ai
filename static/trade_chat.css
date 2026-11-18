@@ -1120,6 +1120,12 @@ body > #toast-container, body > #customer-wall {
 }
 .pill.hot { border-color: var(--accent); color: var(--accent); font-weight: 700; }
 .pill.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.stage-manual-badge {
+    position: absolute; top: -6px; right: -4px;
+    font-size: 9px; line-height: 1; padding: 1px 3px;
+    border: 1px solid var(--ink); background: var(--bg, #fff); color: var(--ink);
+    font-family: var(--font-mono, monospace); letter-spacing: 0;
+}
 
 @media (max-width: 620px) {
     .wstats { grid-template-columns: repeat(2, 1fr); }
