@@ -1712,3 +1712,6 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 @media (max-width: 1100px) {
     #customer-profile .profile-people { grid-template-columns: 1fr; }
 }
+
+/* 编辑/新建客户弹窗加宽：字段较多，480px 三列挤在一起 */
+#customer-modal .modal { width: 720px; max-width: 94vw; }
