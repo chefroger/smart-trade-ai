@@ -198,7 +198,8 @@ body {
 /* ── Chat View (DeepSeek-style: centered, flat, clean) ──────────────── */
 .chat-view, .panel-view {
     display: flex; flex-direction: column; flex: 1; overflow: hidden;
-    background: transparent;
+    /* min-height:0 必须显式给：flex 项默认 min-height:auto 会被内容撑开、溢出 main 后被裁 */
+    min-height: 0; background: transparent;
 }
 #main-content > div { height: auto; flex: 1; background: transparent; }
 .chat-topbar {
@@ -1413,9 +1414,14 @@ body {
 }
 
 /* ── s1 今日简报：对话 + 右栏（简报 / 待办 / 定时任务）────────────── */
-.chat-layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 0; }
+.chat-layout {
+    flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 340px;
+    /* 行高必须钉死 1fr：隐式 auto 行会按内容撑高，导致 rail 内 flex:1 不收缩、定时任务框被裁 */
+    grid-template-rows: minmax(0, 1fr); min-height: 0;
+}
 .chat-layout.single { grid-template-columns: minmax(0, 1fr); }
-.chat-main { display: flex; flex-direction: column; min-height: 0; padding: 0 40px 22px; }
+/* position:relative 让输入条只覆盖对话列（否则 absolute 会以 .main 为基准横跨整宽、压住右栏） */
+.chat-main { position: relative; display: flex; flex-direction: column; min-height: 0; padding: 0 40px 22px; }
 .chat-main .chat-messages { max-width: none; margin: 0; width: 100%; }
 .chat-main .chat-input-area { max-width: none; margin: 0; width: 100%; }
 .chat-cmd {
@@ -1429,10 +1435,13 @@ body {
 .chat-rail {
     border-left: 1px dashed var(--ink); padding: 18px 20px 30px;
     display: flex; flex-direction: column; gap: 14px; min-height: 0;
-    overflow-y: auto; background: rgba(251, 252, 252, .55);
+    /* 三块必须都在一屏内：待办内部滚，定时任务输出固定可见 */
+    overflow: hidden; background: rgba(251, 252, 252, .55);
 }
 .rail-box { border: 1px dashed var(--ink); background: var(--paper); padding: 12px 14px; }
-.rail-grow { flex: 1; min-height: 0; overflow-y: auto; }
+#rail-brief { flex: 0 0 auto; }
+.rail-grow { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#rail-cron { flex: 0 0 auto; max-height: 32%; overflow-y: auto; }
 .rail-bh { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .rail-bh .t { font-size: 12px; font-weight: 600; }
 .rail-bh .lbl {
