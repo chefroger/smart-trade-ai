@@ -1715,3 +1715,18 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 
 /* 编辑/新建客户弹窗加宽：字段较多，480px 三列挤在一起 */
 #customer-modal .modal { width: 720px; max-width: 94vw; }
+
+/* ═════ s1 消息：用户右侧深色气泡 + 助手标题行（mockup）═════ */
+.chat-main .message { display: block; }
+.chat-main .message.user { display: flex; justify-content: flex-end; border-top: none; padding: 14px 0; }
+.chat-main .message.user .msg-body {
+    background: var(--ink); color: #fff; padding: 10px 14px; max-width: 72%;
+    line-height: 1.65; border-radius: 2px;
+}
+.chat-main .message.user .msg-body, .chat-main .message.user .msg-body * { color: #fff; }
+.chat-main .message.assistant { background: transparent; padding-top: 14px; }
+.chat-main .message.assistant::before { content: none; }
+.chat-main .msg-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .12em; color: var(--muted); }
+.chat-main .msg-head .mh-tag { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.chat-main .msg-head .mh-rule { flex: 1; border-top: 1px dashed var(--line-strong); }
+.chat-main .msg-head .mh-t { white-space: nowrap; }

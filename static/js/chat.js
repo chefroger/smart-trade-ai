@@ -689,9 +689,6 @@ function addMsg(role, content, files, save, convId, blocks) {
 
     const div = document.createElement('div');
     div.className = `message ${role}`;
-    const avatar = document.createElement('div');
-    avatar.className = 'msg-avatar';
-    avatar.textContent = role === 'user' ? '👤' : '🤖';
     const body = document.createElement('div');
     body.className = 'msg-body';
     const raw = marked.parse(content || '');
@@ -710,7 +707,17 @@ function addMsg(role, content, files, save, convId, blocks) {
         const blocksEl = _renderChatBlocks(blocks);
         if (blocksEl) body.appendChild(blocksEl);
     }
-    div.appendChild(avatar); div.appendChild(body);
+    // 助手消息：▶ TRADE · ASSISTANT // HH:MM 标题行（mockup s1）；用户消息走右侧气泡
+    if (role === 'assistant') {
+        const head = document.createElement('div');
+        head.className = 'msg-head';
+        const nd = new Date();
+        const pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
+        head.innerHTML = '<span class="mh-tag">▶ TRADE · ASSISTANT</span>' +
+            '<span class="mh-rule"></span><span class="mh-t">' + pad2(nd.getHours()) + ':' + pad2(nd.getMinutes()) + '</span>';
+        div.appendChild(head);
+    }
+    div.appendChild(body);
 
     // AI 回复右侧加「📋 复制」按钮，点击写入剪贴板
     if (role === 'assistant' && content) {
