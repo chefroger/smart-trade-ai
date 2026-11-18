@@ -161,22 +161,17 @@ test('白名单本身不掩盖用户数据字段', () => {
     }
 });
 
-test('tier / unit 两处渲染点都带 esc()', () => {
-    assert.ok(/\$\{esc\(tierLabel\)\}/.test(SRC), '客户等级必须写成 ${esc(tierLabel)}');
-    assert.ok(
-        /esc\(o\.quantity\)\s*\+\s*esc\(o\.unit\|\|''\)/.test(SRC),
-        '订单单位必须写成 esc(o.unit||\'\')',
-    );
+test('客户等级 / 订单数量单位 渲染点都带 esc()', () => {
+    // 客户列表：等级自由文本（CSV/API 可写）→ 必须 esc(tier) 后再进 innerHTML
+    assert.ok(/esc\(tier\)/.test(SRC), '客户等级必须 esc(tier) 后渲染');
+    // 订单数量/单位为自由文本 → 拼接后必须整体 esc(qty)
+    assert.ok(/esc\(qty\)/.test(SRC), '订单数量/单位拼接后必须 esc(qty)');
     // 顶部引导条（guidance.desc）已随右栏改造下线，相关渲染点不再存在
 });
 
-test('stageHtml 由 _CRM_STAGES.map + esc(s) 构造（格式可动，不变量不可破）', () => {
-    assert.ok(
-        stageHtmlIsSafe(),
-        'stageHtml 必须由 _CRM_STAGES.map 构造，正文走 esc(s)，不得把用户 stage 拼进 HTML',
-    );
-    assert.ok(
-        /\$\{stageHtml\}/.test(SRC),
-        '列表仍通过 ${stageHtml} 插入（安全由构造不变量担保，不靠变量名白名单）',
-    );
+test('商机阶段文本必须 esc(stage) 后渲染', () => {
+    // s2 列表用「点阵 + 阶段名」；阶段名来自自由文本，必须转义
+    assert.ok(/esc\(stage\)/.test(SRC), '商机阶段必须 esc(stage) 后插入');
+    // 不得把用户 stage 以未转义形式拼进模板
+    assert.ok(!/\$\{\s*stage\s*\}/.test(SRC), '不得使用未转义的 ${stage}');
 });
