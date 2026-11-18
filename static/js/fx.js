@@ -90,6 +90,73 @@ function toggleFx() {
     setFxEnabled(!_fxOn);
 }
 
+function _initDust() {
+    /** zip 微光粒子：固定种子、缓慢漂移；reduced-motion / 关闭特效时只画静态一帧。 */
+    const cv = document.getElementById('dust');
+    if (!cv || !cv.getContext) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    let w = 0, h = 0, ps = [];
+
+    function rng(seed) {
+        return function () {
+            seed = (seed * 16807) % 2147483647;
+            return (seed - 1) / 2147483646;
+        };
+    }
+
+    function resize() {
+        const host = cv.parentElement || document.body;
+        w = Math.max(1, host.clientWidth);
+        h = Math.max(1, host.clientHeight);
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        cv.width = Math.round(w * dpr);
+        cv.height = Math.round(h * dpr);
+        cv.style.width = w + 'px';
+        cv.style.height = h + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const r = rng(97);
+        ps = [];
+        for (let i = 0; i < 90; i++) {
+            ps.push({
+                x: r() * w, y: r() * h, s: r() * 1.4 + .4, a: r() * .28 + .06,
+                vx: (r() - .5) * .12, vy: (r() - .5) * .12, red: i % 37 === 0,
+            });
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, w, h);
+        ps.forEach(function (p) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.s, 0, 6.283);
+            ctx.fillStyle = p.red
+                ? 'rgba(210,40,30,' + (p.a + .15) + ')'
+                : 'rgba(12,13,14,' + p.a + ')';
+            ctx.fill();
+            if (p.s > 1.5) {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.s * 3.2, 0, 6.283);
+                ctx.fillStyle = 'rgba(12,13,14,' + (p.a * .12) + ')';
+                ctx.fill();
+            }
+        });
+    }
+
+    resize();
+    draw();
+    window.addEventListener('resize', resize);
+    if (!_fxOn) return;
+    (function loop() {
+        ps.forEach(function (p) {
+            p.x = (p.x + p.vx + w) % w;
+            p.y = (p.y + p.vy + h) % h;
+        });
+        draw();
+        requestAnimationFrame(loop);
+    })();
+}
+
 function initFxBackground() {
     hydrateIcons(document);
     const btn = document.getElementById('fx-toggle');
@@ -140,6 +207,8 @@ function initFxBackground() {
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         _fxOn = false;
     }
+    // 粒子层不依赖 THREE：无 three.js 也保留 zip 的微光粒子
+    _initDust();
     if (!window.THREE) {
         _fxOn = false;
         _fxApplyUi();

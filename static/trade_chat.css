@@ -1369,3 +1369,10 @@ body {
 }
 .app-top .clock b { font-weight: 400; color: var(--ink); }
 .main > .dd { height: 1px; background: var(--dd); flex: none; }
+/* zip 微光粒子层：在网格底之上、内容之下 */
+#dust { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+.main > .app-top, .main > .dd, .main > #guidance-bar,
+.main > .chat-view, .main > .panel-view,
+.main > .empty-state, .main > #onboarding-panel {
+    position: relative; z-index: 1;
+}
