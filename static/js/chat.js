@@ -708,6 +708,7 @@ function addMsg(role, content, files, save, convId, blocks) {
         if (blocksEl) body.appendChild(blocksEl);
     }
     // 助手消息：▶ TRADE · ASSISTANT // HH:MM 标题行（mockup s1）；用户消息走右侧气泡
+    let msgHead = null;
     if (role === 'assistant') {
         const head = document.createElement('div');
         head.className = 'msg-head';
@@ -715,6 +716,7 @@ function addMsg(role, content, files, save, convId, blocks) {
         const pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
         head.innerHTML = '<span class="mh-tag">▶ TRADE · ASSISTANT</span>' +
             '<span class="mh-rule"></span><span class="mh-t">' + pad2(nd.getHours()) + ':' + pad2(nd.getMinutes()) + '</span>';
+        msgHead = head;
         div.appendChild(head);
     }
     div.appendChild(body);
@@ -724,10 +726,10 @@ function addMsg(role, content, files, save, convId, blocks) {
         const copyBtn = document.createElement('button');
         copyBtn.textContent = '📋';
         copyBtn.title = currentLang==='en'?'Copy to clipboard':'复制到剪贴板';
-        // 下移到助手标题行之下（再下移 40px），并放大、加深，避免压时间且更显眼
-        copyBtn.style.cssText = 'position:absolute;top:70px;right:8px;background:#fff;border:1.5px solid var(--ink);border-radius:2px;padding:6px 10px;min-width:34px;font-size:16px;line-height:1;cursor:pointer;color:var(--ink);opacity:0.9;transition:opacity 0.15s;';
+        // 复制按钮：无外框，放进助手标题行右侧（跟随标题，短消息也不会下溢遮挡下一条）
+        copyBtn.style.cssText = 'background:none;border:none;padding:0 2px;font-size:15px;line-height:1;cursor:pointer;color:var(--muted);opacity:0.7;transition:opacity 0.15s;';
         copyBtn.onmouseenter = function() { this.style.opacity = '1'; };
-        copyBtn.onmouseleave = function() { this.style.opacity = '0.9'; };
+        copyBtn.onmouseleave = function() { this.style.opacity = '0.7'; };
         copyBtn.onclick = function(e) {
             e.stopPropagation();
             navigator.clipboard.writeText(content).then(function() {
@@ -736,8 +738,15 @@ function addMsg(role, content, files, save, convId, blocks) {
                 copyBtn.textContent = '❌'; setTimeout(function() { copyBtn.textContent = '📋'; }, 1500);
             });
         };
-        div.style.position = 'relative';
-        div.appendChild(copyBtn);
+        if (msgHead) {
+            msgHead.appendChild(copyBtn);
+        } else {
+            div.style.position = 'relative';
+            copyBtn.style.position = 'absolute';
+            copyBtn.style.top = '30px';
+            copyBtn.style.right = '8px';
+            div.appendChild(copyBtn);
+        }
 
         // 评分按钮 — 仅传入 convId 时显示（避免全局变量竞态）
         const convIdForRating = convId;
