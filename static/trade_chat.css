@@ -1302,6 +1302,22 @@ body {
 .csel-row button {
     border: none !important; background: transparent !important; color: var(--ink) !important;
 }
+/* 公司选择：外框只有一层虚线，内层 select / + 不再各自画框 */
+.company-select .csel-row {
+    border: 1px dashed var(--ink) !important; background: transparent !important;
+    padding: 0 4px 0 0 !important; gap: 2px !important;
+    height: 36px; align-items: center;
+}
+.company-select .csel-row select {
+    border: none !important; background: transparent !important;
+    box-shadow: none !important; height: 34px; padding: 0 8px !important;
+    font-size: 12.5px !important; color: var(--ink) !important;
+}
+.company-select .csel-row button {
+    border: none !important; background: transparent !important;
+    color: var(--ink) !important; width: 24px !important; height: 34px !important;
+    padding: 0 !important; box-shadow: none !important;
+}
 .sidebar-nav { padding: 0 !important; }
 .nav-section {
     margin: 0 16px !important; padding: 10px 0 8px !important;

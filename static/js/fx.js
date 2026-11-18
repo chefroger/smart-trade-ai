@@ -117,10 +117,10 @@ function _initDust() {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         const r = rng(97);
         ps = [];
-        for (let i = 0; i < 90; i++) {
+        for (let i = 0; i < 140; i++) {
             ps.push({
-                x: r() * w, y: r() * h, s: r() * 1.4 + .4, a: r() * .28 + .06,
-                vx: (r() - .5) * .12, vy: (r() - .5) * .12, red: i % 37 === 0,
+                x: r() * w, y: r() * h, s: r() * 2.0 + .6, a: r() * .45 + .12,
+                vx: (r() - .5) * .14, vy: (r() - .5) * .14, red: i % 23 === 0,
             });
         }
     }
@@ -134,10 +134,10 @@ function _initDust() {
                 ? 'rgba(210,40,30,' + (p.a + .15) + ')'
                 : 'rgba(12,13,14,' + p.a + ')';
             ctx.fill();
-            if (p.s > 1.5) {
+            if (p.s > 1.4) {
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, p.s * 3.2, 0, 6.283);
-                ctx.fillStyle = 'rgba(12,13,14,' + (p.a * .12) + ')';
+                ctx.fillStyle = 'rgba(12,13,14,' + (p.a * .18) + ')';
                 ctx.fill();
             }
         });
