@@ -1285,7 +1285,24 @@ body {
     background-image: none !important; font-family: var(--mono);
     font-size: 10px !important; padding: 2px 6px !important;
 }
-.sys-strip, .fx-toggle-wrap { display: none !important; }
+.sys-strip { display: none !important; }
+/* 动效开关保留可用：状态条隐藏，但开关移回侧栏（小号 mono 风格） */
+.fx-toggle-wrap {
+    display: flex !important; align-items: center; gap: 8px;
+    padding: 0; margin: 8px 0 10px;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+    color: var(--muted); text-transform: uppercase;
+}
+.fx-switch {
+    width: 28px !important; height: 16px !important;
+    background: rgba(12, 13, 14, .18) !important;
+}
+.fx-switch::after {
+    width: 12px !important; height: 12px !important;
+    top: 2px !important; left: 2px !important;
+}
+.fx-switch[aria-checked="true"] { background: var(--ink) !important; }
+.fx-switch[aria-checked="true"]::after { transform: translateX(12px) !important; }
 .company-select { margin: 0 16px 14px !important; }
 .co-lbl {
     font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;

@@ -74,10 +74,14 @@ function _fxLoop(ts) {
 
 function _fxApplyUi() {
     const canvas = document.getElementById('bg3d');
+    const dust = document.getElementById('dust');
     const btn = document.getElementById('fx-toggle');
     if (btn) btn.setAttribute('aria-checked', _fxOn ? 'true' : 'false');
     if (canvas) canvas.style.display = _fxOn ? 'block' : 'none';
+    // 粒子层跟随总开关：关闭后整层隐藏，不只是停止移动
+    if (dust) dust.style.display = _fxOn ? 'block' : 'none';
     try { localStorage.setItem('trade_fx', _fxOn ? '1' : '0'); } catch (_) {}
+    if (_fxOn && _dustStart) _dustStart();
     if (_fxOn && _fxRenderer && !_fxRaf) _fxRaf = requestAnimationFrame(_fxLoop);
 }
 
@@ -89,6 +93,8 @@ function setFxEnabled(on) {
 function toggleFx() {
     setFxEnabled(!_fxOn);
 }
+
+let _dustStart = null;
 
 function _initDust() {
     /** zip 微光粒子：固定种子、缓慢漂移；reduced-motion / 关闭特效时只画静态一帧。 */
@@ -147,15 +153,23 @@ function _initDust() {
     resize();
     draw();
     window.addEventListener('resize', resize);
-    if (!_fxOn) return;
-    (function loop() {
+    let running = false;
+    function loop() {
+        // 关闭总开关后停止重绘；重新打开由 _fxApplyUi 调 _dustStart 续跑
+        if (!_fxOn) { running = false; return; }
         ps.forEach(function (p) {
             p.x = (p.x + p.vx + w) % w;
             p.y = (p.y + p.vy + h) % h;
         });
         draw();
         requestAnimationFrame(loop);
-    })();
+    }
+    _dustStart = function () {
+        if (running) return;
+        running = true;
+        requestAnimationFrame(loop);
+    };
+    if (_fxOn) _dustStart();
 }
 
 function initFxBackground() {
@@ -211,7 +225,7 @@ function initFxBackground() {
     // 粒子层不依赖 THREE：无 three.js 也保留 zip 的微光粒子
     _initDust();
     if (!window.THREE) {
-        _fxOn = false;
+        // 没有 three.js 也保留 dust 粒子；开关只影响动效，不强制关掉粒子层
         _fxApplyUi();
         return;
     }
@@ -228,8 +242,7 @@ function initFxBackground() {
         _fxResize();
         window.addEventListener('resize', _fxResize);
     } catch (e) {
-        console.warn('three.js 背景初始化失败，已关闭特效', e);
-        _fxOn = false;
+        console.warn('three.js 背景初始化失败，已关闭 3D 特效', e);
         _fxRenderer = null;
     }
     _fxApplyUi();
