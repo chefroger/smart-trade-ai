@@ -435,7 +435,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "conversations", "orders", "order_items", "order_libraries",
                 "order_events",
                 "usage_ledger", "doc_extractions", "contacts",
-                "customer_facts", "customer_gifts",
+                "customer_facts", "customer_gifts", "inquiries",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -685,6 +685,28 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         report["tables"]["customer_gifts"] = {
             "inserted": gifts_inserted, "skipped": gifts_skipped,
             "contact_unmapped": gifts_unmapped,
+        }
+
+        # 询盘实体（旧包缺文件时 _load_table 已返回 []；映射不到客户则跳过）
+        inq_inserted = inq_skipped = 0
+        if _table_exists(conn, "inquiries"):
+            for row in source_tables["inquiries"]:
+                mapped_cust = customer_map.get(row.get("customer_id"))
+                if not mapped_cust:
+                    inq_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["customer_id"] = mapped_cust
+                try:
+                    _insert(conn, "inquiries", new_row)
+                    inq_inserted += 1
+                except Exception:
+                    inq_skipped += 1
+        else:
+            inq_skipped = len(source_tables["inquiries"])
+        report["tables"]["inquiries"] = {
+            "inserted": inq_inserted, "skipped": inq_skipped,
         }
 
         # 订单

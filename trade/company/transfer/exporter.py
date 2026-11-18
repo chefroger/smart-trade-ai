@@ -282,6 +282,12 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     "AND direction != '客户索要'",
                     (company_id,),
                 ),
+                # 询盘实体（N4）；缺表时空列表
+                "inquiries": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM inquiries WHERE company_id = ?",
+                    (company_id,),
+                ),
             }
             schema_version = _schema_version(conn)
         finally:

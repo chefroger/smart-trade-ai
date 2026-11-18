@@ -28,7 +28,7 @@ def _fresh_db(tmp_path: Path) -> Path:
                   "order_events",
                   "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
                   "mailboxes", "emails", "contacts",
-                  "customer_facts", "customer_gifts"):
+                  "customer_facts", "customer_gifts", "inquiries"):
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
     # 迁移 1/2 已应用 —— 否则 init_db 会写入，理应备份
@@ -42,6 +42,7 @@ def _fresh_db(tmp_path: Path) -> Path:
     conn.execute("ALTER TABLE customers ADD COLUMN stage TEXT DEFAULT '询盘'")
     conn.execute("ALTER TABLE customers ADD COLUMN next_follow_up_date TEXT DEFAULT ''")
     conn.execute("ALTER TABLE customers ADD COLUMN is_starred INTEGER DEFAULT 0")
+    conn.execute("ALTER TABLE customers ADD COLUMN stage_override TEXT")
     # emails 两列形态：缺 company_id/customer_id 同样会被 _needs_schema_work 判为待处理
     conn.execute("ALTER TABLE emails ADD COLUMN company_id INTEGER")
     conn.execute("ALTER TABLE emails ADD COLUMN customer_id INTEGER")
