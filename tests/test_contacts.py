@@ -225,6 +225,46 @@ def test_empty_primary_null(api_client):
     assert r.json()["primary"] is None
 
 
+def test_primary_note_from_follow_up_or_customer_note(test_db, company_id):
+    """O-1 / N3 §5：主联系人 note = follow_up_note or customers.note。"""
+    from trade import contacts, customer
+
+    # follow_up_note 优先
+    a = customer.create(
+        "Note A",
+        company_id=company_id,
+        contact="Alice",
+        note="客户备注应被盖住",
+        follow_up_note="下周跟进报价",
+    )
+    pa = contacts.build_primary_person(a)
+    assert pa is not None
+    assert pa["note"] == "下周跟进报价"
+    # overview people[0] 同源
+    ov = customer.get_overview(a["id"], company_id=company_id)
+    assert ov["people"][0]["note"] == "下周跟进报价"
+
+    # follow_up_note 空 → 取 customers.note
+    b = customer.create(
+        "Note B",
+        company_id=company_id,
+        contact="Bob",
+        note="只用客户备注",
+        follow_up_note="",
+    )
+    assert contacts.build_primary_person(b)["note"] == "只用客户备注"
+
+    # 两处都空 → 空串
+    c = customer.create(
+        "Note C",
+        company_id=company_id,
+        contact="Carol",
+        note="",
+        follow_up_note="",
+    )
+    assert contacts.build_primary_person(c)["note"] == ""
+
+
 def test_delete_customer_clears_contacts(api_client):
     client, token, cid = api_client
     from trade.database import get_connection

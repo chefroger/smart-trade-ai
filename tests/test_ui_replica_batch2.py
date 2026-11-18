@@ -121,13 +121,22 @@ class TestW7OrderLogistics:
             "customer_libraries", "conversations", "orders", "order_items",
             "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
             "mailboxes", "emails", "contacts",
-            "customer_facts", "customer_gifts",
+            "customer_facts", "customer_gifts", "inquiries",
         ):
             if table == "orders":
                 conn.execute(
                     "CREATE TABLE orders (id INTEGER PRIMARY KEY, company_id INTEGER, "
                     "customer_id INTEGER, product_name TEXT, status TEXT, "
                     "extra1 TEXT, extra2 TEXT, extra3 TEXT)"
+                )
+            elif table == "customers":
+                # N4：与 _needs_schema_work / _fresh_db 对齐，含 stage_override
+                conn.execute(
+                    "CREATE TABLE customers (id INTEGER PRIMARY KEY, "
+                    "extra1 TEXT, extra2 TEXT, extra3 TEXT, company_id INTEGER, "
+                    "customer_id INTEGER, stage TEXT, stage_override TEXT, "
+                    "next_follow_up_date TEXT, is_starred INTEGER, "
+                    "context TEXT, is_important INTEGER)"
                 )
             else:
                 conn.execute(
