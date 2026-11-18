@@ -1,6 +1,7 @@
 """订单 API 路由。"""
 
 import re
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -22,6 +23,29 @@ def _clean_currency(value) -> str | None:
         return None
     if not _CURRENCY_RE.fullmatch(s):
         raise HTTPException(status_code=400, detail="币种必须是 3 位大写字母（如 USD/EUR）。")
+    return s
+
+
+def _clean_shipped_at(value) -> str | None:
+    """出货日只收 YYYY-MM 或 YYYY-MM-DD；None 原样返回（可清空），脏值 400。"""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return ""
+    fmt = "%Y-%m" if len(s) == 7 else "%Y-%m-%d"
+    try:
+        datetime.strptime(s, fmt)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="出货日必须是 YYYY-MM 或 YYYY-MM-DD。",
+        ) from None
+    if len(s) not in (7, 10):
+        raise HTTPException(
+            status_code=400,
+            detail="出货日必须是 YYYY-MM 或 YYYY-MM-DD。",
+        )
     return s
 
 
@@ -150,7 +174,7 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
             port_of_loading=payload.port_of_loading or "",
             container=payload.container or "",
             lead_time_text=payload.lead_time_text or "",
-            shipped_at=payload.shipped_at or "",
+            shipped_at=_clean_shipped_at(payload.shipped_at) or "",
             items=items,
         )
 
@@ -185,7 +209,7 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
         port_of_loading=payload.port_of_loading or "",
         container=payload.container or "",
         lead_time_text=payload.lead_time_text or "",
-        shipped_at=payload.shipped_at or "",
+        shipped_at=_clean_shipped_at(payload.shipped_at) or "",
     )
 
 
@@ -220,6 +244,8 @@ def update_order(order_id: int, payload: OrderUpdate, cid: int = Depends(require
             changes.pop(key)
     if "currency" in changes:
         changes["currency"] = _clean_currency(changes.get("currency")) or ""
+    if "shipped_at" in changes:
+        changes["shipped_at"] = _clean_shipped_at(changes.get("shipped_at"))
     _reject_negatives(changes)
     if items is not None:
         if not items:

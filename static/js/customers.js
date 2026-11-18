@@ -1193,6 +1193,15 @@ function showOrderEditModal(oid, presetCid) {
         '</div>' +
         '<div class="form-row">' +
             '<div class="form-group"><label for="order-payment">'+t('order.payment')+'</label><input type="text" id="order-payment" placeholder="T/T 30/70"></div>' +
+            '<div class="form-group"><label for="order-incoterm">'+t('order.incoterm')+'</label><input type="text" id="order-incoterm" placeholder="FOB / CIF"></div>' +
+        '</div>' +
+        '<div class="form-row">' +
+            '<div class="form-group"><label for="order-port">'+t('order.port_loading')+'</label><input type="text" id="order-port" placeholder="'+t('order.port_ph')+'"></div>' +
+            '<div class="form-group"><label for="order-container">'+t('order.container')+'</label><input type="text" id="order-container" placeholder="1×20GP"></div>' +
+        '</div>' +
+        '<div class="form-row">' +
+            '<div class="form-group"><label for="order-lead-time">'+t('order.lead_time')+'</label><input type="text" id="order-lead-time" placeholder="'+t('order.lead_time_ph')+'"></div>' +
+            '<div class="form-group"><label for="order-shipped-at">'+t('order.shipped_at')+'</label><input type="text" id="order-shipped-at" placeholder="'+t('order.shipped_ph')+'"></div>' +
         '</div>' +
         '<div class="form-group">' +
             '<label>'+t('order.items')+'</label>' +
@@ -1222,6 +1231,11 @@ function showOrderEditModal(oid, presetCid) {
             $('order-status').value = o.status||'报价中';
             $('order-delivery').value = (o.delivery_date||'').slice(0,10);
             $('order-payment').value = o.payment_terms||'';
+            $('order-incoterm').value = o.incoterm||'';
+            $('order-port').value = o.port_of_loading||'';
+            $('order-container').value = o.container||'';
+            $('order-lead-time').value = o.lead_time_text||'';
+            $('order-shipped-at').value = o.shipped_at||'';
             $('order-notes').value = o.notes||'';
             const items = (o.items && o.items.length)
                 ? o.items
@@ -1361,6 +1375,11 @@ async function saveOrder() {
         status: $('order-status').value,
         delivery_date: $('order-delivery').value,
         payment_terms: $('order-payment').value.trim(),
+        incoterm: $('order-incoterm').value.trim(),
+        port_of_loading: $('order-port').value.trim(),
+        container: $('order-container').value.trim(),
+        lead_time_text: $('order-lead-time').value.trim(),
+        shipped_at: $('order-shipped-at').value.trim(),
         notes: $('order-notes').value.trim(),
     };
     const saved = editId

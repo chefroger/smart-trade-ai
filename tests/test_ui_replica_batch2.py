@@ -274,3 +274,19 @@ class TestW8Timeline:
         )
         assert r.status_code == 200
         assert isinstance(r.json(), list)
+
+
+def test_clean_shipped_at_accepts_month_or_day():
+    """出货日只收 YYYY-MM / YYYY-MM-DD，脏值 400（P2-5）。"""
+    from fastapi import HTTPException
+
+    from trade.api.orders import _clean_shipped_at
+
+    assert _clean_shipped_at(None) is None
+    assert _clean_shipped_at("") == ""
+    assert _clean_shipped_at("2026-12") == "2026-12"
+    assert _clean_shipped_at("2026-12-01") == "2026-12-01"
+    for bad in ("2026/12/01", "2026-13", "2026-12-32", "2026-12-1", "abc"):
+        with pytest.raises(HTTPException) as exc:
+            _clean_shipped_at(bad)
+        assert exc.value.status_code == 400
