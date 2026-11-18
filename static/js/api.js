@@ -71,7 +71,9 @@ function _buildApiOpts(method, body, token, companyId, extraHeaders) {
 }
 // #endregion api-opts
 
-async function api(method, path, body, extraHeaders) {
+async function api(method, path, body, extraHeaders, options) {
+    // options.silent：轮询等后台刷新失败时不弹 toast（仍返回 null，调用方自己决定）
+    const silent = !!(options && options.silent);
     const opts = _buildApiOpts(method, body, TOKEN, currentCompanyId, extraHeaders);
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 120000);
@@ -86,19 +88,19 @@ async function api(method, path, body, extraHeaders) {
                 // 自动恢复一次：重取 token / 重载公司
                 const recovered = await recoverAuth(method, path, body);
                 if (recovered !== null) return recovered;
-                toast(t('toast.no_company'));
+                if (!silent) toast(t('toast.no_company'));
             }
-            else if (r.status === 402) showLicenseExpired(msg);
-            else if (r.status === 404) toast(msg);
-            else if (r.status === 409) toast(msg);
+            else if (r.status === 402) { if (!silent) showLicenseExpired(msg); }
+            else if (r.status === 404) { if (!silent) toast(msg); }
+            else if (r.status === 409) { if (!silent) toast(msg); }
             // 5xx / 429 是「用户需要看清原因」的失败，常驻显示
-            else toast(msg, {sticky: r.status >= 500 || r.status === 429});
+            else if (!silent) toast(msg, {sticky: r.status >= 500 || r.status === 429});
             return null;
         }
         return r.json();
     } catch(e) {
         clearTimeout(tid);
-        if (e.name === 'AbortError') { toast(t('toast.request_timeout')); return null; }
+        if (e.name === 'AbortError') { if (!silent) toast(t('toast.request_timeout')); return null; }
         throw e;
     }
 }

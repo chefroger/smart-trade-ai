@@ -65,10 +65,12 @@ function renderChatViewInto(container, ctx, name) {
     }
 }
 
-async function loadTodayBrief() {
+async function loadTodayBrief(silent) {
     /** 拉取 /brief/today，渲染 KPI 卡并刷新侧栏逾期角标。 */
     if (!currentCompanyId) return;
-    const data = await api('GET', '/api/trade/brief/today');
+    const data = await api('GET', '/api/trade/brief/today', null, undefined, {
+        silent: !!silent,
+    });
     if (!data) return;
     _updateDailyBriefBadge(data.overdue_followups);
     if (currentChatContext !== 'daily' || !currentChatContainer) return;
@@ -278,7 +280,9 @@ async function doUpdateSystem() {
 
 async function loadCronStatus(isPoll = false) {
     if (!currentCompanyId) return;
-    const data = await api('GET', '/api/trade/cron/today');
+    const data = await api('GET', '/api/trade/cron/today', null, undefined, {
+        silent: isPoll,
+    });
     if (!data) return;
     const {completed, pending, current_time} = data;
 
@@ -293,7 +297,7 @@ async function loadCronStatus(isPoll = false) {
     }
 
     // 顺带刷新简报 KPI / 侧栏逾期角标（失败静默）
-    loadTodayBrief().catch(function () {});
+    loadTodayBrief(isPoll).catch(function () {});
 
     // 在今日简报视图更新 cron 面板；在任意聊天视图追加 cron 输出
     const ct = currentChatContainer;

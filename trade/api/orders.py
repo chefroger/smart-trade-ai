@@ -119,9 +119,12 @@ def _reject_negative_items(items: list[dict]) -> None:
 def list_orders(
     cid: int = Depends(require_company),
     status: str | None = Query(None, description="按状态过滤"),
-    limit: int = Query(200, ge=1, le=500, description="条数上限，默认 200"),
+    limit: int = Query(200, description="条数上限，默认 200（1–500）"),
 ):
     """列出当前公司的订单（可按 status 过滤）。"""
+    # 走 400 而不是 FastAPI 的 422：前端 toast 只认 detail 字符串
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit 必须在 1–500 之间。")
     return order_module.list_by_company(cid, limit=limit, status=status)
 
 

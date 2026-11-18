@@ -36,7 +36,7 @@ test('守卫提示不再弹 toast（2026-10-29：默认关闭，警告无用）'
 });
 
 test('api() 支持额外 header', () => {
-  assert.match(SRC, /async function api\(method, path, body, extraHeaders\)/);
+  assert.match(SRC, /async function api\(method, path, body, extraHeaders(?:, options)?\)/);
   assert.match(SRC, /Object\.assign\(opts\.headers, extraHeaders\)/);
 });
 

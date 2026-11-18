@@ -290,3 +290,24 @@ def test_clean_shipped_at_accepts_month_or_day():
         with pytest.raises(HTTPException) as exc:
             _clean_shipped_at(bad)
         assert exc.value.status_code == 400
+
+
+def test_orders_limit_out_of_range_is_400(test_db, company_id):
+    """limit=0/501 走 400 + 中文字符串，不是 FastAPI 422（P2-6）。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from trade.api import deps, router
+
+    token = "batch2-limit"
+    deps.set_session_token(token)
+    deps._ACTIVE_COMPANY.pop(token, None)
+    app = FastAPI()
+    app.include_router(router, prefix="/api/trade")
+    client = TestClient(app)
+    h = {"X-Hermes-Session-Token": token, "X-Company-ID": str(company_id)}
+    for bad in (0, -1, 501):
+        r = client.get(f"/api/trade/orders?limit={bad}", headers=h)
+        assert r.status_code == 400, (bad, r.text)
+        assert isinstance(r.json()["detail"], str)
+    assert client.get("/api/trade/orders?limit=1", headers=h).status_code == 200

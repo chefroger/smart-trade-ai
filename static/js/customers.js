@@ -653,7 +653,8 @@ async function openCustomerWall(cid) {
         keyChats.forEach(function (conv) {
             const talkTitle = (conv.title || '').trim() || (conv.query || '').slice(0, 160);
             const talkSummary = (conv.summary || '').trim() || (conv.response || '').slice(0, 120);
-            bodyHtml += '<article class="wcard"' + delay() + ' data-conv-id="' + esc(String(conv.id || '')) + '">' +
+            bodyHtml += '<article class="wcard"' + delay() + ' data-conv-id="' + esc(String(conv.id || '')) +
+                '" data-conv-summary="' + esc(conv.summary || '') + '">' +
                 '<div class="wc-top"><span class="tagchip dim">' +
                 esc(conv.context || 'chat') + '</span><span class="muted">' + esc((conv.created_at || '').slice(0, 16)) +
                 '</span>' + (conv.is_important ? '<span class="tagchip" style="margin-left:auto">' + (currentLang==='en'?'Important':'重要') + '</span>' : '') +
@@ -766,8 +767,8 @@ async function openCustomerWall(cid) {
             const convId = card && card.getAttribute('data-conv-id');
             if (!convId) return;
             const curTitle = el.textContent || '';
-            const sumEl = card.querySelector('.wall-talk-summary');
-            const curSummary = sumEl ? (sumEl.textContent || '') : '';
+            // 摘要默认值取库里真实 summary，不取卡片兜底显示的 AI 回复片段
+            const curSummary = card ? (card.getAttribute('data-conv-summary') || '') : '';
             const title = window.prompt(
                 currentLang === 'en' ? 'Talk title (max 60)' : '对话标题（最多 60 字）',
                 curTitle
