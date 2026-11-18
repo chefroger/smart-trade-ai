@@ -19,6 +19,7 @@ from trade.api.copilot import router as copilot_router
 from trade.api.cron import router as cron_router
 from trade.api.customers import router as customers_router
 from trade.api.deps import opt_company, require_company, require_session
+from trade.api.inquiries import router as inquiries_router
 from trade.api.libraries import router as libraries_router
 from trade.api.mailboxes import router as mailboxes_router
 from trade.api.memory import router as memory_router
@@ -96,6 +97,7 @@ router.include_router(libraries_router)
 router.include_router(customers_router)
 router.include_router(profile_router)
 router.include_router(contacts_router)
+router.include_router(inquiries_router)
 router.include_router(mailboxes_router)
 router.include_router(conversations_router)
 router.include_router(chat_router)
