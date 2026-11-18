@@ -107,6 +107,17 @@ function _parseExtra1(c) { try { return JSON.parse(c.extra1||'{}'); } catch(e) {
 function _parseExtra2(c) { try { return JSON.parse(c.extra2||'{}'); } catch(e) { return {}; } }
 function _parseExtra3(c) { try { return JSON.parse(c.extra3||'{}'); } catch(e) { return {}; } }
 
+// #region wall-followup-note
+// 客户级跟进备注：只挂在主联系人卡片，单独一行并标明「客户级」，不混入人物 note
+// （N3 终稿 §2 + 2026-11-18 口径 C：人物 note 保持空，客户级字段单独展示）
+function _primaryFollowUpNoteHtml(note, isPrimary) {
+    const text = String(note || '').trim();
+    if (!isPrimary || !text) return '';
+    return '<p class="muted wall-followup-note" title="' + esc(t('cust.followup_note_hint')) + '">' +
+        '<span class="tagchip dim">' + esc(t('cust.followup_note')) + '</span> ' + esc(text) + '</p>';
+}
+// #endregion wall-followup-note
+
 /** 下次跟进日：读 CRM 实列 next_follow_up_date（YYYY-MM-DD）。 */
 function _customerFollowUpDate(c) {
     const d = String(c.next_follow_up_date || '').trim();
@@ -434,6 +445,7 @@ async function openCustomerWall(cid) {
     editingCustomerData = c;
 
     const e1 = _parseExtra1(c);
+    const e2 = _parseExtra2(c);
     const stage = _customerStage(c);
     const follow = _customerFollowUpDate(c);
     const overdue = _isFollowUpOverdue(c);
@@ -506,6 +518,7 @@ async function openCustomerWall(cid) {
             '</span><span><span class="wc-name">' + esc(p.name) + '</span><br /><span class="wc-role">' + esc(role) +
             '</span></span>' + badge + '</div>' +
             (p.note ? '<p class="muted">' + esc(p.note) + '</p>' : '') +
+            _primaryFollowUpNoteHtml(e2.follow_up_note, isPrimary) +
             (p.email ? '<p class="mono">' + esc(p.email) + '</p>' : '') +
             ([p.phone, p.whatsapp, p.wechat].filter(Boolean).length
                 ? '<p class="muted">' + esc([p.phone, p.whatsapp ? 'WA '+p.whatsapp : '', p.wechat ? 'WeChat '+p.wechat : ''].filter(Boolean).join(' · ')) + '</p>'
