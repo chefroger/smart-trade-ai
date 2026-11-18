@@ -225,26 +225,26 @@ def test_empty_primary_null(api_client):
     assert r.json()["primary"] is None
 
 
-def test_primary_note_from_follow_up_or_customer_note(test_db, company_id):
-    """O-1 / N3 §5：主联系人 note = follow_up_note or customers.note。"""
+def test_primary_note_stays_empty_per_n3_final(test_db, company_id):
+    """N3 终稿 §2：主联系人 note 不拼客户级 note / follow_up_note（只读拼装，不入 contacts）。"""
     from trade import contacts, customer
 
-    # follow_up_note 优先
+    # 客户侧两处都有值，主联系人卡片的 note 仍为空（客户级字段只在客户卡显示）
     a = customer.create(
         "Note A",
         company_id=company_id,
         contact="Alice",
-        note="客户备注应被盖住",
+        note="客户备注",
         follow_up_note="下周跟进报价",
     )
     pa = contacts.build_primary_person(a)
     assert pa is not None
-    assert pa["note"] == "下周跟进报价"
+    assert pa["note"] == ""
     # overview people[0] 同源
     ov = customer.get_overview(a["id"], company_id=company_id)
-    assert ov["people"][0]["note"] == "下周跟进报价"
+    assert ov["people"][0]["note"] == ""
 
-    # follow_up_note 空 → 取 customers.note
+    # 只有 customers.note 时同样为空
     b = customer.create(
         "Note B",
         company_id=company_id,
@@ -252,17 +252,7 @@ def test_primary_note_from_follow_up_or_customer_note(test_db, company_id):
         note="只用客户备注",
         follow_up_note="",
     )
-    assert contacts.build_primary_person(b)["note"] == "只用客户备注"
-
-    # 两处都空 → 空串
-    c = customer.create(
-        "Note C",
-        company_id=company_id,
-        contact="Carol",
-        note="",
-        follow_up_note="",
-    )
-    assert contacts.build_primary_person(c)["note"] == ""
+    assert contacts.build_primary_person(b)["note"] == ""
 
 
 def test_delete_customer_clears_contacts(api_client):

@@ -147,8 +147,7 @@ def build_primary_person(cust: dict) -> dict | None:
     responsibility = _trim(e2.get("responsibility"))
 
     display_name = name if name else "未命名联系人"
-    # N3 §5 / O-1：主联系人备注优先 follow_up_note，否则 customers.note；两空仍为 ""
-    note = _trim(e2.get("follow_up_note")) or _trim(cust.get("note"))
+    # N3 终稿 §2：主联系人是只读拼装，备注不拼客户级 note / follow_up_note（客户级字段只在客户卡显示）
     return {
         "id": None,
         "name": display_name,
@@ -160,7 +159,7 @@ def build_primary_person(cust: dict) -> dict | None:
         "phone": phone,
         "whatsapp": whatsapp,
         "wechat": wechat,
-        "note": note,
+        "note": "",
         "is_primary": True,
         "backup_email": backup,
     }
