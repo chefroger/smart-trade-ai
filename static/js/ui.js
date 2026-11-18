@@ -211,14 +211,15 @@ function _replaceMainContent(html) {
     /** 替换主区内容，但保留统一外壳顶栏（zip s1–s4）。 */
     const main = $('main-content');
     for (const child of Array.from(main.children)) {
-        if (child.id === 'dust' || child.id === 'app-top' || child.id === 'app-top-dd' || child.id === 'customer-wall') continue;
+        if (child.id === 'dust' || child.id === 'app-top' || child.id === 'app-top-dd' || child.id === 'customer-wall' || child.id === 'customer-profile') continue;
         child.remove();
     }
     main.insertAdjacentHTML('beforeend', html);
 }
 
 function navToView(view, chatCtx, chatName) {
-    // 切视图时关闭客户详情页内视图，避免 body.wall-open 把新视图隐藏
+    // 切视图时关闭客户详情/画像页内视图，避免 body.wall-open / profile-open 把新视图隐藏
+    if (typeof closeCustomerProfile === 'function') closeCustomerProfile();
     if (typeof closeCustomerWall === 'function') closeCustomerWall();
     // 新手引导进行中时阻止导航
     if (!isOnboardingCompleted() && document.getElementById('onboarding-panel')) {
@@ -279,7 +280,7 @@ function navToView(view, chatCtx, chatName) {
     const cachedIds = new Set(Object.keys(viewCache).map(k => 'view-' + k));
     for (const child of Array.from(main.children)) {
         // 全局横幅与统一外壳顶栏不随视图切换删除
-        if (child.id === 'guidance-bar' || child.id === 'dust' || child.id === 'app-top' || child.id === 'app-top-dd' || child.id === 'customer-wall') continue;
+        if (child.id === 'guidance-bar' || child.id === 'dust' || child.id === 'app-top' || child.id === 'app-top-dd' || child.id === 'customer-wall' || child.id === 'customer-profile') continue;
         if (!cachedIds.has(child.id)) {
             child.remove();
         }

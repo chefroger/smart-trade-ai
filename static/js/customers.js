@@ -2419,6 +2419,15 @@ function closeCustomerProfile() {
     panel.classList.remove('open');
     panel.setAttribute('inert', '');
     panel.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('profile-open');
+    // 恢复打开前的顶栏标题
+    const tt = document.getElementById('app-top-title');
+    const tl = document.getElementById('app-top-lbl');
+    if (tt && tl && panel._prevTop) {
+        tt.textContent = panel._prevTop.t;
+        tl.textContent = panel._prevTop.l;
+        panel._prevTop = null;
+    }
     if (_profileEscHandler) {
         document.removeEventListener('keydown', _profileEscHandler);
         _profileEscHandler = null;
@@ -2448,15 +2457,31 @@ async function openCustomerProfile(cid) {
     let seq = 0;
     function delay() { return ' style="animation-delay:' + ((seq++) * 0.05).toFixed(2) + 's"'; }
 
-    // people-strip
-    let strip = '<div class="people-strip">';
+    // people-strip（s4：人物卡，带 ASSET·职能 标签 / 职务 / 邮箱电话 / 编辑删除）
+    let strip = '<div class="profile-people">';
     people.forEach(function (p) {
+        const isPrimary = !!p.is_primary || p.id == null;
         const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
-        strip += '<div class="ps-card"><span class="avatar">' + esc(ini) + '</span>' +
-            '<div><b>' + esc(p.name || '') + '</b><div class="muted">' +
-            esc(p.title || p.function || '') + '</div></div></div>';
+        const role = [(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ') || p.function || '';
+        const fn = p.function || (isPrimary ? '决策人' : '其他');
+        const acts = isPrimary
+            ? '<a href="#" class="lnk pf-edit-primary">' + t('contacts.edit') + '</a>'
+            : ('<a href="#" class="lnk pf-edit-contact" data-id="' + esc(String(p.id)) + '">' + t('contacts.edit') + '</a>' +
+                '<a href="#" class="lnk pf-del-contact" data-id="' + esc(String(p.id)) + '" data-name="' + esc(p.name || '') + '">' + t('contacts.delete') + '</a>');
+        const kv = [];
+        if (p.email) kv.push('<span class="k">EMAIL</span><span class="v mono">' + esc(p.email) + '</span>');
+        const phone = [p.phone, p.whatsapp ? 'WA ' + p.whatsapp : '', p.wechat ? 'WeChat ' + p.wechat : ''].filter(Boolean).join(' · ');
+        if (phone) kv.push('<span class="k">PHONE</span><span class="v mono">' + esc(phone) + '</span>');
+        strip += '<div class="pf-card" data-contact-id="' + (p.id != null ? esc(String(p.id)) : '') + '">' +
+            '<span class="p-tag' + (isPrimary ? '' : ' o') + '">ASSET · ' + esc(fn) + '</span>' +
+            '<div class="row1"><span class="avatar">' + esc(ini) + '</span><div>' +
+            '<div class="nm">' + esc(p.name || '') + (isPrimary ? '<span class="zhu">主</span>' : '') + '</div>' +
+            '<div class="role">' + esc(role) + '</div></div>' +
+            '<span class="p-acts">' + acts + '</span></div>' +
+            (kv.length ? '<div class="kv">' + kv.join('') + '</div>' : '') +
+            '</div>';
     });
-    if (!people.length) strip += '<div class="muted">' + t('contacts.empty') + '</div>';
+    if (!people.length) strip += '<div class="wall-empty">' + t('contacts.empty') + '</div>';
     strip += '</div>';
 
     const left = renderProfileCircleSection(cid, factsPayload, people, delay, mailboxBound);
@@ -2464,7 +2489,7 @@ async function openCustomerProfile(cid) {
 
     panel.innerHTML =
         '<div class="wall-head">' +
-        '<button type="button" class="wall-back" id="profile-back">' + t('profile.back_wall') + '</button>' +
+        '<button type="button" class="wall-back" id="profile-back">' + t('profile.back_wall') + ' <kbd>ESC</kbd></button>' +
         '<div class="wall-title bracket"><div><h3>' + esc(c.name) + '</h3>' +
         '<div class="facts2">' +
         (e1.tier ? '<span class="tagchip">TIER ' + esc(String(e1.tier)) + '</span>' : '') +
@@ -2481,6 +2506,38 @@ async function openCustomerProfile(cid) {
     panel.classList.add('open');
     panel.removeAttribute('inert');
     panel.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('profile-open');
+    const _pt = document.getElementById('app-top-title');
+    const _pl = document.getElementById('app-top-lbl');
+    if (_pt && _pl) {
+        if (!panel._prevTop) panel._prevTop = { t: _pt.textContent, l: _pl.textContent };
+        _pt.textContent = currentLang === 'en' ? 'Profile' : '客户画像';
+        _pl.textContent = '/ ASSET DOSSIER';
+    }
+    // 画像页人物卡：编辑主联系人 / 编辑附加联系人 / 删除附加联系人
+    panel.querySelectorAll('.pf-edit-primary').forEach(function (a) {
+        a.addEventListener('click', function (e) { e.preventDefault(); showCustomerEditModal(cid); });
+    });
+    panel.querySelectorAll('.pf-edit-contact').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+            e.preventDefault();
+            const id = parseInt(a.getAttribute('data-id'), 10);
+            const person = people.find(function (x) { return x.id === id; });
+            _showContactModal(cid, person || { id: id });
+        });
+    });
+    panel.querySelectorAll('.pf-del-contact').forEach(function (a) {
+        a.addEventListener('click', async function (e) {
+            e.preventDefault();
+            const id = parseInt(a.getAttribute('data-id'), 10);
+            const nm = a.getAttribute('data-name') || '';
+            if (!confirm(t('contacts.delete_confirm').replace('{name}', nm))) return;
+            const r = await api('DELETE', '/api/trade/customers/' + cid + '/contacts/' + id);
+            if (!r || !r.ok) return;
+            toast(t('contacts.deleted'));
+            openCustomerProfile(cid);
+        });
+    });
     $('profile-back')?.addEventListener('click', closeCustomerProfile);
     _bindProfileCardActions(cid, panel, mailboxBound, function () {
         return _refreshProfileSections(cid, panel, people, mailboxBound);

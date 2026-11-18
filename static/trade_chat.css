@@ -1681,3 +1681,34 @@ body:has(#main-content > .empty-state) .app-rail { display: none; }
 .cust-foot .foot-pager { display: flex; gap: 4px; }
 .cust-foot .pg { appearance: none; border: 1px solid var(--line); background: transparent; width: 24px; height: 24px; font-size: 11px; cursor: pointer; color: var(--ink); }
 .cust-foot .pg.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* ═════ 画面 4：客户画像（页内视图）═════ */
+#customer-profile.profile-wall {
+    position: relative; z-index: 6; display: none; flex-direction: column;
+    flex: 1; min-height: 0; background: var(--bg); color: var(--ink);
+}
+#customer-profile.open { display: flex; }
+body.profile-open #customer-wall { display: none !important; }
+body.profile-open #app-rail { display: none; }
+body.profile-open #main-content > .chat-view,
+body.profile-open #main-content > .panel-view,
+body.profile-open #main-content > .empty-state { display: none !important; }
+/* 人物卡条 */
+#customer-profile .profile-people { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+#customer-profile .pf-card { position: relative; border: 1px solid var(--line); padding: 10px 12px; }
+#customer-profile .pf-card .p-tag { position: absolute; top: -8px; left: 10px; background: var(--ink); color: #fff; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .12em; padding: 0 6px; }
+#customer-profile .pf-card .p-tag.o { background: var(--panel); color: var(--ink); border: 1px solid var(--ink); }
+#customer-profile .pf-card .row1 { display: flex; align-items: center; gap: 10px; }
+#customer-profile .pf-card .avatar { width: 34px; height: 34px; border: 1px solid var(--ink); display: grid; place-items: center; font-family: var(--font-mono); font-size: 12px; flex: none; background: #fff; }
+#customer-profile .pf-card .nm { font-weight: 600; font-size: 13.5px; display: flex; align-items: center; }
+#customer-profile .pf-card .zhu { display: inline-grid; place-items: center; min-width: 15px; height: 14px; padding: 0 4px; margin-left: 6px; background: var(--ink); color: #fff; font-family: var(--font-mono); font-size: 9px; }
+#customer-profile .pf-card .role { font-size: 11.5px; color: var(--muted); }
+#customer-profile .pf-card .p-acts { margin-left: auto; display: flex; gap: 8px; flex: none; }
+#customer-profile .pf-card .kv { display: grid; grid-template-columns: 48px 1fr; gap: 2px 8px; margin-top: 6px; font-size: 11.5px; }
+#customer-profile .pf-card .kv .k { color: var(--muted); font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em; }
+#customer-profile .pf-card .kv .v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#customer-profile .lnk { font-size: 11.5px; color: var(--muted); border-bottom: 1px dashed var(--line-strong); cursor: pointer; text-decoration: none; }
+#customer-profile .lnk:hover { color: var(--ink); }
+@media (max-width: 1100px) {
+    #customer-profile .profile-people { grid-template-columns: 1fr; }
+}
