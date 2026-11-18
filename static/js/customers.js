@@ -963,7 +963,9 @@ async function showCustomerDetail(cid) {
             <h3>👤 ${esc(c.name)}</h3>
             <button class="slide-panel-close" onclick="closeCustomerDetail()">×</button>
         </div>
-        <div class="panel-section">
+        <div class="slide-panel-content">
+        <div class="slide-panel-main">
+        <div class="panel-section panel-basic">
             <div class="panel-section-title">${t('customer.detail.basic')}</div>
             <div class="panel-field-row">
                 <div class="panel-field"><label for="detail-name">${t('cust.field.name')}</label><input type="text" value="${esc(c.name)}" id="detail-name"></div>
@@ -1008,7 +1010,9 @@ async function showCustomerDetail(cid) {
             <div class="panel-field"><label for="detail-follow-up-note">${t('cust.field.follow')}</label><textarea id="detail-follow-up-note">${esc(followUpNote)}</textarea></div>
             <button class="btn btn-primary" onclick="saveCustomerDetail(${c.id})" style="width:100%;">${t('customer.detail.save')}</button>
         </div>
-        <div class="panel-section">
+        </div>
+        <div class="slide-panel-side">
+        <div class="panel-section panel-libs">
             <div class="panel-section-title">${t('customer.detail.libs')} (${libs.length})</div>
             <div class="panel-linked-libs" id="detail-libs">
                 ${libs.map(l => `
@@ -1024,11 +1028,11 @@ async function showCustomerDetail(cid) {
                 <button class="btn-xs primary" onclick="linkCustomerLib(${c.id})">${t('customer.detail.link_btn')}</button>
             </div>
         </div>
-        <div class="panel-section">
+        <div class="panel-section panel-orders">
             <div class="panel-section-title">${t('customer.detail.orders')} (<span id="detail-order-count">-</span>) <button class="btn-xs" style="margin-left:8px;" onclick="showOrderModal(${c.id})">${t('customer.detail.add_order')}</button></div>
             <div id="detail-orders"><div class="loading-row"><div class="spinner"></div>${t('misc.loading_orders')}</div></div>
         </div>
-        <div class="panel-section">
+        <div class="panel-section panel-convs">
             <div class="panel-section-title">${t('customer.detail.convs')} (${recentConvs.length})</div>
             <div id="detail-convs">
                 ${recentConvs.length ? recentConvs.map(conv => `
@@ -1037,6 +1041,8 @@ async function showCustomerDetail(cid) {
                     <div class="conv-query">${esc((conv.query||'').slice(0,80))}</div>
                 </div>`).join('') : '<p style="color:var(--text-muted);font-size:12px;">'+t('customer.detail.no_convs')+'</p>'}
             </div>
+        </div>
+        </div>
         </div>
         <button class="btn btn-primary" style="width:100%;" data-chat-cust-id="${c.id}" data-chat-cust-name="${esc(c.name)}">${t('customer.detail.chat_btn')}</button>
     </div>`;

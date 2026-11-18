@@ -374,20 +374,45 @@ body {
 .btn-xs.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
 .btn-xs.primary:hover { background: var(--primary-dark); }
 
-/* ── Slide-over Panel (Customer Detail) ────────────────────────────── */
+/* ── 客户编辑大版面（左侧完整表单 + 右侧关联信息）────────────────────── */
 .slide-panel-backdrop {
-    position: fixed; inset: 0; background: rgba(15,23,42,0.4); z-index: 100;
-    display: flex; justify-content: flex-end; animation: fadeIn 0.2s var(--ease);
+    position: fixed; inset: 0; background: rgba(15,23,42,0.45); z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+    animation: fadeIn 0.2s var(--ease);
 }
 @keyframes fadeIn { from { opacity: 0; } }
 .slide-panel {
-    width: 480px; max-width: 90vw; background: var(--bg-card); height: 100%;
-    overflow-y: auto; padding: 24px; box-shadow: var(--shadow-xl);
-    animation: slideRight 0.25s var(--ease-out);
+    width: min(1180px, calc(100vw - 48px));
+    height: min(92vh, 960px);
+    background: var(--bg-card); border: 1px solid var(--line-strong);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-xl);
+    padding: 0 28px 28px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 18px;
+    animation: panelIn 0.22s var(--ease-out);
 }
-@keyframes slideRight { from { transform: translateX(40px); opacity: 0; } }
-.slide-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+@keyframes panelIn { from { transform: scale(0.985) translateY(6px); opacity: 0; } }
+.slide-panel-header {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 0; padding: 18px 0 14px;
+    background: var(--bg-card); border-bottom: 1px solid var(--line);
+}
 .slide-panel-header h3 { font-size: 16px; font-weight: 600; }
+.slide-panel-content {
+    display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
+    gap: 28px; align-items: start;
+}
+.slide-panel-main, .slide-panel-side { min-width: 0; }
+.slide-panel-side { display: flex; flex-direction: column; gap: 20px; }
+.slide-panel > [data-chat-cust-id] { margin-top: 4px; }
+@media (max-width: 980px) {
+    .slide-panel-backdrop { padding: 0; }
+    .slide-panel {
+        width: 100%; height: 100%; border: none; border-radius: 0;
+        padding: 0 16px 24px;
+    }
+    .slide-panel-content { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+}
 .slide-panel-close { width: 32px; height: 32px; border-radius: 50%; border: none; background: var(--bg-input); cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s var(--ease); }
 .slide-panel-close:hover { background: var(--border); transform: rotate(90deg); }
 .panel-section { margin-bottom: 20px; }
