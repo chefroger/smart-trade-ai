@@ -134,8 +134,7 @@
 
 </aside>
 
-<!-- 客户详情卡片墙（S-01）：点客户名展开，Esc / 返回关闭 -->
-<div id="customer-wall" class="wall" inert aria-hidden="true"></div>
+<!-- 客户画像（S-04）：独立遮盖层（后续 1:1 改造） -->
 <div id="customer-profile" class="wall profile-wall" inert aria-hidden="true"></div>
 
 <!-- ═════════════════════ MAIN ═════════════════════ -->
@@ -149,6 +148,8 @@
         <div class="clock"><span id="app-top-date">--</span><b id="app-top-time">--:--:--</b></div>
     </header>
     <div class="dd" id="app-top-dd"></div>
+    <!-- 客户详情卡片墙（S-03）：页内视图，保留侧栏+顶栏；Esc / 返回关闭 -->
+    <div id="customer-wall" class="wall" inert aria-hidden="true"></div>
     <!-- filled dynamically by navToView() -->
 </main>
 

@@ -411,6 +411,20 @@ function closeCustomerWall() {
     wall.classList.remove('open');
     wall.setAttribute('inert', '');
     wall.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('wall-open');
+    // 页内视图返回：恢复打开前的顶栏标题（不依赖当前视图是哪一个）
+    const tt = document.getElementById('app-top-title');
+    const tl = document.getElementById('app-top-lbl');
+    if (tt && tl) {
+        if (wall._prevTop) {
+            tt.textContent = wall._prevTop.t;
+            tl.textContent = wall._prevTop.l;
+            wall._prevTop = null;
+        } else if (typeof currentView !== 'undefined' && currentView === 'customers') {
+            tt.textContent = currentLang === 'en' ? 'Customers' : '客户管理';
+            tl.textContent = '/ CUSTOMERS';
+        }
+    }
 }
 
 async function openCustomerWall(cid) {
@@ -490,75 +504,69 @@ async function openCustomerWall(cid) {
             : ('THREAT · 已逾期 ' + overdueDays + ' 天'))
         : (e1.tier ? ('TIER ' + e1.tier) : 'POI');
 
-    let bodyHtml = '';
-    bodyHtml += secHead(currentLang === 'en' ? 'People' : '关联人物', 'PEOPLE // ' + people.length) +
-        '<div style="margin:-4px 0 8px;"><button type="button" class="btn-xs" id="wall-add-contact">' +
-        t('contacts.add') + '</button></div><div class="wgrid">';
-    if (!people.length) {
-        bodyHtml += '<div class="wall-empty"' + delay() + '>' + t('contacts.empty') + '</div>';
-    }
-    people.forEach(function (p) {
-        const isPrimary = !!p.is_primary || p.id == null;
-        const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
-        // 主卡与附加联系人统一：职务行显示「title · responsibility」，皆空退回职能
-        const role = ([(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ')
-            || p.function
-            || (isPrimary ? (currentLang === 'en' ? 'Primary contact' : '主要联系人') : ''));
-        const badge = isPrimary
-            ? ('<span class="tagchip" style="margin-left:auto">' + t('contacts.primary_badge') + '</span>')
-            : ('<span class="tagchip dim" style="margin-left:auto">' + t('contacts.extra_badge') + '</span>');
-        const actions = isPrimary
-            ? ('<p class="muted"><a href="#" class="wall-edit-primary">' + t('contacts.edit') + '</a></p>')
-            : ('<p class="muted"><a href="#" class="wall-edit-contact" data-id="' + esc(String(p.id)) + '">' +
-                t('contacts.edit') + '</a> · <a href="#" class="wall-del-contact" data-id="' +
-                esc(String(p.id)) + '" data-name="' + esc(p.name || '') + '">' + t('contacts.delete') + '</a></p>');
-        bodyHtml += '<article class="wcard"' + delay() + ' data-contact-id="' +
-            (p.id != null ? esc(String(p.id)) : '') + '" data-primary="' + (isPrimary ? '1' : '0') + '">' +
-            '<div class="wc-top"><span class="avatar">' + esc(ini) +
-            '</span><span><span class="wc-name">' + esc(p.name) + '</span><br /><span class="wc-role">' + esc(role) +
-            '</span></span>' + badge + '</div>' +
-            (p.note ? '<p class="muted">' + esc(p.note) + '</p>' : '') +
-            _primaryFollowUpNoteHtml(e2.follow_up_note, isPrimary) +
-            (p.email ? '<p class="mono">' + esc(p.email) + '</p>' : '') +
-            ([p.phone, p.whatsapp, p.wechat].filter(Boolean).length
-                ? '<p class="muted">' + esc([p.phone, p.whatsapp ? 'WA '+p.whatsapp : '', p.wechat ? 'WeChat '+p.wechat : ''].filter(Boolean).join(' · ')) + '</p>'
-                : '') +
-            actions +
-            '</article>';
-    });
-    bodyHtml += '</div></div>';
-
-    // 询盘区（人物之下、订单之上）
     const inquiries = Array.isArray(inqRes) ? inqRes : [];
-    bodyHtml += renderWallInquiriesSection(inquiries, delay);
-
-    // 标签编辑（墙内）
     const wallTags = (_parseExtra3(c).tags || []).slice();
-    bodyHtml += secHead(t('contacts.tags_title'), 'TAGS // ' + wallTags.length) +
-        '<div class="wgrid"><article class="wcard"' + delay() + ' id="wall-tags-card">' +
-        '<div id="wall-tags-chips" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"></div>' +
-        '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;">' +
-        '<input type="text" id="wall-tag-input" placeholder="' + esc(t('contacts.tags_ph')) +
-        '" style="flex:1;min-width:120px;font-size:12px;padding:4px 8px;" />' +
-        '<button type="button" class="btn-xs" id="wall-tag-add">' + t('contacts.tags_add') + '</button>' +
-        '</div></article></div></div>';
-
-    // 画像两张卡（人物圈 / 喜好禁忌与往来）—— 可被独立画像页复用
     const factsPayload = (factsRes && typeof factsRes === 'object') ? factsRes : { available: false, items: [] };
     const giftsPayload = (giftsRes && typeof giftsRes === 'object') ? giftsRes : { available: false, items: [] };
-    bodyHtml += renderProfileCircleSection(cid, factsPayload, people, delay, mailboxBound);
-    bodyHtml += renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, delay, mailboxBound);
 
-    bodyHtml += secHead(currentLang === 'en' ? 'Orders' : '订单', 'ORDERS // ' + orders.length) + '<div class="wgrid">';
-    if (!orders.length) {
-        bodyHtml += '<div class="wall-empty"' + delay() + '>' + (currentLang==='en'?'No orders yet':'暂无订单记录') + '</div>';
+    // ── s3 页内卡片墙：header + 4格KPI + 三栏 + 横贯时间线 ──
+    function sect(cls) { return '<div class="wsec ' + cls + '">'; }
+    function chHead(title, lbl) {
+        return '<div class="ch"><span class="t">' + title + '</span><span class="ch-lbl">' + lbl + '</span></div>';
+    }
+
+    // 关联人物
+    let peopleHtml = sect('sec-people') +
+        '<div class="ch"><span class="t">' + (currentLang === 'en' ? 'People' : '人物') + '</span>' +
+        '<span class="ch-acts"><button type="button" class="lnk" id="wall-add-contact">' + t('contacts.add') + '</button></span>' +
+        '<span class="ch-lbl">PERSONS · ' + people.length + '</span></div>';
+    if (!people.length) {
+        peopleHtml += '<div class="wall-empty">' + t('contacts.empty') + '</div>';
     } else {
+        people.forEach(function (p) {
+            const isPrimary = !!p.is_primary || p.id == null;
+            const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
+            const role = ([(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ')
+                || p.function || (isPrimary ? (currentLang === 'en' ? 'Primary contact' : '主要联系人') : ''));
+            const fname = (p.function || (isPrimary ? '决策人' : '其他'));
+            const acts = isPrimary
+                ? ('<a href="#" class="lnk wall-edit-primary">' + t('contacts.edit') + '</a>')
+                : ('<a href="#" class="lnk wall-edit-contact" data-id="' + esc(String(p.id)) + '">' + t('contacts.edit') + '</a>' +
+                    '<a href="#" class="lnk wall-del-contact" data-id="' + esc(String(p.id)) + '" data-name="' + esc(p.name || '') + '">' + t('contacts.delete') + '</a>');
+            peopleHtml += '<div class="person" data-contact-id="' + (p.id != null ? esc(String(p.id)) : '') + '" data-primary="' + (isPrimary ? '1' : '0') + '">' +
+                '<span class="p-tag' + (isPrimary ? '' : ' o') + '">ASSET · ' + esc(fname) + '</span>' +
+                '<div class="row1"><span class="avatar">' + esc(ini) + '</span><div>' +
+                '<div class="nm">' + esc(p.name) + (isPrimary ? '<span class="zhu">主</span>' : '') + '</div>' +
+                '<div class="role">' + esc(role) + '</div></div>' +
+                '<span class="p-acts">' + acts + '</span></div>';
+            const kv = [];
+            if (p.email) kv.push('<span class="k">EMAIL</span><span class="v mono">' + esc(p.email) + '</span>');
+            const phone = [p.phone, p.whatsapp ? 'WA ' + p.whatsapp : '', p.wechat ? 'WeChat ' + p.wechat : ''].filter(Boolean).join(' · ');
+            if (phone) kv.push('<span class="k">PHONE</span><span class="v mono">' + esc(phone) + '</span>');
+            if (kv.length) peopleHtml += '<div class="kv">' + kv.join('') + '</div>';
+            peopleHtml += '</div>';
+        });
+    }
+    peopleHtml += '</div>';
+
+    // 询盘（复用现有区块）
+    const inqHtml = renderWallInquiriesSection(inquiries, delay);
+
+    // 订单
+    let ordersHtml = sect('sec-orders') +
+        chHead(currentLang === 'en' ? 'Orders' : '订单', 'ORDERS · ' + orders.length);
+    if (!orders.length) {
+        ordersHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No orders yet' : '暂无订单记录') + '</div>';
+    } else {
+        const steps = currentLang === 'en'
+            ? ['Quote', 'Ordered', 'Shipped', 'Done'] : ['报价中', '已下单', '已出货', '已完成'];
         orders.forEach(function (o) {
             const prog = _orderProgress(o.status);
             const cancelled = prog < 0;
+            const filled = cancelled ? 0 : Math.round(prog / 100 * 4);
             const amt = (o.total_amount != null && o.total_amount !== '')
                 ? ((o.currency || 'USD') + ' ' + Number(o.total_amount).toLocaleString('en-US'))
-                : (currentLang==='en'?'Price TBD':'金额待谈');
+                : (currentLang === 'en' ? 'Price TBD' : '金额待谈');
             const items = o.items || [];
             const product = items.length
                 ? (items[0].product_name + (items.length > 1 ? ' 等' + items.length + '项' : ''))
@@ -566,177 +574,186 @@ async function openCustomerWall(cid) {
             const qty = items.length
                 ? items.map(function (it) { return (it.quantity || '') + (it.unit || ''); }).join(' / ')
                 : ((o.quantity || '') + (o.unit || ''));
-            // 物流行：FOB 宁波 / 30/70 T/T / 定金后 25 天；柜型+港口；出货月
-            const logistics = [
-                [o.incoterm, o.port_of_loading].filter(Boolean).join(' '),
-                o.payment_terms || '',
-                o.lead_time_text || '',
-            ].filter(Boolean).join(' / ');
+            const logistics = [[o.incoterm, o.port_of_loading].filter(Boolean).join(' '), o.payment_terms || '', o.lead_time_text || ''].filter(Boolean).join(' / ');
             const containerLine = [o.container, o.port_of_loading].filter(Boolean).join(' ');
             let shipLine = '';
-            if (o.shipped_at) {
-                shipLine = String(o.shipped_at).slice(0, 7).replace('-', '.') +
-                    (currentLang === 'en' ? ' shipped' : ' 出货');
-            } else if (o.delivery_date) {
-                shipLine = o.delivery_date;
+            if (o.shipped_at) shipLine = String(o.shipped_at).slice(0, 7).replace('-', '.') + (currentLang === 'en' ? ' shipped' : ' 出货');
+            else if (o.delivery_date) shipLine = o.delivery_date;
+            let segs = '', labels = '';
+            for (let i = 0; i < 4; i++) {
+                segs += '<i class="' + (i < filled ? 'f' : '') + '"></i>';
+                labels += '<span class="' + (i === filled - 1 || (filled === 4 && i === 3) ? 'on' : '') + '">' + esc(steps[i]) + '</span>';
             }
-            bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top"><span class="mono">' + esc(o.order_no || ('#' + o.id)) +
-                '</span><span class="tagchip' + (cancelled ? '' : ' dim') + ' style="margin-left:auto">' + esc(o.status || '') + '</span></div>' +
-                '<p class="wc-subj">' + esc(product) + '</p><p><span class="wc-amt">' + esc(amt) + '</span> <span class="muted">· ' +
-                esc(qty) + '</span></p>' +
-                (logistics ? '<p class="muted">' + esc(logistics) + '</p>' : '') +
-                (containerLine ? '<p class="muted">' + esc(containerLine) + '</p>' : '') +
-                (shipLine ? '<p class="muted">' + esc(shipLine) + '</p>' : '') +
+            const r3 = [logistics, containerLine, shipLine].filter(Boolean)
+                .map(function (x) { return '<span>' + esc(x) + '</span>'; }).join('');
+            ordersHtml += '<div class="ord">' +
+                '<div class="r1"><span class="no">' + esc(o.order_no || ('#' + o.id)) + '</span>' +
+                '<span class="chip k">' + esc(o.status || '') + '</span>' +
+                '<span class="amt">' + esc(amt) + '</span></div>' +
+                '<div class="pn">' + esc(product) + '<span>' + esc(qty) + '</span></div>' +
                 (cancelled
-                    ? '<p class="muted">' + (currentLang === 'en' ? 'Cancelled' : '已取消') + '</p>'
-                    : ('<div class="bar"><i style="width:' + prog + '%"></i></div>' +
-                        '<p class="muted">' + esc((o.updated_at || o.created_at || '').slice(0, 10)) + ' · ' + prog + '%</p>')) +
-                '</article>';
+                    ? '<div class="r3"><span>' + (currentLang === 'en' ? 'Cancelled' : '已取消') + '</span></div>'
+                    : ('<div class="prog">' + segs + '</div><div class="prog-l">' + labels + '</div>')) +
+                (r3 ? '<div class="r3">' + r3 + '</div>' : '') +
+                '</div>';
         });
     }
-    bodyHtml += '</div></div>';
+    ordersHtml += '</div>';
 
-    const emailCount = mailboxBound ? mailRecords.length : 0;
-    bodyHtml += '<div class="wsec"><div class="wsec-head"><h4>' + (currentLang === 'en' ? 'Email' : '邮件往来') +
-        '</h4><span class="cnt">EMAIL // ' + emailCount + '</span>';
+    // 邮件
+    let mailHtml = sect('sec-mail') + '<div class="ch"><span class="t">' + (currentLang === 'en' ? 'Email' : '邮件') + '</span>';
     if (mailboxBound) {
-        bodyHtml += '<button type="button" class="btn" id="wall-email-refresh" style="margin-left:auto;font-size:11px;padding:4px 10px;">' +
-            (currentLang === 'en' ? 'Refresh' : '刷新邮件') + '</button>';
+        mailHtml += '<span class="ch-acts"><button type="button" class="lnk" id="wall-email-refresh">' + (currentLang === 'en' ? 'Refresh' : '刷新') + '</button></span>';
     }
-    bodyHtml += '<span class="ddline" aria-hidden="true"></span></div>';
-    bodyHtml += '<div class="wgrid" id="wall-email-grid">';
+    mailHtml += '<span class="ch-lbl">MAIL · ' + (mailboxBound ? mailRecords.length : emailDetails.length) + '</span></div>';
+    const addrList = emailDetails.length
+        ? emailDetails
+        : fileEmails.map(function (em, i) { return { address: em, is_primary: i === 0 }; });
     if (!mailboxBound) {
-        bodyHtml += '<article class="wcard"' + delay() + '><div class="wc-top">' +
-            (typeof iconHtml === 'function' ? iconHtml('mail', 20) : '') +
-            '<span class="muted">' + (currentLang === 'en' ? 'Addresses on file' : '档案中的邮箱') + '</span></div>';
-        const addrList = emailDetails.length
-            ? emailDetails
-            : fileEmails.map(function (em, i) { return { address: em, is_primary: i === 0 }; });
         if (addrList.length) {
             addrList.forEach(function (em) {
                 const addr = typeof em === 'string' ? em : (em.address || '');
                 const isPri = typeof em === 'object' && em.is_primary;
-                bodyHtml += '<p class="mono">' + esc(addr) +
-                    (isPri ? ' <span class="tagchip">' + (currentLang === 'en' ? 'Primary' : '主') + '</span>' : '') +
-                    '</p>';
+                mailHtml += '<div class="addr">' + (typeof iconHtml === 'function' ? iconHtml('mail', 16) : '') +
+                    '<span class="mono">' + esc(addr) + '</span>' +
+                    (isPri ? '<span class="chip k" style="margin-left:auto">' + (currentLang === 'en' ? 'Primary' : '主') + '</span>' : '') + '</div>';
             });
         } else {
-            bodyHtml += '<p class="muted">' + (currentLang === 'en' ? 'No email on file' : '暂无邮箱') + '</p>';
+            mailHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No email on file' : '暂无邮箱') + '</div>';
         }
-        bodyHtml += '<p class="muted">' + (currentLang === 'en'
-            ? 'Shows addresses only — Trade does not read mail until you bind a mailbox.'
-            : '只显示邮箱地址，不读取邮箱') + '</p>' +
-            '<button type="button" class="primary" id="wall-goto-mailboxes">' +
-            (currentLang === 'en' ? 'Open Mailboxes' : '去绑定邮箱') + '</button></article>';
+        mailHtml += '<div class="mail-note">' + (currentLang === 'en'
+            ? 'Addresses only — bind a mailbox to read mail.' : '只显示邮箱地址，不读取邮箱') + '</div>' +
+            '<button type="button" class="lnk" id="wall-goto-mailboxes" style="margin-top:6px;">' +
+            (currentLang === 'en' ? 'Open Mailboxes' : '去绑定邮箱') + '</button>';
     } else if (!mailRecords.length) {
-        bodyHtml += '<div class="wall-empty"' + delay() + '>' +
-            (currentLang === 'en' ? 'No synced emails for this customer yet.' : '暂无已同步的邮件记录') + '</div>';
+        mailHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No synced emails yet.' : '暂无已同步的邮件记录') + '</div>';
     } else {
+        mailHtml += '<div id="wall-email-grid">';
         mailRecords.forEach(function (m, idx) {
             const subj = m.subject || (currentLang === 'en' ? '(no subject)' : '（无主题）');
             const party = m.from_addr || '';
             const dt = (m.received_at || '').slice(0, 16).replace('T', ' ');
-            bodyHtml += '<article class="wcard wall-mail-card"' + delay() + ' data-mail-idx="' + idx + '" style="cursor:pointer;">' +
-                '<div class="wc-top"><span class="wc-subj">' + esc(subj) + '</span>' +
-                '<span class="muted" style="margin-left:auto;white-space:nowrap;">' + esc(dt) + '</span></div>' +
-                '<p class="mono muted">' + esc(party) + '</p>' +
-                '<div class="wall-mail-body hidden"><p class="muted" style="white-space:pre-wrap;margin:8px 0 0;">' +
-                esc(m.body_text || m.snippet || '') + '</p></div></article>';
+            mailHtml += '<div class="it wall-mail-card" data-mail-idx="' + idx + '" style="cursor:pointer;">' +
+                '<div class="r1"><span>' + esc(subj) + '</span><span class="mono">' + esc(dt) + '</span></div>' +
+                '<p class="mono">' + esc(party) + '</p>' +
+                '<div class="wall-mail-body hidden"><p style="white-space:pre-wrap;margin:6px 0 0;">' + esc(m.body_text || m.snippet || '') + '</p></div></div>';
         });
+        mailHtml += '</div>';
     }
-    bodyHtml += '</div></div>';
+    mailHtml += '</div>';
 
-    bodyHtml += secHead(talksTitle, 'TALKS // ' + keyChats.length) + '<div class="wgrid">';
+    // 对话
+    let talksHtml = sect('sec-talks') + chHead(talksTitle, 'TALKS · ' + keyChats.length);
     if (!keyChats.length) {
-        bodyHtml += '<div class="wall-empty"' + delay() + '>' + (currentLang==='en'?'No conversations linked to this customer':'暂无关联到该客户的对话') + '</div>';
+        talksHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No conversations linked' : '暂无关联对话') + '</div>';
     } else {
         keyChats.forEach(function (conv) {
-            const talkTitle = (conv.title || '').trim() || (conv.query || '').slice(0, 160);
-            const talkSummary = (conv.summary || '').trim() || (conv.response || '').slice(0, 120);
-            bodyHtml += '<article class="wcard"' + delay() + ' data-conv-id="' + esc(String(conv.id || '')) +
-                '" data-conv-summary="' + esc(conv.summary || '') + '">' +
-                '<div class="wc-top"><span class="tagchip dim">' +
-                esc(conv.context || 'chat') + '</span><span class="muted">' + esc((conv.created_at || '').slice(0, 16)) +
-                '</span>' + (conv.is_important ? '<span class="tagchip" style="margin-left:auto">' + (currentLang==='en'?'Important':'重要') + '</span>' : '') +
-                '</div><p class="quote wall-talk-title" style="cursor:text;" title="' +
-                esc(currentLang === 'en' ? 'Double-click to edit title' : '双击编辑标题') + '">' +
-                esc(talkTitle) + '</p>' +
-                '<p class="muted wall-talk-summary">' + esc(talkSummary) + '</p></article>';
+            const talkTitle = (conv.title || '').trim() || (conv.query || '').slice(0, 120);
+            const talkSummary = (conv.summary || '').trim() || (conv.response || '').slice(0, 100);
+            const dt = (conv.created_at || '').slice(5, 10).replace('-', '.');
+            talksHtml += '<div class="it" data-conv-id="' + esc(String(conv.id || '')) + '" data-conv-summary="' + esc(conv.summary || '') + '">' +
+                '<div class="r1"><span class="dot' + (conv.is_important ? '' : ' k') + '"></span><span class="wall-talk-title" style="cursor:text;" title="' +
+                esc(currentLang === 'en' ? 'Double-click to edit' : '双击编辑标题') + '">' + esc(talkTitle) + '</span>' +
+                '<span class="mono">' + esc(dt) + '</span></div>' +
+                '<p class="wall-talk-summary">' + esc(talkSummary) + '</p></div>';
         });
     }
-    bodyHtml += '</div></div>';
+    talksHtml += '</div>';
 
-    bodyHtml += secHead(currentLang === 'en' ? 'Timeline' : '互动时间线', 'TIMELINE') +
-        '<div class="wgrid"><article class="wcard wide"' + delay() + '>';
+    // 人物圈 / 喜好禁忌与往来（复用现有区块）
+    const circleHtml = renderProfileCircleSection(cid, factsPayload, people, delay, mailboxBound);
+    const prefsHtml = renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, delay, mailboxBound);
+
+    // 时间线
+    let timelineHtml = sect('sec-timeline') + chHead(currentLang === 'en' ? 'Timeline' : '互动时间线', 'TIMELINE · LAST 60 DAYS') + '<div class="tl">';
     if (!timeline.length) {
-        bodyHtml += '<div class="wall-empty">' + (currentLang==='en'?'No activity yet':'暂无互动记录') + '</div>';
+        timelineHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No activity yet' : '暂无互动记录') + '</div>';
     } else {
-        bodyHtml += '<ul class="timeline">' + timeline.map(function (t) {
+        timeline.forEach(function (t) {
             const kind = t.kind || '';
-            // filled=订单出货/状态；空心=对话/邮件；红=今日应回复
-            let dot = 'dim';
-            if (kind === 'follow_up_due') dot = 'hot';
-            else if (kind === 'order_status' || kind === 'order_created') dot = 'on';
+            let mk = '';
+            if (kind === 'follow_up_due') mk = ' r';
+            else if (kind === 'order_status' || kind === 'order_created') mk = ' f';
+            const at = String(t.at || '').slice(5, 10).replace('-', '.');
             const title = t.title || t.text || '';
             const detail = t.detail || '';
-            return '<li class="tl-' + esc(dot) + '"><span class="t">' + esc(t.at || '') +
-                '</span><p><b>' + esc(title) + '</b>' +
-                (detail ? ('<br /><span class="muted">' + esc(detail) + '</span>') : '') +
-                '</p></li>';
-        }).join('') + '</ul>';
+            timelineHtml += '<div class="ev' + (kind === 'follow_up_due' ? ' next' : '') + '">' +
+                '<div class="mk' + mk + '"></div><div class="dt">' + esc(at) + '</div>' +
+                '<div class="tx"><b>' + esc(title) + '</b>' + (detail ? ' · ' + esc(detail) : '') + '</div></div>';
+        });
     }
-    bodyHtml += '</article></div></div>';
+    timelineHtml += '</div></div>';
+
+    // header 标签 chips + threat
+    const tierChip = e1.tier ? ('<span class="chip on">' + (currentLang === 'en' ? 'TIER ' : '客户分级 ') + esc(e1.tier) + '</span>') : '';
+    const locVals = [e1.country, e1.city].filter(Boolean);
+    const locChip = locVals.length ? ('<span class="chip k">' + esc(locVals.join(' · ')) + '</span>') : '';
+    const btChip = e1.buyer_type ? ('<span class="chip k">' + esc(e1.buyer_type) + '</span>') : '';
+    const stageChip = '<span class="chip k">' + (currentLang === 'en' ? 'Stage · ' : '商机阶段 · ') + esc(stage) + '</span>';
+    const starred = !!(c.starred || e1.starred);
+    const starHtml = '<span class="star' + (starred ? ' on' : '') + '">' + (typeof iconHtml === 'function' ? iconHtml('star', 18) : '★') + '</span>';
+    const threatHtml = overdue
+        ? ('<span class="tri-d"></span>' + (currentLang === 'en' ? 'OVERDUE ' : '已逾期 ') + overdueDays + (currentLang === 'en' ? ' D' : ' 天'))
+        : ('<span class="tri-d"></span>TODAY <span style="color:var(--muted)">→</span><span class="cn">' + esc(follow || (currentLang === 'en' ? 'Follow-up' : '待跟进')) + '</span>');
+
+    // 4 格 KPI
+    const statTotalHtml = multiCurrency
+        ? esc(Object.keys(byCurrency).map(function (k) { return k + ' ' + Number(byCurrency[k]).toLocaleString('en-US'); }).join(' · '))
+        : (hasAmount ? '0' : '—');
+    const statsHtml = '<div class="stats">' +
+        '<div><span class="n">' + (stats.people_count || people.length) + '</span><span class="d"><span class="lbl">PERSONS</span>' + (currentLang === 'en' ? 'People' : '关联人物') + '</span></div>' +
+        '<div><span class="n">' + (stats.order_count || orders.length) + '</span><span class="d"><span class="lbl">ORDERS</span>' + (currentLang === 'en' ? 'Orders' : '订单数') + (quoteCount ? (' · ' + quoteCount + (currentLang === 'en' ? ' quoting' : ' 单报价中')) : '') + '</span></div>' +
+        '<div><span class="n" id="wall-stat-total">' + statTotalHtml + '</span><span class="d"><span class="lbl">TOTAL · ' + esc(orderCurrency || (Object.keys(byCurrency)[0] || 'USD')) + '</span>' + (currentLang === 'en' ? 'Order total' : '订单总额') + '</span></div>' +
+        '<div><span class="n">' + emailStatN + '<small>/</small>' + talkStatN + '</span><span class="d"><span class="lbl">MAIL / KEY TALKS</span>' + (currentLang === 'en' ? ('Mail ' + emailStatN + ' · talks ' + talkStatN) : ('邮件 ' + emailStatN + ' · 对话 ' + talkStatN)) + '</span></div>' +
+        '</div>';
 
     wall.innerHTML =
-        '<div class="wall-head">' +
-        '<button type="button" class="wall-back" id="wall-back">' + (currentLang==='en'?'← Back to list':'← 返回客户列表') + '</button>' +
-        '<div class="wall-title bracket"><div><h3>' + esc(c.name) + '</h3>' +
-        '<div class="sub">' + esc([e1.country, e1.city, e1.buyer_type, e1.main_category].filter(Boolean).join(' · ') || (currentLang==='en'?'Customer file':'客户档案')) +
-        '<br />' + (currentLang==='en'?'Next follow-up: ':'下次跟进：') +
-        (overdue ? '<span style="color:var(--accent);font-weight:700;">' + (currentLang==='en'?'Overdue':'已逾期') + '</span>' : esc(follow || '—')) +
-        '</div></div><span class="wall-stamp">' + esc(stamp) + '</span></div>' +
-        '<div class="wstats">' +
-        '<div class="wstat"' + delay() + '><b>' + (stats.people_count || people.length) + '</b><span>' + (currentLang==='en'?'People':'关联人物') + '</span></div>' +
-        '<div class="wstat"' + delay() + '><b>' + (stats.order_count || orders.length) + '</b><span>' +
-        (currentLang==='en'?'Orders':'订单记录') +
-        (quoteCount ? (' · ' + quoteCount + (currentLang==='en'?' quoting':' 单报价中')) : '') +
-        '</span></div>' +
-        '<div class="wstat"' + delay() + '><b id="wall-stat-total">' +
-        (multiCurrency
-            ? esc(Object.keys(byCurrency).map(function (k) {
-                return k + ' ' + Number(byCurrency[k]).toLocaleString('en-US');
-            }).join(' · '))
-            : (hasAmount ? '0' : '—')) +
-        '</b><span>' + (currentLang==='en'?'Order total':'订单总额') + '</span></div>' +
-        '<div class="wstat"' + delay() + '><b>' + talksStatLabel + '</b><span>' +
-        (talksAreImportant
-            ? (currentLang==='en'?'Mail · key talks':'邮件 · 重要对话')
-            : (currentLang==='en'?'Mail · talks':'邮件 · 对话')) +
-        '</span></div>' +
+        '<div class="det">' +
+        '<div class="det-head">' +
+        '<button type="button" class="wall-back" id="wall-back">' + (currentLang === 'en' ? '← Back to list' : '← 返回客户列表') + ' <kbd>ESC</kbd></button>' +
+        '<div class="subject bracket">' + starHtml +
+        '<span class="nm">' + esc(c.name) + '</span>' +
+        '<div class="facts2">' + tierChip + locChip + btChip + stageChip +
+        '<span class="tag-chips" id="wall-tags-chips"></span>' +
+        '<input type="text" id="wall-tag-input" class="tag-in" placeholder="' + esc(t('contacts.tags_ph')) + '">' +
+        '<button type="button" class="lnk" id="wall-tag-add">+</button>' +
         '</div>' +
-        '<div class="wall-actions">' +
-        '<button type="button" class="primary" id="wall-edit">' + (currentLang==='en'?'Edit profile':'编辑档案') + '</button>' +
+        '<div class="threat">' + threatHtml + '</div>' +
+        '</div>' +
+        '</div>' +
+        '<div class="det-actions">' +
+        '<button type="button" class="primary" id="wall-edit">' + (currentLang === 'en' ? 'Edit profile' : '编辑档案') + '</button>' +
         '<button type="button" id="wall-open-profile">' + t('profile.open') + '</button>' +
-        '<button type="button" id="wall-add-order">' + (currentLang==='en'?'Add order':'添加订单') + '</button>' +
-        '<button type="button" id="wall-stage-save">' + (currentLang==='en'?'Save stage / follow-up':'保存阶段与跟进日') + '</button>' +
-        '<label style="font-size:12px;display:inline-flex;align-items:center;gap:6px;">' + (currentLang==='en'?'Stage':'商机阶段') +
-        ' <select id="wall-stage">' + (function () {
-            // 自动推导时选「自动」；手动 override 时选有效阶段
+        '<button type="button" id="wall-add-order">' + (currentLang === 'en' ? 'Add order' : '添加订单') + '</button>' +
+        '<label class="da-lbl">' + (currentLang === 'en' ? 'Stage' : '商机阶段') + ' <select id="wall-stage">' + (function () {
             const wallSel = _customerStageAuto(c) ? '自动' : stage;
             return _CRM_STAGES.map(function (s) {
                 return '<option value="' + esc(s) + '"' + (wallSel === s ? ' selected' : '') + '>' + esc(s) + '</option>';
-            }).join('') +
-            '<option value="自动"' + (wallSel === '自动' ? ' selected' : '') + '>' +
-            esc(t('inquiry.stage_auto')) + '</option>';
+            }).join('') + '<option value="自动"' + (wallSel === '自动' ? ' selected' : '') + '>' + esc(t('inquiry.stage_auto')) + '</option>';
         })() + '</select></label>' +
-        '<label style="font-size:12px;display:inline-flex;align-items:center;gap:6px;">' + (currentLang==='en'?'Follow-up':'下次跟进') +
-        ' <input type="date" id="wall-follow" value="' + esc(follow) + '"></label>' +
-        '</div><span class="ddline" aria-hidden="true"></span></div>' +
-        '<div class="wall-scroll" id="wall-body">' + bodyHtml + '</div>';
+        '<label class="da-lbl">' + (currentLang === 'en' ? 'Follow-up' : '下次跟进') + ' <input type="date" id="wall-follow" value="' + esc(follow) + '"></label>' +
+        '<button type="button" id="wall-stage-save">' + (currentLang === 'en' ? 'Save' : '保存') + '</button>' +
+        '</div>' +
+        statsHtml +
+        '<div class="wall3">' +
+        '<div class="col colL">' + peopleHtml + inqHtml + ordersHtml + '</div>' +
+        '<div class="col colM">' + circleHtml + mailHtml + talksHtml + '</div>' +
+        '<div class="col colR">' + prefsHtml + '</div>' +
+        '</div>' +
+        '<div class="wall-timeline">' + timelineHtml + '</div>' +
+        '</div>';
 
     wall.classList.add('open');
     wall.removeAttribute('inert');
     wall.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('wall-open');
+    const _tt = document.getElementById('app-top-title');
+    const _tl = document.getElementById('app-top-lbl');
+    if (_tt && _tl) {
+        if (!wall._prevTop) wall._prevTop = { t: _tt.textContent, l: _tl.textContent };
+        _tt.textContent = currentLang === 'en' ? 'Customer' : '客户详情';
+        _tl.textContent = '/ ASSET PROFILE';
+    }
     $('wall-back')?.focus();
     // 单一币种才数字滚动；多币种已在上方直接列出各币种金额
     if (hasAmount && !multiCurrency) {
