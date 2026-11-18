@@ -1053,6 +1053,8 @@ body > #toast-container, body > #customer-wall {
 body.wall-open #main-content > .chat-view,
 body.wall-open #main-content > .panel-view,
 body.wall-open #main-content > .empty-state { display: none !important; }
+/* 详情页内视图不显示旧视图的顶部进度横幅（否则 30s 轮询会把它刷回来） */
+body.wall-open #guidance-bar { display: none !important; }
 .wall-head {
     flex: none; padding: 16px 22px 14px; background: var(--panel); position: relative;
 }

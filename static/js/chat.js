@@ -348,6 +348,10 @@ async function loadCronStatus(isPoll = false) {
         return;
     }
 
+    // 客户详情页内视图打开时不要在顶部刷新旧视图的进度横幅
+    const _wallOpen = document.getElementById('customer-wall');
+    if (_wallOpen && _wallOpen.classList.contains('open')) return;
+
     // 更新全局顶部横幅
     const main = $('main-content');
     let bar = document.getElementById('guidance-bar');
