@@ -7,6 +7,7 @@ import hashlib
 import logging
 import math
 import re
+import sqlite3
 import threading
 import unicodedata
 from datetime import date, datetime
@@ -270,6 +271,62 @@ def _fact_row(row) -> dict:
     return _read_normalize_attach(d)
 
 
+# source_type → (来源表, 日期列)；source_at 只在读取时推导，不落库、不改表
+_SOURCE_AT_COLUMNS = {
+    "chat": ("conversations", "created_at"),
+    "email": ("emails", "received_at"),
+    "visit": ("customer_visits", "start_date"),
+}
+
+
+def _attach_source_at(items: list[dict]) -> list[dict]:
+    """给事实/礼物补 source_at（来源条目的日期，只读推导）。"""
+    if not items:
+        return items
+    # 先按来源类型收集 id，批量查一次，避免逐条 N+1
+    wanted: dict[str, set[int]] = {}
+    for item in items:
+        st = str(item.get("source_type") or "")
+        ref = item.get("source_ref")
+        if ref is None or st not in _SOURCE_AT_COLUMNS:
+            continue
+        try:
+            wanted.setdefault(st, set()).add(int(ref))
+        except (TypeError, ValueError):
+            continue  # 脏 source_ref 不影响列表
+    dates: dict[tuple[str, int], str] = {}
+    if wanted:
+        conn = get_connection()
+        try:
+            for st, ids in wanted.items():
+                table, col = _SOURCE_AT_COLUMNS[st]
+                marks = ",".join("?" * len(ids))
+                try:
+                    rows = conn.execute(
+                        f"SELECT id, {col} AS source_at FROM {table} "
+                        f"WHERE id IN ({marks})",
+                        tuple(ids),
+                    ).fetchall()
+                except sqlite3.Error:
+                    continue  # 来源表缺失（如 visit 未启用）→ 只缺日期，不影响列表
+                for row in rows:
+                    if row["source_at"]:
+                        dates[(st, int(row["id"]))] = str(row["source_at"])
+        finally:
+            conn.close()
+    for item in items:
+        ref = item.get("source_ref")
+        try:
+            item["source_at"] = (
+                dates.get((str(item.get("source_type") or ""), int(ref)))
+                if ref is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            item["source_at"] = None
+    return items
+
+
 def list_facts(
     customer_id: int,
     *,
@@ -326,7 +383,7 @@ def list_facts(
             return (ub > ua) - (ub < ua)
 
         items.sort(key=cmp_to_key(_cmp))
-        return items
+        return _attach_source_at(items)
     finally:
         conn.close()
 
@@ -602,7 +659,7 @@ def list_gifts(
                 "gift_date DESC, updated_at DESC",
                 (company_id, customer_id),
             ).fetchall()
-        return [_gift_row(r) for r in rows]
+        return _attach_source_at([_gift_row(r) for r in rows])
     finally:
         conn.close()
 

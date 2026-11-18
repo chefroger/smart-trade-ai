@@ -329,3 +329,59 @@ class TestExtractMock:
         assert result["dropped_invalid"] >= 1
         items = p.list_facts(customer_id, company_id=company_id)
         assert any(i["content"] == "喜欢滑雪" and i["status"] == "待确认" for i in items)
+
+
+def test_list_facts_and_gifts_include_source_at(test_db, company_id, customer_id):
+    """facts/gifts 的 source_at 由 source_ref 推导；不落库，来源表缺失不炸。"""
+    from trade import profile as p
+    from trade.database import get_connection
+
+    conn = get_connection()
+    try:
+        conv_id = conn.execute(
+            "INSERT INTO conversations (company_id, customer_id, query, response, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (company_id, customer_id, "报价", "回复", "2026-11-17 09:00:00"),
+        ).lastrowid
+        mailbox_id = conn.execute(
+            "INSERT INTO mailboxes (preset, email_address, host, username) VALUES (?,?,?,?)",
+            ("imap", "buyer@example.com", "imap.example.com", "buyer@example.com"),
+        ).lastrowid
+        email_id = conn.execute(
+            "INSERT INTO emails (mailbox_id, message_id, from_addr, subject, received_at, "
+            "company_id, customer_id) VALUES (?,?,?,?,?,?,?)",
+            (mailbox_id, "m1", "buyer@example.com", "hi",
+             "2026-11-18T10:00:00+08:00", company_id, customer_id),
+        ).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert p._insert_pending_fact(
+        company_id=company_id, customer_id=customer_id, category="喜好",
+        subject="", content="喜欢蓝色包装", source_type="chat",
+        source_ref=conv_id, source_quote="喜欢蓝色包装",
+    )
+    assert p._insert_pending_fact(
+        company_id=company_id, customer_id=customer_id, category="禁忌",
+        subject="", content="不饮酒", source_type="email",
+        source_ref=email_id, source_quote="不饮酒",
+    )
+    # visit 表在干净库里不存在：不得抛错，只是没有日期
+    assert p._insert_pending_fact(
+        company_id=company_id, customer_id=customer_id, category="喜好",
+        subject="", content="来自验厂", source_type="visit",
+        source_ref=999, source_quote="",
+    )
+    facts = {f["content"]: f for f in p.list_facts(customer_id, company_id=company_id)}
+    assert facts["喜欢蓝色包装"]["source_at"] == "2026-11-17 09:00:00"
+    assert facts["不饮酒"]["source_at"] == "2026-11-18T10:00:00+08:00"
+    assert facts["来自验厂"]["source_at"] is None
+
+    assert p._insert_pending_gift(
+        company_id=company_id, customer_id=customer_id, direction="我方赠送",
+        item="宜兴茶具", approx_value=None, currency="", gift_date="",
+        occasion="", source_type="chat", source_ref=conv_id, source_quote="茶具",
+    )
+    gifts = {g["item"]: g for g in p.list_gifts(customer_id, company_id=company_id)}
+    assert gifts["宜兴茶具"]["source_at"] == "2026-11-17 09:00:00"

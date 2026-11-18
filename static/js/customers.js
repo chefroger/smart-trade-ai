@@ -746,7 +746,9 @@ async function openCustomerWall(cid) {
     $('wall-edit')?.addEventListener('click', function () { closeCustomerWall(); showCustomerDetail(cid); });
     $('wall-open-profile')?.addEventListener('click', function () { openCustomerProfile(cid); });
     $('wall-add-order')?.addEventListener('click', function () { showOrderModal(cid); });
-    _bindProfileCardActions(cid, wall, mailboxBound);
+    _bindProfileCardActions(cid, wall, mailboxBound, function () {
+        return _refreshProfileSections(cid, wall, people, mailboxBound);
+    }, people);
     $('wall-add-contact')?.addEventListener('click', function () {
         _showContactModal(cid, null);
     });
@@ -1698,24 +1700,93 @@ function _profilePersonLabel(item, people) {
     return '';
 }
 
+const _PROFILE_ALL_CATS = ['家庭', '其他供应商或竞品', '喜好', '禁忌', '重要日期', '礼物往来'];
+const _PROFILE_GIFT_DIRECTIONS = ['我方赠送', '客户赠送', '客户索要'];
+// 编辑时用：卡片只渲染 HTML，编辑弹窗需要原始条目；按 kind:id 缓存最近一次 GET 的结果
+const _PROFILE_ITEM_CACHE = {};
+
+function _profileCacheItem(kind, item) {
+    if (item && item.id != null) _PROFILE_ITEM_CACHE[kind + ':' + item.id] = item;
+}
+
+// #region profile-source
+// 出处：来源类型 + 日期（source_at 由后端按 source_ref 推导，不落库）
+function _profileSourceLabel(item) {
+    const st = (item && item.source_type) || 'manual';
+    if (st === 'chat') return t('profile.src_chat');
+    if (st === 'email') return t('profile.src_email');
+    if (st === 'visit') return t('profile.src_visit');
+    return t('profile.src_manual');
+}
+
+function _profileSourceDate(item) {
+    const s = String((item && item.source_at) || '').trim();
+    return s ? s.slice(0, 10) : '';
+}
+// #endregion profile-source
+
+// #region profile-attach
+// 挂到下拉：不挂人 / 主联系人（有才出现）/ 每个附加联系人
+function _profileAttachOptions(people) {
+    const opts = [{ value: 'none', label: t('profile.attach_none') }];
+    const list = people || [];
+    const primary = list.find(function (p) { return p.id == null || p.is_primary; });
+    if (primary) {
+        opts.push({
+            value: 'primary',
+            label: t('profile.attach_primary', {
+                name: primary.name || t('profile.attach_primary_default'),
+            }),
+        });
+    }
+    list.filter(function (p) { return p.id != null; }).forEach(function (p) {
+        opts.push({ value: 'contact:' + p.id, label: p.name || t('profile.attach_contact_fallback') });
+    });
+    return opts;
+}
+
+function _profileAttachValue(item) {
+    const at = item && item.attach_to;
+    if (at === 'primary') return 'primary';
+    if (at === 'contact' && item.contact_id != null) return 'contact:' + item.contact_id;
+    return 'none';
+}
+
+function _profileAttachBody(value) {
+    if (value === 'primary') return { attach_to: 'primary', contact_id: null };
+    if (String(value || '').indexOf('contact:') === 0) {
+        const id = parseInt(String(value).slice(8), 10);
+        if (!isNaN(id)) return { attach_to: 'contact', contact_id: id };
+    }
+    return { attach_to: 'none', contact_id: null };
+}
+
+function _profileAttachSelectHtml(id, people, selected) {
+    return '<select id="' + esc(id) + '" style="width:100%;margin-top:2px;">' +
+        _profileAttachOptions(people).map(function (o) {
+            return '<option value="' + esc(o.value) + '"' + (o.value === selected ? ' selected' : '') + '>' +
+                esc(o.label) + '</option>';
+        }).join('') + '</select>';
+}
+// #endregion profile-attach
+
 function _profileFactCardsHtml(items, people, delayFn) {
     /** 已确认事实卡片 HTML。 */
     let html = '';
     (items || []).forEach(function (f) {
-        const src = f.source_type === 'chat'
-            ? (currentLang === 'en' ? 'Talk' : '对话')
-            : (f.source_type === 'email'
-                ? (currentLang === 'en' ? 'Email' : '邮件')
-                : (currentLang === 'en' ? 'Manual' : '手工'));
+        _profileCacheItem('fact', f);
+        const src = _profileSourceLabel(f);
+        const srcDate = _profileSourceDate(f);
         html += '<article class="wcard profile-fact"' + delayFn() + ' data-fact-id="' + esc(String(f.id)) + '">' +
             '<div class="wc-name">' + esc(f.subject || f.category) +
             '<span class="muted">' + esc(_profilePersonLabel(f, people)) + '</span></div>' +
             '<p>' + esc(f.content || '') + '</p>' +
-            '<p class="muted profile-src">' + esc(src) +
+            '<p class="muted profile-src">' + esc(src) + (srcDate ? ' · ' + esc(srcDate) : '') +
             (f.source_quote ? (' · <a href="#" class="profile-toggle-quote">' + t('profile.show_quote') + '</a>') : '') +
             '</p>' +
             (f.source_quote ? ('<p class="profile-quote muted" hidden>' + esc(f.source_quote) + '</p>') : '') +
-            '<p class="muted"><a href="#" class="profile-void-fact">' + t('profile.void') + '</a>' +
+            '<p class="muted"><a href="#" class="profile-edit-fact">' + t('profile.edit') + '</a> · ' +
+            '<a href="#" class="profile-void-fact">' + t('profile.void') + '</a>' +
             (f.source_type === 'manual' ? (' · <a href="#" class="profile-del-fact">' + t('profile.delete') + '</a>') : '') +
             ' · <label class="profile-ai-lab"><input type="checkbox" class="profile-ai-vis"' +
             (f.ai_visible ? ' checked' : '') + '> ' + t('profile.ai_use') + '</label></p>' +
@@ -1804,7 +1875,9 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
     } else {
         html += _profileFactCardsHtml(confirmedFacts, people, delayFn);
         confirmedGifts.forEach(function (g) {
+            _profileCacheItem('gift', g);
             const isAsk = g.direction === '客户索要';
+            const gDate = _profileSourceDate(g);
             html += '<article class="wcard profile-gift"' + delayFn() + ' data-gift-id="' + esc(String(g.id)) + '">' +
                 '<div class="wc-name">' + (isAsk ? ('⚠ ' + t('profile.ask') + ' · ') : '') +
                 esc(g.direction || '') + ' · ' + esc(g.item || '') +
@@ -1812,7 +1885,13 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
                 (g.occasion || g.gift_date
                     ? ('<p class="muted">' + esc([g.gift_date, g.occasion].filter(Boolean).join(' · ')) + '</p>')
                     : '') +
-                '<p class="muted"><a href="#" class="profile-void-gift">' + t('profile.void') + '</a>' +
+                '<p class="muted profile-src">' + esc(_profileSourceLabel(g)) +
+                (gDate ? ' · ' + esc(gDate) : '') +
+                (g.source_quote ? (' · <a href="#" class="profile-toggle-quote">' + t('profile.show_quote') + '</a>') : '') +
+                '</p>' +
+                (g.source_quote ? ('<p class="profile-quote muted" hidden>' + esc(g.source_quote) + '</p>') : '') +
+                '<p class="muted"><a href="#" class="profile-edit-gift">' + t('profile.edit') + '</a> · ' +
+                '<a href="#" class="profile-void-gift">' + t('profile.void') + '</a>' +
                 (g.source_type === 'manual' ? (' · <a href="#" class="profile-del-gift">' + t('profile.delete') + '</a>') : '') +
                 (isAsk ? '' : (' · <label class="profile-ai-lab"><input type="checkbox" class="profile-ai-vis-gift"' +
                     (g.ai_visible ? ' checked' : '') + '> ' + t('profile.ai_use') + '</label>')) +
@@ -1828,7 +1907,36 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
     return html;
 }
 
-function _bindProfileCardActions(cid, root, mailboxBound, refreshFn) {
+async function _refreshProfileSections(cid, root, people, mailboxBound) {
+    /** 只刷新两张画像区块，不整墙重载（确认/作废/编辑后调用）。 */
+    if (!root) return;
+    const [factsRes, giftsRes] = await Promise.all([
+        api('GET', `/api/trade/customers/${cid}/facts`),
+        api('GET', `/api/trade/customers/${cid}/gifts`),
+    ]);
+    // 两个都失败时保留现状（api() 已 toast），不要把区块替换成「重启后可用」
+    if (!factsRes && !giftsRes) return;
+    const factsPayload = (factsRes && typeof factsRes === 'object')
+        ? factsRes : { available: false, items: [] };
+    const giftsPayload = (giftsRes && typeof giftsRes === 'object')
+        ? giftsRes : { available: false, items: [] };
+    const noDelay = function () { return ''; };
+    const circle = root.querySelector('.profile-circle');
+    const prefs = root.querySelector('.profile-prefs');
+    if (circle) {
+        circle.outerHTML = renderProfileCircleSection(cid, factsPayload, people || [], noDelay, mailboxBound);
+    }
+    if (prefs) {
+        prefs.outerHTML = renderProfilePrefsSection(
+            cid, factsPayload, giftsPayload, people || [], noDelay, mailboxBound
+        );
+    }
+    _bindProfileCardActions(cid, root, mailboxBound, function () {
+        return _refreshProfileSections(cid, root, people, mailboxBound);
+    }, people);
+}
+
+function _bindProfileCardActions(cid, root, mailboxBound, refreshFn, people) {
     /** 绑定画像卡上的确认/作废/提取等操作。 */
     if (!root) return;
     root.querySelectorAll('.profile-toggle-quote').forEach(function (a) {
@@ -1836,6 +1944,28 @@ function _bindProfileCardActions(cid, root, mailboxBound, refreshFn) {
             e.preventDefault();
             const q = a.closest('.wcard')?.querySelector('.profile-quote');
             if (q) q.hidden = !q.hidden;
+        });
+    });
+    root.querySelectorAll('.profile-edit-fact').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+            e.preventDefault();
+            const id = a.closest('[data-fact-id]')?.getAttribute('data-fact-id');
+            const item = _PROFILE_ITEM_CACHE['fact:' + id];
+            if (!item) return;
+            _showProfileFactModal(cid, _PROFILE_ALL_CATS, {
+                item: item, people: people, onSaved: refresh,
+            });
+        });
+    });
+    root.querySelectorAll('.profile-edit-gift').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+            e.preventDefault();
+            const id = a.closest('[data-gift-id]')?.getAttribute('data-gift-id');
+            const item = _PROFILE_ITEM_CACHE['gift:' + id];
+            if (!item) return;
+            _showProfileGiftModal(cid, {
+                item: item, people: people, onSaved: refresh,
+            });
         });
     });
     async function refresh() {
@@ -1940,41 +2070,159 @@ function _bindProfileCardActions(cid, root, mailboxBound, refreshFn) {
         btn.addEventListener('click', function () {
             const mode = btn.getAttribute('data-cats') || 'prefs';
             const cats = mode === 'circle' ? _PROFILE_CIRCLE_CATS : _PROFILE_PREFS_CATS;
-            _showProfileFactModal(cid, cats);
+            _showProfileFactModal(cid, cats, { people: people, onSaved: refresh });
         });
     });
     root.querySelectorAll('.profile-add-gift').forEach(function (btn) {
-        btn.addEventListener('click', function () { _showProfileGiftModal(cid); });
+        btn.addEventListener('click', function () {
+            _showProfileGiftModal(cid, { people: people, onSaved: refresh });
+        });
     });
 }
 
-function _showProfileFactModal(cid, cats) {
-    /** 简易添加事实弹窗。 */
-    const cat = window.prompt(t('profile.pick_category') + '\n' + cats.join(' / '), cats[0]);
-    if (cat == null) return;
-    if (cats.indexOf(cat) < 0) { toast(t('profile.bad_category')); return; }
-    const subject = window.prompt(t('profile.subject_ph'), '') || '';
-    const content = window.prompt(t('profile.content_ph'), '');
-    if (content == null || !content.trim()) return;
-    api('POST', `/api/trade/customers/${cid}/facts`, {
-        category: cat, subject: subject.trim(), content: content.trim(), attach_to: 'none',
-    }).then(function (r) {
-        if (r) { toast(t('profile.saved')); openCustomerWall(cid); }
+function _showProfileFactModal(cid, cats, opts) {
+    /** 添加 / 编辑事实弹窗：分类、对象、内容 + 挂到下拉。 */
+    const o = opts || {};
+    const item = o.item || null;
+    const people = o.people || [];
+    const onSaved = typeof o.onSaved === 'function'
+        ? o.onSaved : function () { openCustomerWall(cid); };
+    document.querySelectorAll('.profile-modal-backdrop').forEach(function (el) { el.remove(); });
+    const catList = [];
+    (cats || []).forEach(function (c) { if (catList.indexOf(c) < 0) catList.push(c); });
+    if (item && item.category && catList.indexOf(item.category) < 0) catList.push(item.category);
+    const curCat = (item && item.category) || catList[0] || '喜好';
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop profile-modal-backdrop';
+    backdrop.style.cssText = 'display:flex;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;align-items:center;justify-content:center;';
+    backdrop.innerHTML =
+        '<div class="modal" style="max-width:460px;width:92%;background:var(--bg);padding:16px;border:1px solid var(--line-strong);">' +
+        '<h3 style="margin:0 0 12px;">' + esc(item ? t('profile.edit_fact') : t('profile.add_fact')) + '</h3>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.category')) +
+        '<select id="pf-category" style="width:100%;margin-top:2px;">' +
+        catList.map(function (c) {
+            return '<option value="' + esc(c) + '"' + (c === curCat ? ' selected' : '') + '>' +
+                esc(c) + '</option>';
+        }).join('') + '</select></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.subject')) +
+        '<input id="pf-subject" maxlength="50" style="width:100%;margin-top:2px;" value="' +
+        esc((item && item.subject) || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.content')) +
+        '<textarea id="pf-content" maxlength="500" style="width:100%;margin-top:2px;min-height:80px;">' +
+        esc((item && item.content) || '') + '</textarea></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.attach')) +
+        _profileAttachSelectHtml('pf-attach', people, _profileAttachValue(item)) + '</label>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
+        '<button type="button" id="pf-cancel">' + esc(t('btn.cancel')) + '</button>' +
+        '<button type="button" class="primary" id="pf-save">' + esc(t('btn.save')) + '</button>' +
+        '</div></div>';
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('#pf-cancel').addEventListener('click', function () { backdrop.remove(); });
+    backdrop.addEventListener('click', function (e) {
+        if (e.target === backdrop) backdrop.remove();
+    });
+    backdrop.querySelector('#pf-save').addEventListener('click', async function () {
+        const body = Object.assign({
+            category: backdrop.querySelector('#pf-category').value,
+            subject: (backdrop.querySelector('#pf-subject').value || '').trim(),
+            content: (backdrop.querySelector('#pf-content').value || '').trim(),
+        }, _profileAttachBody(backdrop.querySelector('#pf-attach').value));
+        if (!body.content) {
+            toast(t('profile.content_required'));
+            return;
+        }
+        const r = item
+            ? await api('PUT', `/api/trade/customers/${cid}/facts/${item.id}`, body)
+            : await api('POST', `/api/trade/customers/${cid}/facts`, body);
+        if (!r) return;
+        backdrop.remove();
+        toast(t('profile.saved'));
+        onSaved();
     });
 }
 
-function _showProfileGiftModal(cid) {
-    /** 简易添加礼物弹窗。 */
-    const direction = window.prompt(
-        t('profile.pick_direction') + '\n我方赠送 / 客户赠送 / 客户索要', '我方赠送'
-    );
-    if (direction == null) return;
-    const item = window.prompt(t('profile.item_ph'), '');
-    if (item == null || !item.trim()) return;
-    api('POST', `/api/trade/customers/${cid}/gifts`, {
-        direction: direction.trim(), item: item.trim(), attach_to: 'none',
-    }).then(function (r) {
-        if (r) { toast(t('profile.saved')); openCustomerWall(cid); }
+function _showProfileGiftModal(cid, opts) {
+    /** 添加 / 编辑礼物弹窗：方向、物品、金额、币种、日期、场合、备注 + 挂到下拉。 */
+    const o = opts || {};
+    const item = o.item || null;
+    const people = o.people || [];
+    const onSaved = typeof o.onSaved === 'function'
+        ? o.onSaved : function () { openCustomerWall(cid); };
+    document.querySelectorAll('.profile-modal-backdrop').forEach(function (el) { el.remove(); });
+    const curDir = (item && item.direction) || _PROFILE_GIFT_DIRECTIONS[0];
+    const curVal = (item && item.approx_value != null) ? String(item.approx_value) : '';
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop profile-modal-backdrop';
+    backdrop.style.cssText = 'display:flex;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;align-items:center;justify-content:center;';
+    backdrop.innerHTML =
+        '<div class="modal" style="max-width:460px;width:92%;background:var(--bg);padding:16px;border:1px solid var(--line-strong);">' +
+        '<h3 style="margin:0 0 12px;">' + esc(item ? t('profile.gift_edit_title') : t('profile.gift_add_title')) + '</h3>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.direction')) +
+        '<select id="pg-direction" style="width:100%;margin-top:2px;">' +
+        _PROFILE_GIFT_DIRECTIONS.map(function (d) {
+            return '<option value="' + esc(d) + '"' + (d === curDir ? ' selected' : '') + '>' +
+                esc(d) + '</option>';
+        }).join('') + '</select></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.item')) +
+        '<input id="pg-item" maxlength="200" style="width:100%;margin-top:2px;" value="' +
+        esc((item && item.item) || '') + '" /></label>' +
+        '<div style="display:flex;gap:8px;">' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;flex:1;">' + esc(t('profile.approx_value')) +
+        '<input id="pg-value" type="number" min="0" step="0.01" style="width:100%;margin-top:2px;" value="' +
+        esc(curVal) + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;width:110px;">' + esc(t('profile.currency')) +
+        '<input id="pg-currency" maxlength="3" placeholder="USD" style="width:100%;margin-top:2px;" value="' +
+        esc((item && item.currency) || '') + '" /></label></div>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.gift_date')) +
+        '<input id="pg-date" type="date" style="width:100%;margin-top:2px;" value="' +
+        esc((item && item.gift_date) || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.occasion')) +
+        '<input id="pg-occasion" maxlength="100" style="width:100%;margin-top:2px;" value="' +
+        esc((item && item.occasion) || '') + '" /></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.note')) +
+        '<textarea id="pg-note" maxlength="500" style="width:100%;margin-top:2px;min-height:60px;">' +
+        esc((item && item.note) || '') + '</textarea></label>' +
+        '<label style="display:block;font-size:12px;margin-bottom:6px;">' + esc(t('profile.attach')) +
+        _profileAttachSelectHtml('pg-attach', people, _profileAttachValue(item)) + '</label>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
+        '<button type="button" id="pg-cancel">' + esc(t('btn.cancel')) + '</button>' +
+        '<button type="button" class="primary" id="pg-save">' + esc(t('btn.save')) + '</button>' +
+        '</div></div>';
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('#pg-cancel').addEventListener('click', function () { backdrop.remove(); });
+    backdrop.addEventListener('click', function (e) {
+        if (e.target === backdrop) backdrop.remove();
+    });
+    backdrop.querySelector('#pg-save').addEventListener('click', async function () {
+        const rawVal = (backdrop.querySelector('#pg-value').value || '').trim();
+        let approx = null;
+        if (rawVal) {
+            approx = Number(rawVal);
+            if (!isFinite(approx) || approx < 0) {
+                toast(t('profile.invalid_amount'));
+                return;
+            }
+        }
+        const body = Object.assign({
+            direction: backdrop.querySelector('#pg-direction').value,
+            item: (backdrop.querySelector('#pg-item').value || '').trim(),
+            approx_value: approx,
+            currency: (backdrop.querySelector('#pg-currency').value || '').trim().toUpperCase(),
+            gift_date: (backdrop.querySelector('#pg-date').value || '').trim(),
+            occasion: (backdrop.querySelector('#pg-occasion').value || '').trim(),
+            note: (backdrop.querySelector('#pg-note').value || '').trim(),
+        }, _profileAttachBody(backdrop.querySelector('#pg-attach').value));
+        if (!body.item) {
+            toast(t('profile.item_required'));
+            return;
+        }
+        const r = item
+            ? await api('PUT', `/api/trade/customers/${cid}/gifts/${item.id}`, body)
+            : await api('POST', `/api/trade/customers/${cid}/gifts`, body);
+        if (!r) return;
+        backdrop.remove();
+        toast(t('profile.saved'));
+        onSaved();
     });
 }
 
@@ -2052,7 +2300,9 @@ async function openCustomerProfile(cid) {
     panel.removeAttribute('inert');
     panel.setAttribute('aria-hidden', 'false');
     $('profile-back')?.addEventListener('click', closeCustomerProfile);
-    _bindProfileCardActions(cid, panel, mailboxBound, function () { openCustomerProfile(cid); });
+    _bindProfileCardActions(cid, panel, mailboxBound, function () {
+        return _refreshProfileSections(cid, panel, people, mailboxBound);
+    }, people);
     if (_profileEscHandler) document.removeEventListener('keydown', _profileEscHandler);
     _profileEscHandler = function (e) {
         if (e.key === 'Escape') {
