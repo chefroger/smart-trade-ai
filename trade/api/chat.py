@@ -635,6 +635,7 @@ async def trade_chat(
                         if gate_result else None),
             context=payload.context or "",
             skill=current_skill or "",
+            blocks=response_blocks,
         )
     payload_out = {"response": response, "conversation": conv}
     if response_blocks:
@@ -914,6 +915,7 @@ async def trade_chat_stream(
                                     if gate_result else None),
                         context=payload.context or "",
                         skill=current_skill or "",
+                        blocks=reply_blocks,
                     )
                     if conv:
                         conv_id = conv.get("id")

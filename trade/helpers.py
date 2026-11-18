@@ -383,6 +383,35 @@ def _estimate_tokens(text: str) -> int:
     return int(cjk_chars / 1.5 + other_chars / 4.0)
 
 
+def _blocks_history_summary(blocks) -> str:
+    """把 W10 结构化块压成一行，供下一轮 AI 看到（最长 300 字）。"""
+    if not isinstance(blocks, dict):
+        return ""
+    parts = []
+    facts = blocks.get("facts")
+    if isinstance(facts, list):
+        pairs = [
+            f"{str(f.get('label') or '').strip()}={str(f.get('value') or '').strip()}"
+            for f in facts[:4]
+            if isinstance(f, dict) and (f.get("label") or f.get("value"))
+        ]
+        if pairs:
+            parts.append("facts: " + "; ".join(pairs))
+    draft = blocks.get("draft")
+    if isinstance(draft, dict) and draft.get("subject"):
+        parts.append("draft: " + str(draft.get("subject")))
+    actions = blocks.get("next_actions")
+    if isinstance(actions, list):
+        labels = [
+            str(a.get("label") or a.get("action") or "")
+            for a in actions[:4] if isinstance(a, dict)
+        ]
+        labels = [x for x in labels if x]
+        if labels:
+            parts.append("actions: " + ", ".join(labels))
+    return " | ".join(parts).replace("\n", " ").replace("\r", " ")[:300]
+
+
 def _get_history_block(
     company_id: int | None,
     total_prompt_chars: int,
@@ -430,6 +459,12 @@ def _get_history_block(
         if row.get("response"):
             # 仅在有 response 时注入，避免空内容占用 token
             lines.append(f"[{ts}] assistant: {row['response'][:200]}")
+        # 剥掉的 trade-json 块单独补一行，下一轮 AI 才看得到结构化结果
+        blocks_summary = _blocks_history_summary(
+            (row.get("extra1") or {}).get("trade_blocks")
+        )
+        if blocks_summary:
+            lines.append(f"[{ts}] assistant blocks: {blocks_summary}")
     block = "\n".join(lines) + "\n"
 
     if hint:

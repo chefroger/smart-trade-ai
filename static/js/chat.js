@@ -852,7 +852,10 @@ async function loadChatHistory() {
                 : (c.files_read ? JSON.parse(c.files_read) : []);
         } catch(e) { filesRead = []; }
         if (c.query) addMsg('user', c.query, filesRead, false);
-        if (c.response) addMsg('assistant', c.response, null, false);
+        // 结构化块随 extra1 回放（W10/P1-5）；没有块时保持纯文本
+        const blocks = (c.extra1 && typeof c.extra1 === 'object')
+            ? (c.extra1.trade_blocks || null) : null;
+        if (c.response) addMsg('assistant', c.response, null, false, null, blocks);
     });
     // 加载历史后直接滚动到底部（最新消息）
     container.scrollTop = container.scrollHeight;

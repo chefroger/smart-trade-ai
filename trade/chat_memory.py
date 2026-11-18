@@ -59,11 +59,13 @@ def save(
     context: str = "",
     skill: str = "",
     customer_id: int | None = None,
+    blocks: dict | None = None,
 ) -> dict:
     """保存一条对话记录，作用域限定到指定公司。返回新插入的行，以字典形式呈现。
 
     skill 参数记录本次查询匹配到的技能名（存入 extra3），供质量统计按技能聚合评分。
     customer_id 记录这条对话属于哪个客户（None = 未关联客户），历史注入按它过滤。
+    blocks 是 W10 的 trade-json 结构化块，存 extra1，供历史回放与下一轮 AI 上下文。
     """
     if company_id is None:
         raise ValueError("company_id is required for conversation isolation")
@@ -96,10 +98,16 @@ def save(
 
         # extra3 记录匹配到的 skill（空则不写，保持旧行为兼容）
         extra3 = json.dumps({"skill": skill}, ensure_ascii=False) if skill else "{}"
+        # extra1 存结构化块（W10）；只接受 dict，防止把任意值塞进历史
+        extra1 = (
+            json.dumps({"trade_blocks": blocks}, ensure_ascii=False)
+            if isinstance(blocks, dict) and blocks else "{}"
+        )
         cur = conn.execute(
             "INSERT INTO conversations "
-            "(company_id, customer_id, library_id, query, response, files_read, context, extra3) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(company_id, customer_id, library_id, query, response, files_read, "
+            "context, extra1, extra3) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 company_id,
                 customer_id,
@@ -108,6 +116,7 @@ def save(
                 response,
                 json.dumps(files_read or [], ensure_ascii=False),
                 context,
+                extra1,
                 extra3,
             ),
         )
@@ -419,6 +428,7 @@ def save_with_context(
     retain_to_memory: bool = True,
     context: str = "",
     skill: str = "",
+    blocks: dict | None = None,
 ) -> dict:
     """保存一条对话记录到 SQLite，并可选择同步到 Hindsight 长期记忆。
 
@@ -428,7 +438,7 @@ def save_with_context(
     """
     result = save(
         company_id, query, response, library_id, files_read,
-        context=context, skill=skill, customer_id=customer_id,
+        context=context, skill=skill, customer_id=customer_id, blocks=blocks,
     )
     # 试用期价值小结：每保存一轮对话记一次「处理询盘」（旁路统计，失败不影响保存）
     try:
@@ -541,7 +551,7 @@ def get_recent(
     try:
         rows = conn.execute(
             "SELECT id, company_id, customer_id, library_id, query, response, "
-            "files_read, created_at "
+            "files_read, extra1, created_at "
             f"FROM conversations WHERE {' AND '.join(clauses)} "
             "ORDER BY id DESC LIMIT ?",
             params,
