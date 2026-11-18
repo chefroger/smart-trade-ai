@@ -211,7 +211,7 @@ function _replaceMainContent(html) {
     /** 替换主区内容，但保留统一外壳顶栏（zip s1–s4）。 */
     const main = $('main-content');
     for (const child of Array.from(main.children)) {
-        if (child.id === 'app-top' || child.id === 'app-top-dd') continue;
+        if (child.id === 'dust' || child.id === 'app-top' || child.id === 'app-top-dd') continue;
         child.remove();
     }
     main.insertAdjacentHTML('beforeend', html);
@@ -277,7 +277,7 @@ function navToView(view, chatCtx, chatName) {
     const cachedIds = new Set(Object.keys(viewCache).map(k => 'view-' + k));
     for (const child of Array.from(main.children)) {
         // 全局横幅与统一外壳顶栏不随视图切换删除
-        if (child.id === 'guidance-bar' || child.id === 'app-top' || child.id === 'app-top-dd') continue;
+        if (child.id === 'guidance-bar' || child.id === 'dust' || child.id === 'app-top' || child.id === 'app-top-dd') continue;
         if (!cachedIds.has(child.id)) {
             child.remove();
         }
