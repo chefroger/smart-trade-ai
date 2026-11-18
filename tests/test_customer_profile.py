@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -385,3 +386,400 @@ def test_list_facts_and_gifts_include_source_at(test_db, company_id, customer_id
     )
     gifts = {g["item"]: g for g in p.list_gifts(customer_id, company_id=company_id)}
     assert gifts["宜兴茶具"]["source_at"] == "2026-11-17 09:00:00"
+
+
+def _mk_contact(customer_id: int, company_id: int, name: str = "Lena", email: str = "") -> dict:
+    from trade import contacts
+
+    return contacts.create(
+        customer_id, company_id=company_id, data={"name": name, "email": email},
+    )
+
+
+class TestAttachMatrix:
+    """attach_to 三种挂法、脏值、跨客户/跨公司、删联系人归一（P1-7）。"""
+
+    def test_three_modes_roundtrip(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        contact = _mk_contact(customer_id, company_id)
+        cases = [
+            ({}, "none", None),
+            ({"attach_to": "primary"}, "primary", None),
+            ({"attach_to": "contact", "contact_id": contact["id"]}, "contact", contact["id"]),
+        ]
+        for i, (extra, want_at, want_cid) in enumerate(cases):
+            body = {"category": "喜好", "content": f"内容{i}"}
+            body.update(extra)
+            r = client.post(
+                f"/api/trade/customers/{customer_id}/facts",
+                headers=_h(token, cid), json=body,
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["attach_to"] == want_at
+            assert r.json()["contact_id"] == want_cid
+        items = client.get(
+            f"/api/trade/customers/{customer_id}/facts", headers=_h(token, cid),
+        ).json()["items"]
+        assert len(items) == 3
+
+    def test_gift_attach_contact_roundtrip(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        contact = _mk_contact(customer_id, company_id)
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/gifts",
+            headers=_h(token, cid),
+            json={"direction": "我方赠送", "item": "茶具",
+                  "attach_to": "contact", "contact_id": contact["id"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["attach_to"] == "contact"
+        assert r.json()["contact_id"] == contact["id"]
+
+    def test_dirty_attach_400(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "content": "x", "attach_to": "乱挂"},
+        )
+        assert r.status_code == 400
+        assert isinstance(r.json()["detail"], str)
+
+    def test_contact_without_id_400(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "content": "x", "attach_to": "contact"},
+        )
+        assert r.status_code == 400
+
+    def test_contact_unknown_400(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "content": "x",
+                  "attach_to": "contact", "contact_id": 999999},
+        )
+        assert r.status_code == 400
+
+    def test_contact_other_customer_400(self, api_client, company_id, customer_id):
+        from trade import customer
+
+        client, token, cid = api_client
+        other = customer.create("Other Cust", company_id=company_id)
+        foreign = _mk_contact(other["id"], company_id)
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "content": "x",
+                  "attach_to": "contact", "contact_id": foreign["id"]},
+        )
+        assert r.status_code == 400
+
+    def test_contact_other_company_400(self, api_client, company_id, customer_id):
+        from trade import company, customer
+
+        client, token, cid = api_client
+        other_co = company.create(name="Other Co", slug="other-co-attach")
+        other_cust = customer.create("Foreign Cust", company_id=other_co["id"])
+        foreign = _mk_contact(other_cust["id"], other_co["id"])
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "content": "x",
+                  "attach_to": "contact", "contact_id": foreign["id"]},
+        )
+        assert r.status_code == 400
+
+    def test_primary_requires_primary(self, api_client, company_id):
+        from trade import customer
+
+        client, token, cid = api_client
+        bare = customer.create("No Primary", company_id=company_id)
+        r = client.post(
+            f"/api/trade/customers/{bare['id']}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "content": "x", "attach_to": "primary"},
+        )
+        assert r.status_code == 400
+
+    def test_deleted_contact_reads_as_none(self, api_client, company_id, customer_id):
+        from trade import contacts
+
+        client, token, cid = api_client
+        contact = _mk_contact(customer_id, company_id)
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "content": "挂人后删联系人",
+                  "attach_to": "contact", "contact_id": contact["id"]},
+        )
+        assert r.status_code == 200
+        assert contacts.delete(customer_id, contact["id"], company_id=company_id)
+        items = client.get(
+            f"/api/trade/customers/{customer_id}/facts", headers=_h(token, cid),
+        ).json()["items"]
+        row = [i for i in items if i["content"] == "挂人后删联系人"][0]
+        assert row["attach_to"] == "none"
+        assert row["contact_id"] is None
+
+    def test_primary_name_updates(self, company_id, customer_id, test_db):
+        from trade import customer
+
+        customer.update(customer_id, company_id=company_id, contact="Hans New")
+        ov = customer.get_overview(customer_id, company_id=company_id)
+        assert ov["people"][0]["name"] == "Hans New"
+
+
+class TestApiValidation:
+    """400 不是 422、PUT 指纹 409、作废复活、并发、跨公司 404（P1-7）。"""
+
+    def test_type_errors_are_400_not_422(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        h = _h(token, cid)
+        cases = [
+            ("post", f"/api/trade/customers/{customer_id}/facts",
+             {"category": "喜好", "content": 123}),
+            ("post", f"/api/trade/customers/{customer_id}/facts",
+             {"category": "喜好", "content": "x", "attach_to": 123}),
+            ("post", f"/api/trade/customers/{customer_id}/gifts",
+             {"direction": "我方赠送", "item": ["x"]}),
+            ("post", f"/api/trade/customers/{customer_id}/gifts",
+             {"direction": "我方赠送", "item": "x", "approx_value": "abc"}),
+        ]
+        for method, path, body in cases:
+            r = getattr(client, method)(path, headers=h, json=body)
+            assert r.status_code == 400, (path, body, r.text)
+            assert isinstance(r.json()["detail"], str)
+
+    def test_ai_visible_strict_400(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        h = _h(token, cid)
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts", headers=h,
+            json={"category": "喜好", "content": "x"},
+        )
+        fid = r.json()["id"]
+        bad = client.put(
+            f"/api/trade/customers/{customer_id}/facts/{fid}",
+            headers=h, json={"ai_visible": "yes"},
+        )
+        assert bad.status_code == 400
+
+    def test_put_fingerprint_conflict_409(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        h = _h(token, cid)
+        client.post(
+            f"/api/trade/customers/{customer_id}/facts", headers=h,
+            json={"category": "喜好", "subject": "咖啡", "content": "喜欢手冲"},
+        )
+        f2 = client.post(
+            f"/api/trade/customers/{customer_id}/facts", headers=h,
+            json={"category": "喜好", "subject": "茶", "content": "喜欢红茶"},
+        ).json()
+        r = client.put(
+            f"/api/trade/customers/{customer_id}/facts/{f2['id']}", headers=h,
+            json={"category": "喜好", "subject": "咖啡", "content": "喜欢手冲"},
+        )
+        assert r.status_code == 409
+        assert r.json()["detail"]
+
+    def test_voided_manual_fact_resurrects(self, company_id, customer_id, test_db):
+        from trade import profile as p
+
+        first = p.create_fact_manual(
+            customer_id, company_id=company_id, category="喜好", content="喜欢足球",
+        )
+        p.void_fact(first["id"], customer_id=customer_id, company_id=company_id)
+        again = p.create_fact_manual(
+            customer_id, company_id=company_id, category="喜好", content="喜欢足球",
+        )
+        assert again["id"] == first["id"]
+        assert again["status"] == "已确认"
+
+    def test_concurrent_same_fingerprint_one_row(self, company_id, customer_id, test_db):
+        from trade import profile as p
+        from trade.database import get_connection
+
+        barrier = threading.Barrier(2)
+        results: list[str] = []
+
+        def worker() -> None:
+            barrier.wait()
+            try:
+                p.create_fact_manual(
+                    customer_id, company_id=company_id,
+                    category="喜好", content="并发写入",
+                )
+                results.append("ok")
+            except p.ProfileConflictError:
+                results.append("conflict")
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert sorted(results) == ["conflict", "ok"]
+        conn = get_connection()
+        try:
+            n = conn.execute(
+                "SELECT COUNT(*) AS c FROM customer_facts "
+                "WHERE customer_id=? AND company_id=?",
+                (customer_id, company_id),
+            ).fetchone()["c"]
+        finally:
+            conn.close()
+        assert n == 1
+
+    def test_cross_company_404(self, api_client, company_id, customer_id):
+        from trade import company, customer
+        from trade.api import deps
+
+        client, token, cid = api_client
+        h = _h(token, cid)
+        fid = client.post(
+            f"/api/trade/customers/{customer_id}/facts", headers=h,
+            json={"category": "喜好", "content": "x"},
+        ).json()["id"]
+        other = company.create(name="Other 404", slug="other-404-profile")
+        customer.create("Other 404 Cust", company_id=other["id"])
+        deps._ACTIVE_COMPANY.pop(token, None)
+        h2 = _h(token, other["id"])
+        assert client.get(
+            f"/api/trade/customers/{customer_id}/facts", headers=h2,
+        ).status_code == 404
+        assert client.put(
+            f"/api/trade/customers/{customer_id}/facts/{fid}",
+            headers=h2, json={"content": "y"},
+        ).status_code == 404
+
+
+class TestPurge:
+    def test_purge_company_cascades_profile(self, company_id, customer_id, test_db):
+        from trade import profile as p
+        from trade.company import crud
+        from trade.database import get_connection
+
+        p.create_fact_manual(
+            customer_id, company_id=company_id, category="喜好", content="喜欢足球",
+        )
+        p.create_gift_manual(
+            customer_id, company_id=company_id, direction="我方赠送", item="茶具",
+        )
+        assert crud.purge(company_id) is True
+        conn = get_connection()
+        try:
+            f = conn.execute(
+                "SELECT COUNT(*) AS c FROM customer_facts WHERE company_id=?",
+                (company_id,),
+            ).fetchone()["c"]
+            g = conn.execute(
+                "SELECT COUNT(*) AS c FROM customer_gifts WHERE company_id=?",
+                (company_id,),
+            ).fetchone()["c"]
+        finally:
+            conn.close()
+        assert (f, g) == (0, 0)
+
+
+class TestExtractEdges:
+    """提取：source_id 不在集合、脏分类、只取 query 不取 response、502、409（P1-7）。"""
+
+    def _seed_chat(self, company_id: int, customer_id: int) -> int:
+        from trade import chat_memory
+        from trade.database import get_connection
+
+        chat_memory.save_with_context(
+            company_id=company_id, library_id=None,
+            query="客户说他喜欢滑雪也喜欢蓝色包装",
+            response="回复：他明确说不喝酒。",
+            customer_id=customer_id,
+        )
+        conn = get_connection()
+        try:
+            return int(conn.execute(
+                "SELECT id FROM conversations WHERE customer_id=? "
+                "ORDER BY id DESC LIMIT 1",
+                (customer_id,),
+            ).fetchone()["id"])
+        finally:
+            conn.close()
+
+    def test_invalid_source_and_dirty_category_dropped(
+        self, company_id, customer_id, test_db
+    ):
+        from trade import profile as p
+
+        conv_id = self._seed_chat(company_id, customer_id)
+
+        async def fake_llm(*args, **kwargs):
+            return (
+                '{"facts":['
+                '{"category":"乱七八糟","content":"x","quote":"喜欢滑雪",'
+                f'"source_id":{conv_id}}},'
+                '{"category":"喜好","content":"y","quote":"喜欢滑雪",'
+                '"source_id":9999}'
+                '],"gifts":[]}'
+            )
+
+        with patch("trade.doc_extract.resolve_extraction_model",
+                   return_value=("deepseek", "flash", "k")), \
+             patch("trade.profile._call_extract_llm", side_effect=fake_llm):
+            result = p.extract_from_sources(
+                customer_id, company_id=company_id, source="chat", limit=10,
+            )
+        assert result["added_facts"] == 0
+        assert result["dropped_invalid"] >= 2
+
+    def test_response_text_not_used(self, company_id, customer_id, test_db):
+        """取材只取 query：原句只在 response 里 → 丢弃。"""
+        from trade import profile as p
+
+        conv_id = self._seed_chat(company_id, customer_id)
+
+        async def fake_llm(*args, **kwargs):
+            return (
+                '{"facts":[{"category":"禁忌","content":"不喝酒",'
+                f'"quote":"他明确说不喝酒","source_id":{conv_id}}}],'
+                '"gifts":[]}'
+            )
+
+        with patch("trade.doc_extract.resolve_extraction_model",
+                   return_value=("deepseek", "flash", "k")), \
+             patch("trade.profile._call_extract_llm", side_effect=fake_llm):
+            result = p.extract_from_sources(
+                customer_id, company_id=company_id, source="chat", limit=10,
+            )
+        assert result["added_facts"] == 0
+        assert result["dropped_invalid"] == 1
+
+    def test_model_error_502(self, api_client, company_id, customer_id):
+        client, token, cid = api_client
+        self._seed_chat(company_id, customer_id)
+        with patch("trade.doc_extract.resolve_extraction_model",
+                   return_value=("deepseek", "flash", "k")), \
+             patch("trade.profile._call_extract_llm",
+                   side_effect=RuntimeError("boom")):
+            r = client.post(
+                f"/api/trade/customers/{customer_id}/facts/extract",
+                headers=_h(token, cid), json={"source": "chat", "limit": 5},
+            )
+        assert r.status_code == 502
+        assert "提取失败" in r.json()["detail"]
+
+    def test_extract_in_progress_409(self, api_client, company_id, customer_id):
+        from trade import profile as p
+
+        client, token, cid = api_client
+        p._EXTRACT_LOCKS.add(customer_id)
+        try:
+            r = client.post(
+                f"/api/trade/customers/{customer_id}/facts/extract",
+                headers=_h(token, cid), json={"source": "chat", "limit": 5},
+            )
+        finally:
+            p._EXTRACT_LOCKS.discard(customer_id)
+        assert r.status_code == 409

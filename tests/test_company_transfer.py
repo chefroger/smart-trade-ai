@@ -833,3 +833,145 @@ def test_import_old_package_without_contacts_json(desktop, tmp_path):
 
     report = import_company(old_pkg, force_new=True)
     assert report["tables"]["contacts"] == {"inserted": 0, "skipped": 0}
+
+
+class TestProfileTransfer:
+    """画像导出/导入：排除客户索要、挂人与 source_ref 重映射（P1-7）。"""
+
+    def test_export_excludes_requests_and_manifest(self, desktop, tmp_path):
+        from trade import profile as p
+
+        source = crud.create(_unique("Profile Export"))
+        cid = _insert_sample_rows(source["id"])["customer_id"]
+        p.create_fact_manual(
+            cid, company_id=source["id"], category="喜好", content="喜欢红茶",
+        )
+        for direction, item in (
+            ("我方赠送", "茶具"), ("客户赠送", "外套"), ("客户索要", "现金"),
+        ):
+            p.create_gift_manual(
+                cid, company_id=source["id"], direction=direction, item=item,
+            )
+        package = tmp_path / "profile-export.zip"
+        export_company(source["id"], package)
+        with zipfile.ZipFile(package) as zf:
+            facts = json.loads(zf.read("db/customer_facts.json").decode("utf-8"))
+            gifts = json.loads(zf.read("db/customer_gifts.json").decode("utf-8"))
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert len(facts) == 1
+        assert {g["item"] for g in gifts} == {"茶具", "外套"}
+        assert any("customer_gifts(客户索要)" in x for x in manifest["excluded"])
+
+    def test_roundtrip_remaps_attach_and_source_ref(self, desktop, tmp_path):
+        from trade import contacts
+        from trade import profile as p
+
+        source = crud.create(_unique("Profile Roundtrip"))
+        sid = source["id"]
+        cid = _insert_sample_rows(sid)["customer_id"]
+        conn = database.get_connection()
+        try:
+            conv_id = conn.execute(
+                "SELECT id FROM conversations WHERE customer_id=? ORDER BY id LIMIT 1",
+                (cid,),
+            ).fetchone()["id"]
+        finally:
+            conn.close()
+
+        contact = contacts.create(
+            cid, company_id=sid, data={"name": "Lena", "email": "lena@example.com"},
+        )
+        orphan = contacts.create(
+            cid, company_id=sid, data={"name": "Orphan", "email": "orphan@example.com"},
+        )
+        p.create_fact_manual(
+            cid, company_id=sid, category="喜好", content="喜欢红茶",
+            attach_to="contact", contact_id=contact["id"],
+        )
+        p.create_fact_manual(
+            cid, company_id=sid, category="喜好", content="孤儿挂人",
+            attach_to="contact", contact_id=orphan["id"],
+        )
+        # 删联系人：FK 置 NULL；导出仍是 contact+NULL，导入应降级 none 并计 unmapped
+        contacts.delete(cid, orphan["id"], company_id=sid)
+        assert p._insert_pending_fact(
+            company_id=sid, customer_id=cid, category="禁忌", subject="",
+            content="不喝酒", source_type="chat", source_ref=conv_id,
+            source_quote="",
+        )
+        assert p._insert_pending_fact(
+            company_id=sid, customer_id=cid, category="喜好", subject="",
+            content="喜欢蓝色", source_type="email", source_ref=1,
+            source_quote="",
+        )
+        p.create_gift_manual(
+            cid, company_id=sid, direction="我方赠送", item="茶具",
+        )
+
+        package = tmp_path / "profile-roundtrip.zip"
+        export_company(sid, package)
+        report = import_company(package, force_new=True)
+        target_id = report["target"]["id"]
+        conn = database.get_connection()
+        try:
+            target_cid = conn.execute(
+                "SELECT id FROM customers WHERE company_id=? AND name='Northwind'",
+                (target_id,),
+            ).fetchone()["id"]
+            facts = {
+                r["content"]: dict(r) for r in conn.execute(
+                    "SELECT * FROM customer_facts WHERE company_id=? AND customer_id=?",
+                    (target_id, target_cid),
+                ).fetchall()
+            }
+            target_conv = conn.execute(
+                "SELECT id FROM conversations WHERE company_id=? AND customer_id=? "
+                "ORDER BY id LIMIT 1",
+                (target_id, target_cid),
+            ).fetchone()["id"]
+            target_contact = conn.execute(
+                "SELECT id FROM contacts WHERE company_id=? AND customer_id=? "
+                "AND name='Lena'",
+                (target_id, target_cid),
+            ).fetchone()["id"]
+            gift_n = conn.execute(
+                "SELECT COUNT(*) AS c FROM customer_gifts "
+                "WHERE company_id=? AND customer_id=?",
+                (target_id, target_cid),
+            ).fetchone()["c"]
+        finally:
+            conn.close()
+
+        assert set(facts) == {"喜欢红茶", "孤儿挂人", "不喝酒", "喜欢蓝色"}
+        assert facts["喜欢红茶"]["attach_to"] == "contact"
+        assert facts["喜欢红茶"]["contact_id"] == target_contact
+        assert facts["孤儿挂人"]["attach_to"] == "none"
+        assert facts["孤儿挂人"]["contact_id"] is None
+        assert facts["不喝酒"]["source_ref"] == target_conv
+        assert facts["喜欢蓝色"]["source_ref"] is None
+        assert gift_n == 1
+        assert report["tables"]["customer_facts"]["contact_unmapped"] >= 1
+
+    def test_old_package_without_profile_tables(self, desktop, tmp_path):
+        source = crud.create(_unique("Profile Old Pkg"))
+        _insert_sample_rows(source["id"])
+        package = tmp_path / "profile-old.zip"
+        export_company(source["id"], package)
+        old_pkg = tmp_path / "profile-old-rewritten.zip"
+        drop = {"db/customer_facts.json", "db/customer_gifts.json"}
+        with zipfile.ZipFile(package) as src, zipfile.ZipFile(old_pkg, "w") as dst:
+            for info in src.infolist():
+                data = src.read(info.filename)
+                if info.filename in drop:
+                    continue
+                if info.filename == "checksums.sha256":
+                    lines = data.decode("utf-8").splitlines()
+                    lines = [ln for ln in lines if not any(d in ln for d in drop)]
+                    data = ("\n".join(lines) + "\n").encode("utf-8")
+                dst.writestr(info, data)
+        with zipfile.ZipFile(old_pkg) as zf:
+            assert "db/customer_facts.json" not in zf.namelist()
+            assert "db/customer_gifts.json" not in zf.namelist()
+        report = import_company(old_pkg, force_new=True)
+        assert report["tables"]["customer_facts"]["inserted"] == 0
+        assert report["tables"]["customer_gifts"]["inserted"] == 0
