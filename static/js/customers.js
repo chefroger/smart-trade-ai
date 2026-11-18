@@ -909,8 +909,22 @@ async function openCustomerWall(cid) {
     }
 }
 
+// 客户编辑两处 UI 的 ESC 关闭（编辑表单弹窗优先，其次侧滑详情面板）
+let _custEditEscBound = false;
+function _bindCustEditEsc() {
+    if (_custEditEscBound) return;
+    _custEditEscBound = true;
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        const modal = document.getElementById('customer-modal');
+        if (modal && !modal.classList.contains('hidden')) { hideModal('customer-modal'); return; }
+        if (document.getElementById('customer-detail-panel')) { closeCustomerDetail(); }
+    });
+}
+
 // ── Customer Detail Slide Panel ────────────────────────────────
 async function showCustomerDetail(cid) {
+    _bindCustEditEsc();
     closeCustomerDetail();  // 先关闭旧面板，防止重复 id
     const c = allCustomers.find(x => x.id === cid);
     if (!c) return;
@@ -1464,6 +1478,7 @@ function showCustomerEditModal(cid) {
         ['cust-name','cust-contact','cust-title','cust-responsibility','cust-country','cust-city','cust-email','cust-phone','cust-whatsapp','cust-linkedin','cust-website','cust-tier','cust-buyer-type','cust-main-category','cust-match-score','cust-backup-email','cust-note','cust-follow-up-note'].forEach(id => $(id).value='');
         if ($('cust-function')) $('cust-function').value = '其他';
     }
+    _bindCustEditEsc();
     showModal('customer-modal');
 }
 
