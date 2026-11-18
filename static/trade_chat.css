@@ -830,10 +830,12 @@ body {
     display: none;
 }
 body > .sidebar, body > .main, body > .modal-backdrop,
-body > .slide-panel-backdrop, body > .hermes-upgrade-overlay,
+body > .hermes-upgrade-overlay,
 body > #toast-container, body > #customer-wall {
     position: relative; z-index: 1;
 }
+/* .slide-panel-backdrop 必须保持 fixed 全屏遮盖：上面的覆盖层规则若命中它，
+   会把它变成 body flex 里的流式子元素，把 .main 挤窄（顶栏标题竖排、面板顶到边缘） */
 .sidebar {
     width: 270px; background: var(--panel2) !important;
     border-right: 2px dashed rgba(20,20,20,.45) !important;
