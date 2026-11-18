@@ -93,6 +93,18 @@ function stageHtmlIsSafe() {
     const m = SRC.match(/const stageHtml\s*=\s*([^;]+);/);
     if (!m) return false;
     const expr = m[1];
+    // 内联 map，或委托给 _stagePillsHtml（其内部仍须 map + esc(s)）
+    if (/_stagePillsHtml\s*\(/.test(expr)) {
+        const fn = SRC.match(
+            /function _stagePillsHtml\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/
+        );
+        if (!fn) return false;
+        const body = fn[1];
+        if (!/_CRM_STAGES\.map\s*\(/.test(body)) return false;
+        if (!/esc\s*\(\s*s\s*\)/.test(body)) return false;
+        if (/\+\s*stage\s*\+/.test(body)) return false;
+        return true;
+    }
     // 必须来自 _CRM_STAGES.map；正文走 esc(s)；不得把用户 stage 拼进 HTML 文本
     if (!/_CRM_STAGES\.map\s*\(/.test(expr)) return false;
     if (!/esc\s*\(\s*s\s*\)/.test(expr)) return false;

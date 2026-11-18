@@ -18,11 +18,12 @@ def test_db(monkeypatch, tmp_path):
     import trade.database as _db
     original = _db._get_db_path
     _db._get_db_path = lambda: db_path
-    from trade.database import SCHEMA_SQL, _add_spare_columns
+    from trade.database import SCHEMA_SQL, _add_customer_crm_columns, _add_spare_columns
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA_SQL)
     _add_spare_columns(conn)
+    _add_customer_crm_columns(conn)
     conn.commit()
     conn.close()
     import trade.company as _co
@@ -154,7 +155,7 @@ class TestCustomerCrmColumns:
 
         _add_customer_crm_columns(conn)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)")}
-        assert {"stage", "next_follow_up_date", "is_starred"} <= cols
+        assert {"stage", "next_follow_up_date", "is_starred", "stage_override"} <= cols
         assert conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0] == before_count
 
         row = conn.execute("SELECT * FROM customers WHERE id=1").fetchone()
@@ -289,7 +290,7 @@ class TestCustomerCrmColumns:
         conn.row_factory = sqlite3.Row
         try:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(customers)")}
-            assert {"stage", "next_follow_up_date", "is_starred"} <= cols
+            assert {"stage", "next_follow_up_date", "is_starred", "stage_override"} <= cols
             after = conn.execute(
                 "SELECT id, name, contact, note, extra1, extra2, "
                 "stage, next_follow_up_date, is_starred FROM customers ORDER BY id"
