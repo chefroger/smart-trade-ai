@@ -829,13 +829,13 @@ body {
     position: fixed; inset: 0; z-index: 0; pointer-events: none;
     display: none;
 }
-body > .sidebar, body > .main, body > .modal-backdrop,
-body > .hermes-upgrade-overlay,
+/* 只把背景之上的常驻区/页内视图设为 relative；fixed 遮盖层（.modal-backdrop /
+   .slide-panel-backdrop / .hermes-upgrade-overlay）绝不能命中，否则会被改成
+   body flex 的流式子元素，把 .main 挤窄并让弹窗贴边裁切。 */
+body > .sidebar, body > .main,
 body > #toast-container, body > #customer-wall {
     position: relative; z-index: 1;
 }
-/* .slide-panel-backdrop 必须保持 fixed 全屏遮盖：上面的覆盖层规则若命中它，
-   会把它变成 body flex 里的流式子元素，把 .main 挤窄（顶栏标题竖排、面板顶到边缘） */
 .sidebar {
     width: 270px; background: var(--panel2) !important;
     border-right: 2px dashed rgba(20,20,20,.45) !important;
