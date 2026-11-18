@@ -147,7 +147,7 @@ def build_primary_person(cust: dict) -> dict | None:
     responsibility = _trim(e2.get("responsibility"))
 
     display_name = name if name else "未命名联系人"
-    # N3 终稿 §2：主联系人是只读拼装，备注不拼客户级 note / follow_up_note（客户级字段只在客户卡显示）
+    # 2026-11-18 口径：主联系人是只读拼装，备注不拼客户级 note / follow_up_note（客户级字段只在客户卡显示）
     return {
         "id": None,
         "name": display_name,

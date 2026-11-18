@@ -388,6 +388,47 @@ def test_list_facts_and_gifts_include_source_at(test_db, company_id, customer_id
     assert gifts["宜兴茶具"]["source_at"] == "2026-11-17 09:00:00"
 
 
+def test_source_at_ignores_other_company(test_db, company_id, customer_id):
+    """source_ref 指到别家公司时不带出日期；company_id 为 NULL 的旧来源仍放行。"""
+    from trade import company, customer
+    from trade import profile as p
+    from trade.database import get_connection
+
+    other = company.create(name="Other Src Co", slug="other-src-co")
+    other_cust = customer.create("Other Src Cust", company_id=other["id"])
+    conn = get_connection()
+    try:
+        other_conv = conn.execute(
+            "INSERT INTO conversations (company_id, customer_id, query, response, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (other["id"], other_cust["id"], "q", "r", "2026-01-01 00:00:00"),
+        ).lastrowid
+        legacy_conv = conn.execute(
+            "INSERT INTO conversations (company_id, customer_id, query, response, created_at) "
+            "VALUES (NULL, NULL, ?, ?, ?)",
+            ("q2", "r2", "2026-02-02 00:00:00"),
+        ).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert p._insert_pending_fact(
+        company_id=company_id, customer_id=customer_id, category="喜好",
+        subject="", content="跨公司来源", source_type="chat",
+        source_ref=other_conv, source_quote="",
+    )
+    assert p._insert_pending_fact(
+        company_id=company_id, customer_id=customer_id, category="喜好",
+        subject="", content="旧数据来源", source_type="chat",
+        source_ref=legacy_conv, source_quote="",
+    )
+    items = [i for i in p.list_facts(customer_id, company_id=company_id)
+             if i["content"] in ("跨公司来源", "旧数据来源")]
+    by_content = {i["content"]: i for i in items}
+    assert by_content["跨公司来源"]["source_at"] is None
+    assert by_content["旧数据来源"]["source_at"] == "2026-02-02 00:00:00"
+
+
 def _mk_contact(customer_id: int, company_id: int, name: str = "Lena", email: str = "") -> dict:
     from trade import contacts
 

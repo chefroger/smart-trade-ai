@@ -109,7 +109,7 @@ function _parseExtra3(c) { try { return JSON.parse(c.extra3||'{}'); } catch(e) {
 
 // #region wall-followup-note
 // 客户级跟进备注：只挂在主联系人卡片，单独一行并标明「客户级」，不混入人物 note
-// （N3 终稿 §2 + 2026-11-18 口径 C：人物 note 保持空，客户级字段单独展示）
+// （2026-11-18 口径 C：人物 note 保持空，客户级字段单独展示）
 function _primaryFollowUpNoteHtml(note, isPrimary) {
     const text = String(note || '').trim();
     if (!isPrimary || !text) return '';

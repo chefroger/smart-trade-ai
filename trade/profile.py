@@ -279,8 +279,12 @@ _SOURCE_AT_COLUMNS = {
 }
 
 
-def _attach_source_at(items: list[dict]) -> list[dict]:
-    """给事实/礼物补 source_at（来源条目的日期，只读推导）。"""
+def _attach_source_at(items: list[dict], company_id: int) -> list[dict]:
+    """给事实/礼物补 source_at（来源条目的日期，只读推导）。
+
+    来源行必须属于当前公司（历史数据 company_id 为 NULL 的旧邮件仍放行），
+    避免 source_ref 损坏时把别家公司的日期带出来。
+    """
     if not items:
         return items
     # 先按来源类型收集 id，批量查一次，避免逐条 N+1
@@ -304,8 +308,9 @@ def _attach_source_at(items: list[dict]) -> list[dict]:
                 try:
                     rows = conn.execute(
                         f"SELECT id, {col} AS source_at FROM {table} "
-                        f"WHERE id IN ({marks})",
-                        tuple(ids),
+                        f"WHERE (company_id = ? OR company_id IS NULL) "
+                        f"AND id IN ({marks})",
+                        (company_id, *ids),
                     ).fetchall()
                 except sqlite3.Error:
                     continue  # 来源表缺失（如 visit 未启用）→ 只缺日期，不影响列表
@@ -383,7 +388,7 @@ def list_facts(
             return (ub > ua) - (ub < ua)
 
         items.sort(key=cmp_to_key(_cmp))
-        return _attach_source_at(items)
+        return _attach_source_at(items, company_id)
     finally:
         conn.close()
 
@@ -659,7 +664,7 @@ def list_gifts(
                 "gift_date DESC, updated_at DESC",
                 (company_id, customer_id),
             ).fetchall()
-        return _attach_source_at([_gift_row(r) for r in rows])
+        return _attach_source_at([_gift_row(r) for r in rows], company_id)
     finally:
         conn.close()
 
