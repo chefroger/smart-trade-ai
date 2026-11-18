@@ -305,6 +305,18 @@ const I18N = {
         'contacts.tags_empty':'暂无标签',
         'contacts.tags_too_long':'单个标签最多 20 个字符',
         'contacts.tags_too_many':'标签最多 20 个',
+        // inquiry（墙内询盘区 N4）
+        'inquiry.section':'询盘',
+        'inquiry.empty':'暂无询盘，新建一个开始跟进',
+        'inquiry.title_ph':'询盘标题',
+        'inquiry.create':'新建询盘',
+        'inquiry.delete':'删除',
+        'inquiry.stage_auto':'自动（按询盘推导）',
+        'inquiry.manual_badge':'手',
+        'inquiry.manual_title':'手动锁定，点击卡片墙可改回自动',
+        'inquiry.created':'询盘已创建',
+        'inquiry.updated':'询盘已更新',
+        'inquiry.deleted':'询盘已删除',
     },
     en: {
         'nav.daily':'Daily Briefing','nav.lead':'Lead Gen','nav.platform':'Site Audit',
@@ -580,6 +592,17 @@ const I18N = {
         'contacts.tags_empty':'No tags yet',
         'contacts.tags_too_long':'Each tag max 20 characters',
         'contacts.tags_too_many':'At most 20 tags',
+        'inquiry.section':'Inquiries',
+        'inquiry.empty':'No inquiries yet — create one to start tracking',
+        'inquiry.title_ph':'Inquiry title',
+        'inquiry.create':'New inquiry',
+        'inquiry.delete':'Delete',
+        'inquiry.stage_auto':'Auto (from inquiries)',
+        'inquiry.manual_badge':'M',
+        'inquiry.manual_title':'Manually locked — open the wall to switch back to Auto',
+        'inquiry.created':'Inquiry created',
+        'inquiry.updated':'Inquiry updated',
+        'inquiry.deleted':'Inquiry deleted',
     }
 };
 
