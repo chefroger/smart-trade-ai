@@ -236,6 +236,8 @@ function navToView(view, chatCtx, chatName) {
 
     currentView = view;
     if (chatCtx) { currentChatContext = chatCtx; currentChatName = chatName || ''; }
+    // 今日简报用右栏承载待办，顶部横幅隐藏（zip s1 版式）
+    document.body.classList.toggle('view-daily', view === 'chat' && chatCtx === 'daily');
     saveState();
 
     // Update sidebar active

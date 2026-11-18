@@ -1369,10 +1369,68 @@ body {
 }
 .app-top .clock b { font-weight: 400; color: var(--ink); }
 .main > .dd { height: 1px; background: var(--dd); flex: none; }
+/* #main-content > div 的通用 flex:1 会命中分隔线，必须显式钉住 1px */
+#main-content > #app-top-dd { height: 1px !important; flex: 0 0 1px !important; }
 /* zip 微光粒子层：在网格底之上、内容之下 */
 #dust { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
 .main > .app-top, .main > .dd, .main > #guidance-bar,
 .main > .chat-view, .main > .panel-view,
 .main > .empty-state, .main > #onboarding-panel {
     position: relative; z-index: 1;
+}
+
+/* ── s1 今日简报：对话 + 右栏（简报 / 待办 / 定时任务）────────────── */
+.chat-layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 0; }
+.chat-layout.single { grid-template-columns: minmax(0, 1fr); }
+.chat-main { display: flex; flex-direction: column; min-height: 0; padding: 0 40px 22px; }
+.chat-main .chat-messages { max-width: none; margin: 0; width: 100%; }
+.chat-main .chat-input-area { max-width: none; margin: 0; width: 100%; }
+.chat-cmd {
+    font-family: var(--mono); font-size: 22px; letter-spacing: .22em;
+    color: var(--ink); padding: 30px 0 22px; text-align: center;
+}
+.chat-cmd .cmd-sub {
+    margin-top: 8px; font-family: var(--sans); font-size: 12.5px;
+    letter-spacing: 0; color: var(--muted);
+}
+.chat-rail {
+    border-left: 1px dashed var(--ink); padding: 18px 20px 30px;
+    display: flex; flex-direction: column; gap: 14px; min-height: 0;
+    overflow-y: auto; background: rgba(251, 252, 252, .55);
+}
+.rail-box { border: 1px dashed var(--ink); background: var(--paper); padding: 12px 14px; }
+.rail-grow { flex: 1; min-height: 0; overflow-y: auto; }
+.rail-bh { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.rail-bh .t { font-size: 12px; font-weight: 600; }
+.rail-bh .lbl {
+    font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .1em;
+}
+.rail-kpis {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink);
+}
+.rail-kpis > div { text-align: center; padding: 10px 0; }
+.rail-kpis .n { font-family: var(--mono); font-size: 20px; line-height: 1.1; }
+.rail-kpis .n.r { color: var(--red); }
+.rail-kpis .lbl { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.rail-line { font-size: 12px; color: var(--ink-2); margin-top: 10px; line-height: 1.6; }
+.rail-todo-item {
+    display: flex; align-items: flex-start; gap: 8px; font-size: 12px;
+    padding: 5px 0; border-bottom: 1px dashed var(--faint);
+}
+.rail-todo-item:last-child { border-bottom: none; }
+.rail-todo-item .ck { width: 11px; height: 11px; border: 1px solid var(--ink); margin-top: 3px; flex: none; }
+.rail-todo-item.done .ck { background: var(--ink); }
+.rail-todo-item.done .tx { color: var(--muted); text-decoration: line-through; }
+.rail-todo-item .sub { display: block; font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.rail-cron-item {
+    display: flex; gap: 8px; font-size: 11.5px; color: var(--ink-2);
+    padding: 4px 0; border-bottom: 1px dashed var(--faint);
+}
+.rail-cron-item:last-child { border-bottom: none; }
+.rail-cron-item .mono { color: var(--muted); flex: none; font-family: var(--mono); }
+body.view-daily #guidance-bar { display: none !important; }
+@media (max-width: 1100px) {
+    .chat-layout { grid-template-columns: minmax(0, 1fr); }
+    .chat-rail { display: none; }
 }

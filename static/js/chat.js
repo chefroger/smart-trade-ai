@@ -1,8 +1,9 @@
 // ═════════════════════ CHAT VIEW ═════════════════════
 function renderChatViewInto(container, ctx, name) {
     const coName = currentCompanyId ? (companies.find(c => c.id === currentCompanyId)?.name || '') : '';
-
-    container.innerHTML = `
+    const isDaily = ctx === 'daily';
+    // 今日简报：zip s1 两栏（对话 + 右侧简报/待办/定时任务），不再用页内标题条
+    const topbarHtml = isDaily ? '' : `
         <div class="chat-topbar">
             <div style="display:flex;align-items:center;gap:8px;">
                 <h2>${esc(name)}</h2>
@@ -17,8 +18,21 @@ function renderChatViewInto(container, ctx, name) {
                 <button onclick="showAddLibraryModal()" title="${t('chat.lib.add')}" style="height:30px;width:30px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-card);cursor:pointer;font-size:16px;">+</button>` : ''}
                 <button onclick="clearChat()">${t('chat.clr')}</button>
             </div>
+        </div>`;
+    const railHtml = isDaily ? `
+        <aside class="chat-rail">
+            <div class="rail-box" id="rail-brief"></div>
+            <div class="rail-box rail-grow" id="rail-todo"></div>
+            <div class="rail-box" id="rail-cron"></div>
+        </aside>` : '';
+    container.innerHTML = `
+        <div class="chat-layout${isDaily ? '' : ' single'}">
+        <section class="chat-main">
+        ${topbarHtml}
+        <div class="chat-cmd">
+            <div class="q">WHAT ARE YOUR COMMANDS?<span class="cmd-cursor"></span></div>
+            <div class="cmd-sub">${esc(t('chat.cmd.sub'))}</div>
         </div>
-        <div class="chat-cmd" aria-hidden="true">WHAT ARE YOUR COMMANDS?<span class="cmd-cursor"></span></div>
         <div class="chat-messages" id="chat-messages">
             <div class="empty-state" id="chat-empty">
                 <div class="empty-icon">💬</div>
@@ -36,6 +50,9 @@ function renderChatViewInto(container, ctx, name) {
                 <button type="button" class="chat-send-btn" onclick="sendMsg()" id="send-btn" title="${currentLang==='en'?'Send':'发送'}">${typeof iconHtml==='function'?iconHtml('send',16):''}<span>${currentLang==='en'?'Send':'发送'}</span></button>
                 <button type="button" class="chat-stop-btn hidden" id="stop-btn" title="${currentLang==='en'?'Stop':'停止'}">■ ${currentLang==='en'?'Stop':'停止'}</button>
             </div>
+        </div>
+        </section>
+        ${railHtml}
         </div>
         <div class="drop-overlay" id="drop-overlay"><div class="drop-overlay-inner">&#128193; ${currentLang==='en'?'Drop files to add':'释放以添加文件'}</div></div>`;
 
@@ -84,6 +101,19 @@ async function loadTodayBrief(silent) {
         ? data.summary.text
         : t('brief.summary_empty');
     const dateLabel = (data.date || '').slice(5).replace('-', '.') || '';
+    // zip s1：今日简报进右栏，不再插进对话流
+    const railBrief = document.getElementById('rail-brief');
+    if (currentChatContext === 'daily' && railBrief) {
+        railBrief.innerHTML =
+            '<div class="rail-bh"><span class="t">' + esc(t('brief.title')) + '</span>' +
+            '<span class="lbl">BRIEF' + (dateLabel ? ' · ' + esc(dateLabel) : '') + '</span></div>' +
+            '<div class="rail-kpis">' +
+            '<div><div class="n">' + esc(niText) + '</div><div class="lbl">' + esc(t('brief.new_inquiries')) + '</div></div>' +
+            '<div><div class="n' + (overdue ? ' r' : '') + '">' + esc(String(overdue)) + '</div><div class="lbl">' + esc(t('brief.overdue')) + '</div></div>' +
+            '<div><div class="n">' + esc(String(pending)) + '</div><div class="lbl">' + esc(t('brief.pending_ship')) + '</div></div>' +
+            '</div><p class="rail-line">' + esc(summaryText) + '</p>';
+        return;
+    }
     let html = '<div class="brief-kpi-card">';
     html += '<div class="brief-kpi-head"><span class="brief-kpi-title">' + esc(t('brief.title')) + '</span>';
     html += '<span class="brief-kpi-date">BRIEF' + (dateLabel ? ' · ' + esc(dateLabel) : '') + '</span></div>';
@@ -285,6 +315,38 @@ async function loadCronStatus(isPoll = false) {
     });
     if (!data) return;
     const {completed, pending, current_time} = data;
+
+    // zip s1：今日简报的待办/定时任务进右栏，不再占顶部横幅
+    const railTodo = document.getElementById('rail-todo');
+    if (currentChatContext === 'daily' && railTodo) {
+        let todoHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.todo')) +
+            '</span><span class="lbl">TODO · ' + (pending.length + completed.length) + '</span></div>';
+        for (const task of pending) {
+            todoHtml += '<div class="rail-todo-item"><span class="ck"></span><span class="tx">' +
+                esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
+        }
+        for (const task of completed) {
+            todoHtml += '<div class="rail-todo-item done"><span class="ck"></span><span class="tx">' +
+                esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
+        }
+        railTodo.innerHTML = todoHtml;
+        const railCron = document.getElementById('rail-cron');
+        if (railCron) {
+            let cronHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.cron')) +
+                '</span><span class="lbl">CRON</span></div>';
+            const outs = completed.filter(function (x) { return x.output; }).slice(0, 4);
+            if (!outs.length) {
+                cronHtml += '<p class="rail-line">' + esc(t('brief.cron_empty')) + '</p>';
+            }
+            outs.forEach(function (task) {
+                const line = String(task.output || '').replace(/\s+/g, ' ').slice(0, 90);
+                cronHtml += '<div class="rail-cron-item"><span class="mono">' +
+                    esc(task.time || '') + '</span><span>' + esc(line) + '</span></div>';
+            });
+            railCron.innerHTML = cronHtml;
+        }
+        return;
+    }
 
     // 更新全局顶部横幅
     const main = $('main-content');
