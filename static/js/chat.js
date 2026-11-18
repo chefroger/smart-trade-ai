@@ -679,7 +679,22 @@ async function clearChat() {
 }
 
 // ═════════════════════ CHAT MESSAGES ═════════════════════
-function addMsg(role, content, files, save, convId, blocks) {
+/** 把时间戳格式化成 HH:MM；无法解析时回落到当前时间（实时消息用）。 */
+function _msgHHMM(ts) {
+    const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (typeof ts === 'number' && isFinite(ts)) {
+        const d = new Date(ts);
+        return pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+    if (ts) {
+        const m = String(ts).match(/(\d{1,2}):(\d{2})/);
+        if (m) return pad(parseInt(m[1], 10)) + ':' + m[2];
+    }
+    const now = new Date();
+    return pad(now.getHours()) + ':' + pad(now.getMinutes());
+}
+
+function addMsg(role, content, files, save, convId, blocks, timeStr) {
     const ct = currentChatContainer;
     if (!ct) return;
     const container = ct.querySelector('#chat-messages');
@@ -712,10 +727,8 @@ function addMsg(role, content, files, save, convId, blocks) {
     if (role === 'assistant') {
         const head = document.createElement('div');
         head.className = 'msg-head';
-        const nd = new Date();
-        const pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
         head.innerHTML = '<span class="mh-tag">▶ TRADE · ASSISTANT</span>' +
-            '<span class="mh-rule"></span><span class="mh-t">' + pad2(nd.getHours()) + ':' + pad2(nd.getMinutes()) + '</span>';
+            '<span class="mh-rule"></span><span class="mh-t">' + _msgHHMM(timeStr) + '</span>';
         msgHead = head;
         div.appendChild(head);
     }
@@ -890,11 +903,11 @@ async function loadChatHistory() {
             filesRead = Array.isArray(c.files_read) ? c.files_read
                 : (c.files_read ? JSON.parse(c.files_read) : []);
         } catch(e) { filesRead = []; }
-        if (c.query) addMsg('user', c.query, filesRead, false);
+        if (c.query) addMsg('user', c.query, filesRead, false, null, null, c.created_at);
         // 结构化块随 extra1 回放（W10/P1-5）；没有块时保持纯文本
         const blocks = (c.extra1 && typeof c.extra1 === 'object')
             ? (c.extra1.trade_blocks || null) : null;
-        if (c.response) addMsg('assistant', c.response, null, false, null, blocks);
+        if (c.response) addMsg('assistant', c.response, null, false, null, blocks, c.created_at);
     });
     // 加载历史后直接滚动到底部（最新消息）
     container.scrollTop = container.scrollHeight;
