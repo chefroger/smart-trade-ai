@@ -19,14 +19,8 @@ function renderChatViewInto(container, ctx, name) {
                 <button onclick="clearChat()">${t('chat.clr')}</button>
             </div>
         </div>`;
-    const railHtml = isDaily ? `
-        <aside class="chat-rail">
-            <div class="rail-box" id="rail-brief"></div>
-            <div class="rail-box rail-grow" id="rail-todo"></div>
-            <div class="rail-box" id="rail-cron"></div>
-        </aside>` : '';
     container.innerHTML = `
-        <div class="chat-layout${isDaily ? '' : ' single'}">
+        <div class="chat-layout single">
         <section class="chat-main">
         ${topbarHtml}
         <div class="chat-cmd">
@@ -52,7 +46,6 @@ function renderChatViewInto(container, ctx, name) {
             </div>
         </div>
         </section>
-        ${railHtml}
         </div>
         <div class="drop-overlay" id="drop-overlay"><div class="drop-overlay-inner">&#128193; ${currentLang==='en'?'Drop files to add':'释放以添加文件'}</div></div>`;
 
@@ -90,9 +83,6 @@ async function loadTodayBrief(silent) {
     });
     if (!data) return;
     _updateDailyBriefBadge(data.overdue_followups);
-    if (currentChatContext !== 'daily' || !currentChatContainer) return;
-    const container = currentChatContainer.querySelector('#chat-messages');
-    if (!container) return;
     const ni = data.new_inquiries;
     const niText = (ni === null || ni === undefined) ? t('brief.dash') : String(ni);
     const overdue = data.overdue_followups || 0;
@@ -101,9 +91,9 @@ async function loadTodayBrief(silent) {
         ? data.summary.text
         : t('brief.summary_empty');
     const dateLabel = (data.date || '').slice(5).replace('-', '.') || '';
-    // zip s1：今日简报进右栏，不再插进对话流
+    // 常驻右栏：今日简报 KPI（所有主视图；详情页由 CSS 隐藏）
     const railBrief = document.getElementById('rail-brief');
-    if (currentChatContext === 'daily' && railBrief) {
+    if (railBrief) {
         railBrief.innerHTML =
             '<div class="rail-bh"><span class="t">' + esc(t('brief.title')) + '</span>' +
             '<span class="lbl">BRIEF' + (dateLabel ? ' · ' + esc(dateLabel) : '') + '</span></div>' +
@@ -114,6 +104,10 @@ async function loadTodayBrief(silent) {
             '</div><p class="rail-line">' + esc(summaryText) + '</p>';
         return;
     }
+    // 无右栏时旧聊天内卡片兜底
+    if (currentChatContext !== 'daily' || !currentChatContainer) return;
+    const container = currentChatContainer.querySelector('#chat-messages');
+    if (!container) return;
     let html = '<div class="brief-kpi-card">';
     html += '<div class="brief-kpi-head"><span class="brief-kpi-title">' + esc(t('brief.title')) + '</span>';
     html += '<span class="brief-kpi-date">BRIEF' + (dateLabel ? ' · ' + esc(dateLabel) : '') + '</span></div>';
@@ -181,54 +175,6 @@ function _getCurrentTaskGuidance(currentTime) {
         if (now >= start && now < end) return task;
     }
     return null;  // 休息时段
-}
-
-function _renderGuidanceBar(currentTimeStr, completed, pending) {
-    const guidance = _getCurrentTaskGuidance(currentTimeStr);
-    const doneCount = completed.length, totalPending = pending.length;
-
-    // 背景/边框交给 CSS（#guidance-bar：暗实底；主区格子由 .main 铺）
-    let barHtml = `<div id="guidance-bar">`;
-
-    // 当前任务行
-    if (guidance) {
-        barHtml += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">`;
-        barHtml += `<span style="font-size:15px;">⏰</span>`;
-        barHtml += `<span style="font-weight:600;font-size:13px;color:var(--primary);">${esc(guidance.name)}</span>`;
-        barHtml += `<span style="font-size:13px;color:var(--text-secondary);">${esc(guidance.desc)}</span>`;
-        barHtml += `</div>`;
-    } else {
-        barHtml += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">`;
-        barHtml += `<span style="font-size:15px;">☕</span>`;
-        barHtml += '<span style="font-size:13px;color:var(--text-secondary);">'+t('guide.rest')+' · '+esc(currentTimeStr)+'</span>';
-        barHtml += `</div>`;
-    }
-
-    // 进度条
-    const total = doneCount + totalPending;
-    const pct = total > 0 ? Math.round(doneCount/total*100) : 0;
-    barHtml += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:1px;"><span>'+t('guide.progress')+'</span><span>'+doneCount+'/'+total+'</span></div>';
-    barHtml += `<div style="height:3px;background:var(--bg-main);border-radius:2px;overflow:hidden;margin-bottom:4px;"><div style="height:100%;width:${pct}%;background:var(--accent-green);border-radius:2px;transition:width 0.3s;"></div></div>`;
-
-    // 今日所有定时任务列表（从 completed + pending 合并，按时间排序）
-    const _stripEmoji = s => s.replace(/[\u{1F600}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{200D}\u{FE0F}]/gu, '').trim();
-    const all = [...completed, ...pending].sort((a, b) => {
-        const ta = (a.time || '').split('-')[0], tb = (b.time || '').split('-')[0];
-        return ta.localeCompare(tb);
-    });
-    const items = all.map(t => `<div style="font-size:11px;color:var(--text-muted);line-height:1.6;">${esc(t.time)} ${esc(_stripEmoji(t.name))}</div>`);
-    barHtml += `<div>${items.join('')}</div>`;
-
-    // 文档生成上下文：显示单证模板下载
-    if (currentChatContext === 'docgen') {
-        barHtml += `<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--border-light);font-size:11px;display:flex;gap:8px;align-items:center;">
-            <span>📄</span>
-            <a href="#" onclick="event.preventDefault();downloadManagementTables();" style="color:var(--primary);text-decoration:none;">下载单证模板（商业发票/装箱单/形式发票/报价单）</a>
-        </div>`;
-    }
-
-    barHtml += `</div>`;
-    return barHtml;
 }
 
 function startCronPolling() {
@@ -316,17 +262,29 @@ async function loadCronStatus(isPoll = false) {
     if (!data) return;
     const {completed, pending, current_time} = data;
 
-    // zip s1：今日简报的待办/定时任务进右栏，不再占顶部横幅
+    // 常驻右栏：今日待办 + 定时任务输出（所有主视图；详情页由 CSS 隐藏）
     const railTodo = document.getElementById('rail-todo');
-    if (currentChatContext === 'daily' && railTodo) {
+    if (railTodo) {
+        // 当前时间落到条目时段内 → 红字（每次 30s 轮询按“现在”重新判定）
+        const _nowMin = (function () { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); })();
+        function _taskIsNow(timeStr) {
+            const m = String(timeStr || '').match(/(\d{1,2}):(\d{2})(?:\s*-\s*(\d{1,2}):(\d{2}))?/);
+            if (!m) return false;
+            const s = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+            if (m[3] != null) {
+                const e = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
+                return _nowMin >= s && _nowMin <= e;
+            }
+            return _nowMin >= s && _nowMin < s + 60;
+        }
         let todoHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.todo')) +
             '</span><span class="lbl">TODO · ' + (pending.length + completed.length) + '</span></div>';
         for (const task of pending) {
-            todoHtml += '<div class="rail-todo-item"><span class="ck"></span><span class="tx">' +
+            todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task.time) ? ' now' : '') + '"><span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
         for (const task of completed) {
-            todoHtml += '<div class="rail-todo-item done"><span class="ck"></span><span class="tx">' +
+            todoHtml += '<div class="rail-todo-item done"><span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
         railTodo.innerHTML = todoHtml;
@@ -345,28 +303,13 @@ async function loadCronStatus(isPoll = false) {
             });
             railCron.innerHTML = cronHtml;
         }
+        loadTodayBrief(isPoll).catch(function () {});
         return;
     }
 
-    // 客户详情页内视图打开时不要在顶部刷新旧视图的进度横幅
-    const _wallOpen = document.getElementById('customer-wall');
-    if (_wallOpen && _wallOpen.classList.contains('open')) return;
-
-    // 更新全局顶部横幅
-    const main = $('main-content');
-    let bar = document.getElementById('guidance-bar');
-    const barHtml = _renderGuidanceBar(current_time, completed, pending);
-    if (bar) {
-        bar.outerHTML = barHtml;
-    } else {
-        // 有统一外壳顶栏时，横幅插在顶栏分隔线之后，别盖住顶栏
-        const anchor = document.getElementById('app-top-dd');
-        if (anchor) anchor.insertAdjacentHTML('afterend', barHtml);
-        else main.insertAdjacentHTML('afterbegin', barHtml);
-    }
-
-    // 顺带刷新简报 KPI / 侧栏逾期角标（失败静默）
-    loadTodayBrief(isPoll).catch(function () {});
+    // 顶部进度横幅已下线：其功能（今日简报/待办/定时任务）由常驻右栏承载。
+    // 右栏缺失时无需再兜底渲染（正常情况 #app-rail 常驻）。
+    return;
 
     // 在今日简报视图更新 cron 面板；在任意聊天视图追加 cron 输出
     const ct = currentChatContainer;

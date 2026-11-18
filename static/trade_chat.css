@@ -1601,3 +1601,24 @@ body.view-daily #guidance-bar { display: none !important; }
     #customer-wall .stats { grid-template-columns: repeat(2, 1fr); }
     #customer-wall .stats > div:nth-child(3) { border-left: none; }
 }
+
+/* ═════ 常驻右栏（S-01 今日简报/待办/定时任务）═════ */
+.app-rail {
+    position: fixed; top: 55px; right: 0; bottom: 0; width: 340px; z-index: 30;
+    display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 18px;
+    border-left: 1px dashed var(--ink); background: rgba(251, 252, 252, .9);
+    overflow: hidden;
+}
+/* 视图让出右栏宽度；客户详情/画像等遮盖层不受影响 */
+#main-content > .chat-view, #main-content > .panel-view { margin-right: 340px; }
+/* 客户详情 / 新手引导 / 无公司页 隐藏右栏 */
+body.wall-open .app-rail,
+body:has(#onboarding-panel) .app-rail,
+body:has(#main-content > .empty-state) .app-rail { display: none; }
+/* 待办：无方框；当前时间段落红字 */
+.rail-todo-item.now .tx,
+.rail-todo-item.now .tx .sub { color: var(--accent-red); font-weight: 600; }
+@media (max-width: 1100px) {
+    .app-rail { display: none; }
+    #main-content > .chat-view, #main-content > .panel-view { margin-right: 0; }
+}

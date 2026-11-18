@@ -332,5 +332,9 @@ function navToView(view, chatCtx, chatName) {
             if (msg) _ensureScrollHint(msg);
         }, 300);
     }
+    // 常驻右栏：切换视图时立即刷新（不等 30s 轮询）
+    if (typeof loadCronStatus === 'function' && typeof currentCompanyId !== 'undefined' && currentCompanyId) {
+        loadCronStatus(true);
+    }
 }
 

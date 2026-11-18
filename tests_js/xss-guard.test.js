@@ -161,16 +161,13 @@ test('白名单本身不掩盖用户数据字段', () => {
     }
 });
 
-test('tier / unit / guidance.desc 三处渲染点都带 esc()', () => {
+test('tier / unit 两处渲染点都带 esc()', () => {
     assert.ok(/\$\{esc\(tierLabel\)\}/.test(SRC), '客户等级必须写成 ${esc(tierLabel)}');
     assert.ok(
         /esc\(o\.quantity\)\s*\+\s*esc\(o\.unit\|\|''\)/.test(SRC),
         '订单单位必须写成 esc(o.unit||\'\')',
     );
-    assert.ok(
-        /esc\(guidance\.desc\)/.test(SRC),
-        '引导条描述必须转义（与同一行的 guidance.name 保持一致）',
-    );
+    // 顶部引导条（guidance.desc）已随右栏改造下线，相关渲染点不再存在
 });
 
 test('stageHtml 由 _CRM_STAGES.map + esc(s) 构造（格式可动，不变量不可破）', () => {
