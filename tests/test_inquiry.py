@@ -117,7 +117,7 @@ class TestInquiryDerive:
 
     def test_dirty_stage_normalized(self, test_db, company_id):
         """脏 stage 归一化回询盘。"""
-        from trade import inquiry, customer
+        from trade import customer, inquiry
 
         c = customer.create("Dirty", company_id=company_id)
         row = inquiry.create(
@@ -136,8 +136,8 @@ class TestInquiryDerive:
 
     def test_company_isolation(self, test_db, company_id):
         """A 公司询盘 B 公司查不到。"""
-        from trade.company import create as create_company
         from trade import customer, inquiry
+        from trade.company import create as create_company
 
         other = create_company(name="Other Co", slug="other-inq")
         oid = other["id"]

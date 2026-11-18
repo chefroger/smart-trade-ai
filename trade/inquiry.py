@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from trade.customer import CRM_STAGES, _normalize_crm_stage
+from trade.customer import _normalize_crm_stage
 from trade.database import get_connection
 
 STAGE_ORDER = {"询盘": 0, "报价": 1, "样品": 2, "订单": 3}
