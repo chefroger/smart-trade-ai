@@ -150,13 +150,16 @@ def create(
                 "company_id": company_id,
             }
 
+        # 默认「询盘」→ override NULL（自动推导）；非默认 → 同步锁定 override
+        stage_override = None if stage == "询盘" else stage
         cur = conn.execute(
             "INSERT INTO customers "
-            "(company_id, name, contact, note, stage, next_follow_up_date, is_starred, "
-            "extra1, extra2) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(company_id, name, contact, note, stage, stage_override, "
+            "next_follow_up_date, is_starred, extra1, extra2) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 company_id, name, contact, note,
-                stage, next_follow_up_date, is_starred,
+                stage, stage_override, next_follow_up_date, is_starred,
                 extra1, extra2,
             ),
         )
@@ -305,7 +308,10 @@ def get_company_summary(company_id: int) -> dict:
         except Exception:
             last_email = None
         if last_talk and last_email:
-            last_contact_at = last_talk if last_talk >= last_email else last_email
+            # ISO(T) 与空格格式不可直接比字符串；统一走 _ts_key
+            last_contact_at = (
+                last_talk if _ts_key(last_talk) >= _ts_key(last_email) else last_email
+            )
         else:
             last_contact_at = last_talk or last_email
 
@@ -696,7 +702,8 @@ def get_timeline(
             "ref_id": customer_id,
         })
 
-    events.sort(key=lambda x: x.get("at") or "", reverse=True)
+    # 对话空格格式 vs 邮件 ISO 带 T：必须用 _ts_key，否则同日邮件永远排前
+    events.sort(key=lambda x: _ts_key(x.get("at")), reverse=True)
     return events
 
 
@@ -770,9 +777,8 @@ def update(
     # tags：显式传入才更新；None=本次不动
     extra3_updates = {k: v for k, v in kwargs.items() if k in extra3_keys and v is not None}
     basic_updates = {k: v for k, v in kwargs.items() if k in basic_allowed and v is not None}
-    # CRM 白名单：脏 stage / is_starred 不入库
-    if "stage" in basic_updates:
-        basic_updates["stage"] = _normalize_crm_stage(basic_updates["stage"])
+    # stage 新语义：走 override，不直接当普通列写；先取出原始值
+    stage_raw = basic_updates.pop("stage", None)
     if "is_starred" in basic_updates:
         basic_updates["is_starred"] = _normalize_is_starred(basic_updates["is_starred"])
     if "next_follow_up_date" in basic_updates and basic_updates["next_follow_up_date"] is not None:
@@ -785,7 +791,10 @@ def update(
     if "city" in extra1_updates and extra1_updates["city"] is not None:
         extra1_updates["city"] = str(extra1_updates["city"]).strip()
 
-    if not (extra1_updates or extra2_updates or extra3_updates or basic_updates):
+    if not (
+        extra1_updates or extra2_updates or extra3_updates
+        or basic_updates or stage_raw is not None
+    ):
         return get(customer_id, company_id=company_id)
 
     conn = get_connection()
@@ -834,7 +843,7 @@ def update(
                 (json.dumps(current_extra3, ensure_ascii=False), customer_id, company_id),
             )
 
-        # 基础字段（含 CRM 实列）
+        # 基础字段（跟进日 / 标星等；stage 不在此列）
         if basic_updates:
             set_clause = ", ".join(f"{k} = ?" for k in basic_updates)
             values = list(basic_updates.values()) + [customer_id, company_id]
@@ -843,6 +852,28 @@ def update(
             if n == 0:
                 conn.rollback()
                 return None
+
+        # N4：stage → override；「自动」清 override 并按询盘重算
+        if stage_raw is not None:
+            from trade.inquiry import STAGE_AUTO, recompute_customer_stage
+
+            s = str(stage_raw).strip()
+            if s == STAGE_AUTO:
+                conn.execute(
+                    "UPDATE customers SET stage_override=NULL, "
+                    "updated_at=datetime('now','localtime') "
+                    "WHERE id=? AND company_id=?",
+                    (customer_id, company_id),
+                )
+                recompute_customer_stage(conn, customer_id, company_id)
+            else:
+                norm = _normalize_crm_stage(s)
+                conn.execute(
+                    "UPDATE customers SET stage_override=?, stage=?, "
+                    "updated_at=datetime('now','localtime') "
+                    "WHERE id=? AND company_id=?",
+                    (norm, norm, customer_id, company_id),
+                )
 
         conn.commit()
         result = get(customer_id, company_id=company_id)
@@ -862,10 +893,12 @@ def delete(customer_id: int, *, company_id: int) -> bool:
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        # 双保险：显式清 contacts（外键 CASCADE 也会清；缺表静默）
+        # 双保险：显式清 contacts / inquiries（外键 CASCADE 也会清；缺表静默）
         from trade.contacts import delete_for_customer
+        from trade.inquiry import delete_for_customer as delete_inquiries_for_customer
 
         delete_for_customer(conn, customer_id, company_id)
+        delete_inquiries_for_customer(conn, customer_id, company_id)
         cur = conn.execute(
             "DELETE FROM customers WHERE id = ? AND company_id = ?",
             (customer_id, company_id),
@@ -1046,6 +1079,10 @@ def _row_to_dict(row) -> dict:
         ),
         "is_starred": int(row["is_starred"] or 0) if "is_starred" in keys else 0,
     }
+    # N4：有效阶段 + 是否自动推导（读路径一律不返回原始列裸值以外的歧义）
+    from trade.inquiry import effective_stage_fields
+
+    result.update(effective_stage_fields(row))
     # 扩展字段（JSON 列）：前端依赖 extra1/extra2/extra3 展示额外信息
     try:
         result["extra1"] = row["extra1"] or "{}"
