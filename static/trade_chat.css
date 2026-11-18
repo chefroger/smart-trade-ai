@@ -1235,3 +1235,137 @@ body > #toast-container, body > #customer-wall {
 @media (max-width: 1100px) {
     .profile-cols { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Mockup shell v2（zip s1–s4 统一外壳：灰底纸面 / 232px 虚线侧栏 / 54px 顶栏）
+   逐页内容仍按原结构，后续逐屏对齐
+   ═══════════════════════════════════════════════════════════ */
+:root {
+    --bg: #F3F5F6; --paper: #FBFCFC;
+    --ink: #0C0D0E; --ink-2: #3A3E42;
+    --muted: #7A8086; --faint: #B7BCC0;
+    --grid: rgba(12, 13, 14, .045);
+    --red: #D2281E; --red-soft: rgba(210, 40, 30, .05);
+    --sans: "Archivo", "Noto Sans SC", "Noto Sans CJK SC", system-ui, sans-serif;
+    --mono: "Share Tech Mono", "Noto Sans Mono CJK SC", ui-monospace, monospace;
+    --dd: repeating-linear-gradient(90deg, var(--ink) 0 14px, transparent 14px 18px, var(--ink) 18px 20px, transparent 20px 24px);
+    /* 兼容旧变量 */
+    --bg-field: var(--bg); --grid-line: var(--grid);
+    --panel: var(--paper); --panel2: #F3F5F6;
+    --bg-card: var(--paper); --bg-input: var(--paper); --bg-main: var(--bg); --bg-chat: var(--bg);
+    --text-primary: var(--ink); --text-secondary: var(--ink-2); --text-muted: var(--muted);
+    --line: var(--faint); --border: var(--faint); --line-strong: var(--ink);
+    --accent: var(--red); --accent-red: var(--red); --primary: var(--ink);
+    --radius: 0; --radius-sm: 0; --radius-lg: 0; --radius-xl: 0;
+}
+body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 13px; line-height: 1.55;
+}
+
+/* 侧栏：浅纸底 + 1px 虚线 */
+.sidebar {
+    width: 232px !important; background: rgba(251, 252, 252, .72) !important;
+    border-right: 1px dashed var(--ink) !important;
+    padding: 18px 0 12px !important;
+}
+.sidebar-header { padding: 0 20px 14px !important; border-bottom: none !important; }
+.sidebar-header::after { content: none !important; }
+.logo-row { gap: 10px; }
+.logo {
+    color: var(--ink) !important; font-size: 18px; font-weight: 700;
+    letter-spacing: .02em; display: flex; align-items: center; gap: 8px;
+}
+.logo .brand-sub {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 400;
+    letter-spacing: .14em; color: var(--muted);
+}
+.lang-select {
+    border: 1px dashed var(--faint) !important; color: var(--muted) !important;
+    background-image: none !important; font-family: var(--mono);
+    font-size: 10px !important; padding: 2px 6px !important;
+}
+.sys-strip, .fx-toggle-wrap { display: none !important; }
+.company-select { margin: 0 16px 14px !important; }
+.co-lbl {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+    color: var(--muted); margin-bottom: 2px;
+}
+.csel-row {
+    border: 1px dashed var(--ink) !important; background: transparent !important;
+    padding: 0 8px !important;
+}
+.csel-row select {
+    border: none !important; background: transparent !important;
+    color: var(--ink) !important; font-size: 12.5px !important; padding: 8px 0 !important;
+}
+.csel-row button {
+    border: none !important; background: transparent !important; color: var(--ink) !important;
+}
+.sidebar-nav { padding: 0 !important; }
+.nav-section {
+    margin: 0 16px !important; padding: 10px 0 8px !important;
+    border-top: 1px dashed var(--ink) !important;
+}
+.nav-section-title {
+    font-family: var(--mono) !important; font-size: 9.5px !important;
+    letter-spacing: .12em !important; color: var(--muted) !important;
+    text-transform: uppercase; margin: 0 0 6px !important; opacity: 1 !important;
+}
+.nav-item {
+    padding: 6px 8px !important; margin: 1px 0 !important; gap: 10px;
+    font-size: 13px !important; color: var(--ink-2) !important; border-radius: 0 !important;
+}
+.nav-item:hover { background: rgba(12, 13, 14, .04) !important; color: var(--ink) !important; }
+.nav-item.active {
+    background: var(--paper) !important; color: var(--ink) !important;
+    font-weight: 600 !important; outline: 1px solid var(--ink); box-shadow: none !important;
+}
+.nav-item .nav-icon { width: 16px !important; height: 16px !important; opacity: .9; }
+.sidebar-footer {
+    margin: 8px 16px 0 !important; padding: 10px 0 0 !important;
+    border-top: 1px dashed var(--ink) !important; gap: 6px !important;
+}
+.sidebar-footer button {
+    flex: 0 0 22px !important; width: 22px !important; height: 22px !important;
+    aspect-ratio: auto !important; border: none !important;
+    background: transparent !important; color: var(--muted) !important; border-radius: 0 !important;
+}
+.sidebar-footer button:hover { color: var(--ink) !important; background: transparent !important; }
+.usage-today {
+    font-family: var(--mono) !important; font-size: 10px !important;
+    color: var(--muted) !important; padding: 0 16px 6px !important;
+}
+#license-bar {
+    font-family: var(--mono); font-size: 10px !important; color: var(--muted) !important;
+    text-align: right !important; letter-spacing: .08em; line-height: 1.35 !important;
+    word-break: break-word; padding: 0 !important;
+    margin-left: auto; max-width: 62%;
+}
+#license-bar a { color: var(--muted) !important; text-decoration: none !important; }
+
+/* 顶栏 54px：标题 / 状态 / 日期时间 */
+.app-top {
+    height: 54px; flex: none; display: flex; align-items: center; gap: 18px;
+    padding: 0 24px;
+}
+.app-top .title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.app-top .title .lbl {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em;
+    color: var(--muted); text-transform: uppercase; font-weight: 400;
+}
+.app-top .status {
+    margin-left: auto; display: flex; align-items: center; gap: 9px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .08em; color: var(--ink-2);
+}
+.app-top .status .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--red);
+    display: inline-block; animation: s01pulse 2.2s ease-out infinite;
+}
+.app-top .clock {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    display: flex; align-items: center; gap: 10px; padding-left: 18px;
+    border-left: 1px solid var(--faint); color: var(--muted);
+}
+.app-top .clock b { font-weight: 400; color: var(--ink); }
+.main > .dd { height: 1px; background: var(--dd); flex: none; }

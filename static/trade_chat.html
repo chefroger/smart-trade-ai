@@ -23,7 +23,7 @@
 <aside class="sidebar">
     <div class="sidebar-header">
         <div class="logo-row">
-            <div class="logo">TRADE<b>.</b></div>
+            <div class="logo">TRADE<small class="brand-sub">AI · v2</small></div>
             <select id="lang-select" aria-label="Language" onchange="switchLang(this.value)" class="lang-select">
                 <option value="zh">中文</option>
                 <option value="en">English</option>
@@ -39,6 +39,7 @@
             <button type="button" class="fx-switch" id="fx-toggle" role="switch" aria-checked="true" aria-label="three.js 背景特效开关"></button>
         </div>
         <div class="company-select">
+            <div class="co-lbl">COMPANY / 当前公司</div>
             <div class="csel-row">
                 <select id="company-select" aria-label="选择公司" onchange="onCompanyChange(this.value)">
                     <option value="">— 选择公司 —</option>
@@ -50,7 +51,7 @@
 
     <nav class="sidebar-nav">
         <div class="nav-section">
-            <div class="nav-section-title">📊 工作台</div>
+            <div class="nav-section-title">工作台 · DESK</div>
             <div class="nav-item active" data-view="chat" data-chat-context="daily" onclick="navToView('chat','daily','今日简报')">
                 <span class="nav-icon" data-icon="message-square"></span><span class="nav-label">今日简报</span>
                 <span class="nav-badge" id="daily-brief-badge" hidden>0</span>
@@ -58,7 +59,7 @@
         </div>
 
         <div class="nav-section">
-            <div class="nav-section-title">获客引流</div>
+            <div class="nav-section-title">获客引流 · LEADS</div>
             <div class="nav-item" data-view="chat" data-chat-context="lead" onclick="navToView('chat','lead','客户开发')">
                 <span class="nav-icon" data-icon="search"></span><span class="nav-label">客户开发</span>
             </div>
@@ -77,7 +78,7 @@
         </div>
 
         <div class="nav-section hidden" data-paid>
-            <div class="nav-section-title">销售转化</div>
+            <div class="nav-section-title">销售转化 · CONVERT</div>
             <div class="nav-item" data-view="customers" onclick="navToView('customers')">
                 <span class="nav-icon" data-icon="users"></span><span class="nav-label">客户管理</span>
             </div>
@@ -93,7 +94,7 @@
         </div>
 
         <div class="nav-section hidden" data-paid>
-            <div class="nav-section-title">工具</div>
+            <div class="nav-section-title">工具 · TOOLS</div>
             <div class="nav-item" data-view="chat" data-chat-context="osint" onclick="navToView('chat','osint','客户背调')">
                 <span class="nav-icon" data-icon="search"></span><span class="nav-label">客户背调</span>
             </div>
@@ -103,14 +104,13 @@
         </div>
 
         <div class="nav-section hidden" data-paid>
-            <div class="nav-section-title">历史</div>
+            <div class="nav-section-title">历史 · LOG</div>
             <div class="nav-item" data-view="history" onclick="navToView('history')">
                 <span class="nav-icon" data-icon="rotate-ccw-clock"></span><span class="nav-label">对话记录</span>
             </div>
         </div>
     </nav>
 
-    <div id="license-bar" style="padding:6px 16px;font-size:11px;text-align:center;display:none;"></div>
     <!-- 图标按钮：文字改成悬停时用 data-tip 显示（样式见 trade_chat.css 的
          .sidebar-footer，文案由 i18n.js 的 applyI18n 填）。
          带文字的按钮一行放不下 4 个，会被挤成两行 —— 图标加悬停提示既放得下，
@@ -129,6 +129,7 @@
         <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导"><span class="i i-20" style="--i:url('/static/icons/lucide-compass.svg')"></span></button>
         <!-- 聊天副驾设置入口暂时隐藏（2026-11-06）；弹窗与接口保留，改回可见只需删掉 hidden。 -->
         <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-settings.svg')"></span></button>
+        <div id="license-bar" style="display:none;"></div>
     </div>
 
 </aside>
@@ -139,6 +140,13 @@
 
 <!-- ═════════════════════ MAIN ═════════════════════ -->
 <main class="main" id="main-content">
+    <!-- 统一外壳顶栏（zip s1–s4）：标题 / 状态 / 日期时间 -->
+    <header class="app-top" id="app-top">
+        <div class="title"><span id="app-top-title">今日简报</span><span class="lbl" id="app-top-lbl">/ DAILY BRIEF</span></div>
+        <div class="status"><span class="dot pulse"></span><span id="app-top-status">系统就绪 · SYSTEM READY</span></div>
+        <div class="clock"><span id="app-top-date">--</span><b id="app-top-time">--:--:--</b></div>
+    </header>
+    <div class="dd" id="app-top-dd"></div>
     <!-- filled dynamically by navToView() -->
 </main>
 

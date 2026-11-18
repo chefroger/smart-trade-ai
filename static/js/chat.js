@@ -293,7 +293,10 @@ async function loadCronStatus(isPoll = false) {
     if (bar) {
         bar.outerHTML = barHtml;
     } else {
-        main.insertAdjacentHTML('afterbegin', barHtml);
+        // 有统一外壳顶栏时，横幅插在顶栏分隔线之后，别盖住顶栏
+        const anchor = document.getElementById('app-top-dd');
+        if (anchor) anchor.insertAdjacentHTML('afterend', barHtml);
+        else main.insertAdjacentHTML('afterbegin', barHtml);
     }
 
     // 顺带刷新简报 KPI / 侧栏逾期角标（失败静默）

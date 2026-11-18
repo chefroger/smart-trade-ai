@@ -207,6 +207,16 @@ const viewCache = {};
 // 当前活跃的 chat 容器（用于解决多视图 DOM 中相同 ID 元素的查找问题）
 let currentChatContainer = null;
 
+function _replaceMainContent(html) {
+    /** 替换主区内容，但保留统一外壳顶栏（zip s1–s4）。 */
+    const main = $('main-content');
+    for (const child of Array.from(main.children)) {
+        if (child.id === 'app-top' || child.id === 'app-top-dd') continue;
+        child.remove();
+    }
+    main.insertAdjacentHTML('beforeend', html);
+}
+
 function navToView(view, chatCtx, chatName) {
     // 新手引导进行中时阻止导航
     if (!isOnboardingCompleted() && document.getElementById('onboarding-panel')) {
@@ -234,6 +244,28 @@ function navToView(view, chatCtx, chatName) {
                        document.querySelector(`.nav-item[data-view="${view}"]`);
     if (activeItem) activeItem.classList.add('active');
 
+    // 顶栏标题（zip s1–s4 统一外壳）
+    const topMeta = {
+        'chat-daily': ['今日简报', '/ DAILY BRIEF'],
+        'chat-lead': ['客户开发', '/ LEAD GEN'],
+        'chat-platform': ['网站诊断', '/ SITE AUDIT'],
+        'chat-social': ['社媒营销', '/ SOCIAL'],
+        'chat-linkedin': ['LinkedIn', '/ LINKEDIN'],
+        'chat-customs': ['海关数据', '/ CUSTOMS'],
+        'chat-docs': ['文档库', '/ LIBRARY'],
+        'chat-docgen': ['文档生成', '/ DOC GEN'],
+        'chat-osint': ['客户背调', '/ OSINT'],
+        'customers': ['客户管理', '/ CUSTOMERS'],
+        'mailboxes': ['邮箱', '/ MAILBOXES'],
+        'tasks': ['定时任务', '/ CRON'],
+        'history': ['对话记录', '/ HISTORY'],
+    };
+    const topInfo = topMeta[view + (chatCtx ? '-' + chatCtx : '')] || [chatName || '', ''];
+    const topTitleEl = document.getElementById('app-top-title');
+    const topLblEl = document.getElementById('app-top-lbl');
+    if (topTitleEl) topTitleEl.textContent = topInfo[0];
+    if (topLblEl) topLblEl.textContent = topInfo[1];
+
     // 隐藏所有视图，并清除非缓存内容（如 empty state）
     const main = $('main-content');
     for (const key in viewCache) {
@@ -242,7 +274,8 @@ function navToView(view, chatCtx, chatName) {
     // 移除 main 中不属于视图缓存的子元素（首次从 empty state 切换时）
     const cachedIds = new Set(Object.keys(viewCache).map(k => 'view-' + k));
     for (const child of Array.from(main.children)) {
-        if (child.id === 'guidance-bar') continue;  // 不删除全局横幅
+        // 全局横幅与统一外壳顶栏不随视图切换删除
+        if (child.id === 'guidance-bar' || child.id === 'app-top' || child.id === 'app-top-dd') continue;
         if (!cachedIds.has(child.id)) {
             child.remove();
         }

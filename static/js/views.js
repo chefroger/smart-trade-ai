@@ -682,7 +682,7 @@ function showOnboardingGuide() {
     _onboardingOsinResponse = '';
     if (_onboardingStreamCtl) { _onboardingStreamCtl.abort(); }
     _onboardingStreamCtl = null;
-    $('main-content').innerHTML = `<div id="onboarding-panel" class="onboarding-panel"><div class="onboarding-card" id="onboarding-card">${renderOnboardingStep1HTML()}</div></div>`;
+    _replaceMainContent(`<div id="onboarding-panel" class="onboarding-panel"><div class="onboarding-card" id="onboarding-card">${renderOnboardingStep1HTML()}</div></div>`);
 }
 
 function renderOnboardingStep1HTML() {

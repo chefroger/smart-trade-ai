@@ -105,20 +105,30 @@ function initFxBackground() {
     let statusIdx = 0;
     function pad2(n) { return (n < 10 ? '0' : '') + n; }
     function tickClock() {
-        const el = document.getElementById('sys-clock');
-        if (!el) return;
         const now = new Date();
         const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-        el.textContent = days[now.getDay()] + ' ' + pad2(now.getHours()) + ':' +
-            pad2(now.getMinutes()) + ':' + pad2(now.getSeconds());
+        const time = pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' +
+            pad2(now.getSeconds());
+        const el = document.getElementById('sys-clock');
+        if (el) el.textContent = days[now.getDay()] + ' ' + time;
+        // 统一外壳顶栏（zip s1–s4）
+        const dateEl = document.getElementById('app-top-date');
+        if (dateEl) {
+            dateEl.textContent = now.getFullYear() + '.' +
+                pad2(now.getMonth() + 1) + '.' + pad2(now.getDate()) + ' ' + days[now.getDay()];
+        }
+        const timeEl = document.getElementById('app-top-time');
+        if (timeEl) timeEl.textContent = time;
     }
     tickClock();
     setInterval(tickClock, 1000);
     setInterval(function () {
-        const el = document.getElementById('sys-status');
-        if (!el) return;
         statusIdx = (statusIdx + 1) % STATUS.length;
-        el.textContent = STATUS[statusIdx];
+        const text = STATUS[statusIdx];
+        const el = document.getElementById('sys-status');
+        if (el) el.textContent = text;
+        const topEl = document.getElementById('app-top-status');
+        if (topEl) topEl.textContent = text;
     }, 4000);
 
     // reduced-motion / 用户偏好 / THREE 缺失 → 关

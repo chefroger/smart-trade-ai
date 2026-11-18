@@ -89,10 +89,10 @@ function renderNoCompanyPage() {
     const importBtn = _licenseGateAllowsPaid()
         ? '<button onclick="showImportCompanyDialog()">📦 导入已有公司数据</button>'
         : '';
-    $('main-content').innerHTML = '<div class="empty-state"><div class="empty-icon">🏢</div>'
+    _replaceMainContent('<div class="empty-state"><div class="empty-icon">🏢</div>'
         + '<h2>请先选择或创建公司</h2><p>Trade AI 为多公司隔离架构</p>'
         + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">'
         + '<button onclick="showAddCompanyModal()">➕ 创建公司</button>'
         + importBtn
-        + '</div></div>';
+        + '</div></div>');
 }
