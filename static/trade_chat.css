@@ -1732,4 +1732,4 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .chat-main .msg-head .mh-t { white-space: nowrap; }
 
 /* 复制按钮下移后：助手正文右侧留出按钮宽度，避免压字 */
-.chat-main .message.assistant .msg-body { padding-right: 44px; }
+.chat-main .message.assistant .msg-body { padding-right: 56px; }

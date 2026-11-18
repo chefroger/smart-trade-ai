@@ -724,10 +724,10 @@ function addMsg(role, content, files, save, convId, blocks) {
         const copyBtn = document.createElement('button');
         copyBtn.textContent = '📋';
         copyBtn.title = currentLang==='en'?'Copy to clipboard':'复制到剪贴板';
-        // 下移到助手标题行之下，避免压住「▶ TRADE · ASSISTANT … HH:MM」的时间
-        copyBtn.style.cssText = 'position:absolute;top:30px;right:8px;background:none;border:1px solid #D1D5DB;border-radius:4px;padding:2px 6px;font-size:12px;cursor:pointer;color:#9CA3AF;opacity:0.5;transition:opacity 0.15s;';
+        // 下移到助手标题行之下（再下移 40px），并放大、加深，避免压时间且更显眼
+        copyBtn.style.cssText = 'position:absolute;top:70px;right:8px;background:#fff;border:1.5px solid var(--ink);border-radius:2px;padding:6px 10px;min-width:34px;font-size:16px;line-height:1;cursor:pointer;color:var(--ink);opacity:0.9;transition:opacity 0.15s;';
         copyBtn.onmouseenter = function() { this.style.opacity = '1'; };
-        copyBtn.onmouseleave = function() { this.style.opacity = '0.5'; };
+        copyBtn.onmouseleave = function() { this.style.opacity = '0.9'; };
         copyBtn.onclick = function(e) {
             e.stopPropagation();
             navigator.clipboard.writeText(content).then(function() {
