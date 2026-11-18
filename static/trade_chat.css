@@ -1730,3 +1730,6 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .chat-main .msg-head .mh-tag { color: var(--ink); font-weight: 600; white-space: nowrap; }
 .chat-main .msg-head .mh-rule { flex: 1; border-top: 1px dashed var(--line-strong); }
 .chat-main .msg-head .mh-t { white-space: nowrap; }
+
+/* 复制按钮下移后：助手正文右侧留出按钮宽度，避免压字 */
+.chat-main .message.assistant .msg-body { padding-right: 44px; }
