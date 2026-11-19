@@ -1775,3 +1775,27 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 }
 #customer-wall .profile-fact .profile-src, #customer-profile .profile-fact .profile-src { font-size: 10.5px; }
 #customer-wall .profile-ai-lab, #customer-profile .profile-ai-lab { float: right; }
+
+/* ── s3/s4 细节：AI 开关 / 索要红底 / 原句引文 / 助手尾标 / s2 窄屏列 ── */
+.profile-ai-lab { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; }
+.profile-ai-lab input[type="checkbox"] {
+    -webkit-appearance: none; appearance: none; width: 24px; height: 13px; margin: 0;
+    border: 1px solid var(--ink); background: var(--panel); position: relative; cursor: pointer; flex: none;
+}
+.profile-ai-lab input[type="checkbox"]::after {
+    content: ""; position: absolute; top: 1px; left: 1px; width: 9px; height: 9px; background: var(--ink); transition: left .12s;
+}
+.profile-ai-lab input[type="checkbox"]:checked { background: var(--ink); }
+.profile-ai-lab input[type="checkbox"]:checked::after { left: 12px; background: #fff; }
+#customer-wall .profile-gift.solicit, #customer-profile .profile-gift.solicit {
+    background: rgba(200, 16, 46, .06); border-left: 3px solid var(--accent-red); padding-left: 8px;
+}
+#customer-wall .profile-gift.solicit .wc-name, #customer-profile .profile-gift.solicit .wc-name { color: var(--accent-red); }
+.profile-quote { border-left: 2px solid var(--line-strong); padding: 4px 0 4px 10px; font-style: italic; }
+.chat-main .msg-head .mh-done { white-space: nowrap; color: var(--muted); }
+@media (max-width: 1400px) {
+    .cust-table .c-tags, .cust-table th.c-tags { display: none; }
+}
+@media (max-width: 1240px) {
+    .cust-table .c-date, .cust-table th.c-date { display: none; }
+}

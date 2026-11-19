@@ -503,6 +503,21 @@ function openFollowUpModal(cid) {
     });
 }
 
+async function toggleWallStar(ev, cid) {
+    /** s3/s4 头顶星标：切换后按当前所在页重新渲染。 */
+    if (ev) ev.stopPropagation();
+    const c = allCustomers.find(function (x) { return x.id === cid; });
+    if (!c) return;
+    const next = Number(c.is_starred) === 1 ? 0 : 1;
+    const r = await api('PUT', '/api/trade/customers/' + cid, { is_starred: next });
+    if (!r) return;
+    c.is_starred = next;
+    const wall = document.getElementById('customer-wall');
+    if (document.body.classList.contains('profile-open')) openCustomerProfile(cid);
+    else if (wall && wall.classList.contains('open')) openCustomerWall(cid);
+    else renderCustomersTable(_custFiltered);
+}
+
 async function toggleCustomerStar(ev, cid) {
     if (ev) ev.stopPropagation();
     const c = allCustomers.find(function (x) { return x.id === cid; });
@@ -899,7 +914,9 @@ async function openCustomerWall(cid) {
     const btChip = e1.buyer_type ? ('<span class="chip k">' + esc(e1.buyer_type) + '</span>') : '';
     const stageChip = '<span class="chip k">' + (currentLang === 'en' ? 'Stage · ' : '商机阶段 · ') + esc(stage) + '</span>';
     const starred = !!(c.starred || e1.starred);
-    const starHtml = '<span class="star' + (starred ? ' on' : '') + '">' + (typeof iconHtml === 'function' ? iconHtml('star', 18) : '★') + '</span>';
+    const starHtml = '<span class="star' + (starred ? ' on' : '') + '" role="button" title="' +
+        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" style="cursor:pointer;" onclick="toggleWallStar(event,' + cid + ')">' +
+        (typeof iconHtml === 'function' ? iconHtml('star', 18) : '★') + '</span>';
     const threatHtml = overdue
         ? ('<span class="tri-d"></span>' + (currentLang === 'en' ? 'OVERDUE ' : '已逾期 ') + overdueDays + (currentLang === 'en' ? ' D' : ' 天'))
         : ('<span class="tri-d"></span>TODAY <span style="color:var(--muted)">→</span><span class="cn">' + esc(follow || (currentLang === 'en' ? 'Follow-up' : '待跟进')) + '</span>');
@@ -2144,7 +2161,7 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
             _profileCacheItem('gift', g);
             const isAsk = g.direction === '客户索要';
             const gDate = _profileSourceDate(g);
-            html += '<article class="wcard profile-gift"' + delayFn() + ' data-gift-id="' + esc(String(g.id)) + '">' +
+            html += '<article class="wcard profile-gift' + (isAsk ? ' solicit' : '') + '"' + delayFn() + ' data-gift-id="' + esc(String(g.id)) + '">' +
                 '<div class="wc-name">' + (isAsk ? ('⚠ ' + t('profile.ask') + ' · ') : '') +
                 esc(g.direction || '') + ' · ' + esc(g.item || '') +
                 '<span class="muted">' + esc(_profilePersonLabel(g, people)) + '</span></div>' +
@@ -2580,7 +2597,8 @@ async function openCustomerProfile(cid) {
         (_parseExtra3(c).tags || []).map(function (tag) {
             return '<span class="chip">' + esc(tag) + '</span>';
         }).join('') +
-        '<span class="star ' + (c.is_starred ? 'on' : 'off') + '">★</span>' +
+        '<span class="star ' + (c.is_starred ? 'on' : 'off') + '" role="button" style="cursor:pointer;" title="' +
+        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" onclick="toggleWallStar(event,' + cid + ')">★</span>' +
         '</div>' +
         '<div class="sub">' + esc([e1.country, e1.city, e1.buyer_type].filter(Boolean).join(' · ') || t('profile.title')) +
         '</div></div></div></div>' +

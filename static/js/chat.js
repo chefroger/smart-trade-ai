@@ -729,7 +729,8 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
         const head = document.createElement('div');
         head.className = 'msg-head';
         head.innerHTML = '<span class="mh-tag">▶ TRADE · ASSISTANT</span>' +
-            '<span class="mh-rule"></span><span class="mh-t">' + _msgHHMM(timeStr) + '</span>';
+            '<span class="mh-rule"></span><span class="mh-done">' + (currentLang === 'en' ? 'Analysis done' : '分析完成') + '</span>' +
+            '<span class="mh-t">' + _msgHHMM(timeStr) + '</span>';
         msgHead = head;
         div.appendChild(head);
     } else if (role === 'user') {
