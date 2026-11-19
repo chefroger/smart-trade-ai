@@ -1802,3 +1802,21 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 
 /* s4 画像：每个 pane 内 fact 单列堆叠（mockup），不再两列网格 */
 #customer-profile .wgrid { display: flex; flex-direction: column; gap: 8px; }
+
+/* 卡片左右内边距 + AI 开关移到右上（贴近 mockup） */
+#customer-wall .profile-fact, #customer-profile .profile-fact,
+#customer-wall .profile-gift, #customer-profile .profile-gift {
+    padding: 8px 12px; position: relative;
+}
+#customer-wall .profile-fact:first-child, #customer-profile .profile-fact:first-child,
+#customer-wall .profile-gift:first-child, #customer-profile .profile-gift:first-child { padding-top: 0; }
+#customer-wall .profile-gift.solicit, #customer-profile .profile-gift.solicit { padding-left: 12px; }
+#customer-wall .profile-fact .profile-ai-lab, #customer-profile .profile-fact .profile-ai-lab,
+#customer-wall .profile-gift .profile-ai-lab, #customer-profile .profile-gift .profile-ai-lab {
+    position: absolute; top: 8px; right: 12px; float: none;
+}
+#customer-wall .profile-fact .wc-name, #customer-profile .profile-fact .wc-name,
+#customer-wall .profile-gift .wc-name, #customer-profile .profile-gift .wc-name { padding-right: 96px; }
+/* s4 页内布局：header + 滚动 dossier */
+#customer-profile .det { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 20px 16px; min-height: 0; }
+#customer-profile .profile-dossier { flex: 1; min-height: 0; overflow-y: auto; }

@@ -2589,22 +2589,28 @@ async function openCustomerProfile(cid) {
     const left = renderProfileCircleSection(cid, factsPayload, people, delay, mailboxBound);
     const right = renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, delay, mailboxBound);
 
+    const pfTier = e1.tier ? '<span class="chip on">' + (currentLang === 'en' ? 'TIER ' : '客户分级 ') + esc(String(e1.tier)) + '</span>' : '';
+    const pfLocVals = [e1.country, e1.city].filter(Boolean);
+    const pfLoc = pfLocVals.length ? '<span class="chip k">' + esc(pfLocVals.join(' · ')) + '</span>' : '';
+    const pfBuyer = e1.buyer_type ? '<span class="chip k">' + esc(e1.buyer_type) + '</span>' : '';
+    const pfTags = (_parseExtra3(c).tags || []).map(function (tag) {
+        return '<span class="chip k">' + esc(tag) + '</span>';
+    }).join('');
+    const pfStar = '<span class="star' + (c.is_starred ? ' on' : '') + '" role="button" style="cursor:pointer;" title="' +
+        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" onclick="toggleWallStar(event,' + cid + ')">★</span>';
+
     panel.innerHTML =
-        '<div class="wall-head">' +
+        '<div class="det">' +
+        '<div class="det-head">' +
         '<button type="button" class="wall-back" id="profile-back">' + t('profile.back_wall') + ' <kbd>ESC</kbd></button>' +
-        '<div class="wall-title bracket"><div><h3>' + esc(c.name) + '</h3>' +
-        '<div class="facts2">' +
-        (e1.tier ? '<span class="tagchip">TIER ' + esc(String(e1.tier)) + '</span>' : '') +
-        (_parseExtra3(c).tags || []).map(function (tag) {
-            return '<span class="chip">' + esc(tag) + '</span>';
-        }).join('') +
-        '<span class="star ' + (c.is_starred ? 'on' : 'off') + '" role="button" style="cursor:pointer;" title="' +
-        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" onclick="toggleWallStar(event,' + cid + ')">★</span>' +
+        '<div class="subject bracket">' + pfStar +
+        '<span class="nm">' + esc(c.name) + '</span>' +
+        '<div class="facts2">' + pfTier + pfLoc + pfBuyer + pfTags + '</div>' +
         '</div>' +
-        '<div class="sub">' + esc([e1.country, e1.city, e1.buyer_type].filter(Boolean).join(' · ') || t('profile.title')) +
-        '</div></div></div></div>' +
+        '</div>' +
         '<div class="wall-scroll profile-dossier">' + strip +
-        '<div class="profile-cols">' + left + right + '</div></div>';
+        '<div class="profile-cols">' + left + right + '</div></div>' +
+        '</div>';
 
     panel.classList.add('open');
     panel.removeAttribute('inert');
