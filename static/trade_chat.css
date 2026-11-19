@@ -1839,3 +1839,15 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     margin: 6px 0 0 0 !important; padding: 6px 8px !important;
     text-align: left !important; line-height: 1.5 !important;
 }
+
+/* 原句浮层：hover 即在卡片下方浮出（点击展开仍保留） */
+#customer-wall .profile-fact, #customer-profile .profile-fact { position: relative; }
+#customer-wall .profile-quote, #customer-profile .profile-quote {
+    position: absolute; left: 12px; right: 12px; top: calc(100% - 2px); z-index: 20;
+    background: var(--panel); border: 1px dashed var(--ink); padding: 7px 10px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, .12); margin: 0;
+}
+#customer-wall .profile-fact:hover > .profile-quote,
+#customer-profile .profile-fact:hover > .profile-quote,
+#customer-wall .profile-fact.open > .profile-quote,
+#customer-profile .profile-fact.open > .profile-quote { display: block !important; }
