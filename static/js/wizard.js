@@ -10,13 +10,17 @@ function isOnboardingCompleted() {
 
 // ═════════════════════ 客户开发向导 UI ═════════════════════
 function showWizardInLeadView() {
-    // 在 lead 聊天上下文中显示客户开发向导卡片
-    var msgs = document.getElementById('chat-messages');
-    var empty = document.getElementById('chat-empty');
-    if (!msgs || !empty) return;
-    empty.style.display = 'none';
+    // 在 lead 聊天上下文中显示客户开发向导卡片。
+    // 每个栏目都缓存了一份聊天 DOM（id 相同），必须限定在当前视图内查找，
+    // 否则卡片会插进隐藏的「今日简报」那一份里。
+    var scope = (typeof currentChatContainer !== 'undefined' && currentChatContainer) || document;
+    var msgs = scope.querySelector('#chat-messages');
+    if (!msgs) return;
+    // 空态不一定存在（有历史消息时会被移除），不依赖它
+    var empty = msgs.querySelector('#chat-empty');
+    if (empty) empty.style.display = 'none';
     // 移除已有向导卡片
-    var old = document.getElementById('wizard-card');
+    var old = msgs.querySelector('#wizard-card');
     if (old) old.remove();
     _wizardStep = 1;
     var card = document.createElement('div');
@@ -24,7 +28,7 @@ function showWizardInLeadView() {
     card.innerHTML = wizardRenderStep1();
     msgs.appendChild(card);
     setTimeout(function() {
-        var inp = document.getElementById('wizard-product-input');
+        var inp = card.querySelector('#wizard-product-input');
         if (inp) inp.focus();
     }, 200);
 }
