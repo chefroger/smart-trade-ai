@@ -1832,6 +1832,17 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 }
 .profile-ai-lab input[type="checkbox"]:checked { background: var(--ink); }
 .profile-ai-lab input[type="checkbox"]:checked::after { left: 12px; background: #fff; }
+/* 开关状态文字：关=灰框、开=黑底，默认关闭一眼可辨 */
+.profile-ai-lab .ai-state {
+    display: inline-block; min-width: 14px; text-align: center; padding: 0 3px;
+    font-family: var(--font-mono); font-size: 9px; line-height: 12px;
+    border: 1px solid var(--line-strong); color: var(--muted); background: var(--panel);
+}
+.profile-ai-lab .ai-state::after { content: attr(data-off); }
+.profile-ai-lab input[type="checkbox"]:checked ~ .ai-state {
+    background: var(--ink); color: #fff; border-color: var(--ink);
+}
+.profile-ai-lab input[type="checkbox"]:checked ~ .ai-state::after { content: attr(data-on); }
 #customer-wall .profile-gift.solicit, #customer-profile .profile-gift.solicit {
     background: rgba(200, 16, 46, .06); border-left: 3px solid var(--accent-red); padding-left: 8px;
 }

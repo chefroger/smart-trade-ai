@@ -2090,7 +2090,9 @@ function _profileFactCardsHtml(items, people, delayFn) {
             '<a href="#" class="profile-void-fact">' + t('profile.void') + '</a>' +
             (f.source_type === 'manual' ? (' · <a href="#" class="profile-del-fact">' + t('profile.delete') + '</a>') : '') +
             ' · <label class="profile-ai-lab"><input type="checkbox" class="profile-ai-vis"' +
-            (f.ai_visible ? ' checked' : '') + '> ' + t('profile.ai_use') + '</label></p>' +
+            (f.ai_visible ? ' checked' : '') + '> <span class="ai-state" data-on="' +
+            esc(t('profile.ai_on')) + '" data-off="' + esc(t('profile.ai_off')) + '"></span> ' +
+            t('profile.ai_use') + '</label></p>' +
             '</article>';
     });
     return html;
@@ -2231,7 +2233,9 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
                 '<a href="#" class="profile-void-gift">' + t('profile.void') + '</a>' +
                 (g.source_type === 'manual' ? (' · <a href="#" class="profile-del-gift">' + t('profile.delete') + '</a>') : '') +
                 (isAsk ? '' : (' · <label class="profile-ai-lab"><input type="checkbox" class="profile-ai-vis-gift"' +
-                    (g.ai_visible ? ' checked' : '') + '> ' + t('profile.ai_use') + '</label>')) +
+                    (g.ai_visible ? ' checked' : '') + '> <span class="ai-state" data-on="' +
+                    esc(t('profile.ai_on')) + '" data-off="' + esc(t('profile.ai_off')) + '"></span> ' +
+                    t('profile.ai_use') + '</label>')) +
                 '</p></article>';
         });
     }
@@ -2840,8 +2844,19 @@ async function fillVisitSuggestions(silent) {
         if (el && !el.value.trim() && val) { el.value = val; filled = true; }
     };
     fill('vp-checklist', d.checklist);
-    fill('vp-risks', d.risks);
     fill('vp-summary', d.summary);
+    // 风险：空则整段填入；已有内容（旧计划/用户改过）只追加客户档案块，不覆盖
+    const riskEl = $('vp-risks');
+    if (riskEl) {
+        const marker = '【客户档案提醒 · 内部】';
+        if (!riskEl.value.trim()) {
+            if (d.risks) { riskEl.value = d.risks; filled = true; }
+        } else if (Array.isArray(d.profile_notes) && d.profile_notes.length &&
+                   riskEl.value.indexOf(marker) === -1) {
+            riskEl.value = riskEl.value.replace(/\s+$/, '') + '\n\n' + marker + '\n' + d.profile_notes.join('\n');
+            filled = true;
+        }
+    }
     if (filled && !silent) toast('已填入建议（可自行修改）');
 }
 

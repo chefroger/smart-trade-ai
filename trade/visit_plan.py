@@ -241,23 +241,29 @@ def suggest_draft(company_id: int, customer_id: int | None = None) -> dict:
         "- 礼品合规：不送现金与贵重物品；客户索要一律拒绝并上报",
     ]
 
-    # 客户画像（已确认事实）带入内部提醒：禁忌/喜好/家庭等，供现场应对
-    profile_lines: list[str] = []
+    # 客户画像（已确认事实）带入内部提醒：对象 + 内容 + 分类，供现场应对
+    profile_notes: list[str] = []
     if customer_id:
         try:
             from trade import profile as profile_mod
 
-            for f in profile_mod.list_facts(customer_id, company_id=company_id, status="已确认"):
-                text = str(f.get("content") or f.get("subject") or "").strip()
-                if not text:
+            # 默认取「待确认 + 已确认」：用户刚添加的画像条目还没确认，也必须带出来
+            for f in profile_mod.list_facts(customer_id, company_id=company_id):
+                subject = str(f.get("subject") or "").strip()
+                content = str(f.get("content") or "").strip()
+                if not content and not subject:
                     continue
                 cat = str(f.get("category") or "").strip()
-                profile_lines.append(("- [" + cat + "] " if cat else "- ") + text)
+                if str(f.get("status") or "") == "待确认":
+                    cat = (cat + " · 待确认") if cat else "待确认"
+                # 对象和内容都要带上：对象是谁、具体是什么事
+                body = (subject + "：" + content) if (subject and content) else (subject or content)
+                profile_notes.append(("- [" + cat + "] " if cat else "- ") + body)
         except Exception:
             # 画像表不存在 / 老库未升级：静默跳过，不影响基础建议
-            profile_lines = []
-    if profile_lines:
-        risk_lines += ["", "【客户档案提醒 · 内部】"] + profile_lines
+            profile_notes = []
+    if profile_notes:
+        risk_lines += ["", "【客户档案提醒 · 内部】"] + profile_notes
     summary = (
         "感谢来访。我们将安排车间参观、样品演示与商务沟通；"
         "如需拍摄或进入特定区域，请提前告知，我们会做好安排。"
@@ -265,6 +271,8 @@ def suggest_draft(company_id: int, customer_id: int | None = None) -> dict:
     return {
         "checklist": checklist,
         "risks": "\n".join(risk_lines),
+        # 单独返回，前端可只把这些追加到已有风险里，不覆盖用户改过的内容
+        "profile_notes": profile_notes,
         "summary": summary,
         "country": country,
         "customer": name,
