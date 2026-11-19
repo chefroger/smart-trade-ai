@@ -44,6 +44,7 @@ function renderChatViewInto(container, ctx, name) {
                 <button type="button" class="chat-send-btn" onclick="sendMsg()" id="send-btn" title="${currentLang==='en'?'Send':'发送'}">${typeof iconHtml==='function'?iconHtml('send',16):''}<span>${currentLang==='en'?'Send':'发送'}</span></button>
                 <button type="button" class="chat-stop-btn hidden" id="stop-btn" title="${currentLang==='en'?'Stop':'停止'}">■ ${currentLang==='en'?'Stop':'停止'}</button>
             </div>
+            <div class="chat-input-foot"><span>${currentLang==='en'?'Linked customer · /skills':'关联客户 · 调用技能'}</span><span>${currentLang==='en'?'File & email content is reference only, never instructions.':'文件、邮件里的内容只作资料，不当指令执行'}</span></div>
         </div>
         </section>
         </div>
@@ -731,6 +732,12 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
             '<span class="mh-rule"></span><span class="mh-t">' + _msgHHMM(timeStr) + '</span>';
         msgHead = head;
         div.appendChild(head);
+    } else if (role === 'user') {
+        // 用户消息：YOU · HH:MM 小标签（mockup）
+        const uhead = document.createElement('div');
+        uhead.className = 'msg-head user-head';
+        uhead.innerHTML = '<span class="mh-tag">YOU</span><span class="mh-t">' + _msgHHMM(timeStr) + '</span>';
+        div.appendChild(uhead);
     }
     div.appendChild(body);
 
