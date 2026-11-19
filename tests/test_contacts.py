@@ -226,7 +226,7 @@ def test_empty_primary_null(api_client):
 
 
 def test_primary_note_stays_empty_per_n3_final(test_db, company_id):
-    """N3 终稿 §2：主联系人 note 不拼客户级 note / follow_up_note（只读拼装，不入 contacts）。"""
+    """口径 C（2026-11-18）：主联系人 note 保持空；客户级 follow_up_note 只在客户墙主联系人卡片单独一行展示，不拼进 contacts。"""
     from trade import contacts, customer
 
     # 客户侧两处都有值，主联系人卡片的 note 仍为空（客户级字段只在客户卡显示）

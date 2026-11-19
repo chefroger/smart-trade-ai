@@ -529,31 +529,6 @@ async function toggleCustomerStar(ev, cid) {
     renderCustomersTable(_custFiltered);
 }
 
-function toggleSelectAllCustomers(el) {
-    document.querySelectorAll('.cust-checkbox').forEach(cb => cb.checked = el.checked);
-    updateBatchDeleteBtn();
-}
-
-function updateBatchDeleteBtn() {
-    const checked = document.querySelectorAll('.cust-checkbox:checked').length;
-    $('batch-delete-btn').style.display = checked > 0 ? 'inline-flex' : 'none';
-}
-
-async function batchDeleteCustomers() {
-    const checked = document.querySelectorAll('.cust-checkbox:checked');
-    if (!checked.length) return;
-    if (!confirm(`确定删除选中的 ${checked.length} 个客户？此操作不可恢复。`)) return;
-
-    let deleted = 0;
-    for (const cb of checked) {
-        const r = await api('DELETE', `/api/trade/customers/${cb.value}`);
-        if (r?.ok) deleted++;
-    }
-    toast(`已删除 ${deleted} 个客户`);
-    await loadCustomersData();
-    if (currentView === 'customers') renderCustomersTable(allCustomers);
-}
-
 function filterCustomers() {
     const search = ($('cust-search')?.value || '').toLowerCase();
     const country = $('cust-country-filter')?.value || '';
@@ -703,9 +678,6 @@ async function openCustomerWall(cid) {
         : (currentLang === 'en' ? 'Recent talks' : '最近对话');
     const emailStatN = (stats.email_count != null) ? stats.email_count : (mailboxBound ? mailRecords.length : fileEmails.length);
     const talkStatN = (stats.key_talk_count != null) ? stats.key_talk_count : keyChats.length;
-    const talksStatLabel = talksAreImportant
-        ? ((currentLang === 'en' ? 'Mail ' : '邮件 ') + emailStatN + (currentLang === 'en' ? ' · Key talks ' : ' · 重要对话 ') + talkStatN)
-        : ((currentLang === 'en' ? 'Mail ' : '邮件 ') + emailStatN + (currentLang === 'en' ? ' · Talks ' : ' · 对话 ') + talkStatN);
     const quoteCount = stats.quote_count || 0;
     const orderTotal = stats.order_total_amount;
     const orderCurrency = stats.order_total_currency || '';
@@ -751,7 +723,9 @@ async function openCustomerWall(cid) {
             const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
             const role = ([(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ')
                 || p.function || (isPrimary ? (currentLang === 'en' ? 'Primary contact' : '主要联系人') : ''));
-            const fname = (p.function || (isPrimary ? '决策人' : '其他'));
+            const fname = (p.function || (isPrimary
+                ? (currentLang === 'en' ? 'Decision maker' : '决策人')
+                : (currentLang === 'en' ? 'Other' : '其他')));
             const acts = isPrimary
                 ? ('<a href="#" class="lnk wall-edit-primary">' + t('contacts.edit') + '</a>')
                 : ('<a href="#" class="lnk wall-edit-contact" data-id="' + esc(String(p.id)) + '">' + t('contacts.edit') + '</a>' +
@@ -767,6 +741,8 @@ async function openCustomerWall(cid) {
             const phone = [p.phone, p.whatsapp ? 'WA ' + p.whatsapp : '', p.wechat ? 'WeChat ' + p.wechat : ''].filter(Boolean).join(' · ');
             if (phone) kv.push('<span class="k">PHONE</span><span class="v mono">' + esc(phone) + '</span>');
             if (kv.length) peopleHtml += '<div class="kv">' + kv.join('') + '</div>';
+            // 口径 C：客户级跟进备注只挂在主联系人卡片（单独一行）
+            peopleHtml += _primaryFollowUpNoteHtml(e2.follow_up_note, isPrimary);
             peopleHtml += '</div>';
         });
     }
@@ -913,7 +889,7 @@ async function openCustomerWall(cid) {
     const locChip = locVals.length ? ('<span class="chip k">' + esc(locVals.join(' · ')) + '</span>') : '';
     const btChip = e1.buyer_type ? ('<span class="chip k">' + esc(e1.buyer_type) + '</span>') : '';
     const stageChip = '<span class="chip k">' + (currentLang === 'en' ? 'Stage · ' : '商机阶段 · ') + esc(stage) + '</span>';
-    const starred = !!(c.starred || e1.starred);
+    const starred = Number(c.is_starred) === 1;
     const starHtml = '<span class="star' + (starred ? ' on' : '') + '" role="button" title="' +
         (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" style="cursor:pointer;" onclick="toggleWallStar(event,' + cid + ')">' +
         (typeof iconHtml === 'function' ? iconHtml('star', 18) : '★') + '</span>';
@@ -1129,9 +1105,19 @@ async function openCustomerWall(cid) {
             // 画像页打开时由它自己的监听逐层关闭（画像 → 墙 → 列表）
             const profile = document.getElementById('customer-profile');
             if (profile && profile.classList.contains('open')) return;
+            // 编辑/跟进弹窗打开时让给它们，避免一次 ESC 连关两层
+            if (_custEditorOpen()) return;
             closeCustomerWall();
         });
     }
+}
+
+// 编辑弹窗 / 侧滑详情 / 跟进弹窗 是否打开（ESC 让路用，避免一次关两层）
+function _custEditorOpen() {
+    const modal = document.getElementById('customer-modal');
+    if (modal && !modal.classList.contains('hidden')) return true;
+    return !!(document.getElementById('customer-detail-panel') ||
+        document.getElementById('followup-modal'));
 }
 
 // 客户编辑两处 UI 的 ESC 关闭（编辑表单弹窗优先，其次侧滑详情面板）
@@ -2565,7 +2551,9 @@ async function openCustomerProfile(cid) {
         const isPrimary = !!p.is_primary || p.id == null;
         const ini = String(p.name || '?').trim().slice(0, 2).toUpperCase();
         const role = [(p.title || '').trim(), (p.responsibility || '').trim()].filter(Boolean).join(' · ') || p.function || '';
-        const fn = p.function || (isPrimary ? '决策人' : '其他');
+        const fn = p.function || (isPrimary
+            ? (currentLang === 'en' ? 'Decision maker' : '决策人')
+            : (currentLang === 'en' ? 'Other' : '其他'));
         const acts = isPrimary
             ? '<a href="#" class="lnk pf-edit-primary">' + t('contacts.edit') + '</a>'
             : ('<a href="#" class="lnk pf-edit-contact" data-id="' + esc(String(p.id)) + '">' + t('contacts.edit') + '</a>' +
@@ -2654,6 +2642,8 @@ async function openCustomerProfile(cid) {
     if (_profileEscHandler) document.removeEventListener('keydown', _profileEscHandler);
     _profileEscHandler = function (e) {
         if (e.key === 'Escape') {
+            // 编辑/跟进弹窗打开时让给它们，避免一次 ESC 连关两层
+            if (_custEditorOpen()) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             closeCustomerProfile();

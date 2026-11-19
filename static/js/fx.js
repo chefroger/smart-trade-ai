@@ -97,7 +97,7 @@ function toggleFx() {
 let _dustStart = null;
 
 function _initDust() {
-    /** zip 微光粒子：固定种子、缓慢漂移；reduced-motion / 关闭特效时只画静态一帧。 */
+    /** zip 微光粒子：固定种子、缓慢漂移；reduced-motion / 关闭特效时整层隐藏并停止重绘。 */
     const cv = document.getElementById('dust');
     if (!cv || !cv.getContext) return;
     const ctx = cv.getContext('2d');
