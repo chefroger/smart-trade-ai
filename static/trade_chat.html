@@ -119,6 +119,7 @@
          图标刻意两两不同（⬆️/♻️、📖/📚、ℹ️），否则纯图标后用户分不清谁是谁。 -->
     <!-- 今日 token 用量提示（审计 P1-16）：只展示，不拦聊天。
          文案与配色由 api.js 的 loadUsageToday() 填。 -->
+    <div class="sidebar-bottom">
     <div id="usage-today" class="usage-today" hidden></div>
     <div class="sidebar-footer">
         <button id="system-update-btn" class="hidden" data-paid onclick="doTradeUpdate(event)" data-tip="更新系统">⬆️</button>
@@ -130,6 +131,7 @@
         <!-- 聊天副驾设置入口暂时隐藏（2026-11-06）；弹窗与接口保留，改回可见只需删掉 hidden。 -->
         <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-settings.svg')"></span></button>
         <div id="license-bar" style="display:none;"></div>
+    </div>
     </div>
 
 </aside>
