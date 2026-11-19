@@ -2162,8 +2162,9 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
             const isAsk = g.direction === '客户索要';
             const gDate = _profileSourceDate(g);
             html += '<article class="wcard profile-gift' + (isAsk ? ' solicit' : '') + '"' + delayFn() + ' data-gift-id="' + esc(String(g.id)) + '">' +
-                '<div class="wc-name">' + (isAsk ? ('⚠ ' + t('profile.ask') + ' · ') : '') +
-                esc(g.direction || '') + ' · ' + esc(g.item || '') +
+                '<div class="wc-name">' + (isAsk
+                    ? ('⚠ ' + t('profile.ask') + ' · ' + esc(g.item || ''))
+                    : (esc(g.direction || '') + ' · ' + esc(g.item || ''))) +
                 '<span class="muted">' + esc(_profilePersonLabel(g, people)) + '</span></div>' +
                 (g.occasion || g.gift_date
                     ? ('<p class="muted">' + esc([g.gift_date, g.occasion].filter(Boolean).join(' · ')) + '</p>')

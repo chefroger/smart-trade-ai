@@ -1799,3 +1799,6 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 @media (max-width: 1240px) {
     .cust-table .c-date, .cust-table th.c-date { display: none; }
 }
+
+/* s4 画像：每个 pane 内 fact 单列堆叠（mockup），不再两列网格 */
+#customer-profile .wgrid { display: flex; flex-direction: column; gap: 8px; }
