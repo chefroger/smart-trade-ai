@@ -49,6 +49,12 @@ async function renderCustomersViewInto(container) {
             </div>
             <div class="cust-table-wrap">
                 <table class="cust-table" id="customers-table">
+                    <colgroup>
+                        <col style="width:38px"><col style="width:230px"><col style="width:52px">
+                        <col style="width:84px"><col style="width:92px"><col style="width:120px">
+                        <col style="width:170px"><col style="width:66px"><col style="width:112px">
+                        <col style="width:96px"><col>
+                    </colgroup>
                     <thead><tr>
                         <th class="c-star"></th>
                         <th>客户 <span class="th-lbl">/ CUSTOMER</span></th>
@@ -375,7 +381,9 @@ function renderCustomersTable(data) {
             '<td class="c-star" onclick="event.stopPropagation()"><button type="button" class="star-btn' + (starred ? ' on' : '') + '" onclick="toggleCustomerStar(event,' + c.id + ')" aria-label="星标">★</button></td>' +
             '<td class="c-customer"><div class="rname">' + esc(c.name) + '</div>' +
             '<div class="rsub">' + esc([contact, title].filter(Boolean).join(' · ') || '—') + '</div></td>' +
-            '<td class="c-tier">' + (tier ? '<span class="tchip">' + esc(tier) + '</span>' : '<span class="tchip none">' + (currentLang === 'en' ? 'n/a' : '未分级') + '</span>') + '</td>' +
+            '<td class="c-tier">' + (tier
+                ? '<span class="tchip tier-' + esc(String(tier).toLowerCase()) + '">' + esc(tier) + '</span>'
+                : '<span class="tchip none">' + (currentLang === 'en' ? 'n/a' : '未分级') + '</span>') + '</td>' +
             '<td>' + esc(country || '—') + '</td>' +
             '<td>' + esc(buyer || '—') + '</td>' +
             '<td class="c-stage"><span class="stage-dots">' + dots + '</span><span class="stage-tx">' + esc(stage) + '</span></td>' +
@@ -2120,13 +2128,14 @@ function renderProfileCircleSection(cid, factsPayload, people, delayFn, mailboxB
         return (a.contact_id || 0) - (b.contact_id || 0);
     });
     let html = '<div class="wsec profile-circle" data-cid="' + cid + '"><div class="wsec-head"><h4>' +
-        t('profile.circle') + '</h4><span class="cnt">CIRCLE // ' + confirmed.length +
-        '</span><span class="ddline" aria-hidden="true"></span></div>';
-    html += '<div style="margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        t('profile.circle') + '</h4><span class="ddline" aria-hidden="true"></span>' +
+        '<span class="sec-acts">' +
         '<button type="button" class="btn-xs profile-add-fact" data-cats="circle">' + t('profile.add') + '</button>' +
         '<button type="button" class="btn-xs profile-extract-chat">' + t('profile.extract_chat') + '</button>' +
         (mailboxBound ? ('<button type="button" class="btn-xs profile-extract-email">' + t('profile.extract_email') + '</button>') : '') +
-        '</div><div class="wgrid">';
+        '</span>' +
+        '<span class="cnt">CIRCLE · ' + confirmed.length + '</span></div>';
+    html += '<div class="wgrid">';
     if (!avail) {
         html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.restart') + '</div>';
     } else if (!confirmed.length) {
@@ -2159,14 +2168,15 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
     const confirmedGifts = gifts.filter(function (g) { return g.status === '已确认'; });
     const n = confirmedFacts.length + confirmedGifts.length;
     let html = '<div class="wsec profile-prefs" data-cid="' + cid + '"><div class="wsec-head"><h4>' +
-        t('profile.prefs') + '</h4><span class="cnt">PREFS // ' + n +
-        '</span><span class="ddline" aria-hidden="true"></span></div>';
-    html += '<div style="margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        t('profile.prefs') + '</h4><span class="ddline" aria-hidden="true"></span>' +
+        '<span class="sec-acts">' +
         '<button type="button" class="btn-xs profile-add-fact" data-cats="prefs">' + t('profile.add') + '</button>' +
         '<button type="button" class="btn-xs profile-add-gift">' + t('profile.add_gift') + '</button>' +
         '<button type="button" class="btn-xs profile-extract-chat">' + t('profile.extract_chat') + '</button>' +
         (mailboxBound ? ('<button type="button" class="btn-xs profile-extract-email">' + t('profile.extract_email') + '</button>') : '') +
-        '</div><div class="wgrid">';
+        '</span>' +
+        '<span class="cnt">PREFS · ' + n + '</span></div>';
+    html += '<div class="wgrid">';
     if (!fAvail && !gAvail) {
         html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.restart') + '</div>';
     } else if (!n) {
@@ -2663,6 +2673,8 @@ async function openCustomerProfile(cid) {
         '<span class="nm">' + esc(c.name) + '</span>' +
         '<div class="facts2">' + pfTier + pfLoc + pfBuyer + pfTags + '</div>' +
         '</div>' +
+        '<button type="button" class="btn-xs profile-extract-chat profile-extract-head">' +
+        t('profile.extract_chat') + '</button>' +
         '</div>' +
         '<div class="wall-scroll profile-dossier">' + strip +
         '<div class="profile-cols">' + left + right + '</div></div>' +

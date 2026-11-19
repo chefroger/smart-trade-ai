@@ -44,7 +44,7 @@ function renderChatViewInto(container, ctx, name) {
                 <button type="button" class="chat-send-btn" onclick="sendMsg()" id="send-btn" title="${currentLang==='en'?'Send':'发送'}">${typeof iconHtml==='function'?iconHtml('send',16):''}<span>${currentLang==='en'?'Send':'发送'}</span></button>
                 <button type="button" class="chat-stop-btn hidden" id="stop-btn" title="${currentLang==='en'?'Stop':'停止'}">■ ${currentLang==='en'?'Stop':'停止'}</button>
             </div>
-            <div class="chat-input-foot"><span>${currentLang==='en'?'Linked customer · /skills':'关联客户 · 调用技能'}</span><span>${currentLang==='en'?'File & email content is reference only, never instructions.':'文件、邮件里的内容只作资料，不当指令执行'}</span></div>
+            <div class="chat-input-foot"><span><span class="mono">@</span> ${currentLang==='en'?'Linked customer':'关联客户'}</span><span><span class="mono">/</span> ${currentLang==='en'?'Skills':'调用技能'}</span><span>${currentLang==='en'?'File & email content is reference only, never instructions.':'文件、邮件里的内容只作资料，不当指令执行'}</span></div>
         </div>
         </section>
         </div>
@@ -96,7 +96,9 @@ async function loadTodayBrief(silent) {
     const railBrief = document.getElementById('rail-brief');
     if (railBrief) {
         railBrief.innerHTML =
-            '<div class="rail-bh"><span class="t">' + esc(t('brief.title')) + '</span>' +
+            '<div class="rail-bh"><span class="t">' +
+            (typeof iconHtml === 'function' ? iconHtml('layout-dashboard', 16) : '') +
+            esc(t('brief.title')) + '</span>' +
             '<span class="lbl">BRIEF' + (dateLabel ? ' · ' + esc(dateLabel) : '') + '</span></div>' +
             '<div class="rail-kpis">' +
             '<div><div class="n">' + esc(niText) + '</div><div class="lbl">' + esc(t('brief.new_inquiries')) + '</div></div>' +
@@ -285,7 +287,9 @@ async function loadCronStatus(isPoll = false) {
             if (e == null) return false;
             return _nowMin >= s && _nowMin <= e;
         }
-        let todoHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.todo')) +
+        let todoHtml = '<div class="rail-bh"><span class="t">' +
+            (typeof iconHtml === 'function' ? iconHtml('list-checks', 16) : '') +
+            esc(t('brief.todo')) +
             '</span><span class="lbl">TODO · ' + (pending.length + completed.length) + '</span></div>';
         for (const task of pending) {
             todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task) ? ' now' : '') + '">' +
@@ -307,7 +311,9 @@ async function loadCronStatus(isPoll = false) {
         railTodo.scrollTop = _todoScroll;
         const railCron = document.getElementById('rail-cron');
         if (railCron) {
-            let cronHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.cron')) +
+            let cronHtml = '<div class="rail-bh"><span class="t">' +
+                (typeof iconHtml === 'function' ? iconHtml('calendar-clock', 16) : '') +
+                esc(t('brief.cron')) +
                 '</span><span class="lbl">CRON</span></div>';
             const outs = completed.filter(function (x) { return x.output; }).slice(0, 4);
             if (!outs.length) {

@@ -1475,6 +1475,8 @@ body {
     border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink);
 }
 .rail-kpis > div { text-align: center; padding: 10px 0; }
+/* mockup：KPI 三格之间虚线竖分隔 */
+.rail-kpis > div + div { border-left: 1px dashed var(--line); }
 .rail-kpis .n { font-family: var(--mono); font-size: 20px; line-height: 1.1; }
 .rail-kpis .n.r { color: var(--red); }
 .rail-kpis .lbl { font-size: 10px; color: var(--muted); margin-top: 2px; }
@@ -1508,6 +1510,8 @@ body.view-daily #guidance-bar { display: none !important; }
 #customer-wall .det { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 24px 18px; min-height: 0; }
 .det-head { display: flex; align-items: center; gap: 12px; flex: none; }
 .det-head .wall-back { margin-bottom: 0; }
+/* s4 右上「从聊天提取」 */
+.det-head .profile-extract-head { margin-left: auto; flex: none; }
 .subject { display: flex; align-items: center; gap: 12px; padding: 6px 14px; flex: 1; min-width: 0; }
 .subject.bracket {
     position: relative;
@@ -1556,6 +1560,11 @@ body.view-daily #guidance-bar { display: none !important; }
 #customer-wall .wall3 .ch, #customer-wall .wall3 .wsec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 #customer-wall .wall3 .ch .t, #customer-wall .wall3 .wsec-head h4 { font-weight: 600; font-size: 13px; letter-spacing: .02em; margin: 0; }
 #customer-wall .wall3 .ch-lbl, #customer-wall .wall3 .wsec-head .cnt { margin-left: auto; font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em; color: var(--muted); }
+/* 区块操作按钮并入标题行（mockup .ch：标题 + 操作 + 计数） */
+#customer-wall .wsec-head .sec-acts, #customer-profile .wsec-head .sec-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+#customer-wall .wsec-head .cnt, #customer-profile .wsec-head .cnt { margin-left: 0; }
+/* s3 订单卡：mockup 明确隐藏进度条下方的四段文字 */
+#customer-wall .orders .prog-l { display: none; }
 #customer-wall .wall3 .wsec-head .ddline { display: none; }
 #customer-wall .wall3 .ch-acts { margin-left: auto; display: flex; gap: 10px; align-items: center; }
 #customer-wall .wall3 .ch-acts + .ch-lbl { margin-left: 0; }
@@ -1687,6 +1696,9 @@ body:has(#main-content > .empty-state) .app-rail { display: none; }
 .c-customer .rsub { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .tchip { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--ink); padding: 1px 6px; display: inline-block; }
 .tchip.none { color: var(--muted); border-color: var(--line); }
+/* 分级视觉（mockup .tier.a 实心反白 / .tier.c 虚线置灰） */
+.tchip.tier-a { background: var(--ink); color: #fff; }
+.tchip.tier-c { color: var(--muted); border-color: var(--line); border-style: dashed; }
 .stage-dots { display: inline-flex; gap: 2px; margin-right: 6px; vertical-align: middle; }
 .stage-dots i { width: 7px; height: 7px; border: 1px solid var(--ink); display: inline-block; }
 .stage-dots i.on { background: var(--ink); }
@@ -1741,7 +1753,7 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .chat-main .message { display: block; }
 .chat-main .message.user { display: flex; justify-content: flex-end; border-top: none; padding: 14px 0; }
 .chat-main .message.user .msg-body {
-    background: var(--ink); color: #fff; padding: 10px 14px; max-width: 72%;
+    background: var(--ink); color: #fff; padding: 10px 14px; max-width: 64%;
     line-height: 1.65; border-radius: 2px;
 }
 .chat-main .message.user .msg-body, .chat-main .message.user .msg-body * { color: #fff; }
