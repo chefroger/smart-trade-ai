@@ -322,65 +322,6 @@ async function loadCronStatus(isPoll = false) {
     // 右栏缺失时无需再兜底渲染（正常情况 #app-rail 常驻）。
     return;
 
-    // 在今日简报视图更新 cron 面板；在任意聊天视图追加 cron 输出
-    const ct = currentChatContainer;
-    if (!ct || currentView !== 'chat') return;
-    const container = ct.querySelector('#chat-messages');
-    if (!container) return;
-
-    const isDailyView = currentChatContext === 'daily';
-
-    // 只在今日简报视图更新 cron 面板
-    if (isDailyView) {
-        let panel = container.querySelector('.cron-panel');
-        let panelHtml = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">`;
-        panelHtml += `<div style="font-weight:600;font-size:14px;">📋 今日任务清单 <span style="font-weight:400;color:var(--text-muted);font-size:12px;">${current_time}</span></div>`;
-        panelHtml += `<div style="font-size:12px;color:${pending.length === 0 ? 'var(--accent-green)' : 'var(--accent)'};">${pending.length === 0 ? '✅ 全部完成' : '⏳ ' + pending.length + ' 项待处理'}</div>`;
-        panelHtml += `</div>`;
-        if (completed.length) {
-            panelHtml += `<div style="font-size:12px;color:var(--accent-green);margin-bottom:6px;">已完成 (${completed.length})</div>`;
-            for (const t of completed) {
-                panelHtml += `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;"><span style="color:var(--accent-green);">✓</span><span style="font-weight:500;">${esc(t.name)}</span><span style="color:var(--text-muted);font-size:11px;">${esc(t.time)}</span></div>`;
-            }
-        }
-        if (pending.length) {
-            panelHtml += `<div style="font-size:12px;color:var(--text-secondary);margin:6px 0;">待处理 (${pending.length})</div>`;
-            for (const t of pending) {
-                panelHtml += _cronTaskLine(t);
-            }
-        }
-        if (panel) {
-            panel.innerHTML = panelHtml;
-        } else {
-            panel = document.createElement('div');
-            panel.className = 'cron-panel';
-            panel.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow-sm);';
-            panel.innerHTML = panelHtml;
-            const emptyEl = container.querySelector('.empty-state');
-            if (emptyEl) emptyEl.insertAdjacentElement('afterend', panel);
-            else container.insertAdjacentElement('afterbegin', panel);
-        }
-    }
-
-    // 增量追加已完成任务的 AI 输出（仅今日简报视图，避免干扰其他对话）
-    if (isDailyView) {
-        for (const t of completed) {
-            if (!t.output || _shownCronOutputs.has(t.name)) continue;
-            const msgDiv = document.createElement('div');
-            msgDiv.className = 'message assistant msg-cron-output';
-            // 截断 cron 输出中的冗余管理指令
-            let cleanOutput = t.output || '';
-            const truncIdx = cleanOutput.search(/管理命令参考|##?\s*管理命令|crontab\s*命令参考/i);
-            if (truncIdx >= 0) cleanOutput = cleanOutput.substring(0, truncIdx).trimEnd();
-            msgDiv.innerHTML = `<div class="bubble"><div class="bubble-meta"><span class="cron-badge" style="display:inline-block;padding:2px 8px;background:var(--primary);color:#fff;border-radius:999px;font-size:10px;margin-bottom:6px;">⏰ ${esc(t.name)} · ${esc(t.time)}</span></div><div class="cron-output-content">${DOMPurify.sanitize(marked.parse(cleanOutput))}</div></div>`;
-            container.appendChild(msgDiv);
-            _shownCronOutputs.add(t.name);
-        }
-        if (completed.length) {
-            const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-            if (nearBottom) container.scrollTop = container.scrollHeight;
-        }
-    }
 }
 
 // ── 滚动到底部浮标（用户不在底部时始终显示）─────────

@@ -87,7 +87,7 @@ const SAFE_PATTERNS = [
     // CRM 列表入场延迟：纯数字运算，无用户字符串
     /^\(idx \* 0\.04\)\.toFixed\(2\)$/,
     // chat 视图模板：本函数内拼好的 HTML 片段，用户字段已逐个 esc()
-    /^(topbarHtml|railHtml)$/,
+    /^topbarHtml$/,
 ];
 
 /** stageHtml 安全不变量（不钉死空白/换行，避免格式微调就红）。 */

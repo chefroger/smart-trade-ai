@@ -4,7 +4,7 @@
  */
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { loadRegion } = require('./_extract');
+const { loadRegion, SRC } = require('./_extract');
 
 describe('wall-followup-note', () => {
     const tmap = {
@@ -42,5 +42,16 @@ describe('wall-followup-note', () => {
         const html = ctx._primaryFollowUpNoteHtml('<img src=x onerror=alert(1)>', true);
         assert.doesNotMatch(html, /<img/);
         assert.match(html, /&lt;img/);
+    });
+});
+
+// 接线级：函数本身全过但没人调用就是回归（d33b48f 就是这么漏掉的）
+describe('wall-followup-note 接线', () => {
+    it('openCustomerWall 人物卡片调用 _primaryFollowUpNoteHtml(e2.follow_up_note, isPrimary)', () => {
+        assert.match(
+            SRC,
+            /_primaryFollowUpNoteHtml\(\s*e2\.follow_up_note\s*,\s*isPrimary\s*\)/,
+            '主干墙人物卡片必须调用 _primaryFollowUpNoteHtml(e2.follow_up_note, isPrimary)',
+        );
     });
 });
