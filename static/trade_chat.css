@@ -1941,3 +1941,10 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(20, 20, 20, .25); border-radius: 3px; }
 .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
 .sidebar-bottom { background: #FBFCFC !important; backdrop-filter: none !important; border-top: 1px dashed rgba(20, 20, 20, .18); }
+
+/* 短窗：底栏让高度给功能栏，避免压住最后一项 */
+.sidebar-bottom { padding-top: 8px; }
+@media (max-height: 760px) {
+    #usage-today { display: none !important; }
+    #license-bar { display: none !important; }
+}
