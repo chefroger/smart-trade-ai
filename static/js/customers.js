@@ -693,11 +693,6 @@ async function openCustomerWall(cid) {
     }
 
     const overdueDays = overdue ? _followUpOverdueDays(c) : 0;
-    const stamp = overdue
-        ? (currentLang === 'en'
-            ? ('THREAT · OVERDUE ' + overdueDays + ' DAYS')
-            : ('THREAT · 已逾期 ' + overdueDays + ' 天'))
-        : (e1.tier ? ('TIER ' + e1.tier) : 'POI');
 
     const inquiries = Array.isArray(inqRes) ? inqRes : [];
     const wallTags = (_parseExtra3(c).tags || []).slice();
