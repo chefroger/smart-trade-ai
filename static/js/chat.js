@@ -866,11 +866,13 @@ function _chatInputChanged(el) {
     const caret = el.selectionStart || 0;
     const before = el.value.slice(0, caret);
     // 光标前最近的 @xxx 或 /xxx（允许紧跟中文/标点；邮箱 a@b 不触发）
-    const m = before.match(/(^|[^\w@/])([@/])([^\s@/]*)$/);
+    // 同时接受全角 ＠ / ／（中文输入法常见）
+    const m = before.match(/(^|[^\w@/＠／])([@/＠／])([^\s@/＠／]*)$/);
     if (!m) { _mentionClose(); return; }
+    const sym = (m[2] === '＠') ? '@' : (m[2] === '／' ? '/' : m[2]);
     // 先标记「下拉激活」，避免异步加载期间按 Enter 被当成发送
-    _mention = { kind: m[2], start: caret - m[3].length - 1, items: [], idx: 0, query: m[3] };
-    _mentionOpen(m[2], m[3], caret - m[3].length - 1);
+    _mention = { kind: sym, start: caret - m[3].length - 1, items: [], idx: 0, query: m[3] };
+    _mentionOpen(sym, m[3], caret - m[3].length - 1);
 }
 
 async function _mentionOpen(sym, query, start) {
@@ -901,7 +903,11 @@ async function _mentionOpen(sym, query, start) {
         const flat = [];
         if (typeof _ALL_SKILLS !== 'undefined') {
             _ALL_SKILLS.forEach(function (g) {
-                (g.items || []).forEach(function (it) { flat.push({ it: it, group: g.g || '' }); });
+                (g.items || []).forEach(function (it) {
+                    // 已禁用的技能不进候选（如 auto-smtp-email）
+                    if (String(it.d || '').indexOf('已禁用') >= 0) return;
+                    flat.push({ it: it, group: g.g || '' });
+                });
             });
         }
         items = flat.filter(function (row) {
