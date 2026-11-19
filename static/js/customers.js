@@ -2122,7 +2122,7 @@ function renderProfileCircleSection(cid, factsPayload, people, delayFn, mailboxB
     let html = '<div class="wsec profile-circle" data-cid="' + cid + '"><div class="wsec-head"><h4>' +
         t('profile.circle') + '</h4><span class="cnt">CIRCLE // ' + confirmed.length +
         '</span><span class="ddline" aria-hidden="true"></span></div>';
-    html += '<div style="margin:-4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+    html += '<div style="margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
         '<button type="button" class="btn-xs profile-add-fact" data-cats="circle">' + t('profile.add') + '</button>' +
         '<button type="button" class="btn-xs profile-extract-chat">' + t('profile.extract_chat') + '</button>' +
         (mailboxBound ? ('<button type="button" class="btn-xs profile-extract-email">' + t('profile.extract_email') + '</button>') : '') +
@@ -2161,7 +2161,7 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
     let html = '<div class="wsec profile-prefs" data-cid="' + cid + '"><div class="wsec-head"><h4>' +
         t('profile.prefs') + '</h4><span class="cnt">PREFS // ' + n +
         '</span><span class="ddline" aria-hidden="true"></span></div>';
-    html += '<div style="margin:-4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+    html += '<div style="margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;">' +
         '<button type="button" class="btn-xs profile-add-fact" data-cats="prefs">' + t('profile.add') + '</button>' +
         '<button type="button" class="btn-xs profile-add-gift">' + t('profile.add_gift') + '</button>' +
         '<button type="button" class="btn-xs profile-extract-chat">' + t('profile.extract_chat') + '</button>' +
