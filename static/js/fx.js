@@ -210,7 +210,8 @@ function initFxBackground() {
         const el = document.getElementById('sys-status');
         if (el) el.textContent = text;
         const topEl = document.getElementById('app-top-status');
-        if (topEl) topEl.textContent = text;
+        // 画像页的统计状态由 customers.js 接管，轮播不得覆盖
+        if (topEl && !document.body.classList.contains('profile-open')) topEl.textContent = text;
     }, 4000);
 
     // reduced-motion / 用户偏好 / THREE 缺失 → 关

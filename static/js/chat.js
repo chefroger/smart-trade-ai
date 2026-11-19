@@ -288,11 +288,17 @@ async function loadCronStatus(isPoll = false) {
         let todoHtml = '<div class="rail-bh"><span class="t">' + esc(t('brief.todo')) +
             '</span><span class="lbl">TODO · ' + (pending.length + completed.length) + '</span></div>';
         for (const task of pending) {
-            todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task) ? ' now' : '') + '"><span class="tx">' +
+            todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task) ? ' now' : '') + '">' +
+                '<span class="ck" aria-hidden="true"></span><span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
+        // 已完成单独成组（mockup 的 DONE 分隔），勾选框按状态点亮
+        if (completed.length) {
+            todoHtml += '<div class="rail-todo-sep">' + esc(t('brief.done', { n: completed.length })) + '</div>';
+        }
         for (const task of completed) {
-            todoHtml += '<div class="rail-todo-item done"><span class="tx">' +
+            todoHtml += '<div class="rail-todo-item done">' +
+                '<span class="ck on" aria-hidden="true"></span><span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
         // 轮询每 30s 会重建列表：保留用户滚动位置，避免跳回顶部
@@ -763,10 +769,15 @@ function _renderChatBlocks(blocks) {
         box.className = 'chat-draft';
         const lang = (d.lang || 'en').toUpperCase();
         box.innerHTML = '<div class="bar"><span class="lbl">DRAFT · EMAIL · ' + esc(lang) + '</span>'
-            + '<span class="warn">' + esc(t('chat.blocks.draft_warn')) + '</span></div>'
+            + '<span class="warn"><span class="dot"></span>' + esc(t('chat.blocks.draft_warn')) + '</span></div>'
             + (d.subject ? '<div class="subj">' + esc(d.subject) + '</div>' : '')
             + '<pre class="body">' + esc(d.body || '') + '</pre>'
-            + '<button type="button" class="draft-copy">' + esc(t('chat.blocks.copy_draft')) + '</button>';
+            + '<div class="draft-acts">'
+            + '<button type="button" class="btn solid draft-copy">' + esc(t('chat.blocks.copy_draft')) + '</button>'
+            + '<button type="button" class="btn draft-edit">' + esc(t('chat.blocks.edit_draft')) + '</button>'
+            + '<button type="button" class="btn ghost draft-pi">' + esc(t('chat.blocks.gen_pi')) + '</button>'
+            + '<span class="note">' + esc(t('chat.blocks.copy_note')) + '</span>'
+            + '</div>';
         const btn = box.querySelector('.draft-copy');
         if (btn) {
             btn.addEventListener('click', function (e) {
@@ -776,6 +787,21 @@ function _renderChatBlocks(blocks) {
                     btn.textContent = t('chat.blocks.copied');
                     setTimeout(function () { btn.textContent = t('chat.blocks.copy_draft'); }, 1500);
                 }).catch(function () {});
+            });
+        }
+        // 继续修改 / 生成 PI：写进输入框（与 NEXT chip 同一套动作，不自动外发）
+        const editBtn = box.querySelector('.draft-edit');
+        if (editBtn) {
+            editBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                _fillChatInput(t('chat.blocks.edit_prompt') + (d.subject ? ('：' + d.subject) : ''));
+            });
+        }
+        const piBtn = box.querySelector('.draft-pi');
+        if (piBtn) {
+            piBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                _fillChatInput(t('chat.blocks.gen_pi_prompt'));
             });
         }
         wrap.appendChild(box);
@@ -802,30 +828,35 @@ function _renderChatBlocks(blocks) {
     return wrap.childNodes.length ? wrap : null;
 }
 
-function _handleNextAction(action) {
-    /** NEXT chip：把动作写成可编辑的聊天指令，不自动外发。 */
+function _fillChatInput(text) {
+    /** 把内容写进聊天输入框并聚焦（只填充，不发送）。 */
     const ct = currentChatContainer;
     if (!ct) return;
     const input = ct.querySelector('#msg-input');
-    if (!input) return;
+    if (!input || !text) return;
+    input.value = text;
+    input.focus();
+    input.style.height = '24px';
+    input.style.height = (input.scrollHeight > 80 ? 80 : input.scrollHeight) + 'px';
+}
+
+function _handleNextAction(action) {
+    /** NEXT chip：把动作写成可编辑的聊天指令，不自动外发。 */
     const act = (action && action.action) || '';
     let prompt = (action && action.label) || '';
     if (act === 'gen_pi') {
-        prompt = prompt || (currentLang === 'en'
-            ? 'Generate a PI from this quotation'
-            : '按这份报价生成 PI');
+        prompt = prompt || t('chat.blocks.gen_pi_prompt');
     } else if (act === 'customs_lookup') {
         prompt = prompt || (currentLang === 'en'
             ? 'Look up customs import records for this customer'
             : '查这家客户的海关进口记录');
+    } else if (act === 'add_todo') {
+        // 待办无独立存储：写成指令交给助手（带原始标签，保留「周四前」这类时间）
+        prompt = (currentLang === 'en' ? 'Add to todo: ' : '加入待办：') + (action.label || '');
     } else {
-        // add_todo 等未接线动作：不填入
         return;
     }
-    input.value = prompt;
-    input.focus();
-    input.style.height = '24px';
-    input.style.height = (input.scrollHeight > 80 ? 80 : input.scrollHeight) + 'px';
+    _fillChatInput(prompt);
 }
 
 async function loadChatHistory() {
