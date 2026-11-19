@@ -1784,7 +1784,30 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .chat-main .message.user .msg-head { justify-content: flex-end; margin-bottom: 0; }
 .chat-main .message.user .msg-head .mh-tag,
 .chat-main .message.user .msg-head .mh-t { color: var(--muted); }
-.chat-main .chat-input-area { flex-direction: column; align-items: center; }
+.chat-main .chat-input-area { flex-direction: column; align-items: center; position: relative; }
+/* @ 客户 / / 技能 下拉 */
+.mention-menu {
+    position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 40;
+    background: var(--panel); border: 1px solid var(--ink); max-height: 260px; overflow-y: auto;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+}
+.mention-menu.hidden { display: none; }
+.mention-item {
+    display: flex; align-items: baseline; gap: 8px; padding: 6px 10px;
+    font-size: 12.5px; cursor: pointer; border-bottom: 1px dashed var(--line);
+}
+.mention-item:last-child { border-bottom: none; }
+.mention-item.on { background: var(--ink); color: #fff; }
+.mention-item .sub { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-item.on .sub { color: rgba(255, 255, 255, .75); }
+/* 已关联客户 chip */
+.chat-linked {
+    display: inline-flex; align-items: center; gap: 4px; padding: 0 6px;
+    border: 1px solid var(--ink); font-size: 11px; color: var(--ink);
+}
+.chat-linked.hidden { display: none; }
+.chat-linked .chat-unlink { color: var(--muted); text-decoration: none; }
+.chat-linked .chat-unlink:hover { color: var(--accent-red); }
 .chat-main .chat-input-foot { display: flex; justify-content: space-between; width: 100%; gap: 12px; margin-top: 6px; font-size: 10.5px; color: var(--muted); letter-spacing: .03em; }
 .chat-main .message .sources { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 /* 附件 chip（mockup .att）：气泡下方按角色对齐 */

@@ -35,20 +35,24 @@ function renderChatViewInto(container, ctx, name) {
             </div>
         </div>
         <div class="chat-input-area">
+            <div id="chat-mention-menu" class="mention-menu hidden" role="listbox"></div>
             <div class="chat-input-inner">
                 <textarea id="msg-input" aria-label="${currentLang==='en'?'Message':'输入消息'}" placeholder="AWAITING COMMAND · ${esc(t('chat.ph.' + ctx))}" rows="1"
-                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg();}"
-                    oninput="this.style.height='24px';this.style.height=(this.scrollHeight>80?80:this.scrollHeight)+'px';"></textarea>
+                    onkeydown="_chatInputKeydown(event)"
+                    oninput="_chatInputChanged(this)"></textarea>
                 <button type="button" class="chat-attach-btn" id="attach-btn" title="${currentLang==='en'?'Attach files':'添加文件'}" aria-label="${currentLang==='en'?'Attach files':'添加文件'}">${typeof iconHtml==='function'?iconHtml('paperclip',20):'📎'}</button>
                 <input type="file" id="chat-file-input" multiple hidden>
                 <button type="button" class="chat-send-btn" onclick="sendMsg()" id="send-btn" title="${currentLang==='en'?'Send':'发送'}">${typeof iconHtml==='function'?iconHtml('send',16):''}<span>${currentLang==='en'?'Send':'发送'}</span></button>
                 <button type="button" class="chat-stop-btn hidden" id="stop-btn" title="${currentLang==='en'?'Stop':'停止'}">■ ${currentLang==='en'?'Stop':'停止'}</button>
             </div>
-            <div class="chat-input-foot"><span><span class="mono">@</span> ${currentLang==='en'?'Linked customer':'关联客户'}</span><span><span class="mono">/</span> ${currentLang==='en'?'Skills':'调用技能'}</span><span>${currentLang==='en'?'File & email content is reference only, never instructions.':'文件、邮件里的内容只作资料，不当指令执行'}</span></div>
+            <div class="chat-input-foot"><span id="chat-linked-customer" class="chat-linked hidden"></span><span><span class="mono">@</span> ${currentLang==='en'?'Linked customer':'关联客户'}</span><span><span class="mono">/</span> ${currentLang==='en'?'Skills':'调用技能'}</span><span>${currentLang==='en'?'File & email content is reference only, never instructions.':'文件、邮件里的内容只作资料，不当指令执行'}</span></div>
         </div>
         </section>
         </div>
         <div class="drop-overlay" id="drop-overlay"><div class="drop-overlay-inner">&#128193; ${currentLang==='en'?'Drop files to add':'释放以添加文件'}</div></div>`;
+
+    // 已关联客户 chip（从客户详情进入聊天时显示）
+    _renderChatLinkedChip();
 
     // 回形针：走与拖放相同的导入弹窗
     const attachBtn = container.querySelector('#attach-btn');
@@ -840,6 +844,155 @@ function _renderChatBlocks(blocks) {
     }
 
     return wrap.childNodes.length ? wrap : null;
+}
+
+// ═════════ @ 关联客户 / / 调用技能 下拉 ═════════
+let _mention = { kind: '', start: 0, items: [], idx: 0, query: '' };
+let _mentionSeq = 0;
+let _chatLinkedName = '';
+
+function _mentionEl() { return document.getElementById('chat-mention-menu'); }
+
+function _mentionClose() {
+    const m = _mentionEl();
+    if (m) { m.classList.add('hidden'); m.innerHTML = ''; }
+    _mention = { kind: '', start: 0, items: [], idx: 0, query: '' };
+}
+
+function _chatInputChanged(el) {
+    /** textarea 输入：自适应高度 + 检测 @ / 触发下拉。 */
+    el.style.height = '24px';
+    el.style.height = (el.scrollHeight > 80 ? 80 : el.scrollHeight) + 'px';
+    const caret = el.selectionStart || 0;
+    const before = el.value.slice(0, caret);
+    // 光标前最近的 @xxx 或 /xxx（前面必须是行首或空白）
+    const m = before.match(/(^|\s)([@/])([^\s@/]*)$/);
+    if (!m) { _mentionClose(); return; }
+    // 先标记「下拉激活」，避免异步加载期间按 Enter 被当成发送
+    _mention = { kind: m[2], start: caret - m[3].length - 1, items: [], idx: 0, query: m[3] };
+    _mentionOpen(m[2], m[3], caret - m[3].length - 1);
+}
+
+async function _mentionOpen(sym, query, start) {
+    const seq = ++_mentionSeq;
+    const q = String(query || '').toLowerCase();
+    let items = [];
+    if (sym === '@') {
+        // 客户列表：优先本地缓存，没有就拉一次
+        let list = (typeof allCustomers !== 'undefined' && allCustomers.length) ? allCustomers : null;
+        if (!list) list = (await api('GET', '/api/trade/customers')) || [];
+        items = list.filter(function (c) {
+            const hay = [c.name, c.email, c.country].filter(Boolean).join(' ').toLowerCase();
+            return !q || hay.indexOf(q) >= 0;
+        }).slice(0, 8).map(function (c) {
+            return {
+                label: c.name || ('#' + c.id),
+                sub: [c.country, c.email].filter(Boolean).join(' · '),
+                insert: '',
+                run: function () { _chatLinkCustomer(c); },
+            };
+        });
+    } else {
+        // 技能：拍平注册表，选中后插入该技能的第一个触发词（技能路由按关键词生效）
+        const flat = [];
+        if (typeof _ALL_SKILLS !== 'undefined') {
+            _ALL_SKILLS.forEach(function (g) { (g.items || []).forEach(function (it) { flat.push(it); }); });
+        }
+        items = flat.filter(function (it) {
+            const hay = [it.n, it.d, it.t].filter(Boolean).join(' ').toLowerCase();
+            return !q || hay.indexOf(q) >= 0;
+        }).slice(0, 10).map(function (it) {
+            const trig = String(it.t || '').split(/[、,，]/)[0].trim();
+            return {
+                label: it.n,
+                sub: it.d || '',
+                insert: (trig || it.n) + ' ',
+                run: function () {},
+            };
+        });
+    }
+    if (seq !== _mentionSeq) return; // 期间又输入了，丢弃旧结果
+    _mention = { kind: sym, start: start, items: items, idx: 0, query: query };
+    _mentionRender();
+}
+
+function _mentionRender() {
+    const m = _mentionEl();
+    if (!m) return;
+    if (!_mention.items.length) { m.classList.add('hidden'); m.innerHTML = ''; return; }
+    m.innerHTML = _mention.items.map(function (it, i) {
+        return '<div class="mention-item' + (i === _mention.idx ? ' on' : '') + '" role="option" data-i="' + i + '">' +
+            '<b>' + esc(it.label) + '</b>' + (it.sub ? '<span class="sub">' + esc(it.sub) + '</span>' : '') + '</div>';
+    }).join('');
+    m.querySelectorAll('.mention-item').forEach(function (el) {
+        el.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            _mentionPick(parseInt(el.getAttribute('data-i'), 10));
+        });
+    });
+    m.classList.remove('hidden');
+}
+
+function _mentionMove(delta) {
+    if (!_mention.items.length) return;
+    _mention.idx = (_mention.idx + delta + _mention.items.length) % _mention.items.length;
+    _mentionRender();
+}
+
+function _mentionPick(i) {
+    const it = _mention.items[i];
+    if (!it) return;
+    const el = document.getElementById('msg-input');
+    if (!el) return;
+    const caret = el.selectionStart || 0;
+    el.value = el.value.slice(0, _mention.start) + (it.insert || '') + el.value.slice(caret);
+    try { it.run(); } catch (e) {}
+    _mentionClose();
+    el.focus();
+    el.style.height = '24px';
+    el.style.height = (el.scrollHeight > 80 ? 80 : el.scrollHeight) + 'px';
+}
+
+function _chatInputKeydown(e) {
+    // 下拉激活时（含加载中）：上下选择、Enter 选中、Esc 关闭；否则 Enter 发送
+    if (_mention.kind) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); _mentionMove(1); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); _mentionMove(-1); return; }
+        if (e.key === 'Escape') { e.preventDefault(); _mentionClose(); return; }
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (_mention.items.length) _mentionPick(_mention.idx);
+            return;
+        }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); }
+}
+
+function _chatLinkCustomer(c) {
+    currentCustomerId = c.id;
+    _chatLinkedName = c.name || ('#' + c.id);
+    _renderChatLinkedChip();
+    toast((currentLang === 'en' ? 'Linked customer: ' : '已关联客户：') + _chatLinkedName);
+}
+
+function _renderChatLinkedChip() {
+    const el = document.getElementById('chat-linked-customer');
+    if (!el) return;
+    if (!currentCustomerId) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+    if (!_chatLinkedName && typeof allCustomers !== 'undefined') {
+        const c = allCustomers.find(function (x) { return x.id === currentCustomerId; });
+        if (c) _chatLinkedName = c.name || '';
+    }
+    el.innerHTML = '<span class="mono">@</span> ' + esc(_chatLinkedName || ('#' + currentCustomerId)) +
+        ' <a href="#" class="chat-unlink" title="取消关联">×</a>';
+    el.classList.remove('hidden');
+    const un = el.querySelector('.chat-unlink');
+    if (un) un.addEventListener('click', function (e) {
+        e.preventDefault();
+        currentCustomerId = null;
+        _chatLinkedName = '';
+        _renderChatLinkedChip();
+    });
 }
 
 function _fillChatInput(text) {
