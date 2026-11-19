@@ -1851,3 +1851,30 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 #customer-profile .profile-fact:hover > .profile-quote,
 #customer-wall .profile-fact.open > .profile-quote,
 #customer-profile .profile-fact.open > .profile-quote { display: block !important; }
+
+/* ═════ s5 验厂计划 ═════ */
+.visit-page { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 14px 20px 16px; gap: 12px; }
+.visit-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; flex: none; }
+.visit-chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.visit-chip { border: 1px solid var(--line); background: transparent; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; color: var(--ink); }
+.visit-chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.visit-actions { display: flex; gap: 8px; margin-left: auto; }
+.visit-actions .btn { height: 30px; padding: 0 12px; font-size: 12.5px; border: 1px solid var(--ink); background: transparent; cursor: pointer; }
+.visit-actions .btn.primary { background: var(--ink); color: #fff; }
+.visit-grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; align-content: start; }
+.vcard { border: 1px solid var(--ink); background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.vcard h4 { margin: 0 0 2px; font-size: 13px; }
+.vcard label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
+.vcard input, .vcard select, .vcard textarea { border: 1px solid var(--line); background: #fff; padding: 5px 8px; font: inherit; font-size: 12.5px; color: var(--ink); width: 100%; box-sizing: border-box; }
+.vcard textarea { resize: vertical; }
+@media (max-width: 1240px) { .visit-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 980px) { .visit-grid { grid-template-columns: 1fr; } }
+#visit-print { display: none; }
+@media print {
+    body > *:not(#visit-print) { display: none !important; }
+    #visit-print { display: block !important; padding: 24px; color: #111; }
+    #visit-print h1 { font-size: 22px; margin: 0 0 4px; }
+    #visit-print .meta { color: #555; font-size: 13px; margin: 0 0 12px; }
+    #visit-print h2 { font-size: 14px; border-bottom: 1px solid #999; margin: 14px 0 4px; padding-bottom: 2px; }
+    #visit-print p { font-size: 12.5px; line-height: 1.6; margin: 0; }
+}

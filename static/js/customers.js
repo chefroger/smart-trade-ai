@@ -2646,3 +2646,136 @@ async function openCustomerProfile(cid) {
     };
     document.addEventListener('keydown', _profileEscHandler);
 }
+
+// ══════════════════════ s5 验厂计划 ══════════════════════
+let _visitPlans = [];
+let _visitCurrent = null;
+
+async function renderVisitPlansViewInto(container) {
+    if (!allCustomers.length) {
+        try { allCustomers = (await api('GET', '/api/trade/customers')) || []; } catch (e) { /* 静默 */ }
+    }
+    const plans = (await api('GET', '/api/trade/visit-plans')) || [];
+    _visitPlans = Array.isArray(plans) ? plans : [];
+    if (!_visitCurrent || !_visitPlans.some(function (p) { return p.id === _visitCurrent.id; })) {
+        _visitCurrent = _visitPlans[0] || null;
+    }
+    container.innerHTML =
+        '<div class="visit-page">' +
+        '<div class="visit-head">' +
+        '<h2 class="cust-title">验厂计划<span class="cust-idx">SITE VISIT</span></h2>' +
+        '<div class="visit-chips" id="visit-chips"></div>' +
+        '<div class="visit-actions">' +
+        '<button type="button" class="btn primary" id="visit-save">保存</button>' +
+        '<button type="button" class="btn" id="visit-print">打印 A4</button>' +
+        '<button type="button" class="btn" id="visit-new">＋ 新建一次来访</button>' +
+        '</div></div>' +
+        '<div class="visit-grid">' +
+        '<div class="vcard"><h4>行程与来访人</h4>' +
+        '<label>标题<input id="vp-title" type="text"></label>' +
+        '<label>客户<select id="vp-customer"></select></label>' +
+        '<label>日期<input id="vp-date" type="date"></label>' +
+        '<label>天数<input id="vp-days" type="number" min="1" value="1"></label>' +
+        '<label>地点<input id="vp-location" type="text"></label>' +
+        '<label>来访人<textarea id="vp-visitors" rows="3"></textarea></label></div>' +
+        '<div class="vcard"><h4>日程</h4><textarea id="vp-schedule" rows="8" placeholder="12-08 上午 参观车间…"></textarea></div>' +
+        '<div class="vcard"><h4>人员与分工</h4><textarea id="vp-staff" rows="8" placeholder="接待：张三 / 技术：…"></textarea></div>' +
+        '<div class="vcard"><h4>访前清单</h4><textarea id="vp-checklist" rows="8"></textarea></div>' +
+        '<div class="vcard"><h4>内部风险</h4><textarea id="vp-risks" rows="8"></textarea></div>' +
+        '<div class="vcard"><h4>对外说明</h4><textarea id="vp-summary" rows="8"></textarea></div>' +
+        '</div></div>';
+    _renderVisitChips();
+    _fillVisitForm();
+    const custSel = $('vp-customer');
+    if (custSel) custSel.innerHTML = '<option value="">— 不关联客户 —</option>' + allCustomers.map(function (c) {
+        return '<option value="' + c.id + '">' + esc(c.name) + '</option>';
+    }).join('');
+    $('visit-save')?.addEventListener('click', saveVisitPlan);
+    $('visit-print')?.addEventListener('click', printVisitPlan);
+    $('visit-new')?.addEventListener('click', function () { _visitCurrent = null; _fillVisitForm(); _renderVisitChips(); });
+}
+
+function _renderVisitChips() {
+    const el = $('visit-chips');
+    if (!el) return;
+    el.innerHTML = _visitPlans.length
+        ? _visitPlans.map(function (p) {
+            return '<button type="button" class="visit-chip' + (_visitCurrent && _visitCurrent.id === p.id ? ' on' : '') +
+                '" onclick="_visitSelect(' + p.id + ')">#' + p.id + ' ' + esc(p.visit_date || '') + '</button>';
+        }).join('')
+        : '<span class="muted">暂无来访计划</span>';
+}
+
+function _visitSelect(id) {
+    _visitCurrent = _visitPlans.find(function (p) { return p.id === id; }) || null;
+    _fillVisitForm();
+    _renderVisitChips();
+}
+
+function _fillVisitForm() {
+    const p = _visitCurrent || {};
+    const pay = (p.payload && typeof p.payload === 'object') ? p.payload : {};
+    if ($('vp-title')) $('vp-title').value = p.title || '';
+    if ($('vp-customer')) $('vp-customer').value = p.customer_id != null ? String(p.customer_id) : '';
+    if ($('vp-date')) $('vp-date').value = p.visit_date || '';
+    if ($('vp-days')) $('vp-days').value = p.days || 1;
+    if ($('vp-location')) $('vp-location').value = p.location || '';
+    if ($('vp-visitors')) $('vp-visitors').value = pay.visitors || '';
+    if ($('vp-schedule')) $('vp-schedule').value = pay.schedule || '';
+    if ($('vp-staff')) $('vp-staff').value = pay.staff || '';
+    if ($('vp-checklist')) $('vp-checklist').value = pay.checklist || '';
+    if ($('vp-risks')) $('vp-risks').value = pay.risks || '';
+    if ($('vp-summary')) $('vp-summary').value = pay.summary || '';
+}
+
+function _collectVisitPlan() {
+    return {
+        title: $('vp-title')?.value.trim() || '',
+        customer_id: $('vp-customer')?.value || null,
+        visit_date: $('vp-date')?.value || '',
+        days: parseInt($('vp-days')?.value, 10) || 1,
+        location: $('vp-location')?.value.trim() || '',
+        payload: {
+            visitors: $('vp-visitors')?.value || '',
+            schedule: $('vp-schedule')?.value || '',
+            staff: $('vp-staff')?.value || '',
+            checklist: $('vp-checklist')?.value || '',
+            risks: $('vp-risks')?.value || '',
+            summary: $('vp-summary')?.value || '',
+        },
+    };
+}
+
+async function saveVisitPlan() {
+    const body = _collectVisitPlan();
+    let saved;
+    if (_visitCurrent && _visitCurrent.id) {
+        saved = await api('PUT', '/api/trade/visit-plans/' + _visitCurrent.id, body);
+    } else {
+        saved = await api('POST', '/api/trade/visit-plans', body);
+    }
+    if (!saved) return;
+    toast('验厂计划已保存');
+    const idx = _visitPlans.findIndex(function (p) { return p.id === saved.id; });
+    if (idx >= 0) _visitPlans[idx] = saved; else _visitPlans.unshift(saved);
+    _visitCurrent = saved;
+    _renderVisitChips();
+}
+
+function printVisitPlan() {
+    const p = _collectVisitPlan();
+    document.querySelectorAll('#visit-print').forEach(function (el) { el.remove(); });
+    const pay = p.payload || {};
+    const sec = function (title, text) {
+        return text ? '<h2>' + esc(title) + '</h2><p style="white-space:pre-wrap;">' + esc(text) + '</p>' : '';
+    };
+    const wrap = document.createElement('div');
+    wrap.id = 'visit-print';
+    wrap.innerHTML =
+        '<h1>' + esc(p.title || '验厂计划') + '</h1>' +
+        '<p class="meta">' + esc([p.visit_date, (p.days || 1) + ' 天', p.location].filter(Boolean).join(' · ')) + '</p>' +
+        sec('来访人', pay.visitors) + sec('日程', pay.schedule) + sec('人员与分工', pay.staff) +
+        sec('访前清单', pay.checklist) + sec('内部风险', pay.risks) + sec('对外说明', pay.summary);
+    document.body.appendChild(wrap);
+    window.print();
+}

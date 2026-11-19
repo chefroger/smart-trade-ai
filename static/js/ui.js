@@ -264,6 +264,7 @@ function navToView(view, chatCtx, chatName) {
         'mailboxes': ['邮箱', '/ MAILBOXES'],
         'tasks': ['定时任务', '/ CRON'],
         'history': ['对话记录', '/ HISTORY'],
+        'visit': ['验厂计划', '/ SITE VISIT'],
     };
     const topInfo = topMeta[view + (chatCtx ? '-' + chatCtx : '')] || [chatName || '', ''];
     const topTitleEl = document.getElementById('app-top-title');
@@ -313,6 +314,9 @@ function navToView(view, chatCtx, chatName) {
                 break;
             case 'history':
                 renderHistoryViewInto(container);
+                break;
+            case 'visit':
+                renderVisitPlansViewInto(container);
                 break;
         }
         viewCache[cacheKey].rendered = true;

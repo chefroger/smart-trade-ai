@@ -28,6 +28,7 @@ from trade.api.orders import router as orders_router
 from trade.api.profile import router as profile_router
 from trade.api.templates import router as templates_router
 from trade.api.transfer import router as transfer_router
+from trade.api.visit_plans import router as visit_plans_router
 
 
 def _enforce_company_binding(
@@ -107,6 +108,7 @@ router.include_router(brief_router)
 router.include_router(templates_router)
 router.include_router(transfer_router)
 router.include_router(copilot_router)
+router.include_router(visit_plans_router)
 
 # 便捷导出
 __all__ = [

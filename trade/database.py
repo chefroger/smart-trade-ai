@@ -399,6 +399,22 @@ CREATE TABLE IF NOT EXISTS customer_gifts (
 CREATE INDEX IF NOT EXISTS idx_gifts_customer ON customer_gifts(company_id, customer_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_gifts_fingerprint ON customer_gifts(customer_id, fingerprint);
 
+-- 验厂计划（s5–s7）：一份来访计划，payload 存表单 JSON
+CREATE TABLE IF NOT EXISTS visit_plans (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL,
+    customer_id  INTEGER,
+    title        TEXT    DEFAULT '',
+    visit_date   TEXT    DEFAULT '',
+    days         INTEGER DEFAULT 1,
+    location     TEXT    DEFAULT '',
+    payload      TEXT    DEFAULT '{}',
+    status       TEXT    DEFAULT 'active',
+    created_at   TEXT DEFAULT (datetime('now', 'localtime')),
+    updated_at   TEXT DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_visit_plans_company ON visit_plans(company_id, updated_at);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
@@ -655,7 +671,7 @@ _EXPECTED_TABLES = frozenset({
     "order_events",
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
     "mailboxes", "emails", "contacts",
-    "customer_facts", "customer_gifts", "inquiries",
+    "customer_facts", "customer_gifts", "inquiries", "visit_plans",
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用

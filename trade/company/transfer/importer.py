@@ -435,7 +435,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "conversations", "orders", "order_items", "order_libraries",
                 "order_events",
                 "usage_ledger", "doc_extractions", "contacts",
-                "customer_facts", "customer_gifts", "inquiries",
+                "customer_facts", "customer_gifts", "inquiries", "visit_plans",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -777,6 +777,23 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 events_skipped += 1
         report["tables"]["order_events"] = {
             "inserted": events_inserted, "skipped": events_skipped,
+        }
+
+        # 验厂计划：company_id 重映射；customer_id 映射不到就置空（计划仍保留）
+        vp_inserted = vp_skipped = 0
+        for row in source_tables.get("visit_plans") or []:
+            new_row = _without_id(dict(row))
+            new_row["company_id"] = target_id
+            old_cid = row.get("customer_id")
+            if old_cid is not None:
+                new_row["customer_id"] = customer_map.get(old_cid)
+            try:
+                _insert(conn, "visit_plans", new_row)
+                vp_inserted += 1
+            except Exception:
+                vp_skipped += 1
+        report["tables"]["visit_plans"] = {
+            "inserted": vp_inserted, "skipped": vp_skipped,
         }
 
         # usage / trial / doc cache
