@@ -32,15 +32,18 @@ async function renderCustomersViewInto(container) {
                     <button type="button" data-tier="C">C</button>
                     <button type="button" data-tier="none">${t('cust.field.tier_none')}</button>
                 </div>
+                <span class="flt-lbl">${currentLang==='en'?'Country':'国家'}</span>
                 <select id="cust-country-filter" aria-label="国家" onchange="filterCustomers()">
                     <option value="">${currentLang==='en'?'All Countries':'全部国家'}</option>
                 </select>
+                <span class="flt-lbl">${currentLang==='en'?'Buyer type':'买家类型'}</span>
                 <select id="cust-buyer-filter" aria-label="买家类型" onchange="filterCustomers()">
                     <option value="">${currentLang==='en'?'All Buyer Types':'全部类型'}</option>
                 </select>
                 <div class="cust-seg" id="cust-stage-seg" role="group" aria-label="商机阶段"></div>
                 <button type="button" class="cust-star-toggle" id="cust-starred-toggle" onclick="toggleStarredFilter()">☆ ${currentLang==='en'?'Starred only':'只看星标'}</button>
                 <button type="button" class="cust-star-toggle" id="cust-overdue-toggle" onclick="toggleOverdueFilter()">⚠ ${currentLang==='en'?'Overdue only':'只看逾期'}</button>
+                <span class="flt-lbl">${currentLang==='en'?'Sort':'排序'}</span>
                 <select id="cust-sort" aria-label="排序" onchange="filterCustomers()">
                     <option value="follow_up">${currentLang==='en'?'Follow-up first':'待跟进优先'}</option>
                     <option value="name">${currentLang==='en'?'By name':'按名称排序'}</option>
@@ -2070,10 +2073,10 @@ function _profileFactCardsHtml(items, people, delayFn) {
         const srcDate = _profileSourceDate(f);
         html += '<article class="wcard profile-fact' + (f.category === '禁忌' ? ' taboo' : '') +
             '"' + delayFn() + ' data-fact-id="' + esc(String(f.id)) + '">' +
-            '<div class="wc-name">' + esc(f.subject || f.category) +
-            '<span class="muted">' + esc(_profilePersonLabel(f, people)) + '</span></div>' +
+            '<div class="wc-name">' + esc(f.subject || f.category) + '</div>' +
             '<p>' + esc(f.content || '') + '</p>' +
             '<p class="muted profile-src">' + esc(src) + (srcDate ? ' · ' + esc(srcDate) : '') +
+            '<span class="attach">' + esc(_profilePersonLabel(f, people)) + '</span>' +
             (f.source_quote ? (' · <a href="#" class="profile-toggle-quote">' + t('profile.show_quote') + '</a>') : '') +
             '</p>' +
             (f.source_quote ? ('<p class="profile-quote muted" hidden>' + esc(f.source_quote) + '</p>') : '') +
@@ -2205,7 +2208,7 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
                 '<div class="wc-name">' + (isAsk
                     ? ('⚠ ' + t('profile.ask') + ' · ' + esc(g.item || ''))
                     : ('<span class="g-dir">' + esc(g.direction || '') + '</span> ' + esc(g.item || ''))) +
-                '<span class="muted">' + esc(_profilePersonLabel(g, people)) + '</span></div>' +
+                '</div>' +
                 (gMeta.length
                     ? ('<div class="g-meta muted">' + gMeta.map(function (m) {
                         return '<span>' + esc(m) + '</span>';
@@ -2214,6 +2217,7 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
                 (isAsk ? ('<div class="solicit-note">' + t('profile.solicit_note') + '</div>') : '') +
                 '<p class="muted profile-src">' + esc(_profileSourceLabel(g)) +
                 (gDate ? ' · ' + esc(gDate) : '') +
+                '<span class="attach">' + esc(_profilePersonLabel(g, people)) + '</span>' +
                 (g.source_quote ? (' · <a href="#" class="profile-toggle-quote">' + t('profile.show_quote') + '</a>') : '') +
                 '</p>' +
                 (g.source_quote ? ('<p class="profile-quote muted" hidden>' + esc(g.source_quote) + '</p>') : '') +

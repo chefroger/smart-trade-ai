@@ -89,7 +89,7 @@ const I18N = {
         'toast.no_company':'请先选择公司','toast.csv_ok':'成功导入 {n} 个客户',
         // customer view
         'customer.title':'客户管理','customer.add':'添加客户',
-        'customer.import':'📥 CSV导入','customer.search':'搜索客户...',
+        'customer.import':'📥 CSV导入','customer.search':'搜索公司、联系人、邮箱、标签',
         'customer.detail.save':'💾 保存修改',
         'customer.detail.libs':'📁 关联文档库','customer.detail.orders':'📦 订单',
         'customer.detail.add_order':'+ 新增订单','customer.detail.convs':'💬 最近对话',
@@ -419,7 +419,7 @@ const I18N = {
         'toast.updated':'Updated','toast.error':'Error','toast.network':'Network Error',
         'toast.no_company':'Please select a company first','toast.csv_ok':'Imported {n} customers',
         'customer.title':'Customers','customer.add':'Add Customer',
-        'customer.import':'📥 Import CSV','customer.search':'Search...',
+        'customer.import':'📥 Import CSV','customer.search':'Search company, contact, email, tag',
         'customer.detail.save':'💾 Save',
         'customer.detail.libs':'📁 Linked Libraries','customer.detail.orders':'📦 Orders',
         'customer.detail.add_order':'+ New Order','customer.detail.convs':'💬 Recent Conversations',

@@ -1617,9 +1617,9 @@ body.view-daily #guidance-bar { display: none !important; }
 /* 时间线（横排） */
 #customer-wall .wall-timeline { flex: none; }
 #customer-wall .wall-timeline .wsec { margin: 0; border: 1px dashed var(--ink); background: var(--panel); padding: 8px 14px 10px; }
-#customer-wall .tl { position: relative; display: flex; gap: 0; overflow-x: auto; padding: 2px 2px 0; }
+#customer-wall .tl { position: relative; display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; padding: 2px 2px 0; }
 #customer-wall .tl::before { content: ""; position: absolute; left: 4px; right: 4px; top: 8px; height: 1px; background: var(--line); }
-#customer-wall .tl .ev { position: relative; flex: 1 0 130px; padding-right: 12px; }
+#customer-wall .tl .ev { position: relative; padding-right: 12px; min-width: 0; }
 #customer-wall .tl .ev .mk { position: relative; z-index: 1; width: 9px; height: 9px; border: 1px solid var(--ink); background: var(--panel); margin: 4px 0 6px; }
 #customer-wall .tl .ev .mk.f { background: var(--ink); }
 #customer-wall .tl .ev .mk.r { background: var(--accent-red); border-color: var(--accent-red); }
@@ -1667,8 +1667,11 @@ body:has(#main-content > .empty-state) .app-rail { display: none; }
 .cust-head-actions .btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; font-size: 12.5px; border: 1px solid var(--ink); background: transparent; cursor: pointer; }
 .cust-head-actions .btn.primary { background: var(--ink); color: #fff; }
 .cust-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; border: 1px dashed var(--ink); padding: 8px 10px; margin: 10px 0; flex: none; }
-.cust-search { height: 28px; border: 1px solid var(--line); padding: 0 10px; font: inherit; font-size: 12.5px; min-width: 190px; background: var(--panel); }
+.cust-search { height: 28px; border: 1px solid var(--line); padding: 0 10px; font: inherit; font-size: 12.5px; min-width: 260px; background: var(--panel); }
 .cust-filters select { height: 28px; border: 1px solid var(--line); background: var(--panel); font: inherit; font-size: 12px; padding: 0 6px; max-width: 130px; }
+.cust-filters .flt-lbl { font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+/* 行悬停：左侧黑色竖条（mockup .sel-row） */
+.cust-table tbody tr:hover { box-shadow: inset 3px 0 0 var(--ink); }
 .cust-seg { display: inline-flex; align-items: stretch; border: 1px solid var(--line); flex-wrap: wrap; }
 .cust-seg .seg-lbl { display: inline-flex; align-items: center; font-size: 11px; color: var(--muted); padding: 0 8px; }
 .cust-seg button { appearance: none; border: none; border-left: 1px solid var(--line); background: transparent; padding: 4px 9px; font: inherit; font-size: 12px; cursor: pointer; color: var(--ink); }
@@ -1782,6 +1785,13 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .chat-main .chat-input-area { flex-direction: column; align-items: center; }
 .chat-main .chat-input-foot { display: flex; justify-content: space-between; width: 100%; gap: 12px; margin-top: 6px; font-size: 10.5px; color: var(--muted); letter-spacing: .03em; }
 .chat-main .message .sources { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* 附件 chip（mockup .att）：气泡下方按角色对齐 */
+.chat-main .message .msg-att { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.chat-main .message.user .msg-att { justify-content: flex-end; }
+.chat-main .message .att-chip {
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+    border: 1px dashed var(--line-strong); font-size: 11px; color: var(--muted);
+}
 .chat-main .message .sources .sources-title { display: none; }
 .chat-main .message .sources > div { border: 1px solid var(--line); background: var(--panel); padding: 2px 8px; font-size: 11px; }
 
@@ -1831,6 +1841,11 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 }
 #customer-wall .profile-gift .solicit-note, #customer-profile .profile-gift .solicit-note {
     margin-top: 3px; font-size: 10.5px; color: var(--accent-red);
+}
+/* 挂人徽标（mockup .attach：跟在来源行后面） */
+#customer-wall .profile-fact .attach, #customer-profile .profile-fact .attach,
+#customer-wall .profile-gift .attach, #customer-profile .profile-gift .attach {
+    margin-left: 8px; font-size: 10.5px;
 }
 .profile-quote { border-left: 2px solid var(--line-strong); padding: 4px 0 4px 10px; font-style: italic; }
 
@@ -1905,6 +1920,10 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     background: var(--panel); border: 1px dashed var(--ink); padding: 7px 10px;
     box-shadow: 0 8px 20px rgba(0, 0, 0, .12); margin: 0;
 }
+#customer-wall .profile-gift:hover > .profile-quote,
+#customer-profile .profile-gift:hover > .profile-quote,
+#customer-wall .profile-gift.open > .profile-quote,
+#customer-profile .profile-gift.open > .profile-quote,
 #customer-wall .profile-fact:hover > .profile-quote,
 #customer-profile .profile-fact:hover > .profile-quote,
 #customer-wall .profile-fact.open > .profile-quote,

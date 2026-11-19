@@ -666,10 +666,17 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
             'blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'],
         ALLOWED_ATTR: ['href','target','class','id','style','src','alt','width','height'],
     });
+    // 附件 chip：气泡下方单独一行（mockup .att），不再塞进消息正文
+    let attachEl = null;
     if (files && files.length) {
-        const s = document.createElement('div'); s.className = 'sources';
-        s.innerHTML = '<div class="sources-title">📄 '+(currentLang==='en'?'References':'参考文件')+'</div>' + files.map(f => '<div>📎 '+esc(f.file||f)+(f.status==='cached' ? ' <span class="muted">（'+(currentLang==='en'?'from cached extraction':'来自缓存提取')+'）</span>' : '')+'</div>').join('');
-        body.appendChild(s);
+        attachEl = document.createElement('div');
+        attachEl.className = 'msg-att';
+        attachEl.innerHTML = files.map(function (f) {
+            return '<span class="att-chip">📎 ' + esc(f.file || f) +
+                (f.status === 'cached'
+                    ? ' <span class="muted">（' + (currentLang === 'en' ? 'cached' : '来自缓存提取') + '）</span>'
+                    : '') + '</span>';
+        }).join('');
     }
     // W10：结构化块（四格卡 / 草稿 / NEXT chips）—— 无 blocks 时保持纯文本
     if (role === 'assistant' && blocks) {
@@ -681,9 +688,9 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
     if (role === 'assistant') {
         const head = document.createElement('div');
         head.className = 'msg-head';
-        head.innerHTML = '<span class="mh-tag">▶ TRADE · ASSISTANT</span>' +
-            '<span class="mh-rule"></span><span class="mh-done">' + (currentLang === 'en' ? 'Analysis done' : '分析完成') + '</span>' +
-            '<span class="mh-t">' + _msgHHMM(timeStr) + '</span>';
+        // mockup：TRADE · ASSISTANT // HH:MM → 虚线 → 分析完成
+        head.innerHTML = '<span class="mh-tag">▶ TRADE · ASSISTANT // ' + _msgHHMM(timeStr) + '</span>' +
+            '<span class="mh-rule"></span><span class="mh-done">' + (currentLang === 'en' ? 'Analysis done' : '分析完成') + '</span>';
         msgHead = head;
         div.appendChild(head);
     } else if (role === 'user') {
@@ -694,6 +701,7 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
         div.appendChild(uhead);
     }
     div.appendChild(body);
+    if (attachEl) div.appendChild(attachEl);
 
     // AI 回复右侧加「📋 复制」按钮，点击写入剪贴板
     if (role === 'assistant' && content) {
