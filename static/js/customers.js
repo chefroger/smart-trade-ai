@@ -1951,6 +1951,23 @@ function _showContactModal(cid, person) {
 const _PROFILE_CIRCLE_CATS = ['家庭', '其他供应商或竞品'];
 const _PROFILE_PREFS_CATS = ['喜好', '禁忌', '重要日期'];
 
+// 分类 → 分组标题 i18n key（mockup：家庭 // FAMILY 这类双语小标题）
+const _PROFILE_SEC_KEYS = {
+    '家庭': 'profile.sec.family',
+    '其他供应商或竞品': 'profile.sec.suppliers',
+    '喜好': 'profile.sec.prefs',
+    '禁忌': 'profile.sec.taboos',
+    '重要日期': 'profile.sec.dates',
+    '礼物往来': 'profile.sec.gifts',
+};
+
+function _profileSecLbl(cat) {
+    /** 画像卡内的分类分组标题；禁忌组用红色态。 */
+    const isTaboo = cat === '禁忌';
+    return '<div class="sec-lbl' + (isTaboo ? ' r' : '') + '">' +
+        esc(t(_PROFILE_SEC_KEYS[cat] || cat)) + '</div>';
+}
+
 function _profilePersonLabel(item, people) {
     /** 挂人展示小字。 */
     const at = item.attach_to || 'none';
@@ -2043,7 +2060,8 @@ function _profileFactCardsHtml(items, people, delayFn) {
         _profileCacheItem('fact', f);
         const src = _profileSourceLabel(f);
         const srcDate = _profileSourceDate(f);
-        html += '<article class="wcard profile-fact"' + delayFn() + ' data-fact-id="' + esc(String(f.id)) + '">' +
+        html += '<article class="wcard profile-fact' + (f.category === '禁忌' ? ' taboo' : '') +
+            '"' + delayFn() + ' data-fact-id="' + esc(String(f.id)) + '">' +
             '<div class="wc-name">' + esc(f.subject || f.category) +
             '<span class="muted">' + esc(_profilePersonLabel(f, people)) + '</span></div>' +
             '<p>' + esc(f.content || '') + '</p>' +
@@ -2062,16 +2080,26 @@ function _profileFactCardsHtml(items, people, delayFn) {
 }
 
 function _profilePendingHtml(items, kind) {
-    /** 待确认小字列表。 */
+    /** 待确认区：标题 + 分类 chip + 摘要 + 原句（mockup .pending / .pi）。 */
     const pending = (items || []).filter(function (x) { return x.status === '待确认'; });
     if (!pending.length) return '';
-    let html = '<div class="profile-pending muted">';
+    let html = '<div class="profile-pending"><div class="ph">' +
+        esc(t('profile.pending', { n: pending.length })) + '</div>';
     pending.forEach(function (f) {
-        const q = (f.source_quote || f.content || '').slice(0, 40);
-        const idAttr = kind === 'gift' ? ('data-gift-id="' + esc(String(f.id)) + '"') : ('data-fact-id="' + esc(String(f.id)) + '"');
-        html += '<div ' + idAttr + '>' + esc(q) +
-            ' · <a href="#" class="profile-confirm-' + kind + '">' + t('profile.confirm') + '</a>' +
-            ' · <a href="#" class="profile-void-' + kind + '">' + t('profile.void') + '</a></div>';
+        const idAttr = kind === 'gift'
+            ? ('data-gift-id="' + esc(String(f.id)) + '"')
+            : ('data-fact-id="' + esc(String(f.id)) + '"');
+        const chip = kind === 'gift' ? t('profile.sec.gifts') : (f.category || '');
+        const summary = kind === 'gift'
+            ? [f.direction, f.item].filter(Boolean).join(' · ')
+            : (f.content || f.subject || '');
+        html += '<div class="pi" ' + idAttr + '>' +
+            '<div class="row"><span class="chip">' + esc(chip) + '</span>' +
+            '<span class="sum">' + esc(summary) + '</span>' +
+            '<span class="acts"><a href="#" class="profile-confirm-' + kind + '">' + t('profile.confirm') + '</a>' +
+            ' · <a href="#" class="profile-void-' + kind + '">' + t('profile.void') + '</a></span></div>' +
+            (f.source_quote ? ('<div class="pq">' + esc(f.source_quote) + '</div>') : '') +
+            '</div>';
     });
     html += '</div>';
     return html;
@@ -2104,7 +2132,12 @@ function renderProfileCircleSection(cid, factsPayload, people, delayFn, mailboxB
     } else if (!confirmed.length) {
         html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.empty_circle') + '</div>';
     } else {
-        html += _profileFactCardsHtml(confirmed, people, delayFn);
+        // 按分类分组渲染（家庭 / 其他供应商或竞品），保持 mockup 的分区顺序
+        _PROFILE_CIRCLE_CATS.forEach(function (cat) {
+            const list = confirmed.filter(function (f) { return f.category === cat; });
+            if (!list.length) return;
+            html += _profileSecLbl(cat) + _profileFactCardsHtml(list, people, delayFn);
+        });
     }
     html += '</div>';
     if (avail) html += _profilePendingHtml(items.filter(function (f) {
@@ -2139,19 +2172,36 @@ function renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, dela
     } else if (!n) {
         html += '<div class="wall-empty"' + delayFn() + '>' + t('profile.empty_prefs') + '</div>';
     } else {
-        html += _profileFactCardsHtml(confirmedFacts, people, delayFn);
+        // 事实按 喜好 / 禁忌 / 重要日期 分组；礼物单独成组
+        _PROFILE_PREFS_CATS.forEach(function (cat) {
+            const list = confirmedFacts.filter(function (f) { return f.category === cat; });
+            if (!list.length) return;
+            html += _profileSecLbl(cat) + _profileFactCardsHtml(list, people, delayFn);
+        });
+        if (confirmedGifts.length) html += _profileSecLbl('礼物往来');
         confirmedGifts.forEach(function (g) {
             _profileCacheItem('gift', g);
             const isAsk = g.direction === '客户索要';
             const gDate = _profileSourceDate(g);
+            // 金额：有值才显示「≈ 币种 数字」，与 mockup 的 .g-meta 第一格一致
+            let gAmt = '';
+            if (g.approx_value != null && g.approx_value !== '') {
+                const num = Number(g.approx_value);
+                gAmt = isNaN(num) ? String(g.approx_value) : num.toLocaleString('en-US');
+                gAmt = '≈ ' + (g.currency || '—') + ' ' + gAmt;
+            }
+            const gMeta = [gAmt, g.gift_date || '', g.occasion || ''].filter(Boolean);
             html += '<article class="wcard profile-gift' + (isAsk ? ' solicit' : '') + '"' + delayFn() + ' data-gift-id="' + esc(String(g.id)) + '">' +
                 '<div class="wc-name">' + (isAsk
                     ? ('⚠ ' + t('profile.ask') + ' · ' + esc(g.item || ''))
-                    : (esc(g.direction || '') + ' · ' + esc(g.item || ''))) +
+                    : ('<span class="g-dir">' + esc(g.direction || '') + '</span> ' + esc(g.item || ''))) +
                 '<span class="muted">' + esc(_profilePersonLabel(g, people)) + '</span></div>' +
-                (g.occasion || g.gift_date
-                    ? ('<p class="muted">' + esc([g.gift_date, g.occasion].filter(Boolean).join(' · ')) + '</p>')
+                (gMeta.length
+                    ? ('<div class="g-meta muted">' + gMeta.map(function (m) {
+                        return '<span>' + esc(m) + '</span>';
+                    }).join('') + '</div>')
                     : '') +
+                (isAsk ? ('<div class="solicit-note">' + t('profile.solicit_note') + '</div>') : '') +
                 '<p class="muted profile-src">' + esc(_profileSourceLabel(g)) +
                 (gDate ? ' · ' + esc(gDate) : '') +
                 (g.source_quote ? (' · <a href="#" class="profile-toggle-quote">' + t('profile.show_quote') + '</a>') : '') +
@@ -2188,6 +2238,8 @@ async function _refreshProfileSections(cid, root, people, mailboxBound) {
     const giftsPayload = (giftsRes && typeof giftsRes === 'object')
         ? giftsRes : { available: false, items: [] };
     const noDelay = function () { return ''; };
+    // 确认/作废后同步顶栏统计
+    _setProfileStatus(factsPayload, giftsPayload);
     const circle = root.querySelector('.profile-circle');
     const prefs = root.querySelector('.profile-prefs');
     if (circle) {
@@ -2519,6 +2571,25 @@ function closeCustomerProfile() {
     }
 }
 
+function _profileStatusText(factsPayload, giftsPayload) {
+    /** 画像页顶栏统计：已确认 / 待确认 / 索要（索要仅本机）。 */
+    const facts = (factsPayload && factsPayload.items) || [];
+    const gifts = (giftsPayload && giftsPayload.items) || [];
+    const confirmed = facts.filter(function (f) { return f.status === '已确认'; }).length +
+        gifts.filter(function (g) { return g.status === '已确认'; }).length;
+    const pending = facts.filter(function (f) { return f.status === '待确认'; }).length +
+        gifts.filter(function (g) { return g.status === '待确认'; }).length;
+    const asked = gifts.filter(function (g) { return g.direction === '客户索要'; }).length;
+    return currentLang === 'en'
+        ? ('Confirmed ' + confirmed + ' · Pending ' + pending + ' · Asked ' + asked + ' (local only)')
+        : ('已确认 ' + confirmed + ' · 待确认 ' + pending + ' · 索要 ' + asked + ' 仅本机');
+}
+
+function _setProfileStatus(factsPayload, giftsPayload) {
+    const el = document.getElementById('app-top-status');
+    if (el) el.textContent = _profileStatusText(factsPayload, giftsPayload);
+}
+
 async function openCustomerProfile(cid) {
     /** W12：独立画像页（两栏 dossier；窄屏单列）。 */
     const panel = $('customer-profile');
@@ -2601,6 +2672,8 @@ async function openCustomerProfile(cid) {
     panel.removeAttribute('inert');
     panel.setAttribute('aria-hidden', 'false');
     document.body.classList.add('profile-open');
+    // 顶栏状态改为画像统计（fx.js 的状态轮播在 profile-open 时会跳过）
+    _setProfileStatus(factsPayload, giftsPayload);
     const _pt = document.getElementById('app-top-title');
     const _pl = document.getElementById('app-top-lbl');
     if (_pt && _pl) {
