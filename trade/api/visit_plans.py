@@ -29,6 +29,19 @@ def _int_or_none(v):
         return None
 
 
+def _days_or_400(v):
+    """天数必须是整数；非法值返回 400，而不是让 int() 抛成 500。"""
+    if v in (None, ""):
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="天数必须是整数")
+    if n < 1:
+        raise HTTPException(status_code=400, detail="天数至少为 1")
+    return n
+
+
 @router.get("/visit-plans")
 def list_visit_plans(cid: int = Depends(require_company)):
     return visit_mod.list_plans(cid)
@@ -48,7 +61,7 @@ def create_visit_plan(body: VisitPlanBody, cid: int = Depends(require_company)):
         customer_id=_int_or_none(body.customer_id),
         title=str(body.title or ""),
         visit_date=str(body.visit_date or ""),
-        days=body.days or 1,
+        days=_days_or_400(body.days) or 1,
         location=str(body.location or ""),
         payload=payload,
     )
@@ -70,7 +83,14 @@ def update_visit_plan(plan_id: int, body: VisitPlanBody, cid: int = Depends(requ
         fields["customer_id"] = _int_or_none(body.customer_id)
     for key in ("title", "visit_date", "days", "location", "payload"):
         val = getattr(body, key)
-        if val is not None:
+        if val is None:
+            continue
+        if key == "days":
+            parsed = _days_or_400(val)
+            if parsed is None:
+                continue
+            fields[key] = parsed
+        else:
             fields[key] = val if key != "payload" or isinstance(val, dict) else {}
     plan = visit_mod.update_plan(plan_id, company_id=cid, **fields)
     if not plan:

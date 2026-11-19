@@ -2967,16 +2967,10 @@ function printVisitPlan() {
         '</div>';
     document.body.appendChild(ov);
     function sync() {
-        const visible = [];
+        // 分页已改为尺寸驱动（每张 A4 固定高度），这里只负责显示/隐藏勾选的纸
         ov.querySelectorAll('input[data-sheet]').forEach(function (cb) {
             const wrap = ov.querySelector('.vsheet-wrap[data-sheet="' + cb.getAttribute('data-sheet') + '"]');
             if (wrap) wrap.style.display = cb.checked ? '' : 'none';
-            if (wrap && cb.checked) visible.push(wrap);
-        });
-        // 分页统一用「每张纸后分页，最后一张不分页」：
-        // 不再用 break-before，WebKit/桌面版打印不会多出空白页
-        ov.querySelectorAll('.vsheet-wrap').forEach(function (w) {
-            w.classList.toggle('last', visible.length > 0 && w === visible[visible.length - 1]);
         });
     }
     ov.querySelectorAll('input[data-sheet]').forEach(function (cb) { cb.addEventListener('change', sync); });
@@ -3001,36 +2995,48 @@ function _vWrap(ctx, text, maxW) {
     return out;
 }
 
-function _vBuildLongImage(plan) {
-    const W = 1080, PAD = 72, BODY = 30, LH = 44, BAND = 300;
+function _vBuildLongImage(plan, includeInternal) {
+    /** 手机长图：默认只画公开内容（来访人/日程/对外说明），勾选后才含内部四段。 */
+    const W = 1080, PAD = 72, LH = 44;
     const pay = plan.payload || {};
-    const secs = [
-        ['来访人', pay.visitors], ['日程', pay.schedule], ['人员与分工', pay.staff],
-        ['访前清单', pay.checklist], ['内部风险', pay.risks], ['对外说明', pay.summary],
-    ].filter(function (s) { return String(s[1] || '').trim(); });
+    const pub = [['来访人', pay.visitors], ['日程', pay.schedule], ['对外说明', pay.summary]];
+    const intl = [['人员与分工', pay.staff], ['访前清单', pay.checklist], ['内部风险', pay.risks]];
+    const secs = (includeInternal ? [pub[0], pub[1], intl[0], intl[1], intl[2], pub[2]] : pub)
+        .filter(function (s) { return String(s[1] || '').trim(); });
     const meta = [plan.visit_date, (plan.days || 1) + ' 天', plan.location].filter(Boolean).join(' · ');
     const canvas = document.createElement('canvas');
     canvas.width = W;
     const fontBody = '30px "Noto Sans SC","PingFang SC",sans-serif';
+    const fontTitle = 'bold 54px "Noto Sans SC","PingFang SC",sans-serif';
+    const fontMeta = '26px "Noto Sans SC",sans-serif';
     let ctx = canvas.getContext('2d');
-    ctx.font = fontBody;
     const maxW = W - PAD * 2;
+    // 标题与 meta 也换行，避免超长标题画出画布
+    ctx.font = fontTitle;
+    const titleLines = _vWrap(ctx, plan.title || '验厂计划', maxW);
+    ctx.font = fontMeta;
+    const metaLines = _vWrap(ctx, meta, maxW).slice(0, 2);
+    ctx.font = fontBody;
     const blocks = secs.map(function (s) {
         return { label: s[0], lines: _vWrap(ctx, s[1], maxW) };
     });
-    let h = BAND + 40;
+    const bandH = 168 + titleLines.length * 64 + (metaLines.length ? 26 : 0) + metaLines.length * 34 + 24;
+    let h = bandH + 40;
     blocks.forEach(function (b) { h += 34 + b.lines.length * LH + 18; });
     canvas.height = h + 110;
     ctx = canvas.getContext('2d');
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, canvas.height);
-    ctx.fillStyle = '#0C0D0E'; ctx.fillRect(0, 0, W, BAND);
+    ctx.fillStyle = '#0C0D0E'; ctx.fillRect(0, 0, W, bandH);
     ctx.fillStyle = '#B7BCC0'; ctx.font = '22px monospace';
-    ctx.fillText('SITE VISIT / 验厂资料', PAD, 90);
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 54px "Noto Sans SC","PingFang SC",sans-serif';
-    ctx.fillText(plan.title || '验厂计划', PAD, 168);
-    ctx.fillStyle = '#E6E8EA'; ctx.font = '26px "Noto Sans SC",sans-serif';
-    ctx.fillText(meta, PAD, 222);
-    let y = BAND + 44;
+    ctx.fillText(includeInternal ? 'SITE VISIT / 内部资料' : 'SITE VISIT / 验厂资料', PAD, 90);
+    ctx.fillStyle = '#fff'; ctx.font = fontTitle;
+    let ty = 168;
+    titleLines.forEach(function (line) { ctx.fillText(line, PAD, ty); ty += 64; });
+    if (metaLines.length) {
+        ctx.fillStyle = '#E6E8EA'; ctx.font = fontMeta;
+        metaLines.forEach(function (line) { ty += 34; ctx.fillText(line, PAD, ty); });
+    }
+    let y = bandH + 44;
     blocks.forEach(function (b) {
         ctx.fillStyle = '#777'; ctx.font = '22px monospace';
         ctx.fillText(b.label, PAD, y);
@@ -3040,24 +3046,34 @@ function _vBuildLongImage(plan) {
         y += 18;
     });
     ctx.fillStyle = '#999'; ctx.font = '20px monospace';
-    ctx.fillText('TRADE · 内部资料', PAD, canvas.height - 40);
+    ctx.fillText(includeInternal ? 'TRADE · 内部资料 · 请勿外传' : 'TRADE · 验厂资料', PAD, canvas.height - 40);
     return canvas.toDataURL('image/png');
 }
 
 function openVisitLongImage() {
     const plan = _collectVisitPlan();
-    let url;
-    try { url = _vBuildLongImage(plan); } catch (e) { toast('生成长图失败'); return; }
     document.querySelectorAll('#visit-longimage').forEach(function (el) { el.remove(); });
     const ov = document.createElement('div');
     ov.id = 'visit-longimage';
     ov.innerHTML =
-        '<div class="vp-toolbar"><span class="vp-hint">手机长图 · 1080 宽 PNG</span>' +
-        '<a class="btn primary" id="vl-download" href="' + url + '">下载长图</a>' +
+        '<div class="vp-toolbar"><label><input type="checkbox" id="vl-internal"> 含内部信息</label>' +
+        '<span class="vp-hint">默认公开版：来访人 / 日程 / 对外说明；勾选后加入人员 / 清单 / 内部风险</span>' +
+        '<a class="btn primary" id="vl-download" href="#">下载长图</a>' +
         '<button type="button" class="btn" id="vl-close">关闭</button></div>' +
-        '<div class="vl-body"><img alt="验厂长图" src="' + url + '"></div>';
+        '<div class="vl-body"><img alt="验厂长图" src=""></div>';
     document.body.appendChild(ov);
     const a = document.getElementById('vl-download');
-    a.download = (plan.visit_date || '验厂') + '-长图.png';
+    const img = ov.querySelector('.vl-body img');
+    const cb = document.getElementById('vl-internal');
+    function refresh() {
+        const inc = !!(cb && cb.checked);
+        let url;
+        try { url = _vBuildLongImage(plan, inc); } catch (e) { toast('生成长图失败'); return; }
+        a.href = url;
+        a.download = (plan.visit_date || '验厂') + (inc ? '-内部' : '-公开') + '-长图.png';
+        img.src = url;
+    }
+    if (cb) cb.addEventListener('change', refresh);
     document.getElementById('vl-close').addEventListener('click', function () { ov.remove(); });
+    refresh();
 }

@@ -12,6 +12,15 @@ from typing import Any
 from trade.database import get_connection
 
 
+def _as_days(value: Any) -> int:
+    """天数解析：非法或非正一律按 1 天，避免 int() 抛 ValueError 变 500。"""
+    try:
+        n = int(value or 1)
+    except (TypeError, ValueError):
+        return 1
+    return n if n > 0 else 1
+
+
 def _row_to_dict(row) -> dict:
     d = dict(row)
     try:
@@ -73,7 +82,7 @@ def create_plan(
                 customer_id,
                 str(title or ""),
                 str(visit_date or ""),
-                int(days or 1),
+                _as_days(days),
                 str(location or ""),
                 json.dumps(payload or {}, ensure_ascii=False),
             ),
@@ -96,7 +105,7 @@ def update_plan(plan_id: int, *, company_id: int, **fields) -> dict | None:
     if "payload" in updates:
         updates["payload"] = json.dumps(updates["payload"] or {}, ensure_ascii=False)
     if "days" in updates:
-        updates["days"] = int(updates["days"] or 1)
+        updates["days"] = _as_days(updates["days"])
     cols = ", ".join(f"{k} = ?" for k in updates)
     conn = get_connection()
     try:
