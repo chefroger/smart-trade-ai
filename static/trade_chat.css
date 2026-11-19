@@ -1999,6 +1999,11 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     }
     .vsheet .foot { position: absolute; left: 14mm; right: 14mm; bottom: 10mm; margin: 0; }
     .vsheet.internal .ibar { margin: -14mm -14mm 10mm; padding: 7mm 14mm; }
+    /* 水印是铺满整页的 background-image：Chrome 打印会把它当「背景图形」，
+       关闭背景图形时整页（含文字）被丢弃 → 打印空白。纸质件不要水印。 */
+    .vsheet.internal::after { display: none !important; }
+    /* 背景图形关闭时红底白字会消失：改成红字描边样式，不依赖背景色 */
+    .vsheet.internal .ibar { background: #fff !important; color: #D2281E !important; border-bottom: 1.5px solid #D2281E; }
 }
 
 /* s7 手机长图预览 */
