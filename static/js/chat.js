@@ -293,16 +293,16 @@ async function loadCronStatus(isPoll = false) {
             '</span><span class="lbl">TODO · ' + (pending.length + completed.length) + '</span></div>';
         for (const task of pending) {
             todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task) ? ' now' : '') + '">' +
-                '<span class="ck" aria-hidden="true"></span><span class="tx">' +
+                '<span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
-        // 已完成单独成组（mockup 的 DONE 分隔），勾选框按状态点亮
+        // 已完成单独成组（mockup 的 DONE 分隔）
         if (completed.length) {
             todoHtml += '<div class="rail-todo-sep">' + esc(t('brief.done', { n: completed.length })) + '</div>';
         }
         for (const task of completed) {
             todoHtml += '<div class="rail-todo-item done">' +
-                '<span class="ck on" aria-hidden="true"></span><span class="tx">' +
+                '<span class="tx">' +
                 esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
         }
         // 轮询每 30s 会重建列表：保留用户滚动位置，避免跳回顶部

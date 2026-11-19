@@ -1486,8 +1486,6 @@ body {
     padding: 5px 0; border-bottom: 1px dashed var(--faint);
 }
 .rail-todo-item:last-child { border-bottom: none; }
-.rail-todo-item .ck { width: 11px; height: 11px; border: 1px solid var(--ink); margin-top: 3px; flex: none; }
-.rail-todo-item.done .ck { background: var(--ink); }
 .rail-todo-item.done .tx { color: var(--muted); text-decoration: line-through; }
 .rail-todo-sep {
     font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
@@ -1770,7 +1768,7 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .chat-main .msg-head .mh-t { white-space: nowrap; }
 
 /* 复制按钮下移后：助手正文右侧留出按钮宽度，避免压字 */
-.chat-main .message.assistant .msg-body { padding-right: 0; }
+.chat-main .message.assistant .msg-body { padding-right: 0; max-width: 92%; }
 
 /* 逾期行「处理」按钮 */
 .cust-table .cust-process {
