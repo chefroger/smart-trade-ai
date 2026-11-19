@@ -156,6 +156,84 @@ function _applyLicenseGates() {
 }
 // #endregion license-gate
 
+// #region license-bar
+/** 剩余多少天以内算「即将到期」（与后端 trade/license.py 同一口径）。 */
+const LICENSE_EXPIRING_DAYS = 7;
+
+/**
+ * 许可证状态条文案（纯函数，不碰 DOM）。
+ * 返回 { text: 内嵌 HTML, tone: 'ok'|'warn'|'danger'|'info' }；未知状态 text 为空。
+ */
+function _licenseBarText(data) {
+    const d = data || {};
+    const status = d.status || '';
+    const days = (typeof d.days_remaining === 'number') ? d.days_remaining : 999;
+    const expires = d.expires_at ? String(d.expires_at).slice(0, 10) : '';
+    const isExpired = status === 'expired';
+    const isTampered = status === 'tampered';
+    const isExpiring = status === 'active' && days <= LICENSE_EXPIRING_DAYS;
+    const codeBg = (isExpired || isTampered || (status === 'active' && days === 0))
+        ? '#FEE2E2'
+        : (days <= LICENSE_EXPIRING_DAYS ? '#FEF3C7' : '#DBEAFE');
+    const reqCodeHtml = d.request_code
+        ? ' · ' + t('license.req_code') + ': <code style="background:' + codeBg + ';padding:1px 6px;border-radius:3px;font-size:11px;user-select:all;cursor:text;" onclick="navigator.clipboard.writeText(this.textContent);toast(t(\'toast.copied\'))">' + esc(d.request_code) + '</code>'
+        : '';
+
+    if (isExpired) {
+        // 软着陆：说明数据还在、只是起草暂停，并保留激活入口
+        return {
+            text: '⚠️ ' + t('license.expired') + ' · ' + t('license.expired_soft')
+                + ' · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml,
+            tone: 'danger',
+        };
+    }
+    if (isExpiring) {
+        return {
+            text: '✅ ' + t('license.active') + ' · ' + t('license.expiring') + (expires ? ' ' + expires : '')
+                + ' · <a href="#" onclick="showActivateModal()" style="color:' + (days === 0 ? '#DC2626' : '#D97706') + ';text-decoration:underline;font-weight:600;">' + t('license.activate_btn') + '</a>' + reqCodeHtml,
+            tone: days === 0 ? 'danger' : 'warn',
+        };
+    }
+    if (status === 'active') {
+        // >7 天：写「有效期至」，不再误标「即将到期」
+        return {
+            text: '✅ ' + t('license.active') + (expires ? ' · ' + t('license.valid_until') + ' ' + expires : ''),
+            tone: 'ok',
+        };
+    }
+    if (status === 'trial') {
+        let text = '⏳ ' + t('license.trial') + ' ' + t('license.days_left', { n: days })
+            + ' · <a href="#" onclick="showActivateModal()" style="color:' + (days <= LICENSE_EXPIRING_DAYS ? '#D97706' : '#2563EB') + ';text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
+        // 第 20 天起显示价值小结（只报真实事件数，不估算）
+        if (d.trial_summary) {
+            const ts = d.trial_summary;
+            text += '<div style="margin-top:4px;font-size:11px;opacity:.9;">📊 '
+                + esc(t('license.trial_summary')
+                    .replace('{drafts}', String(ts.drafts || 0))
+                    .replace('{inquiries}', String(ts.inquiries || 0))
+                    .replace('{lookups}', String(ts.product_lookups || 0)))
+                + '</div>';
+        }
+        return { text: text, tone: days <= LICENSE_EXPIRING_DAYS ? 'warn' : 'info' };
+    }
+    if (isTampered) {
+        return {
+            text: '⚠️ License Error · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;font-weight:600;">Reactivate</a>' + reqCodeHtml,
+            tone: 'danger',
+        };
+    }
+    return { text: '', tone: 'info' };
+}
+
+/** tone → 状态条底色/文字色（保持改动前的配色）。 */
+function _licenseBarStyle(tone) {
+    if (tone === 'danger') return { background: '#FEF2F2', color: '#991B1B' };
+    if (tone === 'warn') return { background: '#FFFBEB', color: '#92400E' };
+    if (tone === 'ok') return { background: '#F0FDF4', color: '#166534' };
+    return { background: '#EFF6FF', color: '#1E40AF' };
+}
+// #endregion license-bar
+
 async function loadLicenseStatus() {
     const ctrl = new AbortController();
     // 本地接口正常是毫秒级；超时也不锁界面，走下面的 fail-open。
@@ -172,45 +250,13 @@ async function loadLicenseStatus() {
         const bar = document.getElementById('license-bar');
         if (!bar) return;
 
-        var _daysLeft = (typeof data.days_remaining === 'number') ? data.days_remaining : 999;
-        var _bgColor = _daysLeft <= 7 ? '#FEF3C7' : '#DBEAFE';
-        if (data.status === 'expired' || data.status === 'tampered') _bgColor = '#FEE2E2';
-        var reqCodeHtml = data.request_code
-            ? ' · ' + t('license.req_code') + ': <code style="background:' + _bgColor + ';padding:1px 6px;border-radius:3px;font-size:11px;user-select:all;cursor:text;" onclick="navigator.clipboard.writeText(this.textContent);toast(t(\'toast.copied\'))">' + esc(data.request_code) + '</code>'
-            : '';
-
-        if (data.status === 'expired') {
-            bar.style.display = 'block'; bar.style.background = '#FEF2F2'; bar.style.color = '#991B1B';
-            // 软着陆：说明数据还在、只是起草暂停，并保留激活入口
-            bar.innerHTML = '⚠️ ' + t('license.expired') + ' · ' + t('license.expired_soft')
-                + ' · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
-        } else if (data.status === 'active' && data.days_remaining <= 7) {
-            bar.style.display = 'block';
-            bar.style.background = data.days_remaining === 0 ? '#FEF2F2' : '#FFFBEB';
-            bar.style.color = data.days_remaining === 0 ? '#991B1B' : '#92400E';
-            bar.innerHTML = '✅ ' + t('license.active') + ' · ' + t('license.expiring') + (data.expires_at ? ' ' + data.expires_at.slice(0, 10) : '') + ' · <a href="#" onclick="showActivateModal()" style="color:' + (data.days_remaining===0?'#DC2626':'#D97706') + ';text-decoration:underline;font-weight:600;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
-        } else if (data.status === 'active') {
-            bar.style.display = 'block'; bar.style.background = '#F0FDF4'; bar.style.color = '#166534';
-            bar.innerHTML = '✅ ' + t('license.active') + (data.expires_at ? ' · ' + t('license.expiring') + ' ' + data.expires_at.substring(0, 10) : '');
-        } else if (data.status === 'trial') {
-            bar.style.display = 'block';
-            bar.style.background = data.days_remaining <= 7 ? '#FFFBEB' : '#EFF6FF';
-            bar.style.color = data.days_remaining <= 7 ? '#92400E' : '#1E40AF';
-            bar.innerHTML = '⏳ ' + t('license.trial') + ' ' + t('license.days_left', {n: data.days_remaining}) + ' · <a href="#" onclick="showActivateModal()" style="color:' + (data.days_remaining <= 7 ? '#D97706' : '#2563EB') + ';text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
-            // 第 20 天起显示价值小结（只报真实事件数，不估算）
-            if (data.trial_summary) {
-                var _ts = data.trial_summary;
-                bar.innerHTML += '<div style="margin-top:4px;font-size:11px;opacity:.9;">📊 '
-                    + esc(t('license.trial_summary')
-                        .replace('{drafts}', String(_ts.drafts || 0))
-                        .replace('{inquiries}', String(_ts.inquiries || 0))
-                        .replace('{lookups}', String(_ts.product_lookups || 0)))
-                    + '</div>';
-            }
-        } else if (data.status === 'tampered') {
-            bar.style.display = 'block'; bar.style.background = '#FEF2F2'; bar.style.color = '#991B1B';
-            bar.innerHTML = '⚠️ License Error · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;font-weight:600;">Reactivate</a>' + reqCodeHtml;
-        }
+        const _lb = _licenseBarText(data);
+        if (!_lb.text) { bar.style.display = 'none'; return; }
+        bar.style.display = 'block';
+        const _tone = _licenseBarStyle(_lb.tone);
+        bar.style.background = _tone.background;
+        bar.style.color = _tone.color;
+        bar.innerHTML = _lb.text;
     } catch(e) {
         // 读不到状态（网络/401/超时）：付费 UI fail-open，不能因为本地接口抖动
         // 把付费用户的栏目全部藏掉。license.json 被删时接口正常返回 trial/expired，
