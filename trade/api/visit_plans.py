@@ -34,6 +34,12 @@ def list_visit_plans(cid: int = Depends(require_company)):
     return visit_mod.list_plans(cid)
 
 
+@router.get("/visit-plans/suggest")
+def suggest_visit_draft(customer_id: int | None = None, cid: int = Depends(require_company)):
+    """按客户国家生成验厂建议（出发前/现场卫生安全/礼仪禁忌），不写库。"""
+    return visit_mod.suggest_draft(cid, customer_id)
+
+
 @router.post("/visit-plans")
 def create_visit_plan(body: VisitPlanBody, cid: int = Depends(require_company)):
     payload = body.payload if isinstance(body.payload, dict) else {}

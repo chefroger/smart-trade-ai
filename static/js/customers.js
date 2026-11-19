@@ -2686,6 +2686,7 @@ async function renderVisitPlansViewInto(container) {
         (boundName ? '<span class="cust-co">' + esc(boundName) + '</span>' : '') + '</h2>' +
         '<div class="visit-chips" id="visit-chips"></div>' +
         '<div class="visit-actions">' +
+        '<button type="button" class="btn" id="visit-suggest">生成建议</button>' +
         '<button type="button" class="btn primary" id="visit-save">保存</button>' +
         '<button type="button" class="btn" id="visit-print">打印 A4</button>' +
         '<button type="button" class="btn" id="visit-mobile">手机长图</button>' +
@@ -2715,6 +2716,7 @@ async function renderVisitPlansViewInto(container) {
     _fillVisitForm();
     // 从客户详情进入：锁定为该客户
     if (custSel && bound) { custSel.value = String(bound); custSel.disabled = true; }
+    $('visit-suggest')?.addEventListener('click', function () { fillVisitSuggestions(false); });
     $('visit-save')?.addEventListener('click', saveVisitPlan);
     $('visit-print')?.addEventListener('click', printVisitPlan);
     $('visit-mobile')?.addEventListener('click', openVisitLongImage);
@@ -2727,6 +2729,23 @@ async function renderVisitPlansViewInto(container) {
     $('visit-back')?.addEventListener('click', function () {
         if (bound) openCustomerWall(bound);
     });
+    // 新计划/空表单：按客户国家自动填入建议（只填空字段，不覆盖已写内容）
+    if (bound) fillVisitSuggestions(true);
+}
+
+async function fillVisitSuggestions(silent) {
+    const cid = _visitCustomerId || (_visitCurrent && _visitCurrent.customer_id) || '';
+    const d = await api('GET', '/api/trade/visit-plans/suggest' + (cid ? ('?customer_id=' + cid) : ''));
+    if (!d) return;
+    let filled = false;
+    const fill = function (id, val) {
+        const el = $(id);
+        if (el && !el.value.trim() && val) { el.value = val; filled = true; }
+    };
+    fill('vp-checklist', d.checklist);
+    fill('vp-risks', d.risks);
+    fill('vp-summary', d.summary);
+    if (filled && !silent) toast('已填入建议（可自行修改）');
 }
 
 function _renderVisitChips() {
