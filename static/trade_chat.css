@@ -1930,3 +1930,14 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .nav-section { padding: 6px 0 4px !important; }
 .nav-section-title { margin: 0 0 3px !important; }
 .nav-item { padding: 4px 8px !important; margin: 0 !important; }
+
+/* 底部悬浮块不遮挡功能栏：导航区留出底部空白 + 可见滚动条，底部块不透明 */
+.sidebar-nav {
+    padding-bottom: 14px !important;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(20, 20, 20, .28) transparent;
+}
+.sidebar-nav::-webkit-scrollbar { width: 6px; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: rgba(20, 20, 20, .25); border-radius: 3px; }
+.sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+.sidebar-bottom { background: #FBFCFC !important; backdrop-filter: none !important; border-top: 1px dashed rgba(20, 20, 20, .18); }
