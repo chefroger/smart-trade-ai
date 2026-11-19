@@ -712,13 +712,14 @@ async function openCustomerWall(cid) {
 
     // ── s3 页内卡片墙：header + 4格KPI + 三栏 + 横贯时间线 ──
     function sect(cls) { return '<div class="wsec ' + cls + '">'; }
-    function chHead(title, lbl) {
-        return '<div class="ch"><span class="t">' + title + '</span><span class="ch-lbl">' + lbl + '</span></div>';
+    function chHead(title, lbl, icon) {
+        const ic = icon && typeof iconHtml === 'function' ? iconHtml(icon, 16) : '';
+        return '<div class="ch"><span class="t">' + ic + title + '</span><span class="ch-lbl">' + lbl + '</span></div>';
     }
 
     // 关联人物
     let peopleHtml = sect('sec-people') +
-        '<div class="ch"><span class="t">' + (currentLang === 'en' ? 'People' : '人物') + '</span>' +
+        '<div class="ch"><span class="t">' + (typeof iconHtml === 'function' ? iconHtml('user-round', 16) : '') + (currentLang === 'en' ? 'People' : '人物') + '</span>' +
         '<span class="ch-acts"><button type="button" class="lnk" id="wall-add-contact">' + t('contacts.add') + '</button></span>' +
         '<span class="ch-lbl">PERSONS · ' + people.length + '</span></div>';
     if (!people.length) {
@@ -759,7 +760,7 @@ async function openCustomerWall(cid) {
 
     // 订单
     let ordersHtml = sect('sec-orders') +
-        chHead(currentLang === 'en' ? 'Orders' : '订单', 'ORDERS · ' + orders.length);
+        chHead(currentLang === 'en' ? 'Orders' : '订单', 'ORDERS · ' + orders.length, 'package');
     if (!orders.length) {
         ordersHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No orders yet' : '暂无订单记录') + '</div>';
     } else {
@@ -806,7 +807,7 @@ async function openCustomerWall(cid) {
     ordersHtml += '</div>';
 
     // 邮件
-    let mailHtml = sect('sec-mail') + '<div class="ch"><span class="t">' + (currentLang === 'en' ? 'Email' : '邮件') + '</span>';
+    let mailHtml = sect('sec-mail') + '<div class="ch"><span class="t">' + (typeof iconHtml === 'function' ? iconHtml('mail', 16) : '') + (currentLang === 'en' ? 'Email' : '邮件') + '</span>';
     if (mailboxBound) {
         mailHtml += '<span class="ch-acts"><button type="button" class="lnk" id="wall-email-refresh">' + (currentLang === 'en' ? 'Refresh' : '刷新') + '</button></span>';
     }
@@ -848,7 +849,7 @@ async function openCustomerWall(cid) {
     mailHtml += '</div>';
 
     // 对话
-    let talksHtml = sect('sec-talks') + chHead(talksTitle, 'TALKS · ' + keyChats.length);
+    let talksHtml = sect('sec-talks') + chHead(talksTitle, 'TALKS · ' + keyChats.length, 'message-circle');
     if (!keyChats.length) {
         talksHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No conversations linked' : '暂无关联对话') + '</div>';
     } else {
@@ -876,7 +877,7 @@ async function openCustomerWall(cid) {
     const tlLabel = 'TIMELINE · LAST 60 DAYS' + (timeline.length > _TL_LIMIT
         ? (currentLang === 'en' ? (' · LATEST ' + _TL_LIMIT) : (' · 最近 ' + _TL_LIMIT + ' 条'))
         : '');
-    let timelineHtml = sect('sec-timeline') + chHead(currentLang === 'en' ? 'Timeline' : '互动时间线', tlLabel) + '<div class="tl">';
+    let timelineHtml = sect('sec-timeline') + chHead(currentLang === 'en' ? 'Timeline' : '互动时间线', tlLabel, 'clock') + '<div class="tl">';
     if (!timeline.length) {
         timelineHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No activity yet' : '暂无互动记录') + '</div>';
     } else {
