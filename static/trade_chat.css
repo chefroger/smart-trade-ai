@@ -1798,6 +1798,11 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 }
 .mention-item:last-child { border-bottom: none; }
 .mention-item.on { background: var(--ink); color: #fff; }
+.mention-group {
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
+    color: var(--muted); padding: 6px 10px 2px; background: rgba(20, 20, 20, .03);
+    position: sticky; top: 0;
+}
 .mention-item .sub { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-item.on .sub { color: rgba(255, 255, 255, .75); }
 /* 已关联客户 chip */

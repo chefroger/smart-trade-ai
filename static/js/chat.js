@@ -865,8 +865,8 @@ function _chatInputChanged(el) {
     el.style.height = (el.scrollHeight > 80 ? 80 : el.scrollHeight) + 'px';
     const caret = el.selectionStart || 0;
     const before = el.value.slice(0, caret);
-    // 光标前最近的 @xxx 或 /xxx（前面必须是行首或空白）
-    const m = before.match(/(^|\s)([@/])([^\s@/]*)$/);
+    // 光标前最近的 @xxx 或 /xxx（允许紧跟中文/标点；邮箱 a@b 不触发）
+    const m = before.match(/(^|[^\w@/])([@/])([^\s@/]*)$/);
     if (!m) { _mentionClose(); return; }
     // 先标记「下拉激活」，避免异步加载期间按 Enter 被当成发送
     _mention = { kind: m[2], start: caret - m[3].length - 1, items: [], idx: 0, query: m[3] };
@@ -878,34 +878,43 @@ async function _mentionOpen(sym, query, start) {
     const q = String(query || '').toLowerCase();
     let items = [];
     if (sym === '@') {
-        // 客户列表：优先本地缓存，没有就拉一次
+        // 客户列表：优先本地缓存，没有就拉一次并写回缓存
         let list = (typeof allCustomers !== 'undefined' && allCustomers.length) ? allCustomers : null;
-        if (!list) list = (await api('GET', '/api/trade/customers')) || [];
+        if (!list) {
+            list = (await api('GET', '/api/trade/customers')) || [];
+            if (typeof allCustomers !== 'undefined' && !allCustomers.length) allCustomers = list;
+        }
         items = list.filter(function (c) {
-            const hay = [c.name, c.email, c.country].filter(Boolean).join(' ').toLowerCase();
+            const hay = [c.name, c.contact, c.email, c.country].filter(Boolean).join(' ').toLowerCase();
             return !q || hay.indexOf(q) >= 0;
         }).slice(0, 8).map(function (c) {
             return {
-                label: c.name || ('#' + c.id),
-                sub: [c.country, c.email].filter(Boolean).join(' · '),
+                // 展示联系人姓名；没有联系人再退回公司名。公司名放副标题
+                label: c.contact || c.name || ('#' + c.id),
+                sub: [c.contact ? c.name : '', c.country, c.email].filter(Boolean).join(' · '),
                 insert: '',
                 run: function () { _chatLinkCustomer(c); },
             };
         });
     } else {
-        // 技能：拍平注册表，选中后插入该技能的第一个触发词（技能路由按关键词生效）
+        // 技能：全部列出（按分组），选中后插入该技能的第一个触发词（技能路由按关键词生效）
         const flat = [];
         if (typeof _ALL_SKILLS !== 'undefined') {
-            _ALL_SKILLS.forEach(function (g) { (g.items || []).forEach(function (it) { flat.push(it); }); });
+            _ALL_SKILLS.forEach(function (g) {
+                (g.items || []).forEach(function (it) { flat.push({ it: it, group: g.g || '' }); });
+            });
         }
-        items = flat.filter(function (it) {
+        items = flat.filter(function (row) {
+            const it = row.it;
             const hay = [it.n, it.d, it.t].filter(Boolean).join(' ').toLowerCase();
             return !q || hay.indexOf(q) >= 0;
-        }).slice(0, 10).map(function (it) {
+        }).map(function (row) {
+            const it = row.it;
             const trig = String(it.t || '').split(/[、,，]/)[0].trim();
             return {
                 label: it.n,
                 sub: it.d || '',
+                group: row.group,
                 insert: (trig || it.n) + ' ',
                 run: function () {},
             };
@@ -920,8 +929,14 @@ function _mentionRender() {
     const m = _mentionEl();
     if (!m) return;
     if (!_mention.items.length) { m.classList.add('hidden'); m.innerHTML = ''; return; }
+    let lastGroup = '';
     m.innerHTML = _mention.items.map(function (it, i) {
-        return '<div class="mention-item' + (i === _mention.idx ? ' on' : '') + '" role="option" data-i="' + i + '">' +
+        let head = '';
+        if (it.group && it.group !== lastGroup) {
+            lastGroup = it.group;
+            head = '<div class="mention-group">' + esc(it.group) + '</div>';
+        }
+        return head + '<div class="mention-item' + (i === _mention.idx ? ' on' : '') + '" role="option" data-i="' + i + '">' +
             '<b>' + esc(it.label) + '</b>' + (it.sub ? '<span class="sub">' + esc(it.sub) + '</span>' : '') + '</div>';
     }).join('');
     m.querySelectorAll('.mention-item').forEach(function (el) {
