@@ -74,7 +74,7 @@ def _h(token: str, cid: int) -> dict[str, str]:
 
 class TestBriefToday:
     def test_overdue_and_pending_shipments(self, api_client, company_id):
-        """有逾期客户与「已下单」订单时 KPI 正确；new_inquiries 恒为 null。"""
+        """有逾期客户与「已下单」订单时 KPI 正确；无今日询盘时 new_inquiries 为 0。"""
         from trade import customer, order
 
         yesterday = (date.today() - timedelta(days=1)).isoformat()
@@ -98,7 +98,7 @@ class TestBriefToday:
         r = client.get("/api/trade/brief/today", headers=_h(token, cid))
         assert r.status_code == 200
         body = r.json()
-        assert body["new_inquiries"] is None
+        assert body["new_inquiries"] == 0
         assert body["overdue_followups"] == 1
         assert body["pending_shipments"] == 1
         assert body["summary"] is None
@@ -110,6 +110,59 @@ class TestBriefToday:
         r = client.get("/api/trade/brief/today", headers=_h(token, cid))
         assert r.status_code == 200
         assert r.json()["summary"] is None
+
+    def test_today_inquiries_counted(self, api_client, company_id):
+        """今日新询盘按 created_at 计数，不限阶段；昨天的不算。"""
+        from trade import customer, inquiry
+
+        cust = customer.create("Inquiry Co", company_id=company_id)
+        inquiry.create(cust["id"], company_id=company_id, title="今日 A")
+        inquiry.create(cust["id"], company_id=company_id, title="今日 B", stage="报价")
+        old = inquiry.create(cust["id"], company_id=company_id, title="昨天的")
+
+        # 把一条改成昨天，验证按日期过滤
+        from trade.database import get_connection
+        conn = get_connection()
+        try:
+            conn.execute(
+                "UPDATE inquiries SET created_at=? WHERE id=?",
+                ((date.today() - timedelta(days=1)).isoformat() + " 09:00:00", old["id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        client, token, cid = api_client
+        body = client.get("/api/trade/brief/today", headers=_h(token, cid)).json()
+        assert body["new_inquiries"] == 2
+
+    def test_other_company_inquiries_not_counted(self, api_client, company_id):
+        """别家公司今天的询盘不计入本公司的今日简报。"""
+        from trade import company, customer, inquiry
+
+        other = company.create(name="Other Brief Co", slug="other-brief-co")["id"]
+        oc = customer.create("Other Co", company_id=other)
+        inquiry.create(oc["id"], company_id=other, title="别家今日询盘")
+
+        client, token, cid = api_client
+        body = client.get("/api/trade/brief/today", headers=_h(token, cid)).json()
+        assert body["new_inquiries"] == 0
+
+    def test_missing_inquiries_table_returns_none(self, api_client, company_id):
+        """极旧库没有 inquiries 表时返回 null（前端显示「—」），接口仍 200。"""
+        from trade.database import get_connection
+
+        conn = get_connection()
+        try:
+            conn.execute("DROP TABLE inquiries")
+            conn.commit()
+        finally:
+            conn.close()
+
+        client, token, cid = api_client
+        r = client.get("/api/trade/brief/today", headers=_h(token, cid))
+        assert r.status_code == 200
+        assert r.json()["new_inquiries"] is None
 
 
 # ── W10 trade-json ─────────────────────────────────────────────────────────

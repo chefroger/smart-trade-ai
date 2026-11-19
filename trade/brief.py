@@ -8,7 +8,9 @@ from datetime import date
 def get_today_brief(company_id: int) -> dict:
     """聚合今日简报：新询盘 / 逾期跟进 / 待出货 / 早安摘要。
 
-    new_inquiries 在 v1 固定为 null（询盘实体未落地，不用邮件数顶替）。
+    new_inquiries = 本公司 inquiries 中 created_at 为今天（本地时区）的行数，
+    不限阶段。不用邮件数顶替；inquiries 表不存在（极旧库）时返回 None，
+    前端继续显示「—」。
     """
     today = date.today().isoformat()
     from trade.customer import get_company_summary
@@ -24,12 +26,24 @@ def get_today_brief(company_id: int) -> dict:
             "WHERE company_id = ? AND status = ?",
             (company_id, "已下单"),
         ).fetchone()["c"])
+        has_inquiries = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='inquiries'"
+        ).fetchone() is not None
+        if has_inquiries:
+            # created_at 默认 datetime('now','localtime')，与 today 同一时区
+            new_inquiries = int(conn.execute(
+                "SELECT COUNT(*) AS c FROM inquiries "
+                "WHERE company_id = ? AND date(created_at) = ?",
+                (company_id, today),
+            ).fetchone()["c"])
+        else:
+            new_inquiries = None
     finally:
         conn.close()
 
     return {
         "date": today,
-        "new_inquiries": None,
+        "new_inquiries": new_inquiries,
         "overdue_followups": overdue,
         "pending_shipments": pending,
         "summary": _morning_brief_summary(company_id, today),
