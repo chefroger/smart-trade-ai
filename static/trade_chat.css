@@ -1463,8 +1463,10 @@ body {
 }
 .rail-box { border: 1px dashed var(--ink); background: var(--paper); padding: 12px 14px; }
 #rail-brief { flex: 0 0 auto; }
-.rail-grow { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-#rail-cron { flex: 0 0 auto; max-height: 32%; overflow-y: auto; }
+/* 待办占比较小、内部滚动；剩余高度让给定时任务输出 */
+.rail-grow { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+#rail-todo { flex: 0 1 auto; max-height: 36%; }
+#rail-cron { flex: 1 1 auto; min-height: 140px; max-height: none; overflow-y: auto; }
 .rail-bh { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .rail-bh .t { font-size: 12px; font-weight: 600; }
 .rail-bh .lbl {
