@@ -2668,6 +2668,7 @@ async function renderVisitPlansViewInto(container) {
         '<div class="visit-actions">' +
         '<button type="button" class="btn primary" id="visit-save">保存</button>' +
         '<button type="button" class="btn" id="visit-print">打印 A4</button>' +
+        '<button type="button" class="btn" id="visit-mobile">手机长图</button>' +
         '<button type="button" class="btn" id="visit-new">＋ 新建一次来访</button>' +
         '</div></div>' +
         '<div class="visit-grid">' +
@@ -2692,6 +2693,7 @@ async function renderVisitPlansViewInto(container) {
     }).join('');
     $('visit-save')?.addEventListener('click', saveVisitPlan);
     $('visit-print')?.addEventListener('click', printVisitPlan);
+    $('visit-mobile')?.addEventListener('click', openVisitLongImage);
     $('visit-new')?.addEventListener('click', function () { _visitCurrent = null; _fillVisitForm(); _renderVisitChips(); });
 }
 
@@ -2811,4 +2813,81 @@ function printVisitPlan() {
     document.getElementById('vp-close').addEventListener('click', function () { ov.remove(); });
     document.getElementById('vp-do-print').addEventListener('click', function () { window.print(); });
     sync();
+}
+
+// ── s7 手机长图：Canvas 生成 1080 宽 PNG ──
+function _vWrap(ctx, text, maxW) {
+    const out = [];
+    String(text || '').split('\n').forEach(function (line) {
+        if (!line) { out.push(''); return; }
+        let cur = '';
+        for (const ch of line) {
+            const test = cur + ch;
+            if (ctx.measureText(test).width > maxW && cur) { out.push(cur); cur = ch; }
+            else cur = test;
+        }
+        if (cur) out.push(cur);
+    });
+    return out;
+}
+
+function _vBuildLongImage(plan) {
+    const W = 1080, PAD = 72, BODY = 30, LH = 44, BAND = 300;
+    const pay = plan.payload || {};
+    const secs = [
+        ['来访人', pay.visitors], ['日程', pay.schedule], ['人员与分工', pay.staff],
+        ['访前清单', pay.checklist], ['内部风险', pay.risks], ['对外说明', pay.summary],
+    ].filter(function (s) { return String(s[1] || '').trim(); });
+    const meta = [plan.visit_date, (plan.days || 1) + ' 天', plan.location].filter(Boolean).join(' · ');
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    const fontBody = '30px "Noto Sans SC","PingFang SC",sans-serif';
+    let ctx = canvas.getContext('2d');
+    ctx.font = fontBody;
+    const maxW = W - PAD * 2;
+    const blocks = secs.map(function (s) {
+        return { label: s[0], lines: _vWrap(ctx, s[1], maxW) };
+    });
+    let h = BAND + 40;
+    blocks.forEach(function (b) { h += 34 + b.lines.length * LH + 18; });
+    canvas.height = h + 110;
+    ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, canvas.height);
+    ctx.fillStyle = '#0C0D0E'; ctx.fillRect(0, 0, W, BAND);
+    ctx.fillStyle = '#B7BCC0'; ctx.font = '22px monospace';
+    ctx.fillText('SITE VISIT / 验厂资料', PAD, 90);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 54px "Noto Sans SC","PingFang SC",sans-serif';
+    ctx.fillText(plan.title || '验厂计划', PAD, 168);
+    ctx.fillStyle = '#E6E8EA'; ctx.font = '26px "Noto Sans SC",sans-serif';
+    ctx.fillText(meta, PAD, 222);
+    let y = BAND + 44;
+    blocks.forEach(function (b) {
+        ctx.fillStyle = '#777'; ctx.font = '22px monospace';
+        ctx.fillText(b.label, PAD, y);
+        y += 30;
+        ctx.fillStyle = '#111'; ctx.font = fontBody;
+        b.lines.forEach(function (line) { ctx.fillText(line, PAD, y); y += LH; });
+        y += 18;
+    });
+    ctx.fillStyle = '#999'; ctx.font = '20px monospace';
+    ctx.fillText('TRADE · 内部资料', PAD, canvas.height - 40);
+    return canvas.toDataURL('image/png');
+}
+
+function openVisitLongImage() {
+    const plan = _collectVisitPlan();
+    let url;
+    try { url = _vBuildLongImage(plan); } catch (e) { toast('生成长图失败'); return; }
+    document.querySelectorAll('#visit-longimage').forEach(function (el) { el.remove(); });
+    const ov = document.createElement('div');
+    ov.id = 'visit-longimage';
+    ov.innerHTML =
+        '<div class="vp-toolbar"><span class="vp-hint">手机长图 · 1080 宽 PNG</span>' +
+        '<a class="btn primary" id="vl-download" href="' + url + '">下载长图</a>' +
+        '<button type="button" class="btn" id="vl-close">关闭</button></div>' +
+        '<div class="vl-body"><img alt="验厂长图" src="' + url + '"></div>';
+    document.body.appendChild(ov);
+    const a = document.getElementById('vl-download');
+    a.download = (plan.visit_date || '验厂') + '-长图.png';
+    document.getElementById('vl-close').addEventListener('click', function () { ov.remove(); });
 }
