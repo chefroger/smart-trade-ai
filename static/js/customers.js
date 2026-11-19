@@ -920,6 +920,7 @@ async function openCustomerWall(cid) {
         '<div class="det-actions">' +
         '<button type="button" class="primary" id="wall-edit">' + (currentLang === 'en' ? 'Edit profile' : '编辑档案') + '</button>' +
         '<button type="button" id="wall-open-profile">' + t('profile.open') + '</button>' +
+        '<button type="button" id="wall-visit">' + (currentLang === 'en' ? 'Site visit' : '验厂') + '</button>' +
         '<button type="button" id="wall-add-order">' + (currentLang === 'en' ? 'Add order' : '添加订单') + '</button>' +
         '<label class="da-lbl">' + (currentLang === 'en' ? 'Stage' : '商机阶段') + ' <select id="wall-stage">' + (function () {
             const wallSel = _customerStageAuto(c) ? '自动' : stage;
@@ -959,6 +960,7 @@ async function openCustomerWall(cid) {
     $('wall-back')?.addEventListener('click', closeCustomerWall);
     $('wall-edit')?.addEventListener('click', function () { closeCustomerWall(); showCustomerDetail(cid); });
     $('wall-open-profile')?.addEventListener('click', function () { openCustomerProfile(cid); });
+    $('wall-visit')?.addEventListener('click', function () { openVisitForCustomer(cid); });
     $('wall-add-order')?.addEventListener('click', function () { showOrderModal(cid); });
     _bindProfileCardActions(cid, wall, mailboxBound, function () {
         return _refreshProfileSections(cid, wall, people, mailboxBound);
@@ -2650,20 +2652,38 @@ async function openCustomerProfile(cid) {
 // ══════════════════════ s5 验厂计划 ══════════════════════
 let _visitPlans = [];
 let _visitCurrent = null;
+let _visitCustomerId = null;
+
+/** 从客户详情打开验厂：只显示该客户的计划，并预置 customer_id。 */
+function openVisitForCustomer(cid) {
+    _visitCustomerId = cid;
+    if (typeof viewCache !== 'undefined' && viewCache['visit']) {
+        viewCache['visit'].element.remove();
+        delete viewCache['visit'];
+    }
+    navToView('visit', undefined, '验厂计划');
+}
 
 async function renderVisitPlansViewInto(container) {
     if (!allCustomers.length) {
         try { allCustomers = (await api('GET', '/api/trade/customers')) || []; } catch (e) { /* 静默 */ }
     }
     const plans = (await api('GET', '/api/trade/visit-plans')) || [];
-    _visitPlans = Array.isArray(plans) ? plans : [];
+    const bound = _visitCustomerId;
+    const boundName = bound ? ((allCustomers.find(function (c) { return c.id === bound; }) || {}).name || '') : '';
+    _visitPlans = (Array.isArray(plans) ? plans : []).filter(function (p) {
+        return !bound || Number(p.customer_id) === Number(bound);
+    });
     if (!_visitCurrent || !_visitPlans.some(function (p) { return p.id === _visitCurrent.id; })) {
         _visitCurrent = _visitPlans[0] || null;
     }
     container.innerHTML =
         '<div class="visit-page">' +
         '<div class="visit-head">' +
-        '<h2 class="cust-title">验厂计划<span class="cust-idx">SITE VISIT</span></h2>' +
+        (bound ? '<button type="button" class="btn" id="visit-back">← ' +
+            (currentLang === 'en' ? 'Back to customer' : '返回客户详情') + '</button>' : '') +
+        '<h2 class="cust-title">验厂计划<span class="cust-idx">SITE VISIT</span>' +
+        (boundName ? '<span class="cust-co">' + esc(boundName) + '</span>' : '') + '</h2>' +
         '<div class="visit-chips" id="visit-chips"></div>' +
         '<div class="visit-actions">' +
         '<button type="button" class="btn primary" id="visit-save">保存</button>' +
@@ -2686,15 +2706,27 @@ async function renderVisitPlansViewInto(container) {
         '<div class="vcard"><h4>对外说明</h4><textarea id="vp-summary" rows="8"></textarea></div>' +
         '</div></div>';
     _renderVisitChips();
-    _fillVisitForm();
     const custSel = $('vp-customer');
-    if (custSel) custSel.innerHTML = '<option value="">— 不关联客户 —</option>' + allCustomers.map(function (c) {
-        return '<option value="' + c.id + '">' + esc(c.name) + '</option>';
-    }).join('');
+    if (custSel) {
+        custSel.innerHTML = '<option value="">— 不关联客户 —</option>' + allCustomers.map(function (c) {
+            return '<option value="' + c.id + '">' + esc(c.name) + '</option>';
+        }).join('');
+    }
+    _fillVisitForm();
+    // 从客户详情进入：锁定为该客户
+    if (custSel && bound) { custSel.value = String(bound); custSel.disabled = true; }
     $('visit-save')?.addEventListener('click', saveVisitPlan);
     $('visit-print')?.addEventListener('click', printVisitPlan);
     $('visit-mobile')?.addEventListener('click', openVisitLongImage);
-    $('visit-new')?.addEventListener('click', function () { _visitCurrent = null; _fillVisitForm(); _renderVisitChips(); });
+    $('visit-new')?.addEventListener('click', function () {
+        _visitCurrent = null;
+        _fillVisitForm();
+        if (bound && $('vp-customer')) $('vp-customer').value = String(bound);
+        _renderVisitChips();
+    });
+    $('visit-back')?.addEventListener('click', function () {
+        if (bound) openCustomerWall(bound);
+    });
 }
 
 function _renderVisitChips() {
