@@ -1981,18 +1981,24 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     background-repeat: repeat;
 }
 @media print {
+    /* 不依赖强制分页：每张纸固定为 A4 高度（略小于 297mm 防取整多页），
+       浏览器按页高自然分页。不同 Chrome 版本对 break-before/after 的处理
+       不一致，曾出现第 2 页空白，故改为尺寸驱动的分页。 */
+    @page { size: A4; margin: 0; }
     body > *:not(#visit-print-preview) { display: none !important; }
     #visit-print-preview { position: static !important; background: #fff; display: block; overflow: visible; }
     .vp-toolbar { display: none !important; }
-    .vp-board { display: block; padding: 0; }
-    /* 每张纸后分页，最后一张不分页（JS 给可见的最后一张加 .last）。
-       只用 break-after 一个方向：WebKit/桌面版打印不会多出空白页。 */
-    .vsheet-wrap { width: auto; height: auto; border: none; box-shadow: none; overflow: visible; display: block; }
-    .vsheet-wrap .vsheet { page-break-after: always; break-after: page; }
-    .vsheet-wrap.last .vsheet { page-break-after: auto; break-after: auto; }
-    .vsheet { transform: none; width: 100%; height: auto; min-height: auto; padding: 20mm 16mm; overflow: visible; }
-    .vsheet .foot { position: static; margin-top: 16px; }
-    .vsheet.internal .ibar { margin: -20mm -16mm 14px; padding: 8px 16mm; }
+    .vp-board { display: block; padding: 0; margin: 0; }
+    .vsheet-wrap {
+        width: 210mm; height: 296mm; margin: 0; border: none; box-shadow: none;
+        overflow: hidden; display: block; break-inside: avoid;
+    }
+    .vsheet {
+        transform: none; width: 210mm; height: 296mm; min-height: 0;
+        padding: 14mm; box-sizing: border-box; overflow: hidden; background: #fff;
+    }
+    .vsheet .foot { position: absolute; left: 14mm; right: 14mm; bottom: 10mm; margin: 0; }
+    .vsheet.internal .ibar { margin: -14mm -14mm 10mm; padding: 7mm 14mm; }
 }
 
 /* s7 手机长图预览 */
