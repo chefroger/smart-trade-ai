@@ -870,11 +870,17 @@ async function openCustomerWall(cid) {
     const prefsHtml = renderProfilePrefsSection(cid, factsPayload, giftsPayload, people, delay, mailboxBound);
 
     // 时间线
-    let timelineHtml = sect('sec-timeline') + chHead(currentLang === 'en' ? 'Timeline' : '互动时间线', 'TIMELINE · LAST 60 DAYS') + '<div class="tl">';
+    // 时间线只展示最近 14 条（2 行网格）；邮件多时避免把三栏挤出屏幕
+    const _TL_LIMIT = 14;
+    const tlShown = timeline.slice(0, _TL_LIMIT);
+    const tlLabel = 'TIMELINE · LAST 60 DAYS' + (timeline.length > _TL_LIMIT
+        ? (currentLang === 'en' ? (' · LATEST ' + _TL_LIMIT) : (' · 最近 ' + _TL_LIMIT + ' 条'))
+        : '');
+    let timelineHtml = sect('sec-timeline') + chHead(currentLang === 'en' ? 'Timeline' : '互动时间线', tlLabel) + '<div class="tl">';
     if (!timeline.length) {
         timelineHtml += '<div class="wall-empty">' + (currentLang === 'en' ? 'No activity yet' : '暂无互动记录') + '</div>';
     } else {
-        timeline.forEach(function (t) {
+        tlShown.forEach(function (t) {
             const kind = t.kind || '';
             let mk = '';
             if (kind === 'follow_up_due') mk = ' r';
@@ -2777,7 +2783,7 @@ async function renderVisitPlansViewInto(container) {
         '<div class="visit-actions">' +
         '<button type="button" class="btn" id="visit-suggest">生成建议</button>' +
         '<button type="button" class="btn primary" id="visit-save">保存</button>' +
-        '<button type="button" class="btn" id="visit-print">打印 A4</button>' +
+        '<button type="button" class="btn" id="visit-print-btn">打印 A4</button>' +
         '<button type="button" class="btn" id="visit-mobile">手机长图</button>' +
         '<button type="button" class="btn" id="visit-new">＋ 新建一次来访</button>' +
         '</div></div>' +
@@ -2807,13 +2813,15 @@ async function renderVisitPlansViewInto(container) {
     if (custSel && bound) { custSel.value = String(bound); custSel.disabled = true; }
     $('visit-suggest')?.addEventListener('click', function () { fillVisitSuggestions(false); });
     $('visit-save')?.addEventListener('click', saveVisitPlan);
-    $('visit-print')?.addEventListener('click', printVisitPlan);
+    $('visit-print-btn')?.addEventListener('click', printVisitPlan);
     $('visit-mobile')?.addEventListener('click', openVisitLongImage);
     $('visit-new')?.addEventListener('click', function () {
         _visitCurrent = null;
         _fillVisitForm();
         if (bound && $('vp-customer')) $('vp-customer').value = String(bound);
         _renderVisitChips();
+        // 新建一次来访同样要带出建议（原先只有首次进入才填）
+        if (bound) fillVisitSuggestions(true);
     });
     $('visit-back')?.addEventListener('click', function () {
         if (bound) openCustomerWall(bound);

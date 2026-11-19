@@ -240,6 +240,24 @@ def suggest_draft(company_id: int, customer_id: int | None = None) -> dict:
         "- 不现场承诺交期与价格，统一由业务确认后回复",
         "- 礼品合规：不送现金与贵重物品；客户索要一律拒绝并上报",
     ]
+
+    # 客户画像（已确认事实）带入内部提醒：禁忌/喜好/家庭等，供现场应对
+    profile_lines: list[str] = []
+    if customer_id:
+        try:
+            from trade import profile as profile_mod
+
+            for f in profile_mod.list_facts(customer_id, company_id=company_id, status="已确认"):
+                text = str(f.get("content") or f.get("subject") or "").strip()
+                if not text:
+                    continue
+                cat = str(f.get("category") or "").strip()
+                profile_lines.append(("- [" + cat + "] " if cat else "- ") + text)
+        except Exception:
+            # 画像表不存在 / 老库未升级：静默跳过，不影响基础建议
+            profile_lines = []
+    if profile_lines:
+        risk_lines += ["", "【客户档案提醒 · 内部】"] + profile_lines
     summary = (
         "感谢来访。我们将安排车间参观、样品演示与商务沟通；"
         "如需拍摄或进入特定区域，请提前告知，我们会做好安排。"
