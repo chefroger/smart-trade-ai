@@ -851,7 +851,12 @@ let _mention = { kind: '', start: 0, items: [], idx: 0, query: '' };
 let _mentionSeq = 0;
 let _chatLinkedName = '';
 
-function _mentionEl() { return document.getElementById('chat-mention-menu'); }
+function _chatScope() {
+    // 多个栏目各自缓存了一份聊天 DOM（id 相同），必须限定在当前可见视图内查找
+    return (typeof currentChatContainer !== 'undefined' && currentChatContainer) || document;
+}
+
+function _mentionEl() { return _chatScope().querySelector('#chat-mention-menu'); }
 
 function _mentionClose() {
     const m = _mentionEl();
@@ -963,7 +968,7 @@ function _mentionMove(delta) {
 function _mentionPick(i) {
     const it = _mention.items[i];
     if (!it) return;
-    const el = document.getElementById('msg-input');
+    const el = _chatScope().querySelector('#msg-input');
     if (!el) return;
     const caret = el.selectionStart || 0;
     el.value = el.value.slice(0, _mention.start) + (it.insert || '') + el.value.slice(caret);
@@ -996,8 +1001,9 @@ function _chatLinkCustomer(c) {
     toast((currentLang === 'en' ? 'Linked customer: ' : '已关联客户：') + _chatLinkedName);
 }
 
-function _renderChatLinkedChip() {
-    const el = document.getElementById('chat-linked-customer');
+function _renderChatLinkedChip(root) {
+    const scope = root || _chatScope();
+    const el = scope.querySelector('#chat-linked-customer');
     if (!el) return;
     if (!currentCustomerId) { el.classList.add('hidden'); el.innerHTML = ''; return; }
     if (!_chatLinkedName && typeof allCustomers !== 'undefined') {
