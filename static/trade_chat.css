@@ -1820,3 +1820,22 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 /* s4 页内布局：header + 滚动 dossier */
 #customer-profile .det { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 20px 16px; min-height: 0; }
 #customer-profile .profile-dossier { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* 侧栏底部：按钮一行，许可证文字换到下一行整行显示 */
+.sidebar-footer { flex-wrap: wrap; align-items: center; padding: 8px 16px 8px; }
+.sidebar-footer button { flex: 0 0 34px; width: 34px; height: 34px; aspect-ratio: auto; }
+#license-bar {
+    flex: 1 1 100%; margin-top: 6px; padding: 6px 8px;
+    font-size: 11px; line-height: 1.5; border-radius: 4px; word-break: break-word;
+}
+
+/* 覆盖外壳 v2 的 !important：许可证必须整行在按钮下方，不能同行右挂 */
+.sidebar-footer {
+    flex-wrap: wrap !important; align-items: center !important;
+    margin: 6px 14px 0 !important; padding: 8px 0 4px !important; gap: 6px !important;
+}
+#license-bar {
+    flex: 1 1 100% !important; max-width: 100% !important;
+    margin: 6px 0 0 0 !important; padding: 6px 8px !important;
+    text-align: left !important; line-height: 1.5 !important;
+}
