@@ -2967,10 +2967,18 @@ function printVisitPlan() {
         '</div>';
     document.body.appendChild(ov);
     function sync() {
+        let anyShown = false;
         ov.querySelectorAll('input[data-sheet]').forEach(function (cb) {
             const wrap = ov.querySelector('.vsheet-wrap[data-sheet="' + cb.getAttribute('data-sheet') + '"]');
             if (wrap) wrap.style.display = cb.checked ? '' : 'none';
+            if (cb.checked) anyShown = true;
         });
+        // 两张都显示时，内部页另起一页；只打印其一时不分页，避免首/尾空白页
+        const internalWrap = ov.querySelector('.vsheet-wrap[data-sheet="internal"]');
+        const publicCb = ov.querySelector('input[data-sheet="public"]');
+        if (internalWrap) {
+            internalWrap.classList.toggle('pb', !!(publicCb && publicCb.checked && internalWrap.style.display !== 'none' && anyShown));
+        }
     }
     ov.querySelectorAll('input[data-sheet]').forEach(function (cb) { cb.addEventListener('change', sync); });
     document.getElementById('vp-close').addEventListener('click', function () { ov.remove(); });

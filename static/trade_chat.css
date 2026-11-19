@@ -1985,8 +1985,10 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     #visit-print-preview { position: static !important; background: #fff; display: block; overflow: visible; }
     .vp-toolbar { display: none !important; }
     .vp-board { display: block; padding: 0; }
-    .vsheet-wrap { width: auto; height: auto; border: none; box-shadow: none; overflow: visible; page-break-after: always; }
-    .vsheet-wrap[data-sheet="internal"] { page-break-before: always; }
+    /* 只在内部页前分页（由 JS 按勾选状态加 .pb）。
+       不要同时用 page-break-after + page-break-before：WebKit 会多出空白页。 */
+    .vsheet-wrap { width: auto; height: auto; border: none; box-shadow: none; overflow: visible; page-break-inside: avoid; }
+    .vsheet-wrap.pb { page-break-before: always; break-before: page; }
     .vsheet { transform: none; width: 100%; height: auto; min-height: auto; padding: 20mm 16mm; overflow: visible; }
     .vsheet .foot { position: static; margin-top: 16px; }
     .vsheet.internal .ibar { margin: -20mm -16mm 14px; padding: 8px 16mm; }
