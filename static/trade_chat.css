@@ -1019,6 +1019,8 @@ body > #toast-container, body > #customer-wall {
     display: inline-flex !important; align-items: center; gap: 6px;
     font-size: 12.5px; font-family: inherit; white-space: nowrap;
 }
+/* .hidden 与 .chat-stop-btn 同为 0,1,0 且写在后面会失效，这里用更高特异性兜住 */
+.chat-stop-btn.hidden { display: none !important; }
 .panel-search, .panel-topbar-actions select, .cust-tools .f {
     border-style: dashed !important; border-color: rgba(20,20,20,.5) !important; border-radius: 2px !important;
     background: var(--panel) !important;
