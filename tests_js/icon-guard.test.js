@@ -48,3 +48,21 @@ test('新增图标保留 lucide-static 许可证头', () => {
     assert.match(head, /lucide-static/);
     assert.match(head, /ISC/);
 });
+
+test('视觉收尾 16 个图标全部存在且格式一致', () => {
+    const names = [
+        'arrow-down-wide-narrow', 'arrow-left', 'book-open', 'briefcase-business',
+        'clipboard-list', 'copy', 'folder-open', 'graduation-cap', 'history',
+        'layout-dashboard', 'message-circle', 'search-check', 'share-2', 'ship',
+        'target', 'user-round',
+    ];
+    for (const n of names) {
+        const file = path.join(ICON_DIR, `lucide-${n}.svg`);
+        assert.ok(fs.existsSync(file), `缺少 static/icons/lucide-${n}.svg`);
+        const src = fs.readFileSync(file, 'utf8');
+        assert.match(src, /<!-- @license lucide-static v0\.544\.0 - ISC -->/, `${n} 许可证头不对`);
+        assert.match(src, /class="lucide lucide-[\w-]+"/, `${n} 缺 lucide class`);
+        assert.match(src, /viewBox="0 0 24 24"/, `${n} 不是 24×24`);
+        assert.match(src, /stroke="currentColor"/, `${n} 必须用 currentColor`);
+    }
+});
