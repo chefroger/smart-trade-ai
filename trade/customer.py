@@ -558,6 +558,74 @@ def get_overview(customer_id: int, *, company_id: int) -> dict | None:
     }
 
 
+def record_follow_up(
+    customer_id: int,
+    *,
+    company_id: int,
+    next_follow_up_date: str | None = None,
+    note: str = "",
+    resolved: bool = False,
+) -> dict | None:
+    """逾期跟进处理：更新下次跟进日（或清空=不再跟进），并追加一条跟进事件。
+
+    「逾期已解决」的信号 = 该客户 next_follow_up_date 不再早于今天
+    （改为未来日期，或清空表示不再跟进）。事件写入 extra3.follow_events
+    （无 migration），由 get_timeline 聚合为 follow_up_done 展示。
+    """
+    from datetime import date, datetime
+
+    today = date.today().isoformat()
+    nxt = (next_follow_up_date or "").strip()
+    if not resolved:
+        if not nxt:
+            raise ValueError("需要新的下次跟进日，或标记「不再跟进」")
+        if nxt < today:
+            raise ValueError("下次跟进日不能早于今天")
+    at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = get_connection()
+    try:
+        # 与其他写路径一致：IMMEDIATE 先拿写锁，避免 SNAPSHOT 升级失败
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT extra2, extra3 FROM customers WHERE id = ? AND company_id = ?",
+            (customer_id, company_id),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        try:
+            e2 = json.loads(row["extra2"]) if row["extra2"] else {}
+        except Exception:
+            e2 = {}
+        try:
+            e3 = json.loads(row["extra3"]) if row["extra3"] else {}
+        except Exception:
+            e3 = {}
+        note_txt = (note or "").strip()
+        if note_txt:
+            e2["follow_up_note"] = note_txt
+        events = e3.get("follow_events")
+        if not isinstance(events, list):
+            events = []
+        events.append({"at": at, "note": note_txt, "next": "" if resolved else nxt})
+        e3["follow_events"] = events[-50:]
+        conn.execute(
+            "UPDATE customers SET next_follow_up_date = ?, extra2 = ?, extra3 = ?, "
+            "updated_at = datetime('now','localtime') WHERE id = ? AND company_id = ?",
+            ("" if resolved else nxt,
+             json.dumps(e2, ensure_ascii=False),
+             json.dumps(e3, ensure_ascii=False),
+             customer_id, company_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return get(customer_id, company_id=company_id)
+
+
 def get_timeline(
     customer_id: int, *, company_id: int, days: int = 60,
 ) -> list[dict] | None:
@@ -698,6 +766,28 @@ def get_timeline(
             "kind": "follow_up_due",
             "title": "今天 · 应回复",
             "detail": "",
+            "ref_type": "customer",
+            "ref_id": customer_id,
+        })
+
+    # 跟进处理事件（extra3.follow_events；复用时间线，无独立表）
+    try:
+        _e3 = json.loads(cust.get("extra3") or "{}")
+    except Exception:
+        _e3 = {}
+    for fe in (_e3.get("follow_events") or []):
+        atv = str(fe.get("at") or "")
+        if not atv or atv[:10] < cutoff:
+            continue
+        fe_note = str(fe.get("note") or "").strip()
+        fe_next = str(fe.get("next") or "").strip()
+        tail = ("下次跟进 " + fe_next) if fe_next else "不再跟进"
+        fe_detail = (fe_note + " · " + tail) if fe_note else tail
+        events.append({
+            "at": atv,
+            "kind": "follow_up_done",
+            "title": "跟进已处理",
+            "detail": fe_detail,
             "ref_type": "customer",
             "ref_id": customer_id,
         })

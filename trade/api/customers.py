@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse
 from trade import customer as customer_module
 from trade import mailbox_store
 from trade.api.deps import require_company
-from trade.api.models import CustomerCreate, CustomerUpdate
+from trade.api.models import CustomerCreate, CustomerUpdate, FollowUpCreate
 
 router = APIRouter(tags=["customers"])
 
@@ -343,6 +343,28 @@ def update_customer(
     if "tags" in kwargs:
         kwargs["tags"] = _normalize_tags_or_400(kwargs["tags"])
     result = customer_module.update(customer_id, company_id=cid, **kwargs)
+    if not result:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return result
+
+
+@router.post("/customers/{customer_id}/follow-up")
+def record_follow_up(
+    customer_id: int,
+    payload: FollowUpCreate,
+    cid: int = Depends(require_company),
+):
+    """逾期跟进处理：更新下次跟进日或标记不再跟进，并记一条跟进事件。"""
+    try:
+        result = customer_module.record_follow_up(
+            customer_id,
+            company_id=cid,
+            next_follow_up_date=payload.next_follow_up_date,
+            note=payload.note,
+            resolved=payload.resolved,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not result:
         raise HTTPException(status_code=404, detail="Customer not found")
     return result

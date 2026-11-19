@@ -3,12 +3,13 @@
 let _custTier = '';
 let _custStage = '';
 let _custStarred = false;
+let _custOverdueOnly = false;
 let _custPage = 1;
 const _CUST_PAGE_SIZE = 10;
 
 async function renderCustomersViewInto(container) {
     // 每次进入客户列表重置筛选/分页状态
-    _custTier = ''; _custStage = ''; _custStarred = false; _custPage = 1;
+    _custTier = ''; _custStage = ''; _custStarred = false; _custOverdueOnly = false; _custPage = 1;
     const coName = currentCompanyId ? (companies.find(c => c.id === currentCompanyId)?.name || '') : '';
     container.innerHTML = `
         <div class="cust-page">
@@ -39,6 +40,7 @@ async function renderCustomersViewInto(container) {
                 </select>
                 <div class="cust-seg" id="cust-stage-seg" role="group" aria-label="商机阶段"></div>
                 <button type="button" class="cust-star-toggle" id="cust-starred-toggle" onclick="toggleStarredFilter()">☆ ${currentLang==='en'?'Starred only':'只看星标'}</button>
+                <button type="button" class="cust-star-toggle" id="cust-overdue-toggle" onclick="toggleOverdueFilter()">⚠ ${currentLang==='en'?'Overdue only':'只看逾期'}</button>
                 <select id="cust-sort" aria-label="排序" onchange="filterCustomers()">
                     <option value="follow_up">${currentLang==='en'?'Follow-up first':'待跟进优先'}</option>
                     <option value="name">${currentLang==='en'?'By name':'按名称排序'}</option>
@@ -103,6 +105,10 @@ async function loadCustomersData() {
     allCustomers = list || [];
     _customerSummary = summary || null;
     _renderCustomerSummaryBar();
+    // 侧栏「客户管理」逾期角标：随 summary 立即刷新（不等 30s 轮询）
+    if (typeof _updateDailyBriefBadge === 'function') {
+        _updateDailyBriefBadge(_customerSummary && _customerSummary.overdue);
+    }
     // Enrich with library associations
     for (let c of allCustomers) {
         const libs = await api('GET', `/api/trade/customers/${c.id}/libraries`) || [];
@@ -356,6 +362,10 @@ function renderCustomersTable(data) {
         let followHtml = '<span class="muted">—</span>';
         if (overdue) followHtml = '<span class="od">⚠ ' + (currentLang === 'en' ? 'Overdue ' : '逾期 ') + od + (currentLang === 'en' ? 'd' : ' 天') + '</span>';
         else if (follow) followHtml = '<span>' + esc(follow === today ? (currentLang === 'en' ? 'Today' : '今天') : _custShortDate(follow)) + '</span>';
+        const processBtn = overdue
+            ? (' <button type="button" class="cust-process" onclick="event.stopPropagation();openFollowUpModal(' + c.id + ')">' +
+                (currentLang === 'en' ? 'Resolve' : '处理') + '</button>')
+            : '';
         let dots = '';
         for (let i = 1; i <= 4; i++) dots += '<i class="' + (i <= si ? 'on' : '') + '"></i>';
         const tagHtml = tags.length
@@ -373,7 +383,7 @@ function renderCustomersTable(data) {
             '<td class="c-num">' + oc + '</td>' +
             '<td class="c-amt">' + amt + '</td>' +
             '<td class="c-date">' + esc(_custShortDate(c.last_contact_at)) + '</td>' +
-            '<td class="c-follow">' + followHtml + '</td>' +
+            '<td class="c-follow">' + followHtml + processBtn + '</td>' +
             '</tr>';
     }).join('');
 
@@ -424,6 +434,73 @@ function toggleStarredFilter() {
     const b = $('cust-starred-toggle');
     if (b) { b.classList.toggle('on', _custStarred); b.textContent = (_custStarred ? '★ ' : '☆ ') + (currentLang === 'en' ? 'Starred only' : '只看星标'); }
     filterCustomers();
+}
+
+function toggleOverdueFilter() {
+    _custOverdueOnly = !_custOverdueOnly;
+    const b = $('cust-overdue-toggle');
+    if (b) {
+        b.classList.toggle('on', _custOverdueOnly);
+        b.textContent = '⚠ ' + (currentLang === 'en' ? 'Overdue only' : '只看逾期');
+    }
+    filterCustomers();
+}
+
+function openFollowUpModal(cid) {
+    /** 逾期跟进处理：设置下次跟进日或标记不再跟进，提交后该客户退出逾期。 */
+    const c = allCustomers.find(function (x) { return x.id === cid; });
+    if (!c) return;
+    const follow = _customerFollowUpDate(c) || '—';
+    const od = _followUpOverdueDays(c);
+    document.querySelectorAll('#followup-modal').forEach(function (el) { el.remove(); });
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.id = 'followup-modal';
+    const today = _todayYmd();
+    bd.innerHTML =
+        '<div class="modal" style="width:520px;max-width:94vw;">' +
+        '<h3 style="margin:0 0 6px;">' + (currentLang === 'en' ? 'Resolve follow-up' : '跟进处理') + '</h3>' +
+        '<p class="muted" style="font-size:12.5px;margin:0 0 14px;">' + esc(c.name) +
+        ' · ' + (currentLang === 'en' ? 'was due ' : '原跟进日 ') + esc(follow) +
+        ' · ' + (currentLang === 'en' ? 'overdue ' : '逾期 ') + od + (currentLang === 'en' ? 'd' : ' 天') + '</p>' +
+        '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;">' +
+        '<input type="checkbox" id="fu-no-more"> ' + (currentLang === 'en' ? 'No more follow-up (clear date)' : '不再跟进（清空下次跟进日）') + '</label>' +
+        '<div class="form-group"><label for="fu-date">' + (currentLang === 'en' ? 'Next follow-up date' : '下次跟进日') + '</label>' +
+        '<input type="date" id="fu-date" value="' + esc(today) + '"></div>' +
+        '<div class="form-group"><label for="fu-note">' + (currentLang === 'en' ? 'Note (optional)' : '本次跟进备注（可选）') + '</label>' +
+        '<textarea id="fu-note" rows="3" style="width:100%;box-sizing:border-box;"></textarea></div>' +
+        '<p class="muted" style="font-size:11.5px;margin:0 0 14px;">' +
+        (currentLang === 'en' ? 'This customer then leaves the overdue list; a timeline event is recorded.' : '处理后该客户不再计入逾期；处理记录会出现在客户详情时间线。') + '</p>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+        '<button type="button" id="fu-cancel">' + (currentLang === 'en' ? 'Cancel' : '取消') + '</button>' +
+        '<button type="button" class="primary" id="fu-submit">' + (currentLang === 'en' ? 'Save & resolve' : '保存并解决逾期') + '</button>' +
+        '</div></div>';
+    document.body.appendChild(bd);
+    bd.addEventListener('click', function (e) { if (e.target === bd) bd.remove(); });
+    function onEsc(e) { if (e.key === 'Escape') { bd.remove(); document.removeEventListener('keydown', onEsc); } }
+    document.addEventListener('keydown', onEsc);
+    const noMore = document.getElementById('fu-no-more');
+    const dateEl = document.getElementById('fu-date');
+    noMore.addEventListener('change', function () { dateEl.disabled = noMore.checked; });
+    document.getElementById('fu-cancel').addEventListener('click', function () { bd.remove(); });
+    document.getElementById('fu-submit').addEventListener('click', async function () {
+        const resolved = noMore.checked;
+        const nd = dateEl.value;
+        const note = (document.getElementById('fu-note').value || '').trim();
+        if (!resolved && !nd) { toast(currentLang === 'en' ? 'Pick a date or mark no follow-up' : '请选择下次跟进日，或勾选不再跟进'); return; }
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = currentLang === 'en' ? 'Saving…' : '保存中…';
+        const r = await api('POST', '/api/trade/customers/' + cid + '/follow-up', {
+            next_follow_up_date: resolved ? null : nd,
+            resolved: resolved,
+            note: note,
+        });
+        if (!r) { btn.disabled = false; btn.textContent = currentLang === 'en' ? 'Save & resolve' : '保存并解决逾期'; return; }
+        bd.remove();
+        toast(currentLang === 'en' ? 'Resolved; overdue badge updated' : '已处理，逾期角标已更新');
+        await loadCustomersData();
+    });
 }
 
 async function toggleCustomerStar(ev, cid) {
@@ -490,6 +567,13 @@ function filterCustomers() {
     if (buyer) filtered = filtered.filter(c => (_parseExtra1(c).buyer_type || '') === buyer);
     if (_custStage) filtered = filtered.filter(c => _customerStage(c) === _custStage);
     if (_custStarred) filtered = filtered.filter(c => Number(c.is_starred) === 1);
+    if (_custOverdueOnly) {
+        const tday = _todayYmd();
+        filtered = filtered.filter(c => {
+            const f = _customerFollowUpDate(c);
+            return f && f < tday;
+        });
+    }
     _custPage = 1;
     renderCustomersTable(filtered);
 }

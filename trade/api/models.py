@@ -298,3 +298,11 @@ class MailboxCreateRequest(MailboxTestRequest):
 
 class MailboxSecretUpdate(BaseModel):
     secret: str
+
+
+class FollowUpCreate(BaseModel):
+    """逾期跟进处理：更新下次跟进日（或标记不再跟进）并记录一次跟进事件。"""
+
+    next_follow_up_date: str | None = Field(None, description="新的下次跟进日 YYYY-MM-DD；resolved=True 时忽略")
+    resolved: bool = Field(False, description="不再跟进：清空下次跟进日")
+    note: str = Field("", description="本次跟进备注（可选）")

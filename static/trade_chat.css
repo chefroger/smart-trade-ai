@@ -1733,3 +1733,10 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 
 /* 复制按钮下移后：助手正文右侧留出按钮宽度，避免压字 */
 .chat-main .message.assistant .msg-body { padding-right: 0; }
+
+/* 逾期行「处理」按钮 */
+.cust-table .cust-process {
+    appearance: none; border: none; background: none; padding: 0; margin-left: 4px;
+    font: inherit; font-size: 11px; color: var(--accent-red); cursor: pointer;
+    border-bottom: 1px dashed var(--accent-red);
+}
