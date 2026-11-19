@@ -2762,20 +2762,53 @@ async function saveVisitPlan() {
     _renderVisitChips();
 }
 
+function _vsheetSec(title, text) {
+    return text ? '<h2>' + esc(title) + '</h2><p style="white-space:pre-wrap;">' + esc(text) + '</p>' : '';
+}
+
 function printVisitPlan() {
+    /** s6：A4 打印预览（公开页 / 内部页可选），再调用系统打印。 */
     const p = _collectVisitPlan();
-    document.querySelectorAll('#visit-print').forEach(function (el) { el.remove(); });
     const pay = p.payload || {};
-    const sec = function (title, text) {
-        return text ? '<h2>' + esc(title) + '</h2><p style="white-space:pre-wrap;">' + esc(text) + '</p>' : '';
-    };
-    const wrap = document.createElement('div');
-    wrap.id = 'visit-print';
-    wrap.innerHTML =
+    const meta = [p.visit_date, (p.days || 1) + ' 天', p.location].filter(Boolean).join(' · ');
+    document.querySelectorAll('#visit-print-preview').forEach(function (el) { el.remove(); });
+    const ov = document.createElement('div');
+    ov.id = 'visit-print-preview';
+    ov.innerHTML =
+        '<div class="vp-toolbar">' +
+        '<label><input type="checkbox" data-sheet="public" checked> 公开页</label>' +
+        '<label><input type="checkbox" data-sheet="internal" checked> 内部页</label>' +
+        '<span class="vp-hint">公开页给客户看；内部页只上内部，页头带「内部 · 勿外传」</span>' +
+        '<button type="button" class="btn" id="vp-close">关闭</button>' +
+        '<button type="button" class="btn primary" id="vp-do-print">打印</button>' +
+        '</div>' +
+        '<div class="vp-board">' +
+        '<div class="vsheet-wrap" data-sheet="public"><div class="vsheet">' +
+        '<div class="eb">SITE VISIT / 资料</div>' +
         '<h1>' + esc(p.title || '验厂计划') + '</h1>' +
-        '<p class="meta">' + esc([p.visit_date, (p.days || 1) + ' 天', p.location].filter(Boolean).join(' · ')) + '</p>' +
-        sec('来访人', pay.visitors) + sec('日程', pay.schedule) + sec('人员与分工', pay.staff) +
-        sec('访前清单', pay.checklist) + sec('内部风险', pay.risks) + sec('对外说明', pay.summary);
-    document.body.appendChild(wrap);
-    window.print();
+        '<div class="meta">' + esc(meta) + '</div>' +
+        _vsheetSec('来访人', pay.visitors) + _vsheetSec('日程', pay.schedule) +
+        _vsheetSec('对外说明', pay.summary) +
+        '<div class="foot">' + esc(p.location || '') + '</div>' +
+        '</div></div>' +
+        '<div class="vsheet-wrap" data-sheet="internal"><div class="vsheet internal">' +
+        '<div class="ibar">内部 · 勿外传</div>' +
+        '<h1>' + esc(p.title || '验厂计划') + '</h1>' +
+        '<div class="meta">' + esc(meta) + '</div>' +
+        _vsheetSec('人员与分工', pay.staff) + _vsheetSec('访前清单', pay.checklist) +
+        _vsheetSec('内部风险', pay.risks) +
+        '<div class="foot">INTERNAL</div>' +
+        '</div></div>' +
+        '</div>';
+    document.body.appendChild(ov);
+    function sync() {
+        ov.querySelectorAll('input[data-sheet]').forEach(function (cb) {
+            const wrap = ov.querySelector('.vsheet-wrap[data-sheet="' + cb.getAttribute('data-sheet') + '"]');
+            if (wrap) wrap.style.display = cb.checked ? '' : 'none';
+        });
+    }
+    ov.querySelectorAll('input[data-sheet]').forEach(function (cb) { cb.addEventListener('change', sync); });
+    document.getElementById('vp-close').addEventListener('click', function () { ov.remove(); });
+    document.getElementById('vp-do-print').addEventListener('click', function () { window.print(); });
+    sync();
 }

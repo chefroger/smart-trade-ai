@@ -1878,3 +1878,37 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     #visit-print h2 { font-size: 14px; border-bottom: 1px solid #999; margin: 14px 0 4px; padding-bottom: 2px; }
     #visit-print p { font-size: 12.5px; line-height: 1.6; margin: 0; }
 }
+
+/* ═════ s6 A4 打印预览 ═════ */
+#visit-print-preview { position: fixed; inset: 0; z-index: 90; background: rgba(15, 23, 42, .55); display: flex; flex-direction: column; overflow: auto; }
+.vp-toolbar { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12.5px; position: sticky; top: 0; z-index: 1; }
+.vp-toolbar label { display: flex; align-items: center; gap: 6px; }
+.vp-hint { color: var(--muted); font-size: 11.5px; flex: 1; }
+.vp-toolbar .btn { height: 28px; padding: 0 12px; border: 1px solid var(--ink); background: transparent; cursor: pointer; font: inherit; font-size: 12.5px; }
+.vp-toolbar .btn.primary { background: var(--ink); color: #fff; }
+.vp-board { display: flex; gap: 24px; justify-content: center; padding: 24px; flex-wrap: wrap; }
+.vsheet-wrap { width: 373px; height: 528px; overflow: hidden; border: 1px solid var(--ink); background: #fff; box-shadow: 4px 4px 0 rgba(0, 0, 0, .08); flex: none; }
+.vsheet { width: 794px; height: 1123px; transform: scale(.47); transform-origin: 0 0; padding: 44px 48px 60px; background: #fff; color: #111; font-size: 13.5px; line-height: 1.5; position: relative; overflow: hidden; }
+.vsheet h1 { font-size: 25px; font-weight: 700; margin: 4px 0 2px; }
+.vsheet .eb { font-family: var(--font-mono); font-size: 12px; letter-spacing: .16em; color: #555; }
+.vsheet .meta { font-size: 14px; color: #333; margin-bottom: 10px; }
+.vsheet h2 { font-size: 14.5px; font-weight: 700; border-bottom: 1.5px solid #111; margin: 14px 0 5px; padding-bottom: 3px; }
+.vsheet p { margin: 0; font-size: 12.5px; }
+.vsheet .foot { position: absolute; left: 48px; right: 48px; bottom: 22px; font-size: 11px; color: #555; border-top: 1px solid #bbb; padding-top: 6px; }
+.vsheet.internal .ibar { margin: -44px -48px 14px; padding: 9px 48px; background: #D2281E; color: #fff; font-weight: 700; font-size: 14px; letter-spacing: .06em; }
+.vsheet.internal::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='220'%3E%3Ctext x='20' y='140' transform='rotate(-28 150 110)' font-family='Noto Sans SC,sans-serif' font-size='40' font-weight='700' fill='%23D2281E' fill-opacity='0.08'%3E内部 INTERNAL%3C/text%3E%3C/svg%3E");
+    background-repeat: repeat;
+}
+@media print {
+    body > *:not(#visit-print-preview) { display: none !important; }
+    #visit-print-preview { position: static !important; background: #fff; display: block; overflow: visible; }
+    .vp-toolbar { display: none !important; }
+    .vp-board { display: block; padding: 0; }
+    .vsheet-wrap { width: auto; height: auto; border: none; box-shadow: none; overflow: visible; page-break-after: always; }
+    .vsheet-wrap[data-sheet="internal"] { page-break-before: always; }
+    .vsheet { transform: none; width: 100%; height: auto; min-height: auto; padding: 20mm 16mm; overflow: visible; }
+    .vsheet .foot { position: static; margin-top: 16px; }
+    .vsheet.internal .ibar { margin: -20mm -16mm 14px; padding: 8px 16mm; }
+}
