@@ -602,6 +602,7 @@ body {
 .hidden { display: none !important; }
 .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.i.spin { animation: spin 1s linear infinite; display: inline-block; }
 .loading-row { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--text-muted); font-size: 13px; }
 
 /* ── Tool Progress ──────────────────────────────────────────────────── */
@@ -833,9 +834,11 @@ body {
    .slide-panel-backdrop / .hermes-upgrade-overlay）绝不能命中，否则会被改成
    body flex 的流式子元素，把 .main 挤窄并让弹窗贴边裁切。 */
 body > .sidebar, body > .main,
-body > #toast-container, body > #customer-wall {
+body > #customer-wall {
     position: relative; z-index: 1;
 }
+/* toast 在自己容器里创建层叠上下文；容器 z-index 必须高过右栏(30)，否则升级提示被挡 */
+body > #toast-container { position: relative; z-index: 400; }
 .sidebar {
     width: 270px; background: var(--panel2) !important;
     border-right: 2px dashed rgba(20,20,20,.45) !important;

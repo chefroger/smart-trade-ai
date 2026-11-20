@@ -202,7 +202,7 @@ function _licenseBarText(data) {
         };
     }
     if (status === 'trial') {
-        let text = '⏳ ' + t('license.trial') + ' ' + t('license.days_left', { n: days })
+        let text = '<span class="i i-16" style="--i:url(\'/static/icons/lucide-clock.svg\')"></span> ' + t('license.trial') + ' ' + t('license.days_left', { n: days })
             + ' · <a href="#" onclick="showActivateModal()" style="color:' + (days <= LICENSE_EXPIRING_DAYS ? '#D97706' : '#2563EB') + ';text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
         // 第 20 天起显示价值小结（只报真实事件数，不估算）
         if (d.trial_summary) {
@@ -435,12 +435,15 @@ async function _waitForRestartAndReload(onTimeout, maxSeconds) {
 function _setBtnBusy(btn, busy) {
     if (!btn) return;
     if (busy) {
-        if (btn.dataset.idleIcon === undefined) btn.dataset.idleIcon = btn.textContent;
+        // 存 innerHTML 而不是 textContent：图标按钮的 textContent 是空串，恢复时会把图标抹掉
+        if (btn.dataset.idleHtml === undefined) btn.dataset.idleHtml = btn.innerHTML;
         btn.disabled = true;
-        btn.textContent = '⏳';
+        btn.innerHTML = (typeof iconHtml === 'function')
+            ? '<span class="i i-20 spin" style="--i:url(\'/static/icons/lucide-refresh-cw.svg\')"></span>'
+            : '…';
     } else {
         btn.disabled = false;
-        if (btn.dataset.idleIcon !== undefined) btn.textContent = btn.dataset.idleIcon;
+        if (btn.dataset.idleHtml !== undefined) btn.innerHTML = btn.dataset.idleHtml;
     }
 }
 
