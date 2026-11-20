@@ -83,13 +83,15 @@ class TestHealthySourceStillWorks:
         big_list = [{"name": f"ENTITY NUMBER {i}", "label": "OFAC SDN"} for i in range(500)]
         fresh_sanctions._mark_loaded("OFAC", big_list, "network")
         fresh_sanctions._mark_loaded("UN", big_list, "network")
+        fresh_sanctions._mark_loaded("US_CSL", big_list, "network")
+        fresh_sanctions._mark_loaded("US_RESTRICTED", big_list, "network")
 
         from trade.osint.sanctions import check_sanctions
 
         result = check_sanctions("Some Random Trading LLC")
 
         assert result["coverage"]["degraded"] is False
-        assert result["coverage"]["total_entries"] == 1000
+        assert result["coverage"]["total_entries"] == 2000
         assert "未在任何制裁名单中发现匹配项" in result["suggestion"]
 
     def test_hit_still_reports_high_risk_when_degraded(self, fresh_sanctions):

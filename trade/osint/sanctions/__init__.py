@@ -14,6 +14,8 @@ from trade.osint.sanctions.loader import (
     get_coverage,
     load_ofac_sanctions,
     load_un_sanctions,
+    load_us_csl_sanctions,
+    load_us_restricted_sanctions,
 )
 
 __all__ = [
@@ -22,6 +24,8 @@ __all__ = [
     "get_coverage",
     "load_ofac_sanctions",
     "load_un_sanctions",
+    "load_us_csl_sanctions",
+    "load_us_restricted_sanctions",
 ]
 
 
@@ -73,6 +77,15 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
 
     if not _cache.get("UN"):
         load_un_sanctions()
+
+    # Checked by load status, not by entries: a failed download leaves an empty list,
+    # and retrying a 17 MB download on every lookup would stall each check.
+    _loaded = get_coverage()["lists"]
+    if "US_CSL" not in _loaded:
+        load_us_csl_sanctions()
+
+    if "US_RESTRICTED" not in _loaded:
+        load_us_restricted_sanctions()
 
     # ── 多级匹配引擎 ──────────────────────────────────────────────────────
     exact_match_found = False
