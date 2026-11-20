@@ -1,7 +1,7 @@
 /**
  * 图标存在性守卫（U2）：
- * iconHtml(name) / data-icon="name" / lucide-<name>.svg 都会拼成
- * /static/icons/lucide-<name>.svg 做 mask；文件缺失时静默 404、图标空白。
+ * iconHtml(name) / btnIcon(name) / data-icon="name" / lucide-<name>.svg
+ * 都会拼成 /static/icons/lucide-<name>.svg 做 mask；文件缺失时静默 404、图标空白。
  * 这里扫字面量引用，保证每个引用的文件都在。
  */
 const test = require('node:test');
@@ -25,6 +25,9 @@ function referencedIcons(src) {
     const names = new Set();
     const patterns = [
         /iconHtml\(\s*['"]([a-z0-9-]+)['"]/g,
+        // btnIcon() 是 iconHtml() 的包装，图标名同样是字面量 —— 必须一起扫，
+        // 否则 btnIcon('typo') 引用不存在的文件不会被守卫发现（2026-11-20 审计）
+        /btnIcon\(\s*['"]([a-z0-9-]+)['"]/g,
         /data-icon="([a-z0-9-]+)"/g,
         /lucide-([a-z0-9-]+)\.svg/g,
     ];
