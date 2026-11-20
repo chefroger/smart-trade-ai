@@ -81,3 +81,9 @@ windows-standalone/README.md
 
 # Brainstorm visual companion (local)
 .superpowers/
+
+# 本地分析产物与任务书（不入库）
+# reports/  = 基准测试 json/jsonl（800KB+，本地产物）
+# .task-refs/ = 任务书与 mockup 参考（内部文档）
+reports/
+.task-refs/
