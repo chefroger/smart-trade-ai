@@ -2943,7 +2943,10 @@ function printVisitPlan() {
     ov.innerHTML =
         '<div class="vp-toolbar">' +
         '<label><input type="checkbox" data-sheet="public" checked> 公开页</label>' +
-        '<label><input type="checkbox" data-sheet="internal" checked> 内部页</label>' +
+        // 内部页默认不勾选：公开页与内部页在同一次打印任务里，
+        // 默认勾选等于把「内部风险」连同客户私密画像一起打出去
+        // （2026-11-20 审计 P0-1）
+        '<label><input type="checkbox" data-sheet="internal"> 内部页</label>' +
         '<span class="vp-hint">公开页给客户看；内部页只上内部，页头带「内部 · 勿外传」</span>' +
         '<button type="button" class="btn" id="vp-close">关闭</button>' +
         '<button type="button" class="btn primary" id="vp-do-print">打印</button>' +
