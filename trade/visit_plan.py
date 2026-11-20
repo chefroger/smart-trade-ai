@@ -250,19 +250,27 @@ def suggest_draft(company_id: int, customer_id: int | None = None) -> dict:
         "- 礼品合规：不送现金与贵重物品；客户索要一律拒绝并上报",
     ]
 
-    # 客户画像（已确认事实）带入内部提醒：对象 + 内容 + 分类，供现场应对
+    # 客户画像带入内部提醒：只带非敏感类（家庭/礼物往来绝对不进打印件与长图）
+    # 敏感类只报数量、不写原文（2026-11-20 审计 P0-1）
     profile_notes: list[str] = []
+    sensitive_count = 0
     if customer_id:
         try:
             from trade import profile as profile_mod
 
             # 默认取「待确认 + 已确认」：用户刚添加的画像条目还没确认，也必须带出来
             for f in profile_mod.list_facts(customer_id, company_id=company_id):
+                cat = str(f.get("category") or "").strip()
+                # 敏感类（家庭/礼物往来）只计数，原文一律丢弃
+                if cat in profile_mod.SENSITIVE_CATEGORIES:
+                    sensitive_count += 1
+                    continue
                 subject = str(f.get("subject") or "").strip()
                 content = str(f.get("content") or "").strip()
+                # 对象和内容都为空：没有可展示信息，跳过
                 if not content and not subject:
                     continue
-                cat = str(f.get("category") or "").strip()
+                # 待确认条目在分类后追加标记，提醒现场核实
                 if str(f.get("status") or "") == "待确认":
                     cat = (cat + " · 待确认") if cat else "待确认"
                 # 对象和内容都要带上：对象是谁、具体是什么事
@@ -271,8 +279,15 @@ def suggest_draft(company_id: int, customer_id: int | None = None) -> dict:
         except Exception:
             # 画像表不存在 / 老库未升级：静默跳过，不影响基础建议
             profile_notes = []
-    if profile_notes:
-        risk_lines += ["", "【客户档案提醒 · 内部】"] + profile_notes
+    # 有非敏感条目或有敏感计数时都要出标题：计数行本身就是提醒
+    if profile_notes or sensitive_count:
+        risk_lines += ["", "【客户档案提醒 · 内部】"]
+        risk_lines += profile_notes
+        # 只报数量，不给原文，避免随打印件/长图外流
+        if sensitive_count:
+            risk_lines.append(
+                f"- 该客户有 {sensitive_count} 条私密档案，未在此显示；需要时单独查阅备忘录"
+            )
     summary = (
         "感谢来访。我们将安排车间参观、样品演示与商务沟通；"
         "如需拍摄或进入特定区域，请提前告知，我们会做好安排。"

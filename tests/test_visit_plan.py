@@ -168,3 +168,53 @@ class TestDaysValidation:
         assert ei.value.status_code == 400
         with pytest.raises(HTTPException):
             _days_or_400(0)
+
+
+class TestSensitiveProfileNotLeaked:
+    def test_family_fact_never_in_suggest(self, test_db, company_id, customer_id):
+        """「家庭」类原文不得出现在验厂建议的任何字段里（2026-11-20 审计 P0-1）。"""
+        from trade import visit_plan as vp
+
+        conn = sqlite3.connect(str(test_db))
+        conn.execute(
+            "INSERT INTO customer_facts (company_id, customer_id, category, subject, "
+            "content, source_type, status, ai_visible, fingerprint) VALUES (?,?,?,?,?,?,?,?,?)",
+            (company_id, customer_id, "家庭", "采购经理女儿",
+             "女儿 Anna 明年考大学", "chat", "已确认", 0, "fp-family-1"),
+        )
+        conn.execute(
+            "INSERT INTO customer_facts (company_id, customer_id, category, subject, "
+            "content, source_type, status, ai_visible, fingerprint) VALUES (?,?,?,?,?,?,?,?,?)",
+            (company_id, customer_id, "喜好", "德英对照单据", "箱单用德英双语",
+             "chat", "已确认", 1, "fp-like-1"),
+        )
+        conn.commit()
+        conn.close()
+
+        d = vp.suggest_draft(company_id, customer_id)
+
+        blob = json.dumps(d, ensure_ascii=False)
+        assert "Anna" not in blob, "家庭类原文泄漏进了验厂建议"
+        assert "女儿" not in blob
+        assert "采购经理女儿" not in blob
+        # 非敏感类照常带出
+        assert any("德英对照单据" in x for x in d["profile_notes"])
+        # 只留计数，不留原文
+        assert "1 条私密档案" in d["risks"]
+
+    def test_sensitive_note_absent_from_profile_notes(self, test_db, company_id, customer_id):
+        from trade import visit_plan as vp
+
+        conn = sqlite3.connect(str(test_db))
+        conn.execute(
+            "INSERT INTO customer_facts (company_id, customer_id, category, subject, "
+            "content, source_type, status, ai_visible, fingerprint) VALUES (?,?,?,?,?,?,?,?,?)",
+            (company_id, customer_id, "礼物往来", "客户送礼", "一箱红酒",
+             "chat", "已确认", 0, "fp-gift-1"),
+        )
+        conn.commit()
+        conn.close()
+
+        d = vp.suggest_draft(company_id, customer_id)
+        assert not any("红酒" in x for x in d["profile_notes"])
+        assert "红酒" not in d["risks"]
