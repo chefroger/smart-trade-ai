@@ -1087,3 +1087,24 @@ class TestReimportIdempotency:
             manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         assert manifest["app_version"] == __version__
         assert manifest["app_version"] != "unknown"
+
+
+class TestVersionResolution:
+    def test_version_matches_pyproject_not_stale_metadata(self):
+        """__version__ 必须等于 pyproject 的版本，而不是可能过期的安装元数据。
+
+        2026-11-20 审计 C3 的坑：editable 安装后改了 pyproject 却没重跑
+        pip install，元数据会停在旧值（实测 0.6.8 vs 实际 0.7.7）。
+        """
+        import tomllib
+        from pathlib import Path
+
+        from trade import __version__
+
+        root = Path(__file__).resolve().parent.parent
+        with open(root / "pyproject.toml", "rb") as fh:
+            py_version = tomllib.load(fh)["project"]["version"]
+        assert __version__ == py_version, (
+            f"版本不一致：trade.__version__={__version__!r}，"
+            f"pyproject={py_version!r}"
+        )
