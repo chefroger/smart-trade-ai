@@ -37,6 +37,7 @@ def get_today_brief(company_id: int) -> dict:
                 (company_id, today),
             ).fetchone()["c"])
         else:
+            # 极旧库没有 inquiries 表：不猜数，返回 None 让前端显示「—」
             new_inquiries = None
     finally:
         conn.close()
