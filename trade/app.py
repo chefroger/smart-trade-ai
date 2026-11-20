@@ -18,7 +18,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 # ── Database initialization ──────────────────────────────────────────────────
@@ -256,6 +256,34 @@ def _get_trade_home_path() -> Path:
     return Path(trade_home)
 
 
+# 本机 Host 白名单（不含端口；Host 头形如 "127.0.0.1:9119"）。
+# testserver 是 Starlette TestClient 的默认 Host，放行它以免测试环境被误挡。
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", "testserver"})
+
+
+def _host_is_allowed(host_header: str) -> bool:
+    """Host 头是否属于本机。
+
+    端口固定 9119 时，恶意网页可用 DNS rebinding 把 127.0.0.1:9119 指到自己，
+    从而读到 /trade 页面里的 session token（2026-11-20 审计 P1-1）。
+    空 Host 一律拒绝。
+    """
+    raw = str(host_header or "").strip()
+    # 没有 Host 头：无法确认来源，直接拒绝
+    if not raw:
+        return False
+    # IPv6 带端口时形如 "[::1]:9119"，先取出方括号内的地址
+    if raw.startswith("["):
+        host = raw.split("]", 1)[0].lstrip("[").lower()
+    # 普通 host:port，去掉端口
+    elif ":" in raw:
+        host = raw.rsplit(":", 1)[0].lower()
+    # 不带端口的纯主机名
+    else:
+        host = raw.lower()
+    return host in _LOCAL_HOSTS
+
+
 def _client_is_loopback(request) -> bool:
     """判断请求是否来自本机回环地址。"""
     host = str(getattr(getattr(request, "client", None), "host", "") or "")
@@ -276,6 +304,41 @@ def _client_may_receive_token(request) -> bool:
     默认只给本机回环客户端；确需局域网访问时用 TRADE_ALLOW_REMOTE_UI=1 显式开启。
     """
     return _remote_ui_allowed() or _client_is_loopback(request)
+
+
+def _install_host_guard(app: FastAPI) -> None:
+    """装 Host 头守卫：只接受本机 Host。
+
+    放行远程 UI（TRADE_ALLOW_REMOTE_UI=1）时完全跳过 —— 那是用户显式
+    接受了「局域网可访问」的风险，不该再被 Host 拦一次。
+    /trade 返回友好说明页（403）；其它路径返回 400。
+    """
+
+    @app.middleware("http")
+    async def _host_guard(request: Request, call_next):
+        # 用户显式允许远程访问时不拦（他自己接受了风险）
+        if _remote_ui_allowed():
+            return await call_next(request)
+        # 本机 Host 放行
+        if _host_is_allowed(request.headers.get("host", "")):
+            return await call_next(request)
+        # /trade 是拿到 token 的入口：给出可读说明而不是裸 400
+        if request.url.path == "/trade":
+            return HTMLResponse(
+                content=(
+                    '<html><body style="font-family:sans-serif;padding:2rem;max-width:40rem;">'
+                    '<h1>请在本机浏览器中打开</h1>'
+                    '<p>本服务只接受本机地址（127.0.0.1 / localhost）的访问，'
+                    '以免其它站点通过域名重绑定读走会话凭据。</p>'
+                    '<p>请在这台机器上访问 <code>http://127.0.0.1:{port}/trade</code>。</p>'
+                    '<p style="color:#666;font-size:0.9rem;">确需局域网访问时，'
+                    '可在启动前设置环境变量 <code>TRADE_ALLOW_REMOTE_UI=1</code>（会降低安全性）。</p>'
+                    '</body></html>'
+                ).replace("{port}", str(getattr(request.url, "port", "") or "")),
+                status_code=403,
+            )
+        # 其它路径不是 token 入口，直接返回最小化的 400
+        return PlainTextResponse("Invalid host header", status_code=400)
 
 
 def _pyproject_path() -> Path | None:
@@ -1143,6 +1206,11 @@ def create_app() -> FastAPI:
             "tool_guard": tool_guard,
         }
 
+    # Host 守卫必须最后注册：Starlette 的 add_middleware 是 insert(0, ...)，
+    # 后注册的在最外层，必须先于许可证/业务中间件运行
+    # （2026-11-20 审计 P1-1）。装在 create_app 而不是 main，
+    # 因为 tradewin.py 直接调 create_app() 绕过 main()。
+    _install_host_guard(app)
     return app
 
 
