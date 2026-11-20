@@ -1033,3 +1033,57 @@ class TestSensitiveNotExported:
         assert "【客户档案提醒 · 内部】" not in blob
         # 用户自己写的风险必须保留
         assert "用户自己写的风险" in blob
+
+
+class TestReimportIdempotency:
+    def test_inquiries_and_visit_plans_do_not_double(self, desktop, tmp_path):
+        """二次导入同一份包，询盘与验厂计划不得翻倍（2026-11-20 审计 C1）。"""
+        from trade import customer, inquiry
+        from trade import visit_plan as vp
+
+        source = crud.create(_unique("Dedupe Co"))
+        company_id = source["id"]
+        cust = customer.create("去重客户", company_id=company_id)
+        inquiry.create(cust["id"], company_id=company_id, title="询盘 A")
+        inquiry.create(cust["id"], company_id=company_id, title="询盘 B")
+        vp.create_plan(company_id, customer_id=cust["id"], title="来访一",
+                       visit_date="2026-12-01", payload={"risks": "x"})
+
+        package = tmp_path / "dedupe.zip"
+        export_company(company_id, package)
+
+        first = import_company(package)
+        second = import_company(package)
+        # import_company 报告里目标公司是 report["target"]["id"]（不是 company_id）
+        target_id = first["target"]["id"]
+
+        conn = database.get_connection()
+        try:
+            inq_count = conn.execute(
+                "SELECT COUNT(*) FROM inquiries WHERE company_id = ?", (target_id,)
+            ).fetchone()[0]
+            vp_count = conn.execute(
+                "SELECT COUNT(*) FROM visit_plans WHERE company_id = ?", (target_id,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+        assert inq_count == 2, f"询盘翻倍：期望 2，实际 {inq_count}"
+        assert vp_count == 1, f"验厂计划翻倍：期望 1，实际 {vp_count}"
+        assert second["tables"]["inquiries"]["skipped"] >= 2
+        assert second["tables"]["visit_plans"]["skipped"] >= 1
+
+    def test_app_version_is_real(self, desktop, tmp_path):
+        """导出包 manifest 的 app_version 不得是 unknown（2026-11-20 审计 C3）。"""
+        from trade import __version__
+
+        assert __version__, "trade.__version__ 必须可解析"
+
+        source = crud.create(_unique("Version Co"))
+        package = tmp_path / "version.zip"
+        export_company(source["id"], package)
+
+        with zipfile.ZipFile(package) as zf:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        assert manifest["app_version"] == __version__
+        assert manifest["app_version"] != "unknown"

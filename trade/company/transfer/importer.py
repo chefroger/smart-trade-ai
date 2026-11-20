@@ -94,6 +94,36 @@ def _without_id(row: dict) -> dict:
     return {key: value for key, value in row.items() if key != "id"}
 
 
+def _inquiry_signature(row: dict) -> tuple:
+    """询盘去重键：客户 + 标题 + 阶段 + 来源 + 创建时间（2026-11-20 审计 C1）。
+
+    customer_id 必须是**重映射后**的值。created_at 由源包原样保留，重复导入
+    同一份包时稳定。代价：同一秒内内容完全相同的两条询盘会被合并
+    （与订单去重同一思路）。
+    """
+    return (
+        row.get("customer_id"),
+        (row.get("title") or "").strip(),
+        (row.get("stage") or "").strip(),
+        (row.get("source") or "").strip(),
+        row.get("created_at"),
+    )
+
+
+def _visit_plan_signature(row: dict) -> tuple:
+    """验厂计划去重键：客户 + 日期 + 标题 + 创建时间（payload 不参与）。
+
+    二次导入同一份包会翻倍（2026-11-20 审计 C1）；payload 可能被导出清洗过，
+    不放进键里。
+    """
+    return (
+        row.get("customer_id"),
+        row.get("visit_date"),
+        (row.get("title") or "").strip(),
+        row.get("created_at"),
+    )
+
+
 def _insert(conn: sqlite3.Connection, table: str, row: dict,
             *, or_ignore: bool = False) -> int | None:
     valid = set(_columns(conn, table))
@@ -475,12 +505,15 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         }
 
         # 客户 ↔ 资料库关联
-        link_added = 0
+        link_added = link_skipped = 0
         for link in source_tables["customer_libraries"]:
             customer_id = customer_map.get(link.get("customer_id"))
             library_id = lib_id_map.get(link.get("library_id"))
+            # 映射不到客户或库：计 skipped，不再静默丢掉
             if not customer_id or not library_id:
+                link_skipped += 1
                 continue
+            before = conn.total_changes
             _insert(conn, "customer_libraries", {
                 "customer_id": customer_id,
                 "library_id": library_id,
@@ -488,8 +521,14 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "extra2": link.get("extra2") or "{}",
                 "extra3": link.get("extra3") or "{}",
             }, or_ignore=True)
-            link_added += 1
-        report["tables"]["customer_libraries"] = {"inserted": link_added, "skipped": 0}
+            # OR IGNORE 命中唯一键时 total_changes 不变 → 计 skipped
+            if conn.total_changes > before:
+                link_added += 1
+            else:
+                link_skipped += 1
+        report["tables"]["customer_libraries"] = {
+            "inserted": link_added, "skipped": link_skipped,
+        }
 
         # 附加联系人：按 (lower(email), name) 去重合并；并建旧 id→新 id 映射（画像用）
         contact_inserted = contact_skipped = 0
@@ -690,6 +729,16 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         # 询盘实体（旧包缺文件时 _load_table 已返回 []；映射不到客户则跳过）
         inq_inserted = inq_skipped = 0
         if _table_exists(conn, "inquiries"):
+            # 二次导入同一份包不能翻倍：按自然键判重（2026-11-20 审计 C1）
+            existing_inq = {
+                _inquiry_signature(row)
+                for row in _rows(
+                    conn,
+                    "SELECT customer_id, title, stage, source, created_at "
+                    "FROM inquiries WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
             for row in source_tables["inquiries"]:
                 mapped_cust = customer_map.get(row.get("customer_id"))
                 if not mapped_cust:
@@ -698,8 +747,19 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 new_row = _without_id(dict(row))
                 new_row["company_id"] = target_id
                 new_row["customer_id"] = mapped_cust
+                # source_id 语义未定义、当前恒为 NULL；若有值且指向对话则跟着
+                # 重映射，否则置空 —— 不能把源库旧自增 id 带到目标库（C4）
+                old_src = row.get("source_id")
+                if old_src is not None:
+                    new_row["source_id"] = conversation_map.get(int(old_src))
+                sig = _inquiry_signature(new_row)
+                # 目标库里已有同一条：计 skipped，不重复插入
+                if sig in existing_inq:
+                    inq_skipped += 1
+                    continue
                 try:
                     _insert(conn, "inquiries", new_row)
+                    existing_inq.add(sig)
                     inq_inserted += 1
                 except Exception:
                     inq_skipped += 1
@@ -781,14 +841,30 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
 
         # 验厂计划：company_id 重映射；customer_id 映射不到就置空（计划仍保留）
         vp_inserted = vp_skipped = 0
+        # 二次导入同一份包会翻倍：按自然键判重（2026-11-20 审计 C1）
+        existing_vp = {
+            _visit_plan_signature(row)
+            for row in _rows(
+                conn,
+                "SELECT customer_id, visit_date, title, created_at "
+                "FROM visit_plans WHERE company_id = ?",
+                (target_id,),
+            )
+        }
         for row in source_tables.get("visit_plans") or []:
             new_row = _without_id(dict(row))
             new_row["company_id"] = target_id
             old_cid = row.get("customer_id")
             if old_cid is not None:
                 new_row["customer_id"] = customer_map.get(old_cid)
+            sig = _visit_plan_signature(new_row)
+            # 目标库里已有同一条计划：跳过，不重复插入
+            if sig in existing_vp:
+                vp_skipped += 1
+                continue
             try:
                 _insert(conn, "visit_plans", new_row)
+                existing_vp.add(sig)
                 vp_inserted += 1
             except Exception:
                 vp_skipped += 1
@@ -802,11 +878,13 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
              row["prompt_tokens"], row["completion_tokens"], row["cost_usd"])
             for row in _rows(conn, "SELECT * FROM usage_ledger WHERE company_id = ?", (target_id,))
         }
-        usage_added = 0
+        usage_added = usage_skipped = 0
         for row in source_tables["usage_ledger"]:
             key = (row.get("ts"), row.get("skill"), row.get("provider"), row.get("model"),
                    row.get("prompt_tokens"), row.get("completion_tokens"), row.get("cost_usd"))
+            # 已存在同一笔用量记录：计 skipped
             if key in usage_existing:
+                usage_skipped += 1
                 continue
             new_row = {k: v for k, v in row.items() if k != "id"}
             new_row["company_id"] = target_id
@@ -821,8 +899,14 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             _insert(conn, "doc_extractions", new_row, or_ignore=True)
             if conn.total_changes > before:
                 doc_added += 1
-        report["tables"]["usage_ledger"] = {"inserted": usage_added, "skipped": 0}
-        report["tables"]["doc_extractions"] = {"inserted": doc_added, "skipped": 0}
+        # 其余没插进去的就是被 OR IGNORE 忽略的（P2-14：此前恒为 0）
+        doc_skipped = len(source_tables["doc_extractions"]) - doc_added
+        report["tables"]["usage_ledger"] = {
+            "inserted": usage_added, "skipped": usage_skipped,
+        }
+        report["tables"]["doc_extractions"] = {
+            "inserted": doc_added, "skipped": doc_skipped,
+        }
 
         # 公司身份 + 工作目录路径
         target_tc_extra = dict(ctx["extra"])
