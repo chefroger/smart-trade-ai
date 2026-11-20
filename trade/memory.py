@@ -78,6 +78,61 @@ def reset_cache() -> None:
     _client = None
 
 
+# 用户开关的存储键；默认开启（"1"）
+_ENABLED_SETTING_KEY = "hindsight_enabled"
+
+
+def is_enabled() -> bool:
+    """长期记忆是否被用户开启（默认开）。
+
+    读不到设置时按开启处理 —— 设置表缺失不能把记忆功能关掉。
+    """
+    try:
+        from trade.database import get_setting
+
+        return get_setting(_ENABLED_SETTING_KEY, "1") != "0"
+    except Exception:
+        return True
+
+
+def set_enabled(enabled: bool) -> None:
+    """持久化用户开关；关闭后立即丢弃已缓存的客户端。"""
+    from trade.database import set_setting
+
+    set_setting(_ENABLED_SETTING_KEY, "1" if enabled else "0")
+    # 关掉时立刻释放缓存的客户端，避免开关"看起来关了但还在用旧实例"
+    global _client
+    if not enabled:
+        _client = None
+
+
+def health_check(timeout: float = 2.0) -> bool:
+    """真实探测 Hindsight 服务是否可达（2026-11-20 审计 C6）。
+
+    is_available() 只能证明「装了包、配了 key」；配置写错或服务端挂了，
+    要等到 retain 时才失败。这里做一次 TCP 连接探测，带硬超时，不抛异常。
+    """
+    # 包都没装/没配 key 就不用探了
+    if not is_available():
+        return False
+    try:
+        import socket
+        from urllib.parse import urlparse
+
+        api_url = os.environ.get("HINDSIGHT_API_URL", "https://api.hindsight.vectorize.io")
+        parsed = urlparse(api_url)
+        host = parsed.hostname
+        # 非法 URL：视为不可达，不抛
+        if not host:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        # 连接成功即视为可达（不发送任何请求体）
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 # ── 客户端（懒初始化，复用单例）────────────────────────────────────────────
 
 _client: Any = None
@@ -86,6 +141,9 @@ _client: Any = None
 def _get_client():
     """返回缓存的 Hindsight 客户端，如果不可用则返回 None。"""
     global _client
+    # 用户手动关闭时立即停用（优先于缓存，否则关掉后仍在用旧实例）
+    if not is_enabled():
+        return None
     # 如果 Hindsight 整体不可用，直接返回 None
     if not is_available():
         return None

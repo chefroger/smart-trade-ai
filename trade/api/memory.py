@@ -3,6 +3,7 @@ Trade AI Assistant — 记忆与模型 API 路由。
 
 端点：
   GET /memory/status         — Hindsight 长期记忆可用性
+  POST /memory/settings      — 长期记忆用户开关
   GET /memory/recall         — 搜索长期记忆
   GET /models/providers      — 已配置的 LLM 提供商列表
 """
@@ -10,6 +11,7 @@ Trade AI Assistant — 记忆与模型 API 路由。
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from trade import chat_memory
 from trade.api.deps import opt_company
@@ -20,16 +22,44 @@ router = APIRouter(tags=["memory"])
 # ── Hindsight 长期记忆 ────────────────────────────────────────────────────
 
 @router.get("/memory/status")
-def memory_status(cid: int | None = Depends(opt_company)):
-    """检查 Hindsight 长期记忆是否可用。"""
+def memory_status(cid: int | None = Depends(opt_company), probe: bool = False):
+    """检查 Hindsight 长期记忆状态。
+
+    probe=true 时额外做一次网络探测（默认不做 —— 状态查询会被界面轮询，
+    每次探 2 秒会拖慢界面）。
+    """
     try:
-        from trade.memory import is_available as hindsight_available
-        return {
-            "hindsight_available": hindsight_available(),
+        from trade.memory import health_check, is_available, is_enabled
+
+        result = {
+            "hindsight_available": is_available(),
+            "hindsight_enabled": is_enabled(),
             "company_id": cid,
         }
+        # 只有显式要求、且已开且可用时才探测
+        if probe and result["hindsight_available"] and result["hindsight_enabled"]:
+            result["hindsight_reachable"] = health_check()
+        return result
     except ImportError:
-        return {"hindsight_available": False, "company_id": None}
+        return {
+            "hindsight_available": False,
+            "hindsight_enabled": False,
+            "company_id": None,
+        }
+
+
+class MemorySettingsBody(BaseModel):
+    """长期记忆开关请求体。"""
+    enabled: bool
+
+
+@router.post("/memory/settings")
+def update_memory_settings(body: MemorySettingsBody):
+    """持久化长期记忆开关（默认开）。"""
+    from trade.memory import set_enabled
+
+    set_enabled(body.enabled)
+    return {"hindsight_enabled": body.enabled}
 
 
 @router.get("/memory/recall")

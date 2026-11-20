@@ -22,8 +22,14 @@ def replay_hindsight(company_id: int, conversations: list[dict],
 
     if not conversations:
         return {"status": "skipped", "replayed": 0}
+    # 用户关掉了长期记忆：不重放
+    if not memory_mod.is_enabled():
+        return {"status": "disabled", "replayed": 0}
     if not memory_mod.is_available():
         return {"status": "disabled", "replayed": 0}
+    # 配了 key 但服务不可达：如实报告，避免逐条失败重放（C6）
+    if not memory_mod.health_check():
+        return {"status": "unreachable", "replayed": 0}
 
     bank_id = f"trade-company-{company_id}"
     replayed = failed = 0
@@ -52,8 +58,13 @@ def replay_hindsight_async(company_id: int, conversations: list[dict],
     try:
         from trade import memory as memory_mod
 
-        if not conversations or not memory_mod.is_available():
+        if not conversations:
             return "disabled"
+        # 开关关闭或服务不可达：不排队，返回明确状态
+        if not memory_mod.is_enabled() or not memory_mod.is_available():
+            return "disabled"
+        if not memory_mod.health_check():
+            return "unreachable"
     except Exception:  # noqa: BLE001
         return "disabled"
 

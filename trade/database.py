@@ -51,6 +51,40 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def get_setting(key: str, default: str = "") -> str:
+    """读取全局设置项；不存在、表缺失或出错时返回默认值，绝不抛异常。
+
+    设置缺失不能阻断任何功能（可用性优先），所以这里吞掉所有异常。
+    """
+    try:
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else default
+        finally:
+            conn.close()
+    except Exception:
+        return default
+
+
+def set_setting(key: str, value: str) -> None:
+    """写入全局设置项（存在则覆盖）。"""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) "
+            "VALUES (?, ?, datetime('now','localtime')) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ── Schema ──────────────────────────────────────────────────────────────────
 
 SCHEMA_SQL = """
@@ -416,6 +450,13 @@ CREATE TABLE IF NOT EXISTS visit_plans (
 );
 CREATE INDEX IF NOT EXISTS idx_visit_plans_company ON visit_plans(company_id, updated_at);
 
+-- 全局设置键值表（用户开关等）。默认值由调用方给，不在这里写死业务语义。
+CREATE TABLE IF NOT EXISTS app_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
@@ -673,6 +714,7 @@ _EXPECTED_TABLES = frozenset({
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
     "mailboxes", "emails", "contacts",
     "customer_facts", "customer_gifts", "inquiries", "visit_plans",
+    "app_settings",
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
