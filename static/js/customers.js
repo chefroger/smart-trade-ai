@@ -636,6 +636,22 @@ function closeCustomerWall() {
     }
 }
 
+function backFromCustomerWall() {
+    /** 客户墙的「返回」：关闭覆盖层，并确保落回客户列表。
+
+    客户墙是固定定位的覆盖层，主内容区可能停在别的视图上 ——
+    例如「验厂计划 → 返回客户详情」只是打开墙，主内容区仍是验厂页。
+    此时只关覆盖层会露出底下的验厂页（2026-11-20 用户反馈）。
+    注意不能把这段放进 closeCustomerWall：navToView 开头也会调它，
+    那样会递归导航；wall-edit / 跳邮箱等调用点也不该被带走。
+    */
+    closeCustomerWall();
+    // 当前不在客户列表时切回列表，否则关闭后露出的是原视图
+    if (typeof currentView !== 'undefined' && currentView !== 'customers') {
+        navToView('customers');
+    }
+}
+
 async function openCustomerWall(cid) {
     const wall = $('customer-wall');
     if (!wall) return;
@@ -975,7 +991,7 @@ async function openCustomerWall(cid) {
         _wallAnimateCount($('wall-stat-total'), orderTotal, orderCurrency);
     }
 
-    $('wall-back')?.addEventListener('click', closeCustomerWall);
+    $('wall-back')?.addEventListener('click', backFromCustomerWall);
     $('wall-edit')?.addEventListener('click', function () { closeCustomerWall(); showCustomerDetail(cid); });
     $('wall-open-profile')?.addEventListener('click', function () { openCustomerProfile(cid); });
     $('wall-visit')?.addEventListener('click', function () { openVisitForCustomer(cid); });
@@ -1122,7 +1138,8 @@ async function openCustomerWall(cid) {
             if (profile && profile.classList.contains('open')) return;
             // 编辑/跟进弹窗打开时让给它们，避免一次 ESC 连关两层
             if (_custEditorOpen()) return;
-            closeCustomerWall();
+            // 走「返回」逻辑：从验厂等视图打开客户墙时，ESC 也要落回客户列表
+            backFromCustomerWall();
         });
     }
 }
