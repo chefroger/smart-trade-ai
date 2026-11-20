@@ -24,8 +24,11 @@ const { SRC } = require('./_extract');
 const SAFE_PATTERNS = [
     // i18n 文案与固定中文/英文常量
     /^t\(/,
-    // 静态图标标记：btnIcon 只拼写死的 SVG 路径，不接用户输入
-    /^btnIcon\('/,
+    // 静态图标标记：btnIcon 只拼写死的 SVG 路径，不接用户输入。
+    // 只放行**纯字面量**图标名（可带数字尺寸）：图标名会被拼进
+    // /static/icons/lucide-<name>.svg 的 URL，btnIcon('x' + userInput)
+    // 这种拼接能注入 URL，必须拦下。
+    /^btnIcon\('[a-z0-9-]+'(,\s*\d+)?\)$/,
     /^currentLang\s*===/,
     // 纯数字 / 计数 / 长度
     /^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*\.length$/,
@@ -147,6 +150,16 @@ test('未转义插值只允许白名单里的安全表达式', () => {
         bad.length, 0,
         '以下插值既没走 esc()、也不在安全白名单里（可能是用户数据）：\n' + bad.join('\n'),
     );
+});
+
+test('btnIcon 白名单只放行纯字面量实参', () => {
+    // btnIcon(name) 拼出 /static/icons/lucide-<name>.svg 的 mask URL；
+    // 名字一旦能带用户输入，就是一条注入路径。
+    assert.ok(isSafe("btnIcon('star')"), '纯字面量图标名应放行');
+    assert.ok(isSafe("btnIcon('copy', 16)"), '纯字面量 + 数字尺寸应放行');
+    assert.ok(!isSafe("btnIcon('x' + userInput)"), '拼接用户输入不得放行');
+    assert.ok(!isSafe("btnIcon(userInput)"), '变量实参不得放行');
+    assert.ok(!isSafe("btnIcon('x' + 'y')"), '字符串拼接不得放行（必须是单个字面量）');
 });
 
 test('白名单本身不掩盖用户数据字段', () => {
