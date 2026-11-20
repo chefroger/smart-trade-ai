@@ -26,16 +26,17 @@ log_step()  { echo -e "\n${BOLD}════════════════
 #      随后 `git pull` 静默失败、`pip install -e .` 在残缺树里报出误导性错误，
 #      而且**重试永远无法恢复**，用户只能手动删目录。
 #   2. 用浅克隆 `--depth 1`：全历史克隆在弱网下最慢、最易失败（README 本身就提醒
-#      用户要有稳定网络）。跟 main 时本地没有 tag，Hermes 版本推导会退化为「未知」，
-#      Trade 会打印警告并继续启动，不影响使用；固定版本模式（`--branch <tag>`）
-#      会把该 tag 一并带上，版本可正常解出。
+#      用户要有稳定网络）。跟 main 时本地没有 tag，版本推导会退化为「未知」，
+#      Trade 会打印警告并继续启动，不影响使用。
 #   3. 不吞 git 的 stderr：README 让用户按网络问题排查，看不到真实报错就没法排查。
+#   注：本脚本现在只克隆 Trade 自身（ref 恒为 main）。Hermes 不再由这里安装 ——
+#       用户从官方仓库装最新版，Trade 跟随、不锁版本（2026-11-20 决定）。
 _clone_or_update() {
     local name="$1" repo="$2" dest="$3" ref="${4:-main}"
     # 目录存在且是有效仓库 → 拉取更新
     if [ -d "$dest/.git" ] && git -C "$dest" rev-parse --verify HEAD >/dev/null 2>&1; then
-        # 固定版本模式（ref != main，Hermes 用）：不 pull —— 在 tag 检出上 pull main
-        # 会把它拖到 main 尖端，固定就失去意义。已有检出保持原样。
+        # 指定了非 main 的 ref（如某个 tag）：不 pull，避免把检出拖到 main 尖端。
+        # 当前脚本不再对 Hermes 用这条路径，保留是为了以后需要临时固定某个 ref。
         if [ "$ref" != "main" ]; then
             log_info "已有 $name 检出，保持现状（固定版本 ${ref}，不跟随 main）"
             return 0

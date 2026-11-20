@@ -30,11 +30,13 @@ dependencies = [
   # Hermes Agent — NOT declared here on purpose.
   # Hermes's setup.py refuses to build wheels/sdists for pip ("Building wheels or
   # sdists for hermes-agent is not supported"); declaring it makes `pip install`
-  # fail outright. It is installed separately as an editable checkout by
-  # scripts/install.sh (Step 2), and Trade installs itself with --no-deps.
-  # Pinned version: v2026.9.24 — new installs clone this tag; see COMPATIBILITY.md. The installed
-  # version is enforced at runtime by pre_install_check.py and
-  # bootstrap.check_hermes_version().
+  # fail outright. Users install it separately from the official Hermes repo;
+  # Trade installs itself with --no-deps and consumes that one checkout via sys.path.
+  # 版本策略（2026-11-20 决定）：**跟随 Hermes 最新版，不锁版本**。
+  # 新装一律从 Hermes 官方仓库装最新版，Trade 约束不了它的发布节奏；
+  # 在 Trade 做出独立 exe 之前都会跟随。代码只设下限
+  # （bootstrap._MIN_HERMES_VERSION = 0.21.6），无上限；过旧时由
+  # trade/hermes_upgrade.py 在后台升级。详见 COMPATIBILITY.md「当前策略」。
   # LLM Provider SDKs — Hermes uses openai SDK as universal HTTP wire format
   # for ALL providers (DeepSeek / OpenAI / GLM / Kimi / OpenRouter / etc.),
   # and anthropic SDK for native Anthropic provider. Both are REQUIRED, not optional.

@@ -1031,3 +1031,31 @@ class TestNoBareVarBeforeMultibyte:
         assert not re.search(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", fixed), (
             "守卫把已经修好的写法也报了"
         )
+
+
+def test_no_upper_hermes_version_bound():
+    """Trade 跟随 Hermes 最新版，代码里不得出现版本上限（2026-11-20 决定）。
+
+    新装一律从 Hermes 官方仓库装最新版，Trade 约束不了它的发布节奏；
+    一旦加上限，用户更新 Hermes 后 Trade 会拒绝启动或反复要求降级。
+    """
+    offenders = []
+    for path in list(ROOT.glob("trade/**/*.py")) + [ROOT / "pre_install_check.py"]:
+        if "_MAX_HERMES_VERSION" in path.read_text(encoding="utf-8"):
+            offenders.append(str(path.relative_to(ROOT)))
+    assert not offenders, f"出现 Hermes 版本上限常量：{offenders}"
+
+
+def test_docs_do_not_teach_pinning_hermes():
+    """文档不得再教用户固定 Hermes tag —— 与「跟随最新版」的策略冲突。
+
+    README / README.en / 说明书 都面向用户，写错会让人重装并降级 Hermes。
+    """
+    for name in ("README.md", "README.en.md", "smart-trade-ai-manual/说明书.md"):
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "git clone --branch v" not in text, (
+            f"{name} 仍在教用户用固定 tag 克隆 Hermes"
+        )
