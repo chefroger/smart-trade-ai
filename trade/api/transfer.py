@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from tempfile import mkstemp
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from trade.api.deps import require_company, require_session
@@ -24,6 +27,7 @@ from trade.company.transfer import (
 )
 from trade.company.transfer.exporter import export_company
 from trade.company.transfer.importer import import_company
+from trade.company.transfer.preflight import analyze_package
 
 router = APIRouter(tags=["company-transfer"])
 
@@ -34,6 +38,52 @@ _JOBS: dict[str, dict] = {}
 _JOB_LOCK = threading.Lock()
 _MAX_JOBS = 100
 _JOB_TTL = 24 * 3600
+
+# 两阶段导入的预检结果：upload_id → 临时包 + 预检快照（30 分钟有效）
+_PENDING: dict[str, dict] = {}
+_PENDING_LOCK = threading.Lock()
+_PENDING_TTL = 30 * 60
+# 进程崩溃残留的临时上传包存活上限（模块导入时扫一次）
+_ORPHAN_UPLOAD_TTL = 24 * 3600
+
+
+def _prune_pending() -> None:
+    """清掉过期或被认领后遗留的预检条目，并删除对应临时包。
+
+    条目本身只含路径，删除文件放在锁外做，避免慢 I/O 卡住并发确认。
+    """
+    now = time.time()
+    stale_paths: list[Path] = []
+    with _PENDING_LOCK:
+        for key, entry in list(_PENDING.items()):
+            # 已过期，或已被确认（正常流程会立即 pop，此处仅防御性兜底）
+            if entry.get("expires_at", 0) < now or entry.get("claimed"):
+                popped = _PENDING.pop(key, None)
+                # 确实摘到条目且记录了临时包：记下路径，锁外再删
+                if popped and popped.get("zip_path") is not None:
+                    stale_paths.append(Path(popped["zip_path"]))
+    for path in stale_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # 删不掉不影响任何功能：残留文件由下次孤儿清理兜底
+            continue
+
+
+def _cleanup_orphan_uploads() -> None:
+    """删除 24 小时前残留的临时上传包（进程崩溃后无人回收）。
+
+    只认 `trade-company-upload-*` 前缀的普通文件，绝不碰运行中的新文件。
+    """
+    cutoff = time.time() - _ORPHAN_UPLOAD_TTL
+    for path in Path(tempfile.gettempdir()).glob("trade-company-upload-*"):
+        try:
+            # 只删超过保留期且确实是文件的条目
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except OSError:
+            # 单个文件删不掉（权限/竞态）：跳过，不影响启动
+            continue
 
 
 def _prune_jobs() -> None:
@@ -92,11 +142,14 @@ def _set_job(job_id: str, **updates) -> None:
 
 
 def _run_import(job_id: str, zip_path: Path, target_company_id: int | None,
-                force_new: bool) -> None:
+                force_new: bool, customer_decisions: dict[int, str] | None = None) -> None:
     _set_job(job_id, status="running", phase="importing")
     try:
         report = import_company(
-            zip_path, target_company_id=target_company_id, force_new=force_new
+            zip_path,
+            target_company_id=target_company_id,
+            force_new=force_new,
+            customer_decisions=customer_decisions,
         )
         _set_job(job_id, status="done", phase="done", report=report)
     except AmbiguousCompanyError as exc:
@@ -161,9 +214,13 @@ async def import_company_package(
     file: Annotated[UploadFile, File()],
     target_company_id: Annotated[int | None, Form()] = None,
     force_new: Annotated[bool, Form()] = False,
+    preflight: Annotated[bool, Form()] = False,
     _session: str = Depends(require_session),
 ):
     """上传公司数据包，后台导入并返回 job_id。
+
+    preflight=true 时只读分析并返回同名客户冲突清单（200），不创建导入任务；
+    调用方拿到 upload_id 后再走确认端点。
 
     注意：调用方不要带 X-Company-ID；新公司尚未绑定。
     """
@@ -202,12 +259,155 @@ async def import_company_package(
     finally:
         await file.close()
 
+    _prune_pending()
+    # 预检模式：只读分析，登记结果后立即返回，不创建任何导入任务
+    if preflight:
+        try:
+            result = analyze_package(
+                Path(temp_name),
+                target_company_id=target_company_id,
+                force_new=force_new,
+            )
+        except zipfile.BadZipFile as exc:
+            # 上传的根本不是 zip：删掉临时文件后给出可读提示
+            _cleanup(temp_name)
+            raise HTTPException(
+                status_code=400, detail="文件不是有效的公司数据包（zip）"
+            ) from exc
+        except AmbiguousCompanyError as exc:
+            # 目标机有多个同名公司：返回候选让调用方指定目标，不做猜测
+            _cleanup(temp_name)
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": "目标机存在多个同名公司，请指定要合并的目标公司",
+                    "candidates": exc.candidates,
+                },
+            )
+        except TransferError as exc:
+            # 包内容不合规（格式/版本/schema）：属于可预期的客户端错误
+            _cleanup(temp_name)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 — 预检失败不能影响其它接口
+            _cleanup(temp_name)
+            raise HTTPException(
+                status_code=500, detail="预检失败，请稍后重试"
+            ) from exc
+
+        upload_id = uuid.uuid4().hex
+        now = time.time()
+        with _PENDING_LOCK:
+            _PENDING[upload_id] = {
+                "zip_path": Path(temp_name),
+                "preflight": result,
+                "target_company_id": target_company_id,
+                "force_new": force_new,
+                "created_at": now,
+                "expires_at": now + _PENDING_TTL,
+                "claimed": False,
+            }
+        # 预检成功返回 200（路由默认 202 只适用于「已开始导入」）
+        return JSONResponse(
+            status_code=200,
+            content={
+                "upload_id": upload_id,
+                "expires_in": _PENDING_TTL,
+                **result,
+            },
+        )
+
     _prune_jobs()
     job_id = uuid.uuid4().hex
     _set_job(job_id, status="queued", phase="queued")
     thread = threading.Thread(
         target=_run_import,
         args=(job_id, Path(temp_name), target_company_id, force_new),
+        daemon=True,
+    )
+    thread.start()
+    return {"job_id": job_id, "status": "queued"}
+
+
+class _Decision(BaseModel):
+    """单个同名客户的处置选择。"""
+
+    source_id: int
+    action: Literal["merge", "create"]
+
+
+class ConfirmImportBody(BaseModel):
+    """确认导入请求体：逐对选择 + 可选默认动作。"""
+
+    customer_decisions: list[_Decision] = []
+    default_action: Literal["merge", "create"] | None = None
+
+
+@router.post("/companies/import-package/{upload_id}/confirm", status_code=202)
+def confirm_import_package(upload_id: str, body: ConfirmImportBody,
+                           _session: str = Depends(require_session)):
+    """确认预检结果并启动后台导入。
+
+    校验失败（未知客户 / 未补全选择）不消耗 upload_id，用户可以补选后重试。
+    """
+    _prune_pending()
+    now = time.time()
+    decisions: dict[int, str] = {}
+    with _PENDING_LOCK:
+        entry = _PENDING.get(upload_id)
+        # 不存在（从未创建 / 已被确认清理）：让用户重新选文件
+        if entry is None:
+            raise HTTPException(status_code=410, detail="导入链接已过期，请重新选择文件")
+        # 已过期：移出登记表并删掉临时包
+        if entry.get("expires_at", 0) < now:
+            popped = _PENDING.pop(upload_id, None)
+            if popped and popped.get("zip_path") is not None:
+                _cleanup(str(popped["zip_path"]))
+            raise HTTPException(status_code=410, detail="导入链接已过期，请重新选择文件")
+        # 已被另一个请求认领：不允许两个导入并行跑
+        if entry.get("claimed"):
+            raise HTTPException(status_code=409, detail="导入正在进行中")
+
+        conflicts = (entry.get("preflight") or {}).get("conflicts") or []
+        conflict_ids = [
+            conflict.get("source_id") for conflict in conflicts
+            if conflict.get("source_id") is not None
+        ]
+        known = set(conflict_ids)
+        for decision in body.customer_decisions:
+            # 指向本次预检之外的客户：拒绝，且不消耗 upload_id
+            if decision.source_id not in known:
+                raise HTTPException(status_code=400, detail="未知的客户选择")
+            decisions[decision.source_id] = decision.action
+        # 有冲突未选择：能靠默认动作补齐就补，否则要求用户补选
+        missing = [cid for cid in conflict_ids if cid not in decisions]
+        if missing and body.default_action is not None:
+            for cid in missing:
+                decisions[cid] = body.default_action
+            missing = []
+        # 仍有缺失：返回 409 + missing，条目保持可用
+        if missing:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": "还有同名客户未选择处置方式",
+                    "missing": missing,
+                },
+            )
+
+        # 校验通过：认领并移出登记表，重复确认一律 410
+        entry["claimed"] = True
+        _PENDING.pop(upload_id, None)
+        zip_path = entry.get("zip_path")
+        # 必须用预检时保存的目标，避免「预检 A 公司、确认 B 公司」
+        target_company_id = entry.get("target_company_id")
+        force_new = entry.get("force_new")
+
+    _prune_jobs()
+    job_id = uuid.uuid4().hex
+    _set_job(job_id, status="queued", phase="queued")
+    thread = threading.Thread(
+        target=_run_import,
+        args=(job_id, zip_path, target_company_id, force_new, decisions),
         daemon=True,
     )
     thread.start()
@@ -221,3 +421,11 @@ def import_company_status(job_id: str, _session: str = Depends(require_session))
     if not job:
         raise HTTPException(status_code=404, detail="导入任务不存在或已过期")
     return job
+
+
+# 模块导入时清理一次进程崩溃残留的临时上传包。任何失败都必须吞掉：
+# 清理是锦上添花，绝不能影响应用启动或其它接口（可用性优先）。
+try:
+    _cleanup_orphan_uploads()
+except Exception:  # noqa: BLE001 — 启动路径禁止因清理失败而中断
+    pass
