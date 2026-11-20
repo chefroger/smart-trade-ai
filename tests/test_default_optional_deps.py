@@ -140,7 +140,8 @@ class TestDegradationGuardsStillIntact:
         assert "except ImportError" in EMBEDDINGS_PY
         assert "sentence_transformers" in EMBEDDINGS_PY
 
-    def test_version_is_077(self):
-        assert re.search(r'^version = "0\.7\.7"$', PYPROJECT, re.M), (
-            "版本号应为 0.7.7"
+    def test_version_is_080(self):
+        # 每次发版都要同步这里：版本号漏改会让「用户在哪一版」失去意义
+        assert re.search(r'^version = "0\.8\.0"$', PYPROJECT, re.M), (
+            "版本号应为 0.8.0"
         )

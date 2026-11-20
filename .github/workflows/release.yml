@@ -65,8 +65,14 @@ jobs:
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
-          VER="${TAG#v}"
-          echo "ver=$VER" >> $GITHUB_OUTPUT
+          # tag 触发时 ref_name 是 v0.8.0 这类；手动触发时是分支名（如 main），
+          # 此时改用 pyproject 的版本号，避免打出 TradeWin-main 这种名字
+          if [[ "$TAG" == v* ]]; then
+            VER="${TAG#v}"
+          else
+            VER="$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')"
+          fi
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
 
       # 后处理（macOS 打包 .zip）
       - name: Post-build
