@@ -202,7 +202,7 @@ function _licenseBarText(data) {
         };
     }
     if (status === 'trial') {
-        let text = '⏳ ' + t('license.trial') + ' ' + t('license.days_left', { n: days })
+        let text = '<span class="i i-16" style="--i:url(\'/static/icons/lucide-clock.svg\')"></span> ' + t('license.trial') + ' ' + t('license.days_left', { n: days })
             + ' · <a href="#" onclick="showActivateModal()" style="color:' + (days <= LICENSE_EXPIRING_DAYS ? '#D97706' : '#2563EB') + ';text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
         // 第 20 天起显示价值小结（只报真实事件数，不估算）
         if (d.trial_summary) {
@@ -298,7 +298,7 @@ async function showActivateModal() {
         '<p style="margin:8px 0;color:var(--text-secondary);">' + (currentLang==='en'?'Send the code below to the author to get an activation code':'请将下方申请码发送给作者获取激活码') + '</p>' +
         (reqCode ? '<div style="background:var(--bg-secondary);padding:10px 14px;border-radius:var(--radius-sm);font-family:monospace;font-size:16px;letter-spacing:2px;margin:8px 0;cursor:pointer;user-select:all;" onclick="navigator.clipboard.writeText(this.textContent);toast(t(\'toast.copied\'))" title="' + (currentLang==='en'?'Click to copy':'点击复制') + '">' + reqCode + '</div>' : '') +
         '<input type="text" id="activate-code-input" aria-label="Activation code" placeholder="' + (currentLang==='en'?'Paste activation code':'粘贴作者提供的激活码') + '" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:monospace;font-size:14px;text-align:center;text-transform:uppercase;margin:12px 0;">' +
-        '<button class="btn btn-primary" onclick="doActivate()" style="margin-top:8px;">✅ ' + (currentLang==='en'?'Activate':'激活') + '</button>' +
+        '<button class="btn btn-primary" onclick="doActivate()" style="margin-top:8px;">' + btnIcon('check') + ' ' + (currentLang==='en'?'Activate':'激活') + '</button>' +
         '<button class="btn" onclick="this.closest(\'.modal-backdrop\').remove()">' + t('btn.cancel') + '</button>' +
         '<p id="activate-msg" style="margin-top:10px;font-size:12px;"></p>' +
     '</div>';
@@ -435,12 +435,15 @@ async function _waitForRestartAndReload(onTimeout, maxSeconds) {
 function _setBtnBusy(btn, busy) {
     if (!btn) return;
     if (busy) {
-        if (btn.dataset.idleIcon === undefined) btn.dataset.idleIcon = btn.textContent;
+        // 存 innerHTML 而不是 textContent：图标按钮的 textContent 是空串，恢复时会把图标抹掉
+        if (btn.dataset.idleHtml === undefined) btn.dataset.idleHtml = btn.innerHTML;
         btn.disabled = true;
-        btn.textContent = '⏳';
+        btn.innerHTML = (typeof iconHtml === 'function')
+            ? '<span class="i i-20 spin" style="--i:url(\'/static/icons/lucide-refresh-cw.svg\')"></span>'
+            : '…';
     } else {
         btn.disabled = false;
-        if (btn.dataset.idleIcon !== undefined) btn.textContent = btn.dataset.idleIcon;
+        if (btn.dataset.idleHtml !== undefined) btn.innerHTML = btn.dataset.idleHtml;
     }
 }
 

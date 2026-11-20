@@ -3,6 +3,11 @@ function $(id) { return document.getElementById(id); }
 function showModal(id) { $(id).classList.remove('hidden'); }
 function hideModal(id) { $(id).classList.add('hidden'); }
 
+// 按钮内联图标（Lucide）。图标缺失时返回空串，不阻断按钮文字。
+function btnIcon(name, size) {
+    return (typeof iconHtml === 'function') ? iconHtml(name, size || 16) : '';
+}
+
 // ── 聊天副驾设置（默认关闭；未同意隐私说明不能开启）────────────────────────
 async function showCopilotSettings() {
     const resp = await api('GET', '/api/trade/copilot/settings');

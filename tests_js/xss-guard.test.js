@@ -24,6 +24,8 @@ const { SRC } = require('./_extract');
 const SAFE_PATTERNS = [
     // i18n 文案与固定中文/英文常量
     /^t\(/,
+    // 静态图标标记：btnIcon 只拼写死的 SVG 路径，不接用户输入
+    /^btnIcon\('/,
     /^currentLang\s*===/,
     // 纯数字 / 计数 / 长度
     /^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*\.length$/,

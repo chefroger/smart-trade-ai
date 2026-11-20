@@ -117,7 +117,7 @@ function wizardRenderStep3() {
             </button>
         </div>
         <button class="btn btn-primary btn-lg wizard-launch-btn" id="wizard-launch-btn" disabled
-            onclick="wizardLaunch()">🚀 开始找客户！</button>
+            onclick="wizardLaunch()">${btnIcon('target')} 开始找客户！</button>
         <div class="onboarding-skip" style="display:flex;justify-content:space-between;">
             <a onclick="wizardBack()">← 返回修改</a>
             <a onclick="wizardClose()">跳过向导</a>
