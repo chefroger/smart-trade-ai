@@ -487,7 +487,8 @@ Hermes 会自动执行 `git pull` → `pip install` → `install-trade-skills` �
 
 ```bash
 cd ~/.trade/foreign-trade-assistant
-git pull origin main
+git fetch origin stable
+git checkout -B stable origin/stable
 ~/.trade/venv/bin/pip install -r requirements.txt
 ~/.trade/venv/bin/pip install -e "." --no-deps
 ~/.trade/venv/bin/python -c "from trade.post_install import install_skills; install_skills()"
@@ -506,7 +507,8 @@ git pull origin main
 
 ```powershell
 cd $env:LOCALAPPDATA\trade\foreign-trade-assistant
-git pull origin main
+git fetch origin stable
+git checkout -B stable origin/stable
 $env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -r requirements.txt
 $env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -e "." --no-deps
 $env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
@@ -523,7 +525,8 @@ $env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade.post_install impo
 
 ```bash
 cd ~/.trade/foreign-trade-assistant
-git pull origin main
+git fetch origin stable
+git checkout -B stable origin/stable
 ~/.trade/venv/bin/pip install -r requirements.txt
 ~/.trade/venv/bin/pip install -e "." --no-deps
 ~/.trade/venv/bin/python -c "from trade.post_install import install_skills; install_skills()"
@@ -544,7 +547,8 @@ git pull origin main
 
 ```bash
 cd ~/.trade/foreign-trade-assistant
-git pull origin main
+git fetch origin stable
+git checkout -B stable origin/stable
 ~/.trade/venv/bin/pip install -r requirements.txt
 ~/.trade/venv/bin/pip install -e "." --no-deps
 ~/.trade/venv/bin/python -c "from trade.post_install import install_skills; install_skills()"
@@ -558,7 +562,8 @@ git pull origin main
 
 ```powershell
 cd $env:LOCALAPPDATA\trade\foreign-trade-assistant
-git pull origin main
+git fetch origin stable
+git checkout -B stable origin/stable
 $env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -r requirements.txt
 $env:LOCALAPPDATA\trade\venv\Scripts\pip.exe install -e "." --no-deps
 $env:LOCALAPPDATA\trade\venv\Scripts\python.exe -c "from trade.post_install import install_skills; install_skills()"
