@@ -337,3 +337,113 @@ class TestMigrationTransactionAndPartial:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "companies" not in tables
         conn.close()
+
+
+class TestVisitPlanPayloadScrub:
+    def test_migration_v3_removes_profile_reminder_block(self, tmp_path, monkeypatch):
+        """迁移 v3：清掉 visit_plans.payload 里的自动档案提醒块，用户手写内容保留。"""
+        import json as _json
+        import sqlite3
+
+        import trade.database as db
+
+        db_path = tmp_path / "scrub.db"
+        monkeypatch.setattr(db, "_get_db_path", lambda: db_path)
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.executescript(db.SCHEMA_SQL)
+        conn.execute(
+            "INSERT INTO companies (id, name, slug, is_active, created_at) "
+            "VALUES (1, 'C', 'c', 1, datetime('now'))"
+        )
+        # customer_facts.customer_id 是 NOT NULL，必须先有客户行才能挂事实
+        conn.execute(
+            "INSERT INTO customers (id, company_id, name) VALUES (1, 1, '客户A')"
+        )
+        conn.execute(
+            "INSERT INTO visit_plans (id, company_id, customer_id, title, visit_date, "
+            "days, location, payload, created_at, updated_at) "
+            "VALUES (1, 1, NULL, '来访', '2026-12-01', 1, '', ?, "
+            "datetime('now'), datetime('now'))",
+            (_json.dumps({
+                "risks": "- 我自己写的风险\n\n【客户档案提醒 · 内部】\n- [家庭] 女儿 Anna",
+                "profile_notes": ["- [家庭] 女儿 Anna"],
+            }, ensure_ascii=False),),
+        )
+        # 一条被旧版本打开过 AI 的「家庭」事实（本轮迁移要一并归零）
+        conn.execute(
+            "INSERT INTO customer_facts (id, company_id, customer_id, category, subject, "
+            "content, source_type, status, ai_visible, fingerprint) "
+            "VALUES (1, 1, 1, '家庭', '女儿', '明年考大学', 'chat', '已确认', 1, 'fp-1')"
+        )
+        conn.execute(
+            "INSERT INTO customer_facts (id, company_id, customer_id, category, subject, "
+            "content, source_type, status, ai_visible, fingerprint) "
+            "VALUES (2, 1, 1, '喜好', '单据', '德英双语', 'chat', '已确认', 1, 'fp-2')"
+        )
+        conn.commit()
+        conn.close()
+
+        conn = db.get_connection()
+        try:
+            db._migrate_scrub_visit_plan_payload_v3(conn)
+            conn.commit()
+            payload_raw = conn.execute(
+                "SELECT payload FROM visit_plans WHERE id = 1"
+            ).fetchone()["payload"]
+            fam = conn.execute(
+                "SELECT ai_visible FROM customer_facts WHERE id = 1"
+            ).fetchone()["ai_visible"]
+            like = conn.execute(
+                "SELECT ai_visible FROM customer_facts WHERE id = 2"
+            ).fetchone()["ai_visible"]
+        finally:
+            conn.close()
+
+        payload = _json.loads(payload_raw)
+        assert "Anna" not in payload_raw, "私密原文没被清掉"
+        assert "【客户档案提醒 · 内部】" not in payload_raw
+        assert "profile_notes" not in payload
+        assert "我自己写的风险" in payload["risks"], "用户手写内容必须保留"
+        assert fam == 0, "历史「家庭」事实的 ai_visible 必须归零"
+        assert like == 1, "非敏感类的 ai_visible 不能被误伤"
+
+    def test_migration_v3_is_idempotent(self, tmp_path, monkeypatch):
+        """迁移可重复执行，不报错、不二次改动。"""
+        import sqlite3
+
+        import trade.database as db
+
+        db_path = tmp_path / "scrub2.db"
+        monkeypatch.setattr(db, "_get_db_path", lambda: db_path)
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(db.SCHEMA_SQL)
+        conn.commit()
+        conn.close()
+
+        conn = db.get_connection()
+        try:
+            db._migrate_scrub_visit_plan_payload_v3(conn)
+            db._migrate_scrub_visit_plan_payload_v3(conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_migration_v3_survives_missing_tables(self, tmp_path, monkeypatch):
+        """老库没有 visit_plans / customer_facts 表时不得抛错（不能阻断启动）。"""
+        import sqlite3
+
+        import trade.database as db
+
+        db_path = tmp_path / "bare.db"
+        monkeypatch.setattr(db, "_get_db_path", lambda: db_path)
+        conn = sqlite3.connect(str(db_path))
+        conn.commit()
+        conn.close()
+
+        conn = db.get_connection()
+        try:
+            db._migrate_scrub_visit_plan_payload_v3(conn)
+            conn.commit()
+        finally:
+            conn.close()

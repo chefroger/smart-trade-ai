@@ -7,6 +7,7 @@ libraries、customers、customer_libraries、conversations。
 不干预 Hermes Agent 的会话数据库。
 """
 
+import json
 import os
 import shutil
 import sqlite3
@@ -675,7 +676,7 @@ _EXPECTED_TABLES = frozenset({
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
-_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2})
+_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3})
 
 
 def _needs_schema_work(conn: sqlite3.Connection) -> bool:
@@ -843,6 +844,9 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
         # v2：订单物流字段 + 状态历史表（W7）。SQL 占位；实际走下方幂等逻辑
         # （新库 SCHEMA_SQL 已含列时 ALTER 会报 duplicate column，必须逐列吞掉）。
         (2, "order_logistics_and_events", ""),
+        # v3：清洗验厂计划 payload 里的自动客户档案提醒块（含家庭等敏感原文），
+        # 并把历史「家庭」事实的 AI 可见性归零。SQL 占位；实际走下方幂等逻辑。
+        (3, "scrub_visit_plan_profile_reminders", ""),
     ]
 
     # 获取已应用的版本
@@ -856,6 +860,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
             continue
         if version == 2:
             _migrate_order_logistics_v2(conn)
+        elif version == 3:
+            _migrate_scrub_visit_plan_payload_v3(conn)
         else:
             conn.executescript(sql)
         conn.execute(
@@ -888,6 +894,64 @@ def _migrate_order_logistics_v2(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_order_events_order_at ON order_events(order_id, at)"
     )
+
+
+def _migrate_scrub_visit_plan_payload_v3(conn: sqlite3.Connection) -> None:
+    """清洗验厂计划 payload 里的自动客户档案提醒块，并把历史「家庭」事实的 AI 可见性归零。
+
+    旧版 suggest_draft 会把客户画像（含「家庭」等敏感类）原文写进 risks，
+    前端再自动存进 visit_plans.payload —— 这些内容会随打印件/长图/导出包
+    流出去。这里只删带标记的自动块，用户自己手写的风险原样保留。
+    同时把升级前被打开过 ai_visible 的「家庭」事实归零（2026-11-20 审计 P0-1）。
+    """
+    marker = "【客户档案提醒 · 内部】"
+
+    # 1) 清洗 visit_plans.payload
+    try:
+        rows = conn.execute(
+            "SELECT id, payload FROM visit_plans "
+            "WHERE payload IS NOT NULL AND payload != '{}' AND payload != ''"
+        ).fetchall()
+    except sqlite3.Error:
+        # 老库还没有 visit_plans 表：跳过，不能阻断启动
+        rows = []
+    # 逐行处理：任何单行脏数据都不应中断整次迁移
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except (TypeError, ValueError):
+            # 脏数据：解析不了就不动它，避免把用户内容改成意外值
+            continue
+        # 只处理 dict 形态的 payload（历史上有过数组/标量形态的脏数据）
+        if not isinstance(payload, dict):
+            continue
+        changed = False
+        risks = payload.get("risks")
+        # 只有字符串里真带标记时才切分，保留标记之前用户自写的内容
+        if isinstance(risks, str) and marker in risks:
+            payload["risks"] = risks.split(marker)[0].rstrip()
+            changed = True
+        # profile_notes 全部由旧版自动生成，一律移除
+        if payload.pop("profile_notes", None) is not None:
+            changed = True
+        # 没有任何改动就不写回，保证重复执行结果一致
+        if not changed:
+            continue
+        conn.execute(
+            "UPDATE visit_plans SET payload = ?, updated_at = datetime('now','localtime') "
+            "WHERE id = ?",
+            (json.dumps(payload, ensure_ascii=False), row["id"]),
+        )
+
+    # 2) 历史「家庭」事实的 ai_visible 归零（家庭是硬红线，绝不进 AI 上下文）
+    try:
+        conn.execute(
+            "UPDATE customer_facts SET ai_visible = 0 "
+            "WHERE category = '家庭' AND ai_visible != 0"
+        )
+    except sqlite3.Error:
+        # 老库还没有 customer_facts 表：跳过
+        pass
 
 
 def init_db() -> Path:
