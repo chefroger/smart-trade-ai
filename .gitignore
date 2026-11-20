@@ -57,6 +57,8 @@ AGENTS.md
 CLAUDE.md
 
 # 内部设计文档（本地保留，不入库）
+# 历史变更记录（部分恢复的内部稿，不入库；对外用 CHANGELOG.md）
+CHANGELOG.history.md
 项目需求文档.md
 项目需求文档.en.md
 业务概览.md
