@@ -20,8 +20,9 @@ _log = logging.getLogger(__name__)
 FACT_CATEGORIES = frozenset({
     "家庭", "其他供应商或竞品", "喜好", "禁忌", "礼物往来", "重要日期",
 })
-# 敏感类确认后默认不进简报
-_SENSITIVE_CATEGORIES = frozenset({"家庭", "礼物往来"})
+# 敏感类：绝不进 AI 上下文 / 验厂计划打印件 / 长图 / 导出包
+# （家庭等隐私绝对禁止明文出现在打印和生成图片中）
+SENSITIVE_CATEGORIES = frozenset({"家庭", "礼物往来"})
 # 非敏感类确认后默认 ai_visible=1
 _DEFAULT_AI_VISIBLE_CATEGORIES = frozenset({
     "喜好", "禁忌", "重要日期", "其他供应商或竞品",
@@ -533,8 +534,16 @@ def update_fact(
         at, cid = normalize_attach(
             new_at, new_cid, customer_id=customer_id, company_id=company_id,
         )
+    # 分类变了就按新分类重算默认可见性（用户没显式传时）
+    category_changed = "category" in updates and updates["category"] is not None
     if "ai_visible" in updates and updates["ai_visible"] is not None:
         ai_vis = _as_flag(updates["ai_visible"], "ai_visible") or 0
+    if category_changed and "ai_visible" not in updates:
+        ai_vis = 1 if cat in _DEFAULT_AI_VISIBLE_CATEGORIES else 0
+    # 「家庭」是硬红线：无论用户怎么点，ai_visible 恒为 0
+    # （2026-11-20 审计 P0-1：update_fact 曾能把它翻成 1 绕过门控）
+    if cat == "家庭":
+        ai_vis = 0
 
     fp = fact_fingerprint(cat, subj, cont)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

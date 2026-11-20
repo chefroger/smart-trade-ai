@@ -824,3 +824,41 @@ class TestExtractEdges:
         finally:
             p._EXTRACT_LOCKS.discard(customer_id)
         assert r.status_code == 409
+
+
+class TestSensitiveCategories:
+    def test_family_ai_visible_cannot_be_turned_on(self, company_id, customer_id, test_db):
+        """「家庭」类永远不进 AI 上下文：用户显式打开也要挡住。"""
+        from trade import profile as p
+
+        fact = p.create_fact_manual(
+            customer_id, company_id=company_id,
+            category="家庭", subject="采购经理女儿", content="女儿 Anna 明年考大学",
+        )
+        assert fact["ai_visible"] == 0
+
+        upd = p.update_fact(
+            fact["id"], customer_id=customer_id, company_id=company_id,
+            updates={"ai_visible": 1},
+        )
+        assert upd["ai_visible"] == 0, "「家庭」类不得被打开进 AI 上下文"
+
+    def test_gift_category_keeps_user_toggle(self, company_id, customer_id, test_db):
+        """「礼物往来」是业务记录，保留用户开关（只堵打印件/长图/导出包）。"""
+        from trade import profile as p
+
+        fact = p.create_fact_manual(
+            customer_id, company_id=company_id,
+            category="礼物往来", subject="圣诞礼盒", content="客户送了一箱红酒",
+        )
+        upd = p.update_fact(
+            fact["id"], customer_id=customer_id, company_id=company_id,
+            updates={"ai_visible": 1},
+        )
+        assert upd["ai_visible"] == 1
+
+    def test_sensitive_categories_constant_is_public(self):
+        """敏感类常量必须是公开的，别的模块（验厂建议/导出）要用它。"""
+        from trade import profile as p
+
+        assert p.SENSITIVE_CATEGORIES == frozenset({"家庭", "礼物往来"})
