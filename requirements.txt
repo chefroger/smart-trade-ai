@@ -9,8 +9,9 @@ pyyaml>=6.0
 packaging>=23.0
 pydantic>=2.0
 # License Ed25519 verification (trade/license.py) — required, not optional.
-# 缺了它激活码一律验不过，用户会被判成 expired；此前只靠间接依赖带进来。
-cryptography>=42,<47
+# 缺了它激活码一律验不过，用户会被判成 expired；此前只靠 Hermes 托管环境带进来。
+# 上界 <52：实测 Hermes 当前环境提供 50.x，<47 会把在用的版本排除掉。
+cryptography>=42,<52
 
 # LLM Provider SDKs (required — Hermes uses openai for all providers)
 openai==2.24.0
