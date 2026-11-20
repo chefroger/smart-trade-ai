@@ -31,9 +31,10 @@ def _fresh_db(tmp_path: Path) -> Path:
                   "customer_facts", "customer_gifts", "inquiries", "visit_plans"):
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
-    # 迁移 1/2 已应用 —— 否则 init_db 会写入，理应备份
+    # 迁移 1/2/3 已应用 —— 否则 init_db 会写入，理应备份
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'backfill_order_items')")
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (2, 'order_logistics_and_events')")
+    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (3, 'scrub_visit_plan_profile_reminders')")
     conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")
     conn.execute("ALTER TABLE conversations ADD COLUMN customer_id INTEGER")
     # 与 _needs_schema_work / _add_context_column 对齐：缺 is_important 也会触发备份

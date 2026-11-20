@@ -115,7 +115,7 @@ class TestW7OrderLogistics:
 
         db = tmp_path / "old.db"
         conn = sqlite3.connect(db)
-        # 最小可用表集 + 迁移 1 已应用、缺迁移 2
+        # 最小可用表集 + 迁移 1 已应用、缺迁移 2/3
         for table in (
             "companies", "trade_companies", "libraries", "customers",
             "customer_libraries", "conversations", "orders", "order_items",
@@ -158,12 +158,17 @@ class TestW7OrderLogistics:
         )
         conn.commit()
 
-        assert _needs_schema_work(conn) is True  # 缺迁移 2 + 缺 order_events
+        assert _needs_schema_work(conn) is True  # 缺迁移 2/3 + 缺 order_events
 
         _migrate_order_logistics_v2(conn)
         conn.execute(
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (2, 'order_logistics_and_events')"
+        )
+        # v3 与订单物流无关，但「已是最新」的判定要求它也在册
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (3, 'scrub_visit_plan_profile_reminders')"
         )
         conn.commit()
 
