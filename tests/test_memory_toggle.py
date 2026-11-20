@@ -109,3 +109,30 @@ class TestReplayGuard:
         out = replay.replay_hindsight(1, [{"query": "q", "response": "r"}])
         assert out["status"] == "unreachable"
         assert out["replayed"] == 0
+
+
+class TestHealthCheckUsesResolvedUrl:
+    def test_probes_config_url_not_just_env(self, monkeypatch):
+        """health_check 必须用与客户端相同的地址解析（config.json 优先）。
+
+        否则只在 config.json 里配了自定义地址的用户会被误判不可达。
+        """
+        from trade import memory
+
+        monkeypatch.setattr(memory, "is_available", lambda: True)
+        # 模拟只有配置文件里写了自定义地址
+        monkeypatch.setattr(
+            memory, "_load_hindsight_config",
+            lambda: {"api_url": "http://127.0.0.1:9/"},
+        )
+        monkeypatch.delenv("HINDSIGHT_API_URL", raising=False)
+
+        seen = {}
+
+        def _conn(addr, timeout=None):
+            seen["addr"] = addr
+            raise OSError("refused")
+
+        monkeypatch.setattr(socket, "create_connection", _conn)
+        assert memory.health_check(timeout=0.1) is False
+        assert seen["addr"] == ("127.0.0.1", 9), f"探错了地址：{seen['addr']}"

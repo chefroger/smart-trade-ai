@@ -106,6 +106,36 @@ def set_enabled(enabled: bool) -> None:
         _client = None
 
 
+def _load_hindsight_config() -> dict:
+    """读 Hermes 作用域的 Hindsight 配置；缺失或损坏时返回空 dict。
+
+    客户端初始化与连通性探测共用这一份解析，避免两边指向不同地址
+    （2026-11-20 审计 C6：探测走默认地址、实际连自定义地址会误判不可达）。
+    """
+    try:
+        from hermes_constants import get_hermes_home
+
+        config_path = get_hermes_home() / "hindsight" / "config.json"
+        # 配置文件不存在：没有覆盖值，交给调用方用环境变量/默认值
+        if not config_path.exists():
+            return {}
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        # 非 dict 的畸形配置按空处理
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception as exc:
+        # 损坏或不可读时降级为空配置，不阻断任何功能
+        logger.warning("Hindsight config 解析失败: %s", exc)
+        return {}
+
+
+def _resolve_api_url(cfg: dict | None = None) -> str:
+    """解析 Hindsight 服务地址：配置文件优先，其次环境变量，最后默认。"""
+    cfg = _load_hindsight_config() if cfg is None else cfg
+    default = "https://api.hindsight.vectorize.io"
+    # 配置文件里的自定义地址优先（与客户端初始化保持一致）
+    return str(cfg.get("api_url") or os.environ.get("HINDSIGHT_API_URL", default))
+
+
 def health_check(timeout: float = 2.0) -> bool:
     """真实探测 Hindsight 服务是否可达（2026-11-20 审计 C6）。
 
@@ -119,7 +149,8 @@ def health_check(timeout: float = 2.0) -> bool:
         import socket
         from urllib.parse import urlparse
 
-        api_url = os.environ.get("HINDSIGHT_API_URL", "https://api.hindsight.vectorize.io")
+        # 与客户端初始化共用同一份地址解析，避免探测打到另一个地址
+        api_url = _resolve_api_url()
         parsed = urlparse(api_url)
         host = parsed.hostname
         # 非法 URL：视为不可达，不抛
@@ -152,26 +183,17 @@ def _get_client():
         return _client
 
     try:
-        from hermes_constants import get_hermes_home
         from hindsight_client import Hindsight
 
         api_key = os.environ.get("HINDSIGHT_API_KEY", "")
-        api_url = os.environ.get("HINDSIGHT_API_URL", "https://api.hindsight.vectorize.io")
         timeout = int(os.environ.get("HINDSIGHT_TIMEOUT", "120"))
 
-        # 尝试从 Hermes profile 作用域的配置文件中读取覆盖值
-        config_path = get_hermes_home() / "hindsight" / "config.json"
-        # 如果配置文件存在，用其中的值覆盖环境变量（环境变量优先）
-        if config_path.exists():
-            try:
-                cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                # 配置文件损坏或不可读时降级为空配置，避免阻断客户端初始化
-                logger.warning("Hindsight config 解析失败: %s", exc)
-                cfg = {}
-            api_key = api_key or cfg.get("apiKey", "") or cfg.get("api_key", "")
-            api_url = cfg.get("api_url", api_url)
-            timeout = int(cfg.get("timeout", timeout))
+        # 配置文件的密钥/地址/超时与 health_check 共用同一份解析，
+        # 避免「探测用默认地址、实际连自定义地址」的不一致
+        cfg = _load_hindsight_config()
+        api_key = api_key or cfg.get("apiKey", "") or cfg.get("api_key", "")
+        api_url = _resolve_api_url(cfg)
+        timeout = int(cfg.get("timeout", timeout))
 
         # 如果最终仍没有 API 密钥，则不创建客户端
         if not api_key:
