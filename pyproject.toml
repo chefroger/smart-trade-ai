@@ -23,6 +23,9 @@ dependencies = [
   # Explicit — needed for SKILL.md frontmatter parsing and version checks
   "pyyaml>=6.0,<7.0",
   "packaging>=23.0,<27.0",
+  # License Ed25519 verification (trade/license.py). 缺了它激活码一律验不过，
+  # 用户会被判成 expired。此前只靠别的包间接带进来，干净环境不保证有。
+  "cryptography>=42,<47",
   # Hermes Agent — NOT declared here on purpose.
   # Hermes's setup.py refuses to build wheels/sdists for pip ("Building wheels or
   # sdists for hermes-agent is not supported"); declaring it makes `pip install`

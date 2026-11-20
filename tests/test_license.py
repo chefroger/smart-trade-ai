@@ -791,3 +791,26 @@ class TestActivationCodeErrorChain:
         assert isinstance(exc_info.value.__cause__, InvalidSignature), (
             "签名验证失败应保留原始 InvalidSignature 异常链，否则排查激活失败时无法定位"
         )
+
+
+class TestCryptographyDependencyDeclared:
+    """cryptography 必须在两处声明（2026-11-20 审计 P1-7）。
+
+    许可证验签（Ed25519）硬依赖它；此前只靠别的包间接带进来，
+    干净环境不保证有 —— 缺了会让所有激活码验不过、用户被判 expired。
+    pyproject 声明意图，requirements.txt 是实际安装路径（Trade 用 --no-deps 装自身）。
+    """
+
+    def test_declared_in_pyproject(self):
+        root = Path(__file__).resolve().parent.parent
+        text = (root / "pyproject.toml").read_text(encoding="utf-8")
+        assert "cryptography>=" in text, "pyproject.toml 必须声明 cryptography"
+
+    def test_declared_in_requirements(self):
+        root = Path(__file__).resolve().parent.parent
+        text = (root / "requirements.txt").read_text(encoding="utf-8")
+        lines = [
+            ln.strip() for ln in text.splitlines()
+            if ln.strip().startswith("cryptography")
+        ]
+        assert lines, "requirements.txt 必须声明 cryptography"
