@@ -70,11 +70,12 @@ if s == s2:
 open(p, "w", encoding="utf-8").write(s2)
 PY
 
+# 与 CHANGELOG.md 既有风格一致：每条带短 SHA（按提交整理）
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 if [ -n "$LAST_TAG" ]; then
-    LOG="$(git log --no-merges --pretty='- %s' "$LAST_TAG"..HEAD)"
+    LOG="$(git log --no-merges --pretty='- `%h` %s' "$LAST_TAG"..HEAD)"
 else
-    LOG="$(git log --no-merges --pretty='- %s' -50)"
+    LOG="$(git log --no-merges --pretty='- `%h` %s' -50)"
 fi
 [ -n "$NOTE" ] && LOG="- $NOTE
 $LOG"
