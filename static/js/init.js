@@ -87,12 +87,12 @@ function renderNoCompanyPage() {
     }
     // 「创建公司」始终保留（试用用户也要能建第一家公司）；导入是付费能力
     const importBtn = _licenseGateAllowsPaid()
-        ? '<button onclick="showImportCompanyDialog()">📦 导入已有公司数据</button>'
+        ? '<button onclick="showImportCompanyDialog()">' + btnIcon('upload') + ' 导入已有公司数据</button>'
         : '';
     _replaceMainContent('<div class="empty-state"><div class="empty-icon">🏢</div>'
         + '<h2>请先选择或创建公司</h2><p>Trade AI 为多公司隔离架构</p>'
         + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">'
-        + '<button onclick="showAddCompanyModal()">➕ 创建公司</button>'
+        + '<button onclick="showAddCompanyModal()">' + btnIcon('plus') + ' 创建公司</button>'
         + importBtn
         + '</div></div>');
 }

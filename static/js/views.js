@@ -73,7 +73,7 @@ function renderTasksViewInto(container) {
             </div>
             <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;">${esc(t.desc || '')}</div>
             <div class="task-card-actions">
-                <button onclick="editTemplatePrompt('${t.id}')" style="font-size:11px;">✏️ 编辑 Prompt</button>
+                <button onclick="editTemplatePrompt('${t.id}')" style="font-size:11px;">${btnIcon('pencil')} 编辑 Prompt</button>
                 <button onclick="runSingleTemplate('${t.id}')" style="font-size:11px;">▶ 执行一次</button>
             </div>
         </div>`;
@@ -84,8 +84,8 @@ function renderTasksViewInto(container) {
         <div class="panel-topbar">
             <h2>⏰ 定时任务${coName ? `<span style="margin-left:10px;padding:3px 10px;background:rgba(59,130,246,0.08);color:var(--primary);border-radius:999px;font-size:12px;font-weight:500;">🏢 ${esc(coName)}</span>` : ''}</h2>
             <div class="panel-topbar-actions">
-                <button class="btn btn-primary" onclick="batchCreateCronTasks()">⚡ 批量生成选中任务</button>
-                <button class="btn btn-danger" onclick="clearAllCronTasks()">🗑 清空全部任务</button>
+                <button class="btn btn-primary" onclick="batchCreateCronTasks()">${btnIcon('refresh-cw')} 批量生成选中任务</button>
+                <button class="btn btn-danger" onclick="clearAllCronTasks()">${btnIcon('trash')} 清空全部任务</button>
             </div>
         </div>
         <div class="panel-body" style="overflow-y:auto;padding:16px 20px;">
@@ -208,7 +208,7 @@ function renderTasksViewInto(container) {
             <!-- 模板库 -->
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
                 <div style="font-size:13px;font-weight:600;color:var(--text-secondary);">📋 任务模板库（钩选 → 编辑时间 → 批量生成）</div>
-                <button class="btn btn-xs" onclick="showAddCustomTemplateModal()" style="color:var(--primary);">➕ 自定义模板</button>
+                <button class="btn btn-xs" onclick="showAddCustomTemplateModal()" style="color:var(--primary);">${btnIcon('plus')} 自定义模板</button>
             </div>
             <div class="task-grid" id="task-templates-grid">
                 ${allTemplates.map(renderCard).join('')}
@@ -220,7 +220,7 @@ function renderTasksViewInto(container) {
             <!-- 已激活任务 -->
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
                 <div style="font-size:13px;font-weight:600;color:var(--text-secondary);">📡 已激活的定时任务</div>
-                <button class="btn btn-xs" onclick="loadActiveCronJobs()">🔄 刷新</button>
+                <button class="btn btn-xs" onclick="loadActiveCronJobs()">${btnIcon('refresh-cw')} 刷新</button>
             </div>
             <div class="task-grid" id="active-tasks-grid">
                 <div style="color:var(--text-muted);font-size:12px;padding:12px;">加载中...</div>
@@ -276,7 +276,7 @@ function showPromptEditorModal(title, currentText, onSave) {
                 const text = document.getElementById('prompt-editor-text').value;
                 document.getElementById('prompt-editor-modal').remove();
                 arguments[0](text);
-            })(arguments[0])">💾 保存</button>
+            })(arguments[0])">${btnIcon('check')} 保存</button>
         </div>
     </div>`;
     // 保存回调绑定
@@ -314,7 +314,7 @@ function showAddCustomTemplateModal() {
         <div class="form-group"><label for="custom-tmpl-prompt">执行 Prompt *</label><textarea id="custom-tmpl-prompt" style="width:100%;min-height:150px;font-family:monospace;font-size:13px;padding:10px;" placeholder="Agent 将按此指令执行..."></textarea></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
             <button class="btn" onclick="document.getElementById('custom-template-modal').remove()">取消</button>
-            <button class="btn btn-primary" onclick="saveCustomTemplate()">💾 保存模板</button>
+            <button class="btn btn-primary" onclick="saveCustomTemplate()">${btnIcon('check')} 保存模板</button>
         </div>
     </div>`;
     document.body.appendChild(backdrop);
@@ -457,7 +457,7 @@ function renderDirectoryViewInto(container) {
         <div class="panel-topbar">
             <h2>📂 数据目录${coName ? `<span style="margin-left:10px;padding:3px 10px;background:rgba(59,130,246,0.08);color:var(--primary);border-radius:999px;font-size:12px;font-weight:500;">🏢 ${esc(coName)}</span>` : ''}</h2>
             <div class="panel-topbar-actions">
-                <button class="btn" onclick="toast('功能开发中：将在文件管理器中打开')">📂 打开目录</button>
+                <button class="btn" onclick="toast('功能开发中：将在文件管理器中打开')">${btnIcon('folder-open')} 打开目录</button>
             </div>
         </div>
         <div class="panel-body" style="display:flex;gap:16px;">
@@ -606,7 +606,7 @@ function renderConversationsList(data) {
                 <div class="conv-a">${esc(c.response||'').slice(0,150)}</div>
             </div>
             <button class="btn-xs" style="color:var(--accent-red);border-color:var(--accent-red);flex-shrink:0;margin-top:2px;"
-                onclick="event.stopPropagation();deleteConversation(${c.id})" title="${t('hist.delete_title')}">🗑</button>
+                onclick="event.stopPropagation();deleteConversation(${c.id})" title="${t('hist.delete_title')}">${btnIcon('trash')}</button>
         </div>
     `).join('');
 }
@@ -686,11 +686,11 @@ function showOnboardingGuide() {
 }
 
 function renderOnboardingStep1HTML() {
-    return `<div id="onboarding-step1"><div class="onboarding-icon">🎉</div><h2 class="onboarding-title">欢迎使用 Trade AI</h2><p class="onboarding-subtitle">Trade 可以帮你<strong>自动搜索客户背景信息（OSINT）</strong>，并基于你的产品定位<strong>撰写专业 B2B 开发信</strong>。</p><div class="onboarding-features"><div class="onb-feature"><span>🔍</span> 海关数据 · 社媒分析 · 官网诊断</div><div class="onb-feature"><span>📧</span> AI 写开发信 · 跟进序列 · 报价单</div><div class="onb-feature"><span>🤖</span> 7x24 自动获客 · 定时任务调度</div></div><button class="btn btn-primary btn-lg" onclick="onboardingGoToStep2()">🚀 开发第一个客户</button><div class="onboarding-skip"><a href="#" onclick="onboardingSkip(event)">跳过引导，直接开始</a></div></div>`;
+    return `<div id="onboarding-step1"><div class="onboarding-icon">🎉</div><h2 class="onboarding-title">欢迎使用 Trade AI</h2><p class="onboarding-subtitle">Trade 可以帮你<strong>自动搜索客户背景信息（OSINT）</strong>，并基于你的产品定位<strong>撰写专业 B2B 开发信</strong>。</p><div class="onboarding-features"><div class="onb-feature"><span>🔍</span> 海关数据 · 社媒分析 · 官网诊断</div><div class="onb-feature"><span>📧</span> AI 写开发信 · 跟进序列 · 报价单</div><div class="onb-feature"><span>🤖</span> 7x24 自动获客 · 定时任务调度</div></div><button class="btn btn-primary btn-lg" onclick="onboardingGoToStep2()">${btnIcon('target')} 开发第一个客户</button><div class="onboarding-skip"><a href="#" onclick="onboardingSkip(event)">跳过引导，直接开始</a></div></div>`;
 }
 
 function renderOnboardingStep2HTML() {
-    return `<div id="onboarding-step2"><div class="onboarding-step-indicator"><span class="onb-step done">✓ 了解 Trade</span><span class="onb-step-arrow">→</span><span class="onb-step active">● 开发客户</span></div><h3 class="onboarding-title" style="font-size:18px;margin-bottom:6px;">试试对目标客户做背调</h3><p style="color:var(--text-secondary);font-size:13px;margin-bottom:16px;">输入客户公司名或官网，AI 将自动搜索公开信息并生成开发信</p><div class="onboarding-input-row"><input type="text" id="onboarding-osint-input" placeholder="粘贴客户公司名或网址，如：acme-corp.com" class="onboarding-text-input" onkeydown="if(event.key==='Enter')onboardingStartOSINT()" autofocus /><button class="btn btn-primary" id="onboarding-send-btn" onclick="onboardingStartOSINT()">开始分析</button><button id="onboarding-stop-btn" class="hidden" style="background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:var(--radius-sm);cursor:pointer;" onclick="onboardingStopOSINT()">🛑 停止</button></div><div id="onboarding-results-area"></div><div id="onboarding-actions" class="hidden"></div><div class="onboarding-skip"><a href="#" onclick="onboardingSkip(event)">跳过引导，直接开始</a></div></div>`;
+    return `<div id="onboarding-step2"><div class="onboarding-step-indicator"><span class="onb-step done">✓ 了解 Trade</span><span class="onb-step-arrow">→</span><span class="onb-step active">● 开发客户</span></div><h3 class="onboarding-title" style="font-size:18px;margin-bottom:6px;">试试对目标客户做背调</h3><p style="color:var(--text-secondary);font-size:13px;margin-bottom:16px;">输入客户公司名或官网，AI 将自动搜索公开信息并生成开发信</p><div class="onboarding-input-row"><input type="text" id="onboarding-osint-input" placeholder="粘贴客户公司名或网址，如：acme-corp.com" class="onboarding-text-input" onkeydown="if(event.key==='Enter')onboardingStartOSINT()" autofocus /><button class="btn btn-primary" id="onboarding-send-btn" onclick="onboardingStartOSINT()">开始分析</button><button id="onboarding-stop-btn" class="hidden" style="background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:var(--radius-sm);cursor:pointer;" onclick="onboardingStopOSINT()">${btnIcon('x')} 停止</button></div><div id="onboarding-results-area"></div><div id="onboarding-actions" class="hidden"></div><div class="onboarding-skip"><a href="#" onclick="onboardingSkip(event)">跳过引导，直接开始</a></div></div>`;
 }
 
 function onboardingGoToStep2() {
@@ -840,7 +840,7 @@ function onboardingStopOSINT() {
 function showOnboardingActions() {
     var actionsDiv = $('onboarding-actions');
     actionsDiv.classList.remove('hidden');
-    actionsDiv.innerHTML = '<button class="btn btn-primary" onclick="onboardingSaveAndContinue()">✅ 保存到客户库</button><button class="btn" onclick="onboardingFinish()">进入主界面</button>';
+    actionsDiv.innerHTML = '<button class="btn btn-primary" onclick="onboardingSaveAndContinue()">' + btnIcon('check') + ' 保存到客户库</button><button class="btn" onclick="onboardingFinish()">进入主界面</button>';
 }
 
 async function onboardingSaveAndContinue() {

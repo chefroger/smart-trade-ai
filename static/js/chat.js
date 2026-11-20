@@ -247,7 +247,7 @@ async function doUpdateSystem() {
         } else if (resp?.error || (resp?.errors && resp.errors.length)) {
             // 之前这里只有一句「更新失败」，用户无从知道原因
             toast(_updateErrorText(resp), {sticky: true});
-            if (btn) btn.textContent = '⬆️ 升级';
+            if (btn) btn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('download', 16) : '') + ' 升级';
             _setUpdateInFlight(false);
         } else {
             // resp 为 null 时 api() 已 toast，不重复提示
@@ -256,7 +256,7 @@ async function doUpdateSystem() {
     } catch(e) {
         // 更新请求不会触发服务重启（后端不自动重启）：按普通网络失败处理
         toast(t('sys.update_network'));
-        if (btn) btn.textContent = '⬆️ 升级';
+        if (btn) btn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('download', 16) : '') + ' 升级';
         _setUpdateInFlight(false);
     }
 }
@@ -710,7 +710,7 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
     // AI 回复右侧加「📋 复制」按钮，点击写入剪贴板
     if (role === 'assistant' && content) {
         const copyBtn = document.createElement('button');
-        copyBtn.textContent = '📋';
+        copyBtn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('copy', 16) : '📋');
         copyBtn.title = currentLang==='en'?'Copy to clipboard':'复制到剪贴板';
         // 复制按钮：无外框，放进助手标题行右侧（跟随标题，短消息也不会下溢遮挡下一条）
         copyBtn.style.cssText = 'background:none;border:none;padding:0 2px;font-size:15px;line-height:1;cursor:pointer;color:var(--muted);opacity:0.7;transition:opacity 0.15s;';
@@ -719,9 +719,11 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
         copyBtn.onclick = function(e) {
             e.stopPropagation();
             navigator.clipboard.writeText(content).then(function() {
-                copyBtn.textContent = '✅'; setTimeout(function() { copyBtn.textContent = '📋'; }, 1500);
+                copyBtn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('check', 16) : '✅');
+                setTimeout(function() { copyBtn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('copy', 16) : '📋'); }, 1500);
             }).catch(function() {
-                copyBtn.textContent = '❌'; setTimeout(function() { copyBtn.textContent = '📋'; }, 1500);
+                copyBtn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('x', 16) : '❌');
+                setTimeout(function() { copyBtn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('copy', 16) : '📋'); }, 1500);
             });
         };
         if (msgHead) {

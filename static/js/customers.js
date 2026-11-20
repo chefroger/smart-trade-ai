@@ -41,8 +41,8 @@ async function renderCustomersViewInto(container) {
                     <option value="">${currentLang==='en'?'All Buyer Types':'全部类型'}</option>
                 </select>
                 <div class="cust-seg" id="cust-stage-seg" role="group" aria-label="商机阶段"></div>
-                <button type="button" class="cust-star-toggle" id="cust-starred-toggle" onclick="toggleStarredFilter()">☆ ${currentLang==='en'?'Starred only':'只看星标'}</button>
-                <button type="button" class="cust-star-toggle" id="cust-overdue-toggle" onclick="toggleOverdueFilter()">⚠ ${currentLang==='en'?'Overdue only':'只看逾期'}</button>
+                <button type="button" class="cust-star-toggle" id="cust-starred-toggle" onclick="toggleStarredFilter()">${btnIcon('star')} ${currentLang==='en'?'Starred only':'只看星标'}</button>
+                <button type="button" class="cust-star-toggle" id="cust-overdue-toggle" onclick="toggleOverdueFilter()">${btnIcon('triangle-exclamation-point')} ${currentLang==='en'?'Overdue only':'只看逾期'}</button>
                 <span class="flt-lbl">${currentLang==='en'?'Sort':'排序'}</span>
                 <select id="cust-sort" aria-label="排序" onchange="filterCustomers()">
                     <option value="follow_up">${currentLang==='en'?'Follow-up first':'待跟进优先'}</option>
@@ -443,7 +443,7 @@ function _custGoPage(p) { _custPage = p; renderCustomersTable(_custFiltered); }
 function toggleStarredFilter() {
     _custStarred = !_custStarred;
     const b = $('cust-starred-toggle');
-    if (b) { b.classList.toggle('on', _custStarred); b.textContent = (_custStarred ? '★ ' : '☆ ') + (currentLang === 'en' ? 'Starred only' : '只看星标'); }
+    if (b) { b.classList.toggle('on', _custStarred); b.innerHTML = btnIcon('star') + ' ' + (currentLang === 'en' ? 'Starred only' : '只看星标'); }
     filterCustomers();
 }
 
@@ -452,7 +452,7 @@ function toggleOverdueFilter() {
     const b = $('cust-overdue-toggle');
     if (b) {
         b.classList.toggle('on', _custOverdueOnly);
-        b.textContent = '⚠ ' + (currentLang === 'en' ? 'Overdue only' : '只看逾期');
+        b.innerHTML = btnIcon('triangle-exclamation-point') + ' ' + (currentLang === 'en' ? 'Overdue only' : '只看逾期');
     }
     filterCustomers();
 }
@@ -1768,7 +1768,7 @@ async function bulkImportCustomers() {
     } catch (e) {
         toast('导入失败: ' + e.message);
     }
-    btn.disabled = false; btn.textContent = '📤 上传导入';
+    btn.disabled = false; btn.innerHTML = btnIcon('upload') + ' 上传导入';
     fileInput.value = '';
 }
 
