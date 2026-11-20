@@ -12,6 +12,10 @@ from typing import Any
 from trade.database import get_connection
 
 
+class VisitPlanError(Exception):
+    """验厂计划写入被拒（客户不属于本公司等）。"""
+
+
 def _as_days(value: Any) -> int:
     """天数解析：非法或非正一律按 1 天，避免 int() 抛 ValueError 变 500。"""
     try:
@@ -19,6 +23,24 @@ def _as_days(value: Any) -> int:
     except (TypeError, ValueError):
         return 1
     return n if n > 0 else 1
+
+
+def _assert_customer_in_company(conn, customer_id: int | None, company_id: int) -> None:
+    """校验客户属于本公司；不属于就拒写。
+
+    此前 customer_id 原样入库，可以挂别家客户的 id（2026-11-20 审计 P2-8）。
+    customer_id 为空是合法用法（不关联客户的计划），直接放行。
+    """
+    # 不关联客户是合法用法：空 id 直接放行，不做归属校验
+    if not customer_id:
+        return
+    row = conn.execute(
+        "SELECT 1 FROM customers WHERE id = ? AND company_id = ?",
+        (customer_id, company_id),
+    ).fetchone()
+    # 查不到 = 不存在或属于别家，一律拒绝，避免泄露"这个 id 存不存在"
+    if not row:
+        raise VisitPlanError("客户不属于本公司")
 
 
 def _row_to_dict(row) -> dict:
@@ -73,6 +95,7 @@ def create_plan(
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        _assert_customer_in_company(conn, customer_id, company_id)
         cur = conn.execute(
             "INSERT INTO visit_plans "
             "(company_id, customer_id, title, visit_date, days, location, payload) "
@@ -110,6 +133,9 @@ def update_plan(plan_id: int, *, company_id: int, **fields) -> dict | None:
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        # 改挂客户时同样校验归属，不能把计划挪到别家客户身上
+        if "customer_id" in updates and updates["customer_id"]:
+            _assert_customer_in_company(conn, updates["customer_id"], company_id)
         cur = conn.execute(
             f"UPDATE visit_plans SET {cols}, updated_at = datetime('now','localtime') "
             "WHERE id = ? AND company_id = ?",

@@ -218,3 +218,40 @@ class TestSensitiveProfileNotLeaked:
         d = vp.suggest_draft(company_id, customer_id)
         assert not any("红酒" in x for x in d["profile_notes"])
         assert "红酒" not in d["risks"]
+
+
+class TestCustomerOwnership:
+    def test_create_rejects_foreign_customer(self, company_id, customer_id):
+        """customer_id 必须属于本公司（2026-11-20 审计 P2-8）。"""
+        from trade import company, customer
+        from trade import visit_plan as vp
+
+        other = company.create(name="Other Owner Co", slug="other-owner-co")["id"]
+        other_cust = customer.create("别的公司客户", company_id=other)["id"]
+
+        with pytest.raises(vp.VisitPlanError):
+            vp.create_plan(company_id, customer_id=other_cust, title="挂别人客户")
+
+    def test_update_rejects_foreign_customer(self, company_id, customer_id):
+        from trade import company, customer
+        from trade import visit_plan as vp
+
+        other = company.create(name="Other Owner Co 2", slug="other-owner-co-2")["id"]
+        other_cust = customer.create("别的公司客户2", company_id=other)["id"]
+        pid = vp.create_plan(company_id, customer_id=customer_id, title="自己的")
+
+        with pytest.raises(vp.VisitPlanError):
+            vp.update_plan(pid, company_id=company_id, customer_id=other_cust)
+
+    def test_own_customer_ok(self, company_id, customer_id):
+        from trade import visit_plan as vp
+
+        pid = vp.create_plan(company_id, customer_id=customer_id, title="自己的客户")
+        assert vp.get_plan(pid, company_id=company_id)["customer_id"] == customer_id
+
+    def test_none_customer_still_allowed(self, company_id):
+        """不关联客户的计划（customer_id 为空）必须仍能创建 —— 那是合法用法。"""
+        from trade import visit_plan as vp
+
+        pid = vp.create_plan(company_id, title="不关联客户")
+        assert vp.get_plan(pid, company_id=company_id)["customer_id"] is None

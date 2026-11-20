@@ -56,15 +56,19 @@ def suggest_visit_draft(customer_id: int | None = None, cid: int = Depends(requi
 @router.post("/visit-plans")
 def create_visit_plan(body: VisitPlanBody, cid: int = Depends(require_company)):
     payload = body.payload if isinstance(body.payload, dict) else {}
-    plan_id = visit_mod.create_plan(
-        cid,
-        customer_id=_int_or_none(body.customer_id),
-        title=str(body.title or ""),
-        visit_date=str(body.visit_date or ""),
-        days=_days_or_400(body.days) or 1,
-        location=str(body.location or ""),
-        payload=payload,
-    )
+    try:
+        plan_id = visit_mod.create_plan(
+            cid,
+            customer_id=_int_or_none(body.customer_id),
+            title=str(body.title or ""),
+            visit_date=str(body.visit_date or ""),
+            days=_days_or_400(body.days) or 1,
+            location=str(body.location or ""),
+            payload=payload,
+        )
+    # 客户不属于本公司：转 400，而不是冒成 500
+    except visit_mod.VisitPlanError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return visit_mod.get_plan(plan_id, company_id=cid)
 
 
@@ -92,7 +96,11 @@ def update_visit_plan(plan_id: int, body: VisitPlanBody, cid: int = Depends(requ
             fields[key] = parsed
         else:
             fields[key] = val if key != "payload" or isinstance(val, dict) else {}
-    plan = visit_mod.update_plan(plan_id, company_id=cid, **fields)
+    try:
+        plan = visit_mod.update_plan(plan_id, company_id=cid, **fields)
+    # 改挂到别家客户：转 400，而不是冒成 500
+    except visit_mod.VisitPlanError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not plan:
         raise HTTPException(status_code=404, detail="验厂计划不存在")
     return plan
