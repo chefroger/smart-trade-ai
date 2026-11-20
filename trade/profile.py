@@ -534,8 +534,15 @@ def update_fact(
         at, cid = normalize_attach(
             new_at, new_cid, customer_id=customer_id, company_id=company_id,
         )
-    # 分类变了就按新分类重算默认可见性（用户没显式传时）
-    category_changed = "category" in updates and updates["category"] is not None
+    # 分类真的变了，且调用方没显式传 ai_visible 时，按新分类重算默认可见性。
+    # 注意必须比较「新旧分类」，不能只看调用方是否带了 category 键 ——
+    # 前端编辑弹窗每次保存都固定回传 category（不含 ai_visible），
+    # 若按「带键」判定，改个错别字就会静默重置用户的 AI 可见性选择。
+    category_changed = (
+        "category" in updates
+        and updates["category"] is not None
+        and cat != existing["category"]
+    )
     if "ai_visible" in updates and updates["ai_visible"] is not None:
         ai_vis = _as_flag(updates["ai_visible"], "ai_visible") or 0
     if category_changed and "ai_visible" not in updates:

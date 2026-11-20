@@ -862,3 +862,48 @@ class TestSensitiveCategories:
         from trade import profile as p
 
         assert p.SENSITIVE_CATEGORIES == frozenset({"家庭", "礼物往来"})
+
+    def test_editing_same_category_keeps_ai_visible(self, company_id, customer_id, test_db):
+        """改错别字（分类不变）不得覆盖用户对 AI 可见性的选择。"""
+        from trade import profile as p
+
+        fact = p.create_fact_manual(
+            customer_id, company_id=company_id,
+            category="喜好", subject="德英对照", content="箱单用双语",
+        )
+        assert fact["ai_visible"] == 1
+        # 用户手动关掉 AI
+        p.update_fact(fact["id"], customer_id=customer_id, company_id=company_id,
+                      updates={"ai_visible": 0})
+        # 前端编辑弹窗固定回传 category/subject/content，不带 ai_visible
+        upd = p.update_fact(fact["id"], customer_id=customer_id, company_id=company_id,
+                            updates={"category": "喜好", "subject": "德英对照单据",
+                                     "content": "箱单用德英双语"})
+        assert upd["ai_visible"] == 0, "分类没变时不得重算 ai_visible"
+
+    def test_editing_same_gift_category_keeps_ai_visible_on(self, company_id, customer_id, test_db):
+        """「礼物往来」用户手动打开后，改错别字不得被悄悄关掉。"""
+        from trade import profile as p
+
+        fact = p.create_fact_manual(
+            customer_id, company_id=company_id,
+            category="礼物往来", subject="圣诞礼盒", content="一箱红酒",
+        )
+        p.update_fact(fact["id"], customer_id=customer_id, company_id=company_id,
+                      updates={"ai_visible": 1})
+        upd = p.update_fact(fact["id"], customer_id=customer_id, company_id=company_id,
+                            updates={"category": "礼物往来", "subject": "圣诞礼盒",
+                                     "content": "一箱红酒（已收）"})
+        assert upd["ai_visible"] == 1, "分类没变时不得重算 ai_visible"
+
+    def test_category_switch_recomputes_default(self, company_id, customer_id, test_db):
+        """家庭 → 喜好 且不传 ai_visible：按新分类默认给 1。"""
+        from trade import profile as p
+
+        fact = p.create_fact_manual(
+            customer_id, company_id=company_id,
+            category="家庭", subject="女儿", content="明年考大学",
+        )
+        upd = p.update_fact(fact["id"], customer_id=customer_id, company_id=company_id,
+                            updates={"category": "喜好"})
+        assert upd["ai_visible"] == 1
