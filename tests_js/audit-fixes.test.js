@@ -156,3 +156,19 @@ test('两个更新入口都先确认再 POST', () => {
     assert.match(body, /'X-Confirm-Update': 'yes'/, `${fn} 必须带后端要求的确认头`);
   }
 });
+
+test('两个更新入口用同一套按钮忙态机制', () => {
+  // 2026-11-20：_setBtnBusy 从 textContent 改成 innerHTML 之后，
+  // doUpdateSystem 里手写的 btn.textContent / btn.innerHTML 成了同类 bug 的残留
+  // ——textContent 会把图标按钮的图标抹掉，恢复也只能硬编码一份 HTML。
+  // 两个入口必须走同一个机制，否则改一处就漏一处。
+  for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
+    const start = SRC.indexOf(fn);
+    assert.ok(start > 0, `找不到 ${fn}`);
+    const body = SRC.slice(start, SRC.indexOf('\n}', start));
+    assert.match(body, /_setBtnBusy\(btn, true\)/, `${fn} 必须用 _setBtnBusy 进入忙态`);
+    assert.match(body, /_setBtnBusy\(btn, false\)/, `${fn} 必须用 _setBtnBusy 还原按钮`);
+    assert.ok(!/btn\.textContent\s*=/.test(body), `${fn} 不得手写 btn.textContent（会抹掉图标）`);
+    assert.ok(!/btn\.innerHTML\s*=/.test(body), `${fn} 不得手写 btn.innerHTML（还原须走 dataset）`);
+  }
+});

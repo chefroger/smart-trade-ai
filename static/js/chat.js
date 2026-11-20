@@ -223,8 +223,12 @@ function stopVersionCheck() {
 async function doUpdateSystem() {
     const btn = document.getElementById('update-banner');
     if (!(await _confirmTradeUpdate())) return;
-    if (btn) btn.textContent = '更新中...';
+    // 按钮忙态统一走 _setBtnBusy（存 innerHTML 再还原），与 doTradeUpdate 同机制：
+    // 手写 textContent 会把图标按钮的图标抹掉，恢复时也只能硬编码一份 HTML。
+    _setBtnBusy(btn, true);
     _setUpdateInFlight(true);
+    // 忙态提示走 toast：按钮已变成旋转图标，文字提示不能丢（与 doTradeUpdate 一致）
+    toast(t('sys.updating_now'));
     try {
         const resp = await api('POST', '/api/trade/system/update',
             {target_sha: _pendingUpdateTarget || null},
@@ -247,7 +251,7 @@ async function doUpdateSystem() {
         } else if (resp?.error || (resp?.errors && resp.errors.length)) {
             // 之前这里只有一句「更新失败」，用户无从知道原因
             toast(_updateErrorText(resp), {sticky: true});
-            if (btn) btn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('download', 16) : '') + ' 升级';
+            _setBtnBusy(btn, false);
             _setUpdateInFlight(false);
         } else {
             // resp 为 null 时 api() 已 toast，不重复提示
@@ -256,7 +260,7 @@ async function doUpdateSystem() {
     } catch(e) {
         // 更新请求不会触发服务重启（后端不自动重启）：按普通网络失败处理
         toast(t('sys.update_network'));
-        if (btn) btn.innerHTML = (typeof iconHtml === 'function' ? iconHtml('download', 16) : '') + ' 升级';
+        _setBtnBusy(btn, false);
         _setUpdateInFlight(false);
     }
 }
