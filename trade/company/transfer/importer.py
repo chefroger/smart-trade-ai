@@ -165,6 +165,81 @@ def _find_targets(conn: sqlite3.Connection, name: str) -> list[dict]:
     return [row for row in rows if merge_mod.norm_name(row.get("name")) == target]
 
 
+# 合并同名客户时允许「目标为空则用源值填」的文本字段
+_MERGE_TEXT_FIELDS = ("contact", "note")
+# 同理按 key 合并的 JSON 字段（extra3 是用户标签，不合并）
+_MERGE_JSON_FIELDS = ("extra1", "extra2")
+
+
+def _merge_json_blanks(target_raw, source_raw) -> str | None:
+    """按 key 合并 JSON：目标缺 key 或值为空时用源值；没有任何变化返回 None。"""
+    try:
+        target = json.loads(target_raw) if target_raw else {}
+        source = json.loads(source_raw) if source_raw else {}
+    except (TypeError, ValueError):
+        # 任一侧不是合法 JSON：不动，避免把用户数据改成意外结构
+        return None
+    # 非 dict 的畸形内容不动，避免把用户数据改成意外结构
+    if not isinstance(target, dict) or not isinstance(source, dict):
+        return None
+    changed = False
+    for key, value in source.items():
+        # 目标已有非空值：保留目标
+        if target.get(key) not in (None, "", [], {}):
+            continue
+        # 源值也是空：补了也没意义
+        if value in (None, "", [], {}):
+            continue
+        target[key] = value
+        changed = True
+    return json.dumps(target, ensure_ascii=False) if changed else None
+
+
+def _fill_empty_customer_fields(conn: sqlite3.Connection, customer_id: int,
+                                source: dict) -> None:
+    """合并同名客户：目标为空时用源值填充，非空一律不动（2026-11-20 审计 C2）。
+
+    明确不碰 stage / stage_override / is_starred / next_follow_up_date ——
+    这些是用户在目标库里的当前状态，不该被导入覆盖。
+    """
+    row = conn.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
+    # 目标行消失（并发删除）：不填，直接返回
+    if row is None:
+        return
+    target = dict(row)
+    changes: dict[str, str] = {}
+    for field in _MERGE_TEXT_FIELDS:
+        # 目标该字段为空、源值非空：记下要补的值
+        if not str(target.get(field) or "").strip() and str(source.get(field) or "").strip():
+            changes[field] = source[field]
+    for field in _MERGE_JSON_FIELDS:
+        merged = _merge_json_blanks(target.get(field), source.get(field))
+        # 确实补进了内容：记为一次变更
+        if merged is not None:
+            changes[field] = merged
+    # 没有任何空字段可补：不写库
+    if not changes:
+        return
+    cols = ", ".join(f"{k} = ?" for k in changes)
+    conn.execute(
+        f"UPDATE customers SET {cols} WHERE id = ?",
+        (*changes.values(), customer_id),
+    )
+
+
+def _unique_customer_name(base_name: str, existing_by_name: dict) -> str:
+    """给「新建」的客户算一个不与现有同名客户冲突的名字。"""
+    base = (base_name or "").strip() or "未命名客户"
+    n = 2
+    # 逐个后缀试，直到归一化后不与现有名字冲突
+    while True:
+        candidate = f"{base} ({n})"
+        # 该后缀仍被占用：换下一个数字继续试
+        if merge_mod.norm_name(candidate) not in existing_by_name:
+            return candidate
+        n += 1
+
+
 def _target_context(conn: sqlite3.Connection, company_id: int) -> dict:
     row = conn.execute(
         "SELECT * FROM trade_companies WHERE company_id = ?", (company_id,)
@@ -231,8 +306,13 @@ def _merge_copy(src: Path, dst: Path, conflict_root: Path, rel: str,
 
 
 def import_company(zip_path: Path, *, target_company_id: int | None = None,
-                   force_new: bool = False) -> dict:
-    """导入一个公司包，返回报告。异常时抛 TransferError / ValueError。"""
+                   force_new: bool = False,
+                   customer_decisions: dict[int, str] | None = None) -> dict:
+    """导入一个公司包，返回报告。异常时抛 TransferError / ValueError。
+
+    customer_decisions：{源客户 id: "merge" | "create"}。None 时保持历史行为
+    （同名客户静默合并）；调用方传入时必须覆盖所有冲突客户（API 层负责校验）。
+    """
     from trade.company import crud as company_crud
     from trade.database import _get_db_path, get_connection
     from trade.post_install.backup import snapshot_db
@@ -477,25 +557,32 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         customer_map: dict[int, int] = {}
         customer_names: dict[int, str] = {row["id"]: row.get("name") or "" for row in target_customers}
         customer_inserted = customer_skipped = 0
+        decisions = customer_decisions or {}
         for row in source_tables["customers"]:
             key = merge_mod.norm_name(row.get("name"))
             existing = cust_by_name.get(key)
-            if existing:
+            decision = decisions.get(row["id"])
+
+            # 合并：用户选了 merge，或没提供决定（历史行为）
+            if existing and decision != "create":
                 customer_map[row["id"]] = existing["id"]
                 customer_skipped += 1
-                for field in ("contact", "note"):
-                    if not existing.get(field) and row.get(field):
-                        conn.execute(
-                            f"UPDATE customers SET {field} = ? WHERE id = ?",
-                            (row[field], existing["id"]),
-                        )
+                _fill_empty_customer_fields(conn, existing["id"], row)
                 continue
+
             new_row = _without_id(dict(row))
             new_row["company_id"] = target_id
+            # 新建：用户明确要求，或在目标库没有同名客户
+            if existing and decision == "create":
+                # 同名但不同公司：加唯一后缀，避免下次导入又冲突
+                new_row["name"] = _unique_customer_name(row.get("name") or "", cust_by_name)
             new_id = _insert(conn, "customers", new_row)
             customer_map[row["id"]] = new_id
-            cust_by_name[key] = {"id": new_id, "name": row.get("name")}
-            customer_names[new_id] = row.get("name") or ""
+            # 按**新名字**登记：新建加了后缀时 key 会变，否则同包后续同名客户会匹配错
+            cust_by_name[merge_mod.norm_name(new_row["name"])] = {
+                "id": new_id, "name": new_row["name"],
+            }
+            customer_names[new_id] = new_row["name"] or ""
             customer_inserted += 1
         report["tables"]["customers"] = {
             "inserted": customer_inserted, "skipped": customer_skipped,
