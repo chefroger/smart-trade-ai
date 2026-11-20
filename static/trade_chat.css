@@ -2079,3 +2079,9 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     #usage-today { display: none !important; }
     #license-bar { display: none !important; }
 }
+
+/* C2 导入同名客户逐对选择 */
+.imp-conflict { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--border-light); }
+.imp-conflict-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.imp-conflict select { max-width: 55%; font-size: 12px; }
+.imp-conflict-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; flex-wrap: wrap; }

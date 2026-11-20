@@ -922,6 +922,8 @@ function loadCompanyListUI() {
 
 // ── 公司数据导出 / 导入 ─────────────────────────────────────────────
 let _pendingImportFile = null;
+// 两阶段导入：预检返回的 upload_id，确认导入时凭它取回临时包（30 分钟有效）
+let _importUploadId = null;
 
 function _downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
@@ -1017,10 +1019,11 @@ function showImportCompanyDialog() {
 
 async function uploadCompanyImport(file, targetCompanyId, forceNew) {
     const status = document.getElementById('imp-status');
-    if (status) status.textContent = '正在上传并导入，请勿关闭页面…';
+    if (status) status.textContent = '正在分析数据包，请勿关闭页面…';
     // 合并到非当前公司时先切换 session 绑定：导入端点会拒绝「绑定 A 却写 B」
     if (targetCompanyId && targetCompanyId !== currentCompanyId) {
         const switched = await api('POST', '/api/trade/companies/' + targetCompanyId + '/switch').catch(() => null);
+        // 切换失败：停止上传，避免带着旧绑定去写另一个公司
         if (!switched) {
             if (status) status.textContent = '切换目标公司失败，请重试。';
             return;
@@ -1030,6 +1033,8 @@ async function uploadCompanyImport(file, targetCompanyId, forceNew) {
     }
     const fd = new FormData();
     fd.append('file', file);
+    // 两阶段导入：先只读预检，列出同名客户冲突，用户逐对决定后再确认
+    fd.append('preflight', 'true');
     if (targetCompanyId) fd.append('target_company_id', String(targetCompanyId));
     if (forceNew) fd.append('force_new', 'true');
     try {
@@ -1040,12 +1045,138 @@ async function uploadCompanyImport(file, targetCompanyId, forceNew) {
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
+            // 公司级歧义（多个同名公司）：和 job 阶段一样用 prompt() 让用户指定目标，再重新预检
+            if (resp.status === 409 && data.candidates) {
+                const list = (data.candidates || [])
+                    .map(function (c) { return c.id + ': ' + c.name + ' (' + c.slug + ')'; })
+                    .join('\n');
+                const answer = prompt('目标机有多个同名公司，请输入要合并的公司 ID：\n' + list);
+                const targetId = parseInt(answer, 10);
+                // 用户给了有效 ID：清掉旧的上传状态，带目标公司重新预检
+                if (targetId) {
+                    _importUploadId = null;
+                    uploadCompanyImport(_pendingImportFile || file, targetId, false);
+                } else if (status) {
+                    // 用户取消：保留文件选择，提示后可再次选文件重试
+                    status.textContent = '已取消：未选择目标公司';
+                }
+                return;
+            }
+            // 其它失败（非 zip / 过大 / 包不合规）：显示原因并清空选择以便重试
             if (status) status.textContent = '导入失败：' + (data.detail || resp.status);
             // 清空选择：否则重新选同一个文件不会触发 change，用户无法重试
             const inp = document.getElementById('imp-file');
             if (inp) inp.value = '';
             return;
         }
+        // 预检成功：交给冲突渲染决定「无冲突直接确认」还是「逐对选择」
+        _renderImportConflicts(data);
+    } catch (err) {
+        if (status) status.textContent = '导入失败：' + (err && err.message ? err.message : err);
+        const inp = document.getElementById('imp-file');
+        if (inp) inp.value = '';
+    }
+}
+
+function _renderImportConflicts(data) {
+    /** 预检结果：无冲突直接确认；有冲突渲染逐对选择（2026-11-20 审计 C2）。 */
+    const status = document.getElementById('imp-status');
+    _importUploadId = data.upload_id;
+
+    // 无冲突：与今天一样的「一键导入」体验
+    if (!data.conflicts || !data.conflicts.length) {
+        if (status) status.textContent = '未发现同名客户，开始导入…';
+        _confirmImport([]);
+        return;
+    }
+
+    if (status) {
+        // 每个冲突一行：左侧源客户名，右侧选择「合并到目标」或「新建为提议名」
+        const rows = data.conflicts.map(function (c) {
+            // 后端没算新名字时兜底为「原名 (2)」，避免出现空选项
+            const newName = c.proposed_new_name || ((c.source_name || '') + ' (2)');
+            return '<div class="imp-conflict" data-source-id="' + esc(String(c.source_id)) + '">' +
+                '<div class="imp-conflict-name">' + esc(c.source_name || '') + '</div>' +
+                '<select data-role="imp-action">' +
+                '<option value="merge">合并到「' + esc(c.target_name || '') + '」</option>' +
+                '<option value="create">新建为「' + esc(newName) + '」</option>' +
+                '</select></div>';
+        }).join('');
+        status.innerHTML =
+            '<div class="imp-conflict-title">发现 ' + esc(String(data.conflicts.length)) + ' 个同名客户，请逐个选择：</div>' +
+            rows +
+            '<div class="imp-conflict-actions">' +
+            '<button type="button" class="btn btn-xs" data-imp-bulk="merge">全部合并</button>' +
+            '<button type="button" class="btn btn-xs" data-imp-bulk="create">全部新建</button>' +
+            '<button type="button" class="btn btn-primary btn-xs" id="imp-confirm-btn">开始导入</button>' +
+            '</div>';
+    }
+
+    // 批量按钮：把每行的 select 统一设成同一动作
+    document.querySelectorAll('[data-imp-bulk]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const action = btn.getAttribute('data-imp-bulk');
+            document.querySelectorAll('select[data-role="imp-action"]').forEach(function (sel) {
+                sel.value = action;
+            });
+        });
+    });
+    // 开始导入：收集逐对选择后确认
+    document.getElementById('imp-confirm-btn')?.addEventListener('click', function () {
+        // 逐行读取，batch 按钮只是「预填」，最终仍以用户的逐对选择为准
+        const decisions = Array.prototype.map.call(
+            document.querySelectorAll('.imp-conflict'),
+            function (el) {
+                return {
+                    source_id: Number(el.getAttribute('data-source-id')),
+                    action: el.querySelector('select[data-role="imp-action"]').value,
+                };
+            },
+        );
+        _confirmImport(decisions);
+    });
+}
+
+async function _confirmImport(decisions) {
+    /** 用预检结果 + 逐对选择开始导入。 */
+    const status = document.getElementById('imp-status');
+    // 没有 upload_id：预检没跑完或状态被清掉，只能让用户重新选文件
+    if (!_importUploadId) {
+        if (status) status.textContent = '导入链接已失效，请重新选择文件。';
+        return;
+    }
+    if (status) status.textContent = '正在导入，请勿关闭页面…';
+    try {
+        const resp = await fetch(
+            '/api/trade/companies/import-package/' + encodeURIComponent(_importUploadId) + '/confirm',
+            {
+                method: 'POST',
+                headers: {
+                    'X-Hermes-Session-Token': TOKEN,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({customer_decisions: decisions}),
+            },
+        );
+        const data = await resp.json().catch(function () { return {}; });
+        if (!resp.ok) {
+            // 过期：upload_id 已被清掉，链接不能再用，提示重选文件
+            if (resp.status === 410) {
+                if (status) status.textContent = '导入链接已过期，请重新选择文件。';
+            } else if (resp.status === 409) {
+                // 409：另一请求正在导入，或还有未选择的冲突
+                if (status) status.textContent = data.detail || '导入正在进行中，请稍候。';
+            } else {
+                // 其它错误：显示后端原因，让用户可重试
+                if (status) status.textContent = '导入失败：' + (data.detail || resp.status);
+            }
+            // 清空选择：确认失败后让用户能重新选同一个文件发起新一轮预检
+            const inp = document.getElementById('imp-file');
+            if (inp) inp.value = '';
+            return;
+        }
+        // 确认成功：upload_id 已消耗，轮询后台任务进度
+        _importUploadId = null;
         pollImportJob(data.job_id);
     } catch (err) {
         if (status) status.textContent = '导入失败：' + (err && err.message ? err.message : err);
