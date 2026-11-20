@@ -2,8 +2,8 @@
 Trade AI Assistant — 一键系统更新。
 
 update_trade() 按序执行 7 个步骤：
-  1. git pull（在运行目录拉取最新代码；拉取前钉选远端 main 的 SHA，
-     拉取后回读 HEAD 必须与之一致，否则中止并回退）
+  1. fetch + checkout 更新分支（在运行目录拉取最新代码；拉取前钉选远端
+     更新分支的 SHA，拉取后回读 HEAD 必须与之一致，否则中止并回退）
   2. install_skills()（安装新增的 b2b-* skill 目录 + 模板）
   3. update_skills()（从 GitHub 同步每个 SKILL.md 内容）
   4. pip install -e .（更新包及依赖）
@@ -458,11 +458,15 @@ def _git_head(trade_dir: Path) -> str | None:
 #: 私有仓库/凭证过期时，`git` 会在后台服务里静等账号密码，界面永远停在"更新中"。
 _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
 
+# 更新跟随的分支（2026-11-20 决定）：main 开发，stable 只在验证后快进。
+# 环境变量可覆盖，用于回滚到 main 或临时测试其它分支。
+_UPDATE_BRANCH = (os.environ.get("TRADE_UPDATE_BRANCH", "stable").strip() or "stable")
+
 
 def _explain_git_error(stderr: str, stdout: str = "") -> str:
     """把 git 的报错翻成**能照做**的中文提示（而不是笼统的「检查网络」）。
 
-    2026-11-02 客户机实测：界面只显示「无法解析远端 main 的最新提交，请检查网络
+    2026-11-02 客户机实测：界面只显示「无法解析远端更新分支的最新提交，请检查网络
     或代理后重试」，但真实原因可能是 git 没走代理、credential 过期、origin 配置
     丢了 —— 三种情况的解法完全不同，笼统提示等于没有提示。
     """
@@ -498,13 +502,16 @@ def _first_line(text: str) -> str:
 
 
 def _remote_main_sha_diagnose(remote: str, cwd: Path) -> tuple[str | None, str]:
-    """解析远端 main 的 SHA；返回 (sha, 失败原因)。
+    """解析远端更新分支（默认 stable）的 SHA；返回 (sha, 失败原因)。
+
+    函数名带 main 是历史遗留（2026-11-20 起更新改跟 stable），调用方与测试
+    依赖这个名字，故不改名。
 
     sha 为 None 时，第二个值是给用户看的可读原因（调用方直接展示）。
     """
     try:
         r = subprocess.run(
-            ["git", "ls-remote", remote, "refs/heads/main"],
+            ["git", "ls-remote", remote, f"refs/heads/{_UPDATE_BRANCH}"],
             cwd=str(cwd), capture_output=True, text=True, timeout=60,
             env={**os.environ, **_GIT_ENV},
         )
@@ -531,15 +538,15 @@ def _remote_main_sha_diagnose(remote: str, cwd: Path) -> tuple[str | None, str]:
 
 
 def _remote_main_sha_from(remote: str, cwd: Path) -> str | None:
-    """解析 `remote` 的 main 分支当前提交 SHA；解析失败返回 None。"""
+    """解析 `remote` 的更新分支当前提交 SHA；解析失败返回 None。"""
     sha, _reason = _remote_main_sha_diagnose(remote, cwd)
     return sha
 
 
 def _remote_main_sha(trade_dir: Path) -> str | None:
-    """解析 origin/main 当前的提交 SHA，用于把本次更新钉死在这个提交上。
+    """解析 origin 更新分支当前的提交 SHA，用于把本次更新钉死在这个提交上。
 
-    为什么先查远端：`git pull origin main` 拉的是"命令执行那一刻"的分支头，
+    为什么先查远端：`git fetch origin <branch>` 拉的是"命令执行那一刻"的分支头，
     若拉取过程中远端被推了新提交，装进来的就未必是用户点更新时那个版本。
     先记下 SHA、拉取后再回读 HEAD 比对，不一致就中止 —— 宁可让用户重试，
     也不要把一个未经确认的提交装进本机。
@@ -563,13 +570,13 @@ def _normalize_sha(value: str | None) -> str | None:
 
 
 def preview_update_target() -> dict:
-    """前端确认框用：返回本次更新将要钉选的远端 main 短 SHA。"""
+    """前端确认框用：返回本次更新将要钉选的远端更新分支短 SHA。"""
     trade_dir = _get_trade_home() / "foreign-trade-assistant"
     if not trade_dir.is_dir():
         return {"ok": False, "error": "安装目录不存在，无法检查更新目标。"}
     sha, reason = _remote_main_sha_ex(trade_dir)
     if not sha:
-        return {"ok": False, "error": f"无法解析远端 main 的最新提交：{reason}"}
+        return {"ok": False, "error": f"无法解析远端 {_UPDATE_BRANCH} 的最新提交：{reason}"}
     return {"ok": True, "sha": sha, "short": sha[:8]}
 
 
@@ -618,6 +625,27 @@ def _verify_pinned_head(
     emit(f"  ❌ HEAD 与钉选提交不一致：期望 {target_sha[:8]}，实际 {got_short}")
     errors.append(f"pinned head mismatch: expected {target_sha[:8]}, got {got_short}")
     return False
+
+
+def _sync_to_update_branch(trade_dir: Path, target_sha: str) -> subprocess.CompletedProcess:
+    """把本地检出切到更新分支并钉在 target_sha 上。
+
+    为什么不用 `git pull origin <branch>`：老用户的仓库还停在 main，pull 会把
+    更新分支合进 main 且从此不再快进。`fetch` + `checkout -B` 能一次性完成
+    「切换分支 + 对齐到确认过的提交」（2026-11-20 起更新跟随 stable）。
+    """
+    fetch = subprocess.run(
+        ["git", "fetch", "origin", _UPDATE_BRANCH],
+        cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
+    )
+    # 拉取失败原样返回，交给调用方走现有的 stash/重试流程
+    if fetch.returncode != 0:
+        return fetch
+    # fetch 成功后再把本地分支对齐到钉选提交（checkout 失败同样交给调用方）
+    return subprocess.run(
+        ["git", "checkout", "-B", _UPDATE_BRANCH, target_sha],
+        cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
+    )
 
 
 def _prune_failed_migration_copies(backups_dir: Path, keep: int = 3) -> None:
@@ -746,14 +774,14 @@ def update_trade(target_sha_request: str | None = None) -> dict:
     """一键更新 Foreign Trade Assistant 系统。
 
     `target_sha_request`：前端预览接口返回、用户确认过的目标提交。
-    提供时更新钉在**这一个**提交上（不再临场重取 main），保证"确认框显示的
+    提供时更新钉在**这一个**提交上（不再临场重取更新分支），保证"确认框显示的
     SHA = 实际安装的 SHA"。
 
     返回结构化结果: {"ok": bool, "version": str, "target_sha": str,
                      "errors": list[str], "messages": list[str]}
 
     7 步更新流程（全部在 ~/.trade/foreign-trade-assistant/ 中执行，不依赖开发目录）：
-      1. git pull / git clone
+      1. git fetch + checkout / git clone
       2. install_skills()
       3. update_skills()
       4. pip install -e .
@@ -838,7 +866,7 @@ def update_trade(target_sha_request: str | None = None) -> dict:
         if _rollback_checkout(trade_dir, pre_update_sha, _emit, warnings):
             warnings.append(f"checkout rolled back after {reason}")
 
-    # ── Step 1: git pull / clone ───────────────────────────────────────────
+    # ── Step 1: git fetch + checkout / clone ───────────────────────────────
     # 本次更新钉选的提交（clone 也在 clone 后 checkout 到同一个 SHA）
     target_sha: str | None = None
     _REPO_URL = "https://github.com/chefroger/smart-trade-ai.git"
@@ -849,11 +877,12 @@ def update_trade(target_sha_request: str | None = None) -> dict:
         # 首次安装同样钉选：clone 拿到的是 clone 那一刻的分支头，先记下 SHA
         target_sha, why = _remote_main_sha_diagnose(_REPO_URL, trade_dir.parent)
         if not target_sha:
-            _emit(f"  ❌ 无法解析远端 main 的最新提交：{why}，已中止安装。")
+            _emit(f"  ❌ 无法解析远端 {_UPDATE_BRANCH} 的最新提交：{why}，已中止安装。")
+            # 内部标记保留 main 字样：既有失败识别与测试依赖它
             errors.append(f"cannot resolve remote main commit: {why}")
             return {
                 "ok": False, "version": "",
-                "error": f"无法解析远端 main 的最新提交：{why}",
+                "error": f"无法解析远端 {_UPDATE_BRANCH} 的最新提交：{why}",
                 "errors": errors, "warnings": warnings, "messages": messages,
             }
         _emit(f"  ℹ️ 本次安装钉选提交：{target_sha[:8]}")
@@ -871,9 +900,9 @@ def update_trade(target_sha_request: str | None = None) -> dict:
             _emit(f"  ❌ git clone failed: {err}")
             errors.append(f"git clone failed: {err}")
             return {"ok": False, "version": "", "error": err, "errors": errors, "warnings": warnings, "messages": messages}
-        # 把本地 main 指到钉选提交（clone 期间远端可能被推进）；之后回读校验
+        # 把本地更新分支指到钉选提交（clone 期间远端可能被推进）；之后回读校验
         pinned = subprocess.run(
-            ["git", "checkout", "-B", "main", target_sha],
+            ["git", "checkout", "-B", _UPDATE_BRANCH, target_sha],
             cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
         )
         if pinned.returncode != 0:
@@ -892,46 +921,42 @@ def update_trade(target_sha_request: str | None = None) -> dict:
             }
         _emit(f"  ✓ Repository cloned to {trade_dir}")
     else:
-        _emit("→ Step 1/7: git pull ...")
-        # 目标提交：前端确认过就用它（显示即所用）；否则临场取 main 当前头。
+        _emit(f"→ Step 1/7: git fetch + checkout ({_UPDATE_BRANCH}) ...")
+        # 目标提交：前端确认过就用它（显示即所用）；否则临场取更新分支当前头。
         if requested_sha:
             target_sha = requested_sha
             _emit(f"  ℹ️ 本次更新钉选提交（用户确认）：{target_sha[:8]}")
         else:
             target_sha, why = _remote_main_sha_ex(trade_dir)
             if not target_sha:
-                _emit(f"  ❌ 无法解析远端 main 的最新提交：{why}，已中止升级。")
+                _emit(f"  ❌ 无法解析远端 {_UPDATE_BRANCH} 的最新提交：{why}，已中止升级。")
+                # 内部标记保留 main 字样：既有失败识别与测试依赖它
                 errors.append(f"cannot resolve remote main commit: {why}")
                 return {
                     "ok": False, "version": "",
-                    "error": f"无法解析远端 main 的最新提交：{why}",
+                    "error": f"无法解析远端 {_UPDATE_BRANCH} 的最新提交：{why}",
                     "errors": errors, "warnings": warnings, "messages": messages,
                 }
             _emit(f"  ℹ️ 本次更新钉选提交：{target_sha[:8]}")
         try:
-            result = subprocess.run(
-                ["git", "pull", "--ff-only", "origin", "main"],
-                cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
-            )
+            result = _sync_to_update_branch(trade_dir, target_sha)
         except FileNotFoundError:
             _emit("  ❌ git 命令未找到，请先安装 Git for Windows 并重启终端")
             errors.append("git not found")
             return {"ok": False, "version": "", "error": "Git 未安装或不在 PATH 中，请先安装 Git for Windows", "errors": errors, "warnings": warnings, "messages": messages}
         if result.returncode != 0:
             err_text = result.stderr.strip()
-            _emit(f"  ⚠ git pull failed: {err_text}")
+            _emit(f"  ⚠ git 同步失败: {err_text}")
             _emit("  💡 尝试自动 stash 后重试...")
             stash = subprocess.run(
                 ["git", "stash"], cwd=str(trade_dir),
                 capture_output=True, text=True, timeout=30,
             )
             if stash.returncode == 0:
-                pull2 = subprocess.run(
-                    ["git", "pull", "--ff-only", "origin", "main"],
-                    cwd=str(trade_dir), capture_output=True, text=True, timeout=120,
-                )
-                if pull2.returncode == 0:
-                    _emit("  ✓ git pull (after stash) OK")
+                # stash 成功后重试同一套「fetch + checkout」同步
+                sync_retry = _sync_to_update_branch(trade_dir, target_sha)
+                if sync_retry.returncode == 0:
+                    _emit(f"  ✓ 已同步到 {_UPDATE_BRANCH}@{target_sha[:8]}（stash 后重试）")
                     pop = subprocess.run(
                         ["git", "stash", "pop"], cwd=str(trade_dir),
                         capture_output=True, text=True, timeout=30,
@@ -972,8 +997,8 @@ def update_trade(target_sha_request: str | None = None) -> dict:
                             "errors": errors, "warnings": warnings, "messages": messages,
                         }
                 else:
-                    err2 = pull2.stderr.strip()
-                    _emit(f"  ❌ git pull failed after stash: {err2}")
+                    err2 = sync_retry.stderr.strip()
+                    _emit(f"  ❌ git 同步失败（stash 后）: {err2}")
                     # 关键：本地改动已被 stash 且未 pop，工作区看起来「改动消失了」——
                     # 必须明确告知用户改动在哪、怎么取回，不能静默吞掉
                     _emit("  ⚠ 你的本地改动已被暂存到 git stash（未自动恢复）")
@@ -988,8 +1013,8 @@ def update_trade(target_sha_request: str | None = None) -> dict:
                 errors.append(f"git stash failed: {err_s}")
                 return {"ok": False, "version": "", "error": err_s, "errors": errors, "warnings": warnings, "messages": messages}
         else:
-            last_line = result.stdout.strip().split("\n")[-1] if result.stdout.strip() else "Already up-to-date."
-            _emit(f"  ✓ {last_line}")
+            # checkout 不会给 pull 那种 "Already up-to-date" 输出，直接报同步结果
+            _emit(f"  ✓ 已同步到 {_UPDATE_BRANCH}@{target_sha[:8]}")
 
         # 用户确认过的固定提交：拉取后钉回该提交（拉取期间远端可能已前进）。
         if requested_sha:
@@ -998,12 +1023,13 @@ def update_trade(target_sha_request: str | None = None) -> dict:
                 cwd=str(trade_dir), capture_output=True, text=True, timeout=60,
             )
             if anc.returncode != 0:
+                # 内部标记保留 main 字样：既有失败识别与测试依赖它
                 _rollback_if_possible("target sha not on main")
-                _emit(f"  ❌ 目标提交 {target_sha[:8]} 不在远端 main 上，已中止。")
+                _emit(f"  ❌ 目标提交 {target_sha[:8]} 不在远端 {_UPDATE_BRANCH} 上，已中止。")
                 errors.append("target sha not on main")
                 return {
                     "ok": False, "version": "", "target_sha": target_sha,
-                    "error": "目标提交不在 main 分支上，请重新检查更新后重试。",
+                    "error": f"目标提交不在 {_UPDATE_BRANCH} 分支上，请重新检查更新后重试。",
                     "errors": errors, "warnings": warnings, "messages": messages,
                 }
             pin = subprocess.run(
@@ -1028,7 +1054,7 @@ def update_trade(target_sha_request: str | None = None) -> dict:
             _rollback_if_possible("remote main moved during update")
             return {
                 "ok": False, "version": "",
-                "error": f"更新期间远端 main 发生变化（期望 {target_sha[:8]}），请重试。",
+                "error": f"更新期间远端 {_UPDATE_BRANCH} 发生变化（期望 {target_sha[:8]}），请重试。",
                 "errors": errors, "warnings": warnings, "messages": messages,
             }
 

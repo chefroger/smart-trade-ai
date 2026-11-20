@@ -31,7 +31,7 @@ def _pin_pip_interpreter(monkeypatch):
     monkeypatch.setattr(upd, "_pip_python", lambda: (sys.executable, None))
 
 
-# 钉选测试用的稳定提交：默认让「远端 main」与「本地 HEAD」一致，
+# 钉选测试用的稳定提交：默认让「远端更新分支（stable）」与「本地 HEAD」一致，
 # 需要模拟漂移的用例自行覆盖 `_remote_main_sha` / `_git_head`。
 PIN_SHA = "a" * 40
 
@@ -318,9 +318,10 @@ def _classify_subprocess_cmd(cmd) -> str:
     if prog.startswith("git"):
         if "stash" in argv:
             return "git-stash"
-        if "pull" in argv:
+        # 2026-11-20 起更新用 fetch（跟随 stable）取代 pull，二者归为同一类
+        if "pull" in argv or "fetch" in argv:
             return "git-pull"
-        return "git-other"  # clone / fetch 等
+        return "git-other"  # clone / checkout 等
     # pip 可能是裸命令，也可能是 `python -m pip ...`（前 4 个参数足够覆盖）
     if "pip" in argv[:4]:
         return "pip"
@@ -351,7 +352,7 @@ class TestRemoteShaDiagnostics:
 
     def test_success_returns_sha_and_empty_reason(self, monkeypatch):
         sha = "a" * 40
-        upd = self._run(monkeypatch, stdout=f"{sha}\trefs/heads/main\n")
+        upd = self._run(monkeypatch, stdout=f"{sha}\trefs/heads/stable\n")
 
         got, reason = upd._remote_main_sha_diagnose("origin", Path("."))
 
@@ -705,18 +706,20 @@ class TestUpdateTradeDir:
         ], clone_cmd
         assert clone_cmd[-1] == str(expected_dir), f"clone 目标应是运行目录：{clone_cmd}"
 
-    def test_git_pull_runs_inside_runtime_dir(self):
-        """目录已存在时，git pull 的 cwd 必须是运行目录。"""
+    def test_git_fetch_runs_inside_runtime_dir(self):
+        """目录已存在时，同步更新分支的 git 命令 cwd 必须是运行目录。"""
         from trade.post_install.skills import _get_trade_home
 
         updater = TestUpdateStepSeverity()
         updater._run_update(existing_dir=True)
 
         # 首个调用现在是 `git rev-parse HEAD`（升级前记录回滚点，见 TestUpdateRollback），
-        # 所以这里按命令找 pull，而不是假设它是第一次调用。
+        # 所以这里按命令找 fetch / checkout，而不是假设它是第一次调用。
         calls = updater.last_subprocess.run.call_args_list
-        pull = next(c for c in calls if c[0][0][:3] == ["git", "pull", "--ff-only"])
-        assert pull[1]["cwd"] == str(_get_trade_home() / "foreign-trade-assistant"), pull[1]
+        fetch = next(c for c in calls if c[0][0][:3] == ["git", "fetch", "origin"])
+        assert fetch[1]["cwd"] == str(_get_trade_home() / "foreign-trade-assistant"), fetch[1]
+        checkout = next(c for c in calls if c[0][0][:3] == ["git", "checkout", "-B"])
+        assert checkout[1]["cwd"] == str(_get_trade_home() / "foreign-trade-assistant"), checkout[1]
 
     def test_guess_running_project_dir_removed(self):
         """_guess_running_project_dir 应已被删除。"""
@@ -867,8 +870,12 @@ class TestUpdateTrade:
         # 不应抛 SystemExit
         update_module.update_trade()
 
-        # 验证调用了 git pull 和 pip install
-        assert any(c[0] == "git" and c[1] == "pull" for c in subprocess_calls)
+        # 验证调用了同步更新分支（fetch + checkout）和 pip install
+        assert any(c[0] == "git" and c[1] == "fetch" for c in subprocess_calls)
+        assert any(
+            c[:3] == ["git", "checkout", "-B"] and c[3] == "stable"
+            for c in subprocess_calls
+        )
         # pip 命令形如 [python, "-m", "pip", "install", "-e", dir]
         assert any(
             len(c) >= 4 and c[0] == sys.executable and c[2] == "pip" and c[3] == "install"
@@ -992,7 +999,7 @@ class TestUpdateTrade:
         update_module.update_trade()
 
     def test_update_trade_git_pull_stash_failure(self, tmp_path, monkeypatch):
-        """git pull 失败 + git stash 也失败时，update_trade 应继续后续步骤。"""
+        """同步更新分支失败 + git stash 也失败时，update_trade 应继续后续步骤。"""
         from trade.post_install import update as update_module
 
         fake_trade_dir = tmp_path / "foreign-trade-assistant"
@@ -1002,10 +1009,13 @@ class TestUpdateTrade:
             update_module, "_get_trade_home", lambda: tmp_path
         )
 
+        # 第一次 fetch 失败，stash 也失败：不得进入 checkout，也不得抛异常
+        failed = {"done": False}
+
         def fake_run(cmd, *args, **kwargs):
-            if cmd[0] == "git" and cmd[1] == "pull":
-                # 第一次 pull 失败
-                if len(cmd) == 5:  # ['git', 'pull', '--ff-only', 'origin', 'main']
+            if cmd[:3] == ["git", "fetch", "origin"]:
+                if not failed["done"]:
+                    failed["done"] = True
                     return self._make_completed(1, stdout="", stderr="local changes")
             if cmd[0] == "git" and cmd[1] == "stash":
                 # stash 也失败
@@ -1312,15 +1322,42 @@ class TestUpdateRollback:
         assert any("恢复到升级前备份" in m for m in result["messages"]), result["messages"]
 
 
+class TestUpdateBranch:
+    """更新跟随的分支（2026-11-20 决定）：main 开发，stable 只在验证后快进。"""
+
+    def test_update_follows_stable_branch_by_default(self):
+        """默认跟随 stable：用户不该拿到 main 上的半成品（2026-11-20 决定）。"""
+        from trade.post_install import update as upd
+
+        # 开发机可能显式设置了覆盖变量；有覆盖时不代表默认值错误
+        if "TRADE_UPDATE_BRANCH" not in os.environ:
+            assert upd._UPDATE_BRANCH == "stable"
+
+    def test_update_branch_env_override(self, monkeypatch):
+        """允许用环境变量覆盖（回滚到 main / 临时测试）。"""
+        import importlib
+
+        from trade.post_install import update as upd
+
+        monkeypatch.setenv("TRADE_UPDATE_BRANCH", "main")
+        reloaded = importlib.reload(upd)
+        try:
+            assert reloaded._UPDATE_BRANCH == "main"
+        # 无论断言是否失败都要恢复默认值，避免污染后续用例
+        finally:
+            monkeypatch.delenv("TRADE_UPDATE_BRANCH", raising=False)
+            importlib.reload(upd)
+
+
 class TestUpdatePinning:
-    """P1-10：更新钉选远端 main 的提交；拉取后 HEAD 不一致就中止并回退。"""
+    """P1-10：更新钉选远端更新分支（stable）的提交；拉取后 HEAD 不一致就中止并回退。"""
 
     def test_remote_main_sha_parses_ls_remote_output(self, monkeypatch):
         from trade.post_install import update as upd
 
         class _R:
             returncode = 0
-            stdout = PIN_SHA + "\trefs/heads/main\n"
+            stdout = PIN_SHA + "\trefs/heads/stable\n"
             stderr = ""
 
         monkeypatch.setattr(upd.subprocess, "run", lambda *a, **k: _R())
@@ -1363,7 +1400,7 @@ class TestUpdatePinning:
 
         assert result["ok"] is False
         assert any("cannot resolve remote main" in e for e in result["errors"])
-        assert not [c for c in calls if c[:2] == ["git", "pull"]], (
+        assert not [c for c in calls if c[:2] == ["git", "fetch"]], (
             "解析不到钉选提交时不能拉取（否则装进来的是未经确认的版本）"
         )
 
@@ -1396,7 +1433,7 @@ class TestUpdatePinning:
         clone = next(c for c in calls if c[:2] == ["git", "clone"])
         assert clone[2].endswith("smart-trade-ai.git")
         assert any(
-            c[:3] == ["git", "checkout", "-B"] and c[3] == "main" and PIN_SHA in c
+            c[:3] == ["git", "checkout", "-B"] and c[3] == "stable" and PIN_SHA in c
             for c in calls
         ), calls
 
@@ -2074,16 +2111,17 @@ class TestLaunchdDetection:
         monkeypatch.setattr(upd, "_git_head", lambda d: pre_sha)
         monkeypatch.setattr(upd, "_remote_main_sha_ex", lambda d: ("b" * 40, ""))
 
-        pulled = {"first": False}
+        fetched = {"first": False}
         calls = []
 
         def fake_run(cmd, *a, **k):
             calls.append(list(cmd))
             cp = MagicMock()
             cp.returncode, cp.stdout, cp.stderr = 0, "", ""
-            if cmd[:3] == ["git", "pull", "--ff-only"] and not pulled["first"]:
+            # 第一次 fetch 分叉失败 → 触发 stash 重试；stash pop 再冲突
+            if cmd[:3] == ["git", "fetch", "origin"] and not fetched["first"]:
                 cp.returncode, cp.stderr = 1, "diverged"
-                pulled["first"] = True
+                fetched["first"] = True
             elif cmd[:3] == ["git", "stash", "pop"]:
                 cp.returncode, cp.stderr = 1, "CONFLICT"
             return cp
