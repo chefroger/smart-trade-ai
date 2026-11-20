@@ -975,3 +975,61 @@ class TestProfileTransfer:
         report = import_company(old_pkg, force_new=True)
         assert report["tables"]["customer_facts"]["inserted"] == 0
         assert report["tables"]["customer_gifts"]["inserted"] == 0
+
+
+class TestSensitiveNotExported:
+    def test_family_facts_not_in_package(self, desktop, tmp_path):
+        """敏感类画像（家庭/礼物往来）不得出现在导出包里（2026-11-20 审计 P0-1）。"""
+        from trade import customer
+        from trade import profile as p
+
+        source = crud.create(_unique("Sensitive Export"))
+        company_id = source["id"]
+        cust = customer.create("敏感客户", company_id=company_id)
+        p.create_fact_manual(
+            cust["id"], company_id=company_id, category="家庭",
+            subject="采购经理女儿", content="女儿 Anna 明年考大学",
+        )
+        p.create_fact_manual(
+            cust["id"], company_id=company_id, category="喜好",
+            subject="德英对照单据", content="箱单用德英双语",
+        )
+
+        package = tmp_path / "sensitive.zip"
+        export_company(company_id, package)
+
+        with zipfile.ZipFile(package) as zf:
+            rows = json.loads(zf.read("db/customer_facts.json").decode("utf-8"))
+
+        blob = json.dumps(rows, ensure_ascii=False)
+        assert "Anna" not in blob, "家庭类原文进了导出包"
+        assert "采购经理女儿" not in blob
+        assert any(r.get("category") == "喜好" for r in rows), "非敏感类必须照常导出"
+
+    def test_visit_plan_payload_reminder_block_scrubbed(self, desktop, tmp_path):
+        """visit_plans.payload 里的自动档案提醒块不得进导出包。"""
+        from trade import customer
+        from trade import visit_plan as vp
+
+        source = crud.create(_unique("Sensitive Plan"))
+        company_id = source["id"]
+        cust = customer.create("计划客户", company_id=company_id)
+        vp.create_plan(
+            company_id, customer_id=cust["id"], title="来访",
+            payload={
+                "risks": "- 用户自己写的风险\n\n【客户档案提醒 · 内部】\n- [家庭] 女儿 Anna",
+                "profile_notes": ["- [家庭] 女儿 Anna"],
+            },
+        )
+
+        package = tmp_path / "plan.zip"
+        export_company(company_id, package)
+
+        with zipfile.ZipFile(package) as zf:
+            rows = json.loads(zf.read("db/visit_plans.json").decode("utf-8"))
+
+        blob = json.dumps(rows, ensure_ascii=False)
+        assert "Anna" not in blob, "档案提醒块里的私密原文进了导出包"
+        assert "【客户档案提醒 · 内部】" not in blob
+        # 用户自己写的风险必须保留
+        assert "用户自己写的风险" in blob

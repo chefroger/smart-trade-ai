@@ -93,6 +93,60 @@ def _app_version() -> str:
         return "unknown"
 
 
+def _sensitive_categories() -> tuple[str, ...]:
+    """取敏感类分类清单（单一来源：trade.profile.SENSITIVE_CATEGORIES）。"""
+    from trade.profile import SENSITIVE_CATEGORIES
+
+    return tuple(sorted(SENSITIVE_CATEGORIES))
+
+
+def _sensitive_placeholders() -> str:
+    """生成与 _sensitive_categories() 等长的 SQL 占位符，如 "?, ?"。"""
+    return ", ".join("?" for _ in _sensitive_categories())
+
+
+# 前端自动写入客户画像提醒的块标记（旧版 suggest_draft 留下的）
+_PROFILE_REMINDER_MARKER = "【客户档案提醒 · 内部】"
+
+
+def _strip_profile_reminder(payload: dict) -> dict:
+    """从 payload 里去掉自动写入的客户档案提醒块。
+
+    这块是旧版 suggest_draft 自动填进去的，内容可能含「家庭」等敏感原文，
+    会随打印件/长图/导出包流出去。导出包必须不含它
+    （2026-11-20 审计 P0-1）。用户自己手写的风险原样保留。
+    """
+    # 不是字典就原样返回，避免把意外的标量/列表当 payload 解析
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    risks = out.get("risks")
+    # 只有字符串里真带着标记时才切分，保留标记之前用户自写的内容
+    if isinstance(risks, str) and _PROFILE_REMINDER_MARKER in risks:
+        out["risks"] = risks.split(_PROFILE_REMINDER_MARKER)[0].rstrip()
+    # profile_notes 整体由前端自动档案提醒生成，一律不进导出包
+    out.pop("profile_notes", None)
+    return out
+
+
+def _clean_visit_plan_rows(rows) -> list[dict]:
+    """导出前清洗验厂计划 payload：去掉自动写入的客户档案提醒块。"""
+    out = []
+    for row in rows or []:
+        r = dict(row)
+        raw = r.get("payload")
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) and raw else raw
+        except (TypeError, ValueError):
+            # 脏数据/非 JSON 字符串时无法安全清洗，保持原值而不是编造内容
+            payload = None
+        # payload 是 TEXT 列，清洗后必须仍序列化为 JSON 字符串
+        if isinstance(payload, dict):
+            r["payload"] = json.dumps(_strip_profile_reminder(payload), ensure_ascii=False)
+        out.append(r)
+    return out
+
+
 def _copy_tree(src: Path, dst: Path, warnings: list[str]) -> list[str]:
     """复制普通文件，拒绝符号链接；返回相对路径列表。
 
@@ -262,10 +316,13 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     "SELECT * FROM order_events WHERE company_id = ?",
                     (company_id,),
                 ),
-                "visit_plans": _safe_table_rows(
-                    conn,
-                    "SELECT * FROM visit_plans WHERE company_id = ?",
-                    (company_id,),
+                # 验厂计划：payload 里可能有自动写入的客户档案提醒（含私密原文），导出前清掉
+                "visit_plans": _clean_visit_plan_rows(
+                    _safe_table_rows(
+                        conn,
+                        "SELECT * FROM visit_plans WHERE company_id = ?",
+                        (company_id,),
+                    ),
                 ),
                 "usage_ledger": _rows(conn, "SELECT * FROM usage_ledger WHERE company_id = ?", (company_id,)),
                 # trial_events 是许可证试用统计，不属于公司业务数据；导入会虚增
@@ -275,11 +332,13 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                 ),
                 # 附加联系人；缺表时导出空列表（升级未重启不炸）
                 "contacts": _safe_contacts_rows(conn, company_id),
-                # 客户画像：facts 全量；gifts 排除「客户索要」
+                # 客户画像：facts 排除敏感类；gifts 排除「客户索要」
+                # 分类清单取自 profile.SENSITIVE_CATEGORIES，避免与隐私规则漂移
                 "customer_facts": _safe_table_rows(
                     conn,
-                    "SELECT * FROM customer_facts WHERE company_id = ?",
-                    (company_id,),
+                    "SELECT * FROM customer_facts WHERE company_id = ? "
+                    "AND category NOT IN (" + _sensitive_placeholders() + ")",
+                    (company_id, *_sensitive_categories()),
                 ),
                 "customer_gifts": _safe_table_rows(
                     conn,
