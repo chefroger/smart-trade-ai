@@ -29,14 +29,14 @@ jobs:
           # 与部署一致：Hermes ≥0.21.6 只提供 3.14 的依赖集
           python-version: "3.14"
 
-      # 按项目策略「跟随 Hermes 最新版」：直接装 main 上最新的那份，不钉 tag
-      - name: Install latest Hermes
+      # 按项目策略「跟随 Hermes 最新版」：用**官方安装脚本**装 main 上最新那份。
+      # 不要自己 `pip install -e .` —— 实测会撞上游依赖冲突
+      # （hermes-agent 钉 Pillow==13.0.0，browser-harness 钉 pillow==12.3.0）：
+      # 官方脚本走 uv + pm 锁定，才是用户真实安装路径。
+      - name: Install latest Hermes (official installer)
         run: |
-          mkdir -p "$HOME/.hermes"
-          git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$HOME/.hermes/hermes-agent"
-          cd "$HOME/.hermes/hermes-agent"
-          python -m pip install --upgrade pip
-          pip install -e .
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
+            | bash -s -- --non-interactive --skip-browser
 
       - name: Install Trade (no deps)
         run: |
