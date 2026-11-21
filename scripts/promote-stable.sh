@@ -89,7 +89,13 @@ try:
     old = open("CHANGELOG.md", encoding="utf-8").read()
 except FileNotFoundError:
     old = "# CHANGELOG\n\n"
-open("CHANGELOG.md", "w", encoding="utf-8").write(head + old)
+# 新版本小节必须插在 # CHANGELOG 标题之后，不能插到文件最前面（否则标题被压到中间）
+if old.startswith("# CHANGELOG"):
+    header, _, rest = old.partition("\n")
+    new = header + "\n\n" + head + rest.lstrip("\n")
+else:
+    new = "# CHANGELOG\n\n" + head + old
+open("CHANGELOG.md", "w", encoding="utf-8").write(new)
 PY
 
 git add pyproject.toml CHANGELOG.md
