@@ -1083,3 +1083,23 @@ def test_ci_covers_deployment_python_and_real_hermes_smoke():
     # 必须验证耦合点，而不是只 import run_agent
     assert "prepare_hermes_import_paths" in body
     assert "_MIN_HERMES_VERSION" in body
+
+
+def test_frontend_smoke_workflow_is_isolated_from_default_ci():
+    """P2-7：浏览器冒烟要有独立工作流，且默认 pytest 不收集它。
+
+    浏览器依赖重（chromium + 系统库），放进每个 PR 的矩阵会把反馈速度拖垮；
+    默认 `pytest tests/` 必须保持不碰 tests_e2e。
+    """
+    wf = ROOT / ".github" / "workflows" / "e2e-smoke.yml"
+    assert wf.is_file(), "缺前端冒烟工作流"
+    text = wf.read_text(encoding="utf-8")
+    assert "tests_e2e" in text, "工作流要跑 tests_e2e"
+    assert "playwright install" in text, "工作流要装 chromium"
+    # 只在相关路径变更时触发，避免每个 PR 都跑
+    assert "static/**" in text, "应按前端路径过滤触发"
+
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'testpaths = ["tests"]' in pyproject, (
+        "默认 pytest 必须只收集 tests/，否则 e2e 会被普通 CI 拉起"
+    )

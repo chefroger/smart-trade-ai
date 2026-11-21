@@ -1,0 +1,46 @@
+name: Frontend smoke (Playwright)
+
+# 2026-11-21 审计 P2-7：11-19 那批问题（停止按钮常驻、图标 404、到期文案）
+# 全是截图时才发现的 —— 静态源码检查抓不到，必须有浏览器级冒烟。
+#
+# 只在「前端 / e2e 有改动」的 PR 上跑，外加每晚一次；默认 CI 不装浏览器，
+# 保持 PR 反馈速度。
+
+on:
+  pull_request:
+    paths:
+      - "static/**"
+      - "tests_e2e/**"
+      - ".github/workflows/e2e-smoke.yml"
+  schedule:
+    # 每天 19:00 UTC = 次日 03:00 CST
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # 冒烟不加载 Hermes（兼容检查在浏览器层被桩掉），只需服务端最小依赖
+      - name: Install server deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest fastapi "uvicorn[standard]" pydantic pyyaml packaging python-multipart
+          pip install pytest-playwright playwright
+          pip install -e . --no-deps
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run frontend smoke
+        run: python -m pytest tests_e2e -v

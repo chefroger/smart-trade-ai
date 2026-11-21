@@ -1,0 +1,187 @@
+"""前端冒烟（Playwright）：打开主要页面，断言没有 4xx/5xx 与页面错误。
+
+2026-11-21 审计 P2-7：11-19 那批问题（停止按钮、图标 404、到期文案）
+全是截图时才发现的 —— 现有测试只做静态源码检查，没有任何浏览器级验证。
+
+本文件不在默认 `pytest tests/` 里（pyproject 的 testpaths 只含 tests），
+需要 playwright 与 chromium：
+
+    pip install playwright && python -m playwright install chromium
+    pytest tests_e2e -v
+
+CI 由 .github/workflows/e2e-smoke.yml 运行。
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+pytest.importorskip("playwright", reason="需要 playwright（见文件头说明）")
+
+
+def _free_port() -> int:
+    """取一个空闲端口，避免与正在运行的实例冲突。"""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _wait_http(url: str, timeout: float = 60.0) -> None:
+    """等到服务可用；超时抛错并带上最后一次失败原因。"""
+    import urllib.error
+    import urllib.request
+
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310 — 本机固定地址
+                if resp.status == 200:
+                    return
+        except Exception as exc:  # noqa: BLE001 — 轮询期间任何错误都只是"还没好"
+            last = str(exc)
+        time.sleep(0.5)
+    raise RuntimeError(f"服务在 {timeout}s 内未就绪：{last}")
+
+
+@pytest.fixture(scope="module")
+def live_server(tmp_path_factory):
+    """用临时 HOME/TRADE_HOME 起一个独立实例，返回 (base_url, token, company_id, customer_id)。"""
+    import json
+    import urllib.request
+
+    home = tmp_path_factory.mktemp("e2e-home")
+    env = {
+        **os.environ,
+        # 隔离到临时目录：绝不碰用户的 ~/.trade 与桌面
+        "HOME": str(home),
+        "TRADE_HOME": str(home / ".trade"),
+        "HERMES_HOME": str(home / ".hermes"),
+        "HERMES_DISABLE_LAZY_INSTALLS": "1",
+    }
+    port = _free_port()
+    proc = subprocess.Popen(
+        [sys.executable, "server.py", "--port", str(port), "--no-browser", "--no-gateway"],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        _wait_http(base + "/api/status")
+        # 从页面里取 session token（与真实前端同一方式）
+        html = urllib.request.urlopen(base + "/trade", timeout=5).read().decode("utf-8")
+        m = re.search(r'let TOKEN = "([^"]+)"', html)
+        assert m, "页面里没有 session token"
+        token = m.group(1)
+
+        def api(method: str, path: str, body: dict | None = None, cid: int | None = None) -> dict:
+            data = json.dumps(body).encode() if body is not None else None
+            req = urllib.request.Request(base + path, data=data, method=method)
+            req.add_header("X-Hermes-Session-Token", token)
+            req.add_header("Content-Type", "application/json")
+            if cid is not None:
+                req.add_header("X-Company-ID", str(cid))
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode() or "{}")
+
+        company = api("POST", "/api/trade/companies", {"name": "E2E Co", "slug": "e2e-co"})
+        cid = company["id"]
+        customer = api("POST", "/api/trade/customers", {"name": "E2E Customer"}, cid)
+        yield base, token, cid, customer["id"]
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def test_main_pages_have_no_4xx_or_page_errors(live_server):
+    """首页 → 客户列表 → 客户墙 → 画像 → 验厂：全程无错误响应、无页面异常。"""
+    from playwright.sync_api import sync_playwright
+
+    base, token, cid, customer_id = live_server
+    console_errors: list[str] = []
+    page_errors: list[str] = []
+    bad_responses: list[str] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context(viewport={"width": 1440, "height": 900})
+        # 进页面之前写状态：跳过新手引导并直接选中测试公司
+        context.add_init_script(
+            "try { localStorage.setItem('_onboarding_completed', '1');"
+            f" sessionStorage.setItem('trade_cid', '{cid}'); }} catch (e) {{}}"
+        )
+        # 本冒烟只验前端：Hermes 兼容检查在无 Hermes 环境会显示升级面板挡住界面。
+        # 桩成 usable，真机/CI 的 Hermes 加载由 hermes-smoke 工作流单独覆盖。
+        context.route(
+            "**/api/trade/system/hermes-compat",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json", body='{"usable": true}'
+            ),
+        )
+        # 客户管理/邮箱/文档库在 data-paid 区，试用态会被隐藏。临时实例没有真许可证，
+        # 这里把状态桩成已激活，好让冒烟能覆盖这些页面（真机激活行为不变）。
+        context.route(
+            "**/api/trade/license/status",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body='{"status": "active", "days_remaining": 365, "activated": true}',
+            ),
+        )
+        page = context.new_page()
+        page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
+        page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+
+        def on_response(resp):
+            # 只关心本机 API 与静态资源；favicon 是浏览器自动请求，忽略
+            url = resp.url
+            if resp.status >= 400 and "favicon" not in url:
+                bad_responses.append(f"{resp.status} {url}")
+
+        page.on("response", on_response)
+
+        page.goto(base + "/trade", wait_until="networkidle")
+        page.wait_for_selector("#app-rail", timeout=15000)
+
+        # 客户列表
+        page.click('[data-view="customers"]')
+        page.wait_for_selector(".cust-row", timeout=15000)
+
+        # 客户墙
+        page.click(".cust-row")
+        page.wait_for_selector("#customer-wall.open", timeout=15000)
+
+        # 画像页（ESC 返回客户墙）
+        page.click("#wall-open-profile")
+        page.wait_for_selector("#customer-profile.open", timeout=15000)
+        page.keyboard.press("Escape")
+        # 关闭后元素是 display:none，用 class 判断而不是等"可见"
+        page.wait_for_function(
+            "!document.getElementById('customer-profile').classList.contains('open')",
+            timeout=10000,
+        )
+
+        # 验厂计划
+        page.click("#wall-visit")
+        page.wait_for_selector(".visit-page", timeout=15000)
+
+        browser.close()
+
+    assert not page_errors, "页面脚本异常：\n" + "\n".join(page_errors)
+    assert not bad_responses, "出现 4xx/5xx 响应：\n" + "\n".join(bad_responses)
+    assert not console_errors, "控制台 error 日志：\n" + "\n".join(console_errors)

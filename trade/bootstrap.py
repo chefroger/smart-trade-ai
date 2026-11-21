@@ -517,10 +517,18 @@ def load_env_and_set_yolo():
     注意：pm 激活后的恢复**不在这里**做，而在 `prepare_hermes_import_paths()` ——
     它必须早于**任何** Hermes import（含子命令 doctor/osint），见其 docstring。
     """
-    from hermes_cli.env_loader import load_hermes_dotenv
-    from hermes_constants import get_hermes_home
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        from hermes_constants import get_hermes_home
 
-    load_hermes_dotenv(hermes_home=get_hermes_home())
+        load_hermes_dotenv(hermes_home=get_hermes_home())
+    except ImportError:
+        # Hermes 完全缺失（未安装/环境被清）：跳过 .env 加载即可，不能抛 traceback。
+        # 前面的版本检查已经决定「按未知放行」，这里再崩就自相矛盾了
+        # （可用性优先；2026-11-21 实测缺失 Hermes 时启动直接崩在 import 上）。
+        _logging.getLogger(__name__).warning(
+            "未找到 Hermes，跳过 .env 加载（将以降级模式启动）"
+        )
     os.environ["HERMES_YOLO_MODE"] = "true"
 
     # 禁用 Hermes 的「借用启动」：否则 `from run_agent import AIAgent` 会连带执行
@@ -547,7 +555,12 @@ def _local_skills_sync():
     从项目目录（或 PyInstaller/运行时目录）复制 skills 到 Hermes，
     比对外部哈希避免重复写入。速度远快于 GitHub 下载。
     """
-    from hermes_constants import get_hermes_home
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        # 没有 Hermes 就没有可写入的 skills 目录：跳过而不是崩溃（降级启动）
+        _logging.getLogger(__name__).warning("未找到 Hermes，跳过 skills 同步")
+        return
 
     # 优先级：PyInstaller _MEIPASS > 运行时目录 > 开发目录
     _meipass = getattr(sys, "_MEIPASS", None)
