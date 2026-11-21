@@ -75,6 +75,8 @@ SANCTIONS_SOURCES: list[dict] = [
 
 import ipaddress
 import socket
+import threading
+import time
 import urllib.parse
 
 # 内网 / 保留 / 云元数据网段（IPv4 + IPv6）。
@@ -169,7 +171,7 @@ def _same_ip(left: str, right: str) -> bool:
 def _is_configured_proxy(peer_ip: str, peer_port: int) -> bool:
     """对端是否就是本机配置的 HTTP(S) 代理（2026-11-21 审计 P0-3）。
 
-    系统代理模式下（Clash 等 `HTTPS_PROXY=http://127.0.0.1:7890`），
+    系统代理模式下（Clash 等 `HTTPS_PROXY=http://127.0.0.1:<端口>`），
     所有请求的对端都是回环地址，会被对端校验当成内网而全部拦掉 ——
     结果是背调各层静默失败。这里只在「即将拦截」时才解析代理地址，
     不给正常直连路径增加任何开销。
@@ -258,17 +260,18 @@ class _SafeHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
 
 
-def _build_opener() -> tuple[urllib.request.OpenerDirector, dict]:
+def _build_opener(proxies: dict | None = None) -> tuple[urllib.request.OpenerDirector, dict]:
     """构建带 SSRF 复查的 opener，并返回它使用的代理快照。
 
     显式传入 ProxyHandler(proxies)，保证「实际走哪个代理」与
     `_is_configured_proxy()` 的判定完全一致（不显式传的话 build_opener 会
     自己再读一次 getproxies()，两次快照可能不同）。
     """
-    try:
-        proxies = urllib.request.getproxies()
-    except Exception:
-        proxies = {}
+    if proxies is None:
+        try:
+            proxies = urllib.request.getproxies()
+        except Exception:
+            proxies = {}
     opener = urllib.request.build_opener(
         _SafeRedirectHandler(), _SafeHTTPHandler(), _SafeHTTPSHandler(),
         urllib.request.ProxyHandler(proxies),
@@ -277,6 +280,38 @@ def _build_opener() -> tuple[urllib.request.OpenerDirector, dict]:
 
 
 _SAFE_OPENER, _CONFIGURED_PROXIES = _build_opener()
+_OPENER_LOCK = threading.Lock()
+# 代理配置最多每 5 秒复查一次：macOS 的 getproxies() 会读系统网络设置，不能每次请求都调
+_PROXY_CHECK_INTERVAL = 5.0
+_proxy_checked_at = 0.0
+
+
+def _current_opener() -> urllib.request.OpenerDirector:
+    """返回与**当前**代理配置匹配的 opener（2026-11-21：运行中切代理不用重启）。
+
+    用户在 Trade 运行时开关 Clash、换代理端口，下一次请求就会用上新配置。
+    只有配置变化时才重建 opener；正常路径只是一次字典比较。
+    """
+    global _SAFE_OPENER, _CONFIGURED_PROXIES, _proxy_checked_at
+    now = time.monotonic()
+    # 未到复查间隔：直接用现有 opener
+    if now - _proxy_checked_at < _PROXY_CHECK_INTERVAL:
+        return _SAFE_OPENER
+    with _OPENER_LOCK:
+        # 双检：等锁期间别的线程可能已经复查过
+        now = time.monotonic()
+        if now - _proxy_checked_at < _PROXY_CHECK_INTERVAL:
+            return _SAFE_OPENER
+        _proxy_checked_at = now
+        try:
+            live = urllib.request.getproxies()
+        except Exception:
+            # 读不到就维持现状，不能因为一次读取失败把已有代理配置丢掉
+            return _SAFE_OPENER
+        if live != _CONFIGURED_PROXIES:
+            # 代理变了：opener 与判定用的快照一起换掉
+            _SAFE_OPENER, _CONFIGURED_PROXIES = _build_opener(live)
+        return _SAFE_OPENER
 
 
 def http_get(url: str, timeout: int = 30) -> str | None:
@@ -298,7 +333,7 @@ def http_get(url: str, timeout: int = 30) -> str | None:
                 "Accept": "*/*",
             },
         )
-        with _SAFE_OPENER.open(req, timeout=timeout) as resp:
+        with _current_opener().open(req, timeout=timeout) as resp:
             charset = resp.headers.get_content_charset() or "utf-8"
             return resp.read(_MAX_BODY_BYTES).decode(charset, errors="replace")
     except Exception as e:

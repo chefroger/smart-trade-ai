@@ -69,9 +69,10 @@ def detect_tech_stack(url: str, *, opener=None) -> dict:
             headers={"User-Agent": "Mozilla/5.0 (compatible; Trade-AI/1.0)"},
         )
         # 测试可注入 opener（见签名）；生产用带重定向复查的 safe opener
-        from trade.osint.constants import _MAX_BODY_BYTES, _SAFE_OPENER
+        from trade.osint.constants import _MAX_BODY_BYTES, _current_opener
 
-        _open = opener or _SAFE_OPENER.open
+        # 生产路径用动态 opener：运行中切换代理（Clash 开关/换端口）下一次请求生效
+        _open = opener or _current_opener().open
         with _open(req, timeout=15) as resp:
             result["ssl_valid"] = True
             # 从响应头提取服务器信息

@@ -182,3 +182,57 @@ class TestHttpGetThroughProxy:
     def test_without_proxy_private_peer_still_blocked(self, clean_proxy_env):
         """没有配置代理时，直连内网的口子仍然关着。"""
         assert c.http_get("http://127.0.0.1:9/", timeout=2) is None
+
+
+class TestLiveProxySwitch:
+    """运行中切换代理（开关 Clash / 换端口）不需要重启 Trade。"""
+
+    def test_proxy_change_rebuilds_opener(self, clean_proxy_env):
+        _use_proxy(clean_proxy_env, "http://127.0.0.1:7897")
+        # 用户在运行中把端口改成 7898
+        clean_proxy_env.setenv("HTTP_PROXY", "http://127.0.0.1:7898")
+        clean_proxy_env.setenv("http_proxy", "http://127.0.0.1:7898")
+        # 绕过 5 秒节流，模拟"下一次请求"
+        clean_proxy_env.setattr(c, "_proxy_checked_at", 0.0)
+
+        c._current_opener()
+
+        assert c._CONFIGURED_PROXIES.get("http") == "http://127.0.0.1:7898"
+        assert c._is_configured_proxy("127.0.0.1", 7898) is True
+        assert c._is_configured_proxy("127.0.0.1", 7897) is False
+
+    def test_recheck_is_throttled(self, clean_proxy_env, monkeypatch):
+        """5 秒内不重复读系统代理设置（macOS 上这个调用不便宜）。"""
+        calls = {"n": 0}
+
+        def _counting():
+            calls["n"] += 1
+            return {"http": "http://127.0.0.1:7897"}
+
+        _use_proxy(clean_proxy_env, "http://127.0.0.1:7897")
+        monkeypatch.setattr(c.urllib.request, "getproxies", _counting)
+        monkeypatch.setattr(c, "_proxy_checked_at", c.time.monotonic())
+
+        for _ in range(5):
+            c._current_opener()
+
+        assert calls["n"] == 0, "节流窗口内不应再次读取代理配置"
+
+    def test_request_follows_proxy_switch(self, clean_proxy_env, fake_proxy):
+        """端到端：换到另一个代理后，下一次请求由新代理接收。"""
+        proxy_b = _FakeProxy()
+        try:
+            _use_proxy(clean_proxy_env, f"http://127.0.0.1:{fake_proxy.port}")
+            assert c.http_get("http://example.invalid/a", timeout=5) == "proxied-ok"
+            assert len(fake_proxy.requests) == 1
+
+            # 切到 B
+            clean_proxy_env.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy_b.port}")
+            clean_proxy_env.setenv("http_proxy", f"http://127.0.0.1:{proxy_b.port}")
+            clean_proxy_env.setattr(c, "_proxy_checked_at", 0.0)
+
+            assert c.http_get("http://example.invalid/b", timeout=5) == "proxied-ok"
+            assert len(proxy_b.requests) == 1, "第二次请求没有走新代理"
+            assert len(fake_proxy.requests) == 1, "仍在用旧代理"
+        finally:
+            proxy_b.close()
