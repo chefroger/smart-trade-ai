@@ -43,13 +43,14 @@ from trade.console import reconfigure_streams
 # 用「命中数」而不是「全部命中」判定 —— 用户可能删掉或改名个别分类目录。
 _ORPHAN_MIN_HITS = 5
 
-# 清理口令：删除公司/残留目录前必须输入。
+# 删除确认：必须输入要删除的公司名（2026-11-21 审计 P2-9）。
 #
-# 定位是**防误操作**（客户机常被远程操作，误删不可恢复），不是防攻击 ——
-# 代码是公开的，口令自然也公开，这一点作者已知情（同许可证私钥那套「防君子不防小人」）。
-# 校验发生在**预览之后、删除之前**：先看到"将要删什么"，再输口令授权。
-# 只读的 `list` 不需要口令（诊断要方便）。
-_PURGE_PASSWORD = "Lele@885918"
+# 原先用写死在源码里的口令。现在改成输入公司名：
+#   - 源码不再含任何密码，也不存在「这串在别处当过密码」的顾虑；
+#   - 强迫操作者看清自己删的是哪一家（远程操作时尤其重要）。
+# 定位仍是**防误操作**（客户机常被远程操作，误删不可恢复），不是防攻击。
+# 校验发生在**预览之后、删除之前**：先看到"将要删什么"，再输名字授权。
+# 只读的 `list` 不需要确认（诊断要方便）。
 
 
 def _stdin_is_tty() -> bool:
@@ -65,42 +66,45 @@ def _stdin_is_tty() -> bool:
         return False
 
 
-def _check_password(provided: str | None) -> tuple[str, str]:
-    """校验清理口令。返回 (状态, 附加提示)。
+def _check_confirmation(provided: str | None, expected: str) -> tuple[str, str]:
+    """校验删除确认名。返回 (状态, 附加提示)。
 
     状态：``ok`` / ``wrong`` / ``no_tty`` / ``error``。
+    必须与要删除的公司名（或目录名）完全一致（去首尾空白后比较）。
 
-    没有 TTY 时不尝试读输入 —— `getpass` 在非交互环境会去读 stdin，
-    在脚本/管道里表现为"卡住"或读到脏数据，不如直接告诉用户改用 `--password`。
+    没有 TTY 时不尝试读输入 —— 在脚本/管道里 `input()` 会"卡住"或读到脏数据，
+    不如直接告诉用户改用 `--confirm-name`。
     """
-    if provided:
-        return ("ok", "") if provided == _PURGE_PASSWORD else ("wrong", "")
-
-    import getpass
+    # 命令行传入的值：直接比对，不做模糊匹配（模糊匹配会削弱"看清删的是谁"的作用）
+    if provided is not None:
+        return ("ok", "") if provided.strip() == expected.strip() else ("wrong", "")
 
     if not _stdin_is_tty():
         return (
             "no_tty",
             "  当前不是交互终端。请改用：\n"
-            "      trade company <子命令> <目标> --yes --password <口令>\n",
+            "      trade company <子命令> <目标> --yes --confirm-name <公司名>\n",
         )
     try:
-        entered = getpass.getpass("请输入清理口令：")
+        # 这里不是密码，普通 input 即可（回显名字有助于核对）
+        entered = input("请输入要删除的公司名以确认：")
     except Exception as e:
-        return ("error", f"  无法读取口令（{e}）。请改用 --password 传入。\n")
-    return ("ok", "") if entered == _PURGE_PASSWORD else ("wrong", "")
+        return ("error", f"  无法读取输入（{e}）。请改用 --confirm-name 传入。\n")
+    return ("ok", "") if entered.strip() == expected.strip() else ("wrong", "")
 
 
-def _password_gate(provided: str | None, lines: list[str]) -> bool:
-    """在预览之后执行口令校验。通过返回 True；否则把原因写进 lines 并返回 False。"""
-    status, hint = _check_password(provided)
+def _confirmation_gate(provided: str | None, expected: str, lines: list[str]) -> bool:
+    """在预览之后执行确认校验。通过返回 True；否则把原因写进 lines 并返回 False。"""
+    status, hint = _check_confirmation(provided, expected)
+    # 确认名正确：放行
     if status == "ok":
         return True
     lines.append("")
+    # 输错或读输入失败：明示应有的名字，避免用户反复试
     if status in ("wrong", "error"):
-        lines.append("  ✗ 口令错误，未执行任何删除。")
+        lines.append(f"  ✗ 公司名不匹配（应为：{expected}），未执行任何删除。")
     else:  # no_tty
-        lines.append("  ✗ 未提供口令，未执行任何删除。")
+        lines.append("  ✗ 未提供确认名，未执行任何删除。")
     if hint:
         lines.append(hint.rstrip("\n"))
     lines.append("")
@@ -108,14 +112,14 @@ def _password_gate(provided: str | None, lines: list[str]) -> bool:
 
 
 def _parse_flags(args: list[str]) -> tuple[bool, str | None]:
-    """从参数里取 --yes 与 --password <值>。返回 (yes, password)。"""
+    """从参数里取 --yes 与 --confirm-name <值>。返回 (yes, confirm_name)。"""
     yes = "--yes" in args
-    password = None
-    if "--password" in args:
-        idx = args.index("--password")
+    confirm_name = None
+    if "--confirm-name" in args:
+        idx = args.index("--confirm-name")
         if idx + 1 < len(args):
-            password = args[idx + 1]
-    return yes, password
+            confirm_name = args[idx + 1]
+    return yes, confirm_name
 
 
 # ── 辅助 ──────────────────────────────────────────────────────────────────
@@ -435,7 +439,8 @@ def list_companies() -> str:
 
 # ── 命令：purge ───────────────────────────────────────────────────────────
 
-def purge_company(target: str, *, yes: bool = False, password: str | None = None) -> tuple[str, int]:
+def purge_company(target: str, *, yes: bool = False,
+                  confirm_name: str | None = None) -> tuple[str, int]:
     """`trade company purge` 的实现。返回 (报告文本, 退出码)。
 
     不加 `--yes` 时只打印计划并返回 1 —— 不用交互式确认，因为这条命令主要在
@@ -506,13 +511,15 @@ def purge_company(target: str, *, yes: bool = False, password: str | None = None
 
     if not yes:
         lines.append("")
-        lines.append("  以上是预览。确认无误后加 --yes 执行：")
-        lines.append(f"      trade company purge {target} --yes")
+        lines.append("  以上是预览。确认无误后加 --yes 并输入公司名执行：")
+        lines.append(
+            f'      trade company purge {target} --yes --confirm-name "<公司名>"'
+        )
         lines.append("")
         return "\n".join(lines), 1
 
-    # 口令闸门：预览已打印、删除尚未开始 —— 用户看到影响面之后才被要求授权
-    if not _password_gate(password, lines):
+    # 确认闸门：预览已打印、删除尚未开始 —— 用户看到影响面之后才被要求确认
+    if not _confirmation_gate(confirm_name, company.get("name") or "", lines):
         return "\n".join(lines), 1
 
     ok = crud.purge(cid)
@@ -545,7 +552,8 @@ def purge_company(target: str, *, yes: bool = False, password: str | None = None
     return "\n".join(lines), 0
 
 
-def purge_dir(path_str: str, *, yes: bool = False, password: str | None = None) -> tuple[str, int]:
+def purge_dir(path_str: str, *, yes: bool = False,
+              confirm_name: str | None = None) -> tuple[str, int]:
     """删除一个**孤儿**工作目录（数据库里没有对应公司记录的那种）。
 
     只接受通过 `is_trade_work_dir()` 指纹校验、且在桌面下的目录 ——
@@ -593,14 +601,14 @@ def purge_dir(path_str: str, *, yes: bool = False, password: str | None = None) 
     if not yes:
         return (
             preview
-            + f"\n  确认无误后加 --yes 执行：\n"
-            f"      trade company purge-dir \"{path}\" --yes\n",
+            + f"\n  确认无误后加 --yes 并输入目录名执行：\n"
+            f"      trade company purge-dir \"{path}\" --yes --confirm-name \"{path.name}\"\n",
             1,
         )
 
-    # 同样在预览之后、删除之前过口令闸门
+    # 同样在预览之后、删除之前过确认闸门；孤儿目录没有公司记录，用目录名确认
     gate_lines: list[str] = []
-    if not _password_gate(password, gate_lines):
+    if not _confirmation_gate(confirm_name, path.name, gate_lines):
         return preview + "\n".join(gate_lines), 1
 
     # 删除前先落审计（`crud.purge` 同样先写审计再动手）。公司场景传 company_id=0,
@@ -640,19 +648,20 @@ def main(argv: list[str]) -> int:
 
     if sub == "purge":
         if not rest:
-            print("用法：trade company purge <slug 或 ID> [--yes [--password <口令>]]")
+            print("用法：trade company purge <slug 或 ID> [--yes [--confirm-name <公司名>]]")
             return 1
-        yes, password = _parse_flags(rest[1:])
-        text, code = purge_company(rest[0], yes=yes, password=password)
+        yes, confirm_name = _parse_flags(rest[1:])
+        text, code = purge_company(rest[0], yes=yes, confirm_name=confirm_name)
         print(text)
         return code
 
     if sub == "purge-dir":
         if not rest:
-            print('用法：trade company purge-dir "<桌面目录路径>" [--yes [--password <口令>]]')
+            print('用法：trade company purge-dir "<桌面目录路径>" '
+                  '[--yes [--confirm-name <目录名>]]')
             return 1
-        yes, password = _parse_flags(rest[1:])
-        text, code = purge_dir(rest[0], yes=yes, password=password)
+        yes, confirm_name = _parse_flags(rest[1:])
+        text, code = purge_dir(rest[0], yes=yes, confirm_name=confirm_name)
         print(text)
         return code
 

@@ -31,6 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from trade import company_admin
 
+# env 夹具里公司的显示名（删除确认要输入的正是它）
+COMPANY_NAME = "错误公司"
+
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
@@ -135,7 +138,7 @@ class TestPurgeExecutes:
 
         data_dir = TRADE_HOME / "wrong-co"
         assert data_dir.is_dir(), f"前置条件：数据目录应先存在（{data_dir}）"
-        text, code = company_admin.purge_company("wrong-co", yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_company("wrong-co", yes=True, confirm_name=COMPANY_NAME)
 
         assert code == 0, text
         from trade.company import crud
@@ -147,7 +150,7 @@ class TestPurgeExecutes:
     def test_purge_by_numeric_id(self, env):
         cid = env["company"]["id"]
 
-        text, code = company_admin.purge_company(str(cid), yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_company(str(cid), yes=True, confirm_name=COMPANY_NAME)
 
         assert code == 0
         from trade.company import crud
@@ -155,14 +158,14 @@ class TestPurgeExecutes:
         assert crud.get(cid) is None
 
     def test_unknown_target_is_reported(self, env):
-        text, code = company_admin.purge_company("no-such-company", yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_company("no-such-company", yes=True, confirm_name=COMPANY_NAME)
 
         assert code == 1
         assert "找不到" in text
 
     def test_reports_verified_deletion(self, env):
         """删完要复核并说出来，不能只说"已执行"。"""
-        text, code = company_admin.purge_company("wrong-co", yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_company("wrong-co", yes=True, confirm_name=COMPANY_NAME)
 
         assert "已删除" in text
 
@@ -178,7 +181,7 @@ class TestDirGuard:
             env["company"]["id"], extra1=json.dumps({"work_dir": str(outside)})
         )
 
-        text, code = company_admin.purge_company("wrong-co", yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_company("wrong-co", yes=True, confirm_name=COMPANY_NAME)
 
         assert code == 0
         assert "保护范围" in text, "要说明这个目录没被删"
@@ -238,7 +241,7 @@ class TestPurgeDir:
     def test_deletes_orphan(self, env):
         orphan = self._make_orphan(env)
 
-        text, code = company_admin.purge_dir(str(orphan), yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_dir(str(orphan), yes=True, confirm_name=orphan.name)
 
         assert code == 0
         assert not orphan.exists()
@@ -249,7 +252,7 @@ class TestPurgeDir:
         plain.mkdir()
         (plain / "报价单.xlsx").write_text("x", encoding="utf-8")
 
-        text, code = company_admin.purge_dir(str(plain), yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_dir(str(plain), yes=True, confirm_name=plain.name)
 
         assert code == 1
         assert plain.is_dir(), "普通目录被删了 —— 这条命令太危险"
@@ -259,7 +262,7 @@ class TestPurgeDir:
         for cat, _ in __import__("trade.company.workdir", fromlist=["x"])._WORK_DIR_CATEGORIES:
             (outside / cat).mkdir(parents=True)
 
-        text, code = company_admin.purge_dir(str(outside), yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_dir(str(outside), yes=True, confirm_name=outside.name)
 
         assert code == 1
         assert outside.is_dir()
@@ -387,7 +390,7 @@ class TestPurgeFindsUnrecordedWorkDir:
         desktop_dir = env["desktop"] / "错误公司"
         assert desktop_dir.is_dir(), "前置条件：桌面文件夹存在"
 
-        text, code = company_admin.purge_company("wrong-co", yes=True, password=company_admin._PURGE_PASSWORD)
+        text, code = company_admin.purge_company("wrong-co", yes=True, confirm_name=COMPANY_NAME)
 
         assert code == 0, text
         assert not desktop_dir.exists(), (
@@ -422,80 +425,80 @@ class TestPurgeFindsUnrecordedWorkDir:
         plain.mkdir()
         (plain / "我的笔记.txt").write_text("x", encoding="utf-8")
 
-        company_admin.purge_company("wrong-co", yes=True, password=company_admin._PURGE_PASSWORD)
+        company_admin.purge_company("wrong-co", yes=True, confirm_name=COMPANY_NAME)
 
         assert (plain / "我的笔记.txt").is_file(), "误删了同名的普通文件夹"
 
 
-class TestPurgePasswordGate:
-    """删除前必须输入口令（防误操作；客户机常被远程操作，误删不可恢复）。
+class TestPurgeConfirmationGate:
+    """删除前必须输入公司名（防误操作；客户机常被远程操作，误删不可恢复）。
 
-    定位说明：代码是公开的，口令自然也公开 —— 这是**防误操作**而不是防攻击，
-    与许可证私钥同一性质，作者已知情。
+    2026-11-21 起不再使用写死的口令：源码不含任何密码，且强迫操作者
+    看清自己删的是哪一家。定位仍是**防误操作**，不是防攻击。
     """
 
-    PW = company_admin._PURGE_PASSWORD
+    PW = COMPANY_NAME
 
-    def test_correct_password_deletes(self, env):
-        text, code = company_admin.purge_company("wrong-co", yes=True, password=self.PW)
+    def test_correct_name_deletes(self, env):
+        text, code = company_admin.purge_company("wrong-co", yes=True, confirm_name=self.PW)
 
         assert code == 0, text
         from trade.company import crud
 
         assert crud.get(env["company"]["id"]) is None
 
-    def test_wrong_password_deletes_nothing(self, env):
-        """口令错了必须什么都不删 —— 数据库、数据目录、桌面目录全都原封不动。"""
+    def test_wrong_name_deletes_nothing(self, env):
+        """公司名不匹配了必须什么都不删 —— 数据库、数据目录、桌面目录全都原封不动。"""
         from trade.company.crud import TRADE_HOME
 
         data_dir = TRADE_HOME / "wrong-co"
-        text, code = company_admin.purge_company("wrong-co", yes=True, password="猜的")
+        text, code = company_admin.purge_company("wrong-co", yes=True, confirm_name="猜的")
 
         assert code == 1
-        assert "口令错误" in text
+        assert "公司名不匹配" in text
         from trade.company import crud
 
-        assert crud.get(env["company"]["id"]) is not None, "口令错误却删了数据库行"
-        assert data_dir.is_dir(), "口令错误却删了数据目录"
-        assert (env["desktop"] / "错误公司").is_dir(), "口令错误却删了桌面目录"
+        assert crud.get(env["company"]["id"]) is not None, "公司名不匹配误却删了数据库行"
+        assert data_dir.is_dir(), "公司名不匹配误却删了数据目录"
+        assert (env["desktop"] / "错误公司").is_dir(), "公司名不匹配误却删了桌面目录"
 
-    def test_no_password_without_tty_refuses_with_hint(self, env, monkeypatch):
-        """非交互环境没给口令 → 明确拒绝并告知怎么传，不能卡住等输入。"""
+    def test_no_name_without_tty_refuses_with_hint(self, env, monkeypatch):
+        """非交互环境没给确认名 → 明确拒绝并告知怎么传，不能卡住等输入。"""
         import io
         import sys as _sys
 
         monkeypatch.setattr(_sys, "stdin", io.StringIO(""))  # isatty() 为 False
 
-        text, code = company_admin.purge_company("wrong-co", yes=True, password=None)
+        text, code = company_admin.purge_company("wrong-co", yes=True, confirm_name=None)
 
         assert code == 1
-        assert "--password" in text, "要告诉用户怎么把口令传进来"
+        assert "--confirm-name" in text, "要告诉用户怎么把公司名传进来"
         from trade.company import crud
 
         assert crud.get(env["company"]["id"]) is not None
 
-    def test_preview_shown_before_asking_password(self, env, monkeypatch):
-        """先看到「将要删什么」，再输口令 —— 顺序反了等于盲签。"""
+    def test_preview_shown_before_asking_name(self, env, monkeypatch):
+        """先看到「将要删什么」，再输公司名 —— 顺序反了等于盲签。"""
         import io
         import sys as _sys
 
         monkeypatch.setattr(_sys, "stdin", io.StringIO(""))
 
-        text, _ = company_admin.purge_company("wrong-co", yes=True, password=None)
+        text, _ = company_admin.purge_company("wrong-co", yes=True, confirm_name=None)
 
         assert "将要删除" in text, "预览没了"
-        assert text.index("将要删除") < text.index("口令"), "口令闸门在预览之前"
+        assert text.index("将要删除") < text.index("公司名"), "确认闸门在预览之前"
 
-    def test_preview_mode_needs_no_password(self, env):
-        """只看预览不需要口令（--yes 才过闸门）。"""
+    def test_preview_mode_needs_no_name(self, env):
+        """只看预览不需要确认名（--yes 才过闸门）。"""
         text, code = company_admin.purge_company("wrong-co")
 
         assert code == 1
         assert "将要删除" in text
-        assert "口令错误" not in text
+        assert "公司名不匹配" not in text
 
-    def test_list_needs_no_password(self, env):
-        """列表是只读诊断，不加口令 —— 否则自己排查时反而麻烦。"""
+    def test_list_needs_no_name(self, env):
+        """列表是只读诊断，不加确认 —— 否则自己排查时反而麻烦。"""
         out = company_admin.list_companies()
 
         assert "错误公司" in out
@@ -508,51 +511,51 @@ class TestPurgeDirPasswordGate:
             (d / cat).mkdir(parents=True)
         return d
 
-    def test_wrong_password_keeps_dir(self, env):
+    def test_wrong_name_keeps_dir(self, env):
         orphan = self._make_orphan(env)
 
-        text, code = company_admin.purge_dir(str(orphan), yes=True, password="猜的")
+        text, code = company_admin.purge_dir(str(orphan), yes=True, confirm_name="猜的")
 
         assert code == 1
         assert orphan.is_dir()
 
-    def test_correct_password_deletes_dir(self, env):
+    def test_correct_name_deletes_dir(self, env):
         orphan = self._make_orphan(env)
 
         text, code = company_admin.purge_dir(
-            str(orphan), yes=True, password=company_admin._PURGE_PASSWORD
+            str(orphan), yes=True, confirm_name=orphan.name
         )
 
         assert code == 0
         assert not orphan.exists()
 
-    def test_no_password_without_tty_refuses(self, env, monkeypatch):
+    def test_no_name_without_tty_refuses(self, env, monkeypatch):
         import io
         import sys as _sys
 
         monkeypatch.setattr(_sys, "stdin", io.StringIO(""))
         orphan = self._make_orphan(env)
 
-        text, code = company_admin.purge_dir(str(orphan), yes=True, password=None)
+        text, code = company_admin.purge_dir(str(orphan), yes=True, confirm_name=None)
 
         assert code == 1
         assert orphan.is_dir()
 
 
 class TestFlagParsing:
-    def test_parses_yes_and_password(self):
-        yes, pw = company_admin._parse_flags(["--yes", "--password", "abc"])
+    def test_parses_yes_and_confirm_name(self):
+        yes, pw = company_admin._parse_flags(["--yes", "--confirm-name", "abc"])
 
         assert yes is True and pw == "abc"
 
-    def test_password_absent_is_none(self):
+    def test_confirm_name_absent_is_none(self):
         yes, pw = company_admin._parse_flags(["--yes"])
 
         assert yes is True and pw is None
 
-    def test_password_flag_without_value_is_none(self):
-        """`--password` 后面没跟值 → 当作没提供，走交互/拒绝分支，不能崩。"""
-        _yes, pw = company_admin._parse_flags(["--yes", "--password"])
+    def test_confirm_name_flag_without_value_is_none(self):
+        """`--confirm-name` 后面没跟值 → 当作没提供，走交互/拒绝分支，不能崩。"""
+        _yes, pw = company_admin._parse_flags(["--yes", "--confirm-name"])
 
         assert pw is None
 
@@ -576,7 +579,7 @@ class TestOrphanPurgeLeavesAuditTrail:
         orphan = self._make_orphan(env)
 
         company_admin.purge_dir(
-            str(orphan), yes=True, password=company_admin._PURGE_PASSWORD
+            str(orphan), yes=True, confirm_name=orphan.name
         )
 
         from trade.company.crud import _audit_dir
@@ -593,7 +596,7 @@ class TestOrphanPurgeLeavesAuditTrail:
         orphan = self._make_orphan(env)
 
         company_admin.purge_dir(
-            str(orphan), yes=True, password=company_admin._PURGE_PASSWORD
+            str(orphan), yes=True, confirm_name=orphan.name
         )
 
         assert not orphan.exists()
@@ -669,7 +672,7 @@ class TestWindowsPathCaseInsensitivity:
         self._simulate_windows(monkeypatch)
 
         text, code = company_admin.purge_dir(
-            str(desktop_dir), yes=True, password=company_admin._PURGE_PASSWORD
+            str(desktop_dir), yes=True, confirm_name=desktop_dir.name
         )
 
         assert code == 1, "大小写不同就放行删除 —— 会删掉在用公司的真实文件"
@@ -749,7 +752,7 @@ class TestWindowsRobustness:
         monkeypatch.setattr(company_admin.shutil, "rmtree", fake_rmtree)
 
         text, code = company_admin.purge_dir(
-            str(d), yes=True, password=company_admin._PURGE_PASSWORD
+            str(d), yes=True, confirm_name=d.name
         )
 
         assert code == 0, f"只读文件把删除卡死了：{text}"
@@ -772,7 +775,7 @@ class TestWindowsRobustness:
         monkeypatch.setattr(company_admin.shutil, "rmtree", flaky_rmtree)
 
         text, code = company_admin.purge_dir(
-            str(d), yes=True, password=company_admin._PURGE_PASSWORD
+            str(d), yes=True, confirm_name=d.name
         )
 
         assert code == 0, f"瞬时占用没有重试：{text}"
@@ -789,7 +792,7 @@ class TestWindowsRobustness:
         monkeypatch.setattr(company_admin.shutil, "rmtree", always_fail)
 
         text, code = company_admin.purge_dir(
-            str(d), yes=True, password=company_admin._PURGE_PASSWORD
+            str(d), yes=True, confirm_name=d.name
         )
 
         assert code == 1
@@ -798,13 +801,13 @@ class TestWindowsRobustness:
 
     def test_no_stdin_is_treated_as_no_tty(self, env, monkeypatch):
         """Windows 上 sys.stdin 可能是 None（pythonw/无控制台）→ 不能崩，
-        要按「没有 TTY」拒绝，并提示改用 --password。"""
+        要按「没有 TTY」拒绝，并提示改用 --confirm-name。"""
         monkeypatch.setattr(company_admin.sys, "stdin", None)
 
         text, code = company_admin.purge_company(
-            env["company"]["slug"], yes=True, password=None
+            env["company"]["slug"], yes=True, confirm_name=None
         )
 
         assert code == 1
-        assert "--password" in text
-        assert env["desktop"].joinpath("错误公司").is_dir(), "没有口令就必须什么都不删"
+        assert "--confirm-name" in text
+        assert env["desktop"].joinpath("错误公司").is_dir(), "没有确认名就必须什么都不删"
