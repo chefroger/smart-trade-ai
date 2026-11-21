@@ -346,5 +346,9 @@ function navToView(view, chatCtx, chatName) {
     if (typeof loadCronStatus === 'function' && typeof currentCompanyId !== 'undefined' && currentCompanyId) {
         loadCronStatus(true);
     }
+    // 待办是独立数据源，切视图时同样立即刷新
+    if (typeof loadTodos === 'function' && typeof currentCompanyId !== 'undefined' && currentCompanyId) {
+        loadTodos(true);
+    }
 }
 

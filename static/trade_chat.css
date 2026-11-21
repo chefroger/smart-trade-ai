@@ -2085,3 +2085,32 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .imp-conflict-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .imp-conflict select { max-width: 55%; font-size: 12px; }
 .imp-conflict-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; flex-wrap: wrap; }
+
+/* ── 待办（P2-12）：添加行 / 勾选 / 删除 ─────────────────────────── */
+.todo-add-btn {
+    margin-left: auto; background: none; border: 1px dashed var(--line);
+    border-radius: 2px; color: var(--ink-2); font-size: 14px; line-height: 1;
+    width: 20px; height: 20px; cursor: pointer; padding: 0;
+}
+.todo-add-btn:hover { border-color: var(--ink); color: var(--ink); }
+.todo-add-form { margin-bottom: 8px; }
+.todo-add-form.hidden { display: none; }
+.todo-add-form > input[type="text"] {
+    width: 100%; font-size: 12px; padding: 5px 6px; margin-bottom: 4px;
+    border: 1px dashed var(--line); border-radius: 2px; background: var(--panel);
+    color: var(--ink); font-family: inherit;
+}
+.todo-add-row { display: flex; gap: 4px; align-items: center; }
+.todo-add-row input[type="date"] { font-size: 11px; padding: 3px 4px; min-width: 0; flex: 0 0 auto; }
+.todo-add-row select { font-size: 11px; padding: 3px 4px; flex: 1 1 auto; min-width: 0; }
+.todo-check {
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--muted); font-size: 13px; line-height: 1; flex: none;
+}
+.rail-todo-item.done .todo-check { color: var(--green, #16a34a); }
+.todo-del {
+    background: none; border: none; padding: 0 2px; cursor: pointer;
+    color: var(--faint); font-size: 14px; line-height: 1; flex: none;
+}
+.todo-del:hover { color: var(--accent-red); }
+.rail-todo-item .tx { flex: 1 1 auto; min-width: 0; }

@@ -76,6 +76,7 @@ function renderChatViewInto(container, ctx, name) {
     if (ctx === 'daily') {
         _shownCronOutputs = new Set();
         loadCronStatus(false);
+        loadTodos(false);
         loadTodayBrief();
     }
 }
@@ -187,7 +188,7 @@ function _getCurrentTaskGuidance(currentTime) {
 function startCronPolling() {
     stopCronPolling();
     _cronPollTimer = setInterval(() => {
-        if (currentCompanyId) loadCronStatus(true);
+        if (currentCompanyId) { loadCronStatus(true); loadTodos(true); }
     }, 30000);
 }
 
@@ -273,75 +274,203 @@ async function loadCronStatus(isPoll = false) {
     if (!data) return;
     const {completed, pending, current_time} = data;
 
-    // 常驻右栏：今日待办 + 定时任务输出（所有主视图；详情页由 CSS 隐藏）
-    const railTodo = document.getElementById('rail-todo');
-    if (railTodo) {
-        // 标红：当前时间落到条目执行窗口内（与后端同一口径）
-        // - 用后端 current_time（不是浏览器 new Date），避免两套时间源在跨分钟时打架
-        // - missed（已过窗口终点）/ unknown_schedule 一律不红：漏做的任务不是「当前」
-        // - 单点任务「15:30」窗口就是该分钟；范围「09:00-10:30」窗口为区间
-        function _toMin(hhmm) {
-            const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})/);
-            return m ? (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) : null;
+    // 定时任务输出（待办已迁到独立 /todos，由 loadTodos 渲染）
+    const railCron = document.getElementById('rail-cron');
+    if (railCron) {
+        let cronHtml = '<div class="rail-bh"><span class="t">' +
+            (typeof iconHtml === 'function' ? iconHtml('calendar-clock', 16) : '') +
+            esc(t('brief.cron')) +
+            '</span><span class="lbl">CRON</span></div>';
+        const outs = completed.filter(function (x) { return x.output; }).slice(0, 4);
+        // 今天没有定时任务产出：给一行说明，而不是留空白
+        if (!outs.length) {
+            cronHtml += '<p class="rail-line">' + esc(t('brief.cron_empty')) + '</p>';
         }
-        let _nowMin = _toMin(current_time);
-        if (_nowMin == null) { const d = new Date(); _nowMin = d.getHours() * 60 + d.getMinutes(); }
-        function _taskIsNow(task) {
-            if (!task || task.unknown_schedule || task.missed) return false;
-            const parts = String(task.time || '').split('-');
-            const s = _toMin(parts[0]);
-            if (s == null) return false;
-            const e = (parts.length > 1) ? _toMin(parts[1]) : s;
-            if (e == null) return false;
-            return _nowMin >= s && _nowMin <= e;
-        }
-        let todoHtml = '<div class="rail-bh"><span class="t">' +
-            (typeof iconHtml === 'function' ? iconHtml('list-checks', 16) : '') +
-            esc(t('brief.todo')) +
-            '</span><span class="lbl">TODO · ' + (pending.length + completed.length) + '</span></div>';
-        for (const task of pending) {
-            todoHtml += '<div class="rail-todo-item' + (_taskIsNow(task) ? ' now' : '') + '">' +
-                '<span class="tx">' +
-                esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
-        }
-        // 已完成单独成组（mockup 的 DONE 分隔）
-        if (completed.length) {
-            todoHtml += '<div class="rail-todo-sep">' + esc(t('brief.done', { n: completed.length })) + '</div>';
-        }
-        for (const task of completed) {
-            todoHtml += '<div class="rail-todo-item done">' +
-                '<span class="tx">' +
-                esc(task.name) + '<span class="sub">' + esc(task.time || '') + '</span></span></div>';
-        }
-        // 轮询每 30s 会重建列表：保留用户滚动位置，避免跳回顶部
-        const _todoScroll = railTodo.scrollTop;
-        railTodo.innerHTML = todoHtml;
-        railTodo.scrollTop = _todoScroll;
-        const railCron = document.getElementById('rail-cron');
-        if (railCron) {
-            let cronHtml = '<div class="rail-bh"><span class="t">' +
-                (typeof iconHtml === 'function' ? iconHtml('calendar-clock', 16) : '') +
-                esc(t('brief.cron')) +
-                '</span><span class="lbl">CRON</span></div>';
-            const outs = completed.filter(function (x) { return x.output; }).slice(0, 4);
-            if (!outs.length) {
-                cronHtml += '<p class="rail-line">' + esc(t('brief.cron_empty')) + '</p>';
-            }
-            outs.forEach(function (task) {
-                const line = String(task.output || '').replace(/\s+/g, ' ').slice(0, 90);
-                cronHtml += '<div class="rail-cron-item"><span class="mono">' +
-                    esc(task.time || '') + '</span><span>' + esc(line) + '</span></div>';
-            });
-            railCron.innerHTML = cronHtml;
-        }
-        loadTodayBrief(isPoll).catch(function () {});
-        return;
+        outs.forEach(function (task) {
+            const line = String(task.output || '').replace(/\s+/g, ' ').slice(0, 90);
+            cronHtml += '<div class="rail-cron-item"><span class="mono">' +
+                esc(task.time || '') + '</span><span>' + esc(line) + '</span></div>';
+        });
+        railCron.innerHTML = cronHtml;
     }
+    loadTodayBrief(isPoll).catch(function () {});
 
     // 顶部进度横幅已下线：其功能（今日简报/待办/定时任务）由常驻右栏承载。
     // 右栏缺失时无需再兜底渲染（正常情况 #app-rail 常驻）。
     return;
 
+}
+
+// ── 待办（独立存储，P2-12）────────────────────────────────────────
+
+let _todosData = null;
+
+async function loadTodos(isPoll = false) {
+    /** 拉取并渲染右栏待办；与定时任务（cron）完全独立。 */
+    if (!currentCompanyId) return;
+    const data = await api('GET', '/api/trade/todos', null, undefined, {silent: isPoll});
+    if (!data) return;
+    _todosData = data;
+    _renderRailTodos();
+}
+
+function _todoItemHtml(item, done) {
+    /** 单条待办：勾选钮 + 标题（+ 日期/客户）+ 删除钮。 */
+    const parts = [];
+    // 截止日与客户是可选信息，有才显示
+    if (item.due_date) parts.push(item.due_date);
+    if (item.customer_name) parts.push(item.customer_name);
+    const sub = parts.join(' · ');
+    return '<div class="rail-todo-item' + (done ? ' done' : '') +
+        '" data-todo-id="' + esc(String(item.id)) + '">' +
+        '<button type="button" class="todo-check" data-role="toggle" aria-label="' +
+        (done ? '取消完成' : '标记完成') + '">' + (done ? '✓' : '○') + '</button>' +
+        '<span class="tx">' + esc(item.title) +
+        (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') +
+        '</span>' +
+        '<button type="button" class="todo-del" data-role="delete" aria-label="删除">×</button>' +
+        '</div>';
+}
+
+function _renderRailTodos() {
+    /** 按 逾期 / 今天 / 将来 / 已完成 渲染右栏。 */
+    const el = document.getElementById('rail-todo');
+    if (!el || !_todosData) return;
+    const d = _todosData;
+    const sc = el.scrollTop;
+    const overdue = d.overdue || [];
+    const todayItems = d.today_items || [];
+    const upcoming = d.upcoming || [];
+    const doneItems = d.done || [];
+    const openCount = overdue.length + todayItems.length + upcoming.length;
+
+    let html = '<div class="rail-bh"><span class="t">' +
+        (typeof iconHtml === 'function' ? iconHtml('list-checks', 16) : '') +
+        esc(t('brief.todo')) +
+        '</span><span class="lbl">TODO · ' + esc(String(openCount)) + '</span>' +
+        '<button type="button" class="todo-add-btn" id="todo-add-btn" aria-label="' +
+        esc(t('todo.add')) + '">+</button></div>';
+
+    // 添加表单默认收起，点 + 展开
+    html += '<div id="todo-add-form" class="todo-add-form hidden">' +
+        '<input type="text" id="todo-add-title" maxlength="200" placeholder="' +
+        esc(t('todo.placeholder')) + '">' +
+        '<div class="todo-add-row">' +
+        '<input type="date" id="todo-add-due" aria-label="' + esc(t('todo.due')) + '">' +
+        '<select id="todo-add-customer" aria-label="' + esc(t('todo.customer')) + '">' +
+        '<option value="">' + esc(t('todo.no_customer')) + '</option></select>' +
+        '<button type="button" class="btn btn-xs primary" id="todo-add-save">' +
+        esc(t('todo.save')) + '</button>' +
+        '</div></div>';
+
+    const groups = [
+        [overdue, t('todo.overdue')],
+        [todayItems, t('todo.today')],
+        [upcoming, t('todo.upcoming')],
+    ];
+    groups.forEach(function (g) {
+        // 空分组不占位置
+        if (!g[0].length) return;
+        html += '<div class="rail-todo-sep">' + esc(g[1]) + '</div>';
+        g[0].forEach(function (it) { html += _todoItemHtml(it, false); });
+    });
+    if (doneItems.length) {
+        html += '<div class="rail-todo-sep">' +
+            esc(t('brief.done', {n: doneItems.length})) + '</div>';
+        doneItems.forEach(function (it) { html += _todoItemHtml(it, true); });
+    }
+    // 一条都没有：给一行空态，而不是留白
+    if (!openCount && !doneItems.length) {
+        html += '<p class="rail-line">' + esc(t('todo.empty')) + '</p>';
+    }
+
+    el.innerHTML = html;
+    // 轮询重建会跳回顶部：保留原滚动位置
+    el.scrollTop = sc;
+    _bindRailTodos(el);
+}
+
+function _bindRailTodos(el) {
+    /** 绑定添加/勾选/删除；每次重渲染都要重绑（innerHTML 会销毁旧节点）。 */
+    document.getElementById('todo-add-btn')?.addEventListener('click', function () {
+        const form = document.getElementById('todo-add-form');
+        if (!form) return;
+        form.classList.toggle('hidden');
+        // 展开时才拉客户列表，避免每次轮询都请求
+        if (!form.classList.contains('hidden')) {
+            _fillTodoCustomers();
+            document.getElementById('todo-add-title')?.focus();
+        }
+    });
+    document.getElementById('todo-add-save')?.addEventListener('click', _saveTodo);
+    document.getElementById('todo-add-title')?.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); _saveTodo(); }
+    });
+
+    el.querySelectorAll('.rail-todo-item').forEach(function (row) {
+        const id = Number(row.getAttribute('data-todo-id'));
+        row.querySelector('[data-role="toggle"]')?.addEventListener('click', function (e) {
+            e.stopPropagation();
+            // 当前是「已完成」就取消，否则标记完成
+            _todoPatch(id, {done: !row.classList.contains('done')});
+        });
+        row.querySelector('[data-role="delete"]')?.addEventListener('click', function (e) {
+            e.stopPropagation();
+            // 删除不可撤销，先确认
+            if (!confirm(t('todo.confirm_delete'))) return;
+            _todoDelete(id);
+        });
+    });
+}
+
+async function _fillTodoCustomers() {
+    /** 填充「关联客户」下拉；客户列表未加载时先取一次。 */
+    const sel = document.getElementById('todo-add-customer');
+    if (!sel) return;
+    if (typeof allCustomers !== 'undefined' && !allCustomers.length) {
+        try {
+            const list = await api('GET', '/api/trade/customers', null, undefined, {silent: true});
+            const arr = Array.isArray(list) ? list : ((list && list.items) || []);
+            if (typeof allCustomers !== 'undefined') allCustomers = arr;
+        } catch (e) {
+            // 拉不到客户不影响「无客户」待办的添加
+        }
+    }
+    const cur = sel.value;
+    const list = (typeof allCustomers !== 'undefined' ? allCustomers : []) || [];
+    sel.innerHTML = '<option value="">' + esc(t('todo.no_customer')) + '</option>' +
+        list.map(function (c) {
+            return '<option value="' + esc(String(c.id)) + '">' + esc(c.name) + '</option>';
+        }).join('');
+    sel.value = cur;
+}
+
+async function _saveTodo() {
+    const titleEl = document.getElementById('todo-add-title');
+    const dueEl = document.getElementById('todo-add-due');
+    const custEl = document.getElementById('todo-add-customer');
+    const title = (titleEl && titleEl.value || '').trim();
+    // 标题为空：不提交，把焦点放回输入框
+    if (!title) { if (titleEl) titleEl.focus(); return; }
+    const body = {title: title};
+    if (dueEl && dueEl.value) body.due_date = dueEl.value;
+    if (custEl && custEl.value) body.customer_id = Number(custEl.value);
+    const r = await api('POST', '/api/trade/todos', body);
+    if (!r) return;
+    if (titleEl) titleEl.value = '';
+    if (dueEl) dueEl.value = '';
+    if (custEl) custEl.value = '';
+    await loadTodos(false);
+}
+
+async function _todoPatch(id, body) {
+    const r = await api('PATCH', '/api/trade/todos/' + id, body);
+    if (r) await loadTodos(false);
+}
+
+async function _todoDelete(id) {
+    const r = await api('DELETE', '/api/trade/todos/' + id);
+    if (r) await loadTodos(false);
 }
 
 // ── 滚动到底部浮标（用户不在底部时始终显示）─────────
@@ -1040,6 +1169,17 @@ function _fillChatInput(text) {
     input.style.height = (input.scrollHeight > 80 ? 80 : input.scrollHeight) + 'px';
 }
 
+async function _addTodoFromAction(action) {
+    /** NEXT chip 的「加入待办」：直接写库并刷新右栏。 */
+    const title = ((action && action.label) || '').trim();
+    // 没有内容就不建空待办
+    if (!title) { toast(t('todo.empty_label')); return; }
+    const r = await api('POST', '/api/trade/todos', {title: title});
+    if (!r) return;
+    toast(t('todo.added'));
+    await loadTodos(false);
+}
+
 function _handleNextAction(action) {
     /** NEXT chip：把动作写成可编辑的聊天指令，不自动外发。 */
     const act = (action && action.action) || '';
@@ -1051,8 +1191,9 @@ function _handleNextAction(action) {
             ? 'Look up customs import records for this customer'
             : '查这家客户的海关进口记录');
     } else if (act === 'add_todo') {
-        // 待办无独立存储：写成指令交给助手（带原始标签，保留「周四前」这类时间）
-        prompt = (currentLang === 'en' ? 'Add to todo: ' : '加入待办：') + (action.label || '');
+        // 待办已独立存储（P2-12）：直接落库，不再往聊天框塞指令
+        _addTodoFromAction(action);
+        return;
     } else {
         return;
     }
@@ -1118,6 +1259,7 @@ async function sendMsg() {
         input.value = '';
         input.style.height = '24px';  // 复位输入框高度
         await loadCronStatus();
+        await loadTodos();
         return;
     }
 
