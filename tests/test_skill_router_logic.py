@@ -25,6 +25,16 @@ import pytest
         ("buyer persona", "b2b-buyer-persona"),
         ("LinkedIn", "b2b-linkedin-marketing"),
         ("领英", "b2b-linkedin-marketing"),
+        # 个人背调不能被 LinkedIn 营销劫持（2026-11-22 实测：粘贴个人主页 +
+        # 「查一下这个人」被判给 b2b-linkedin-marketing，整层机器判定丢失）
+        ("https://www.linkedin.com/in/matthewbusel/ 帮我查一下这个人", "b2b-osint"),
+        ("帮我查一下这个人", "b2b-osint"),
+        ("帮我查一下 这个人", "b2b-osint"),
+        ("这个人是谁", "b2b-osint"),
+        # 营销意图仍然归 marketing
+        ("优化我的 LinkedIn profile", "b2b-linkedin-marketing"),
+        ("帮我把这个人加好友", "b2b-linkedin-marketing"),
+        ("领英怎么发帖子", "b2b-linkedin-marketing"),
         ("客户分析", "b2b-customer-intel"),
         ("客户跟进", "b2b-sales-pipeline"),
         ("市场调研", "b2b-market-analysis"),

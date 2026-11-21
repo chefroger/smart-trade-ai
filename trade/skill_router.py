@@ -253,6 +253,9 @@ _SUBSTRING_WEIGHT = 1  # 宽松子串匹配（如"做一下背景调查再联系
 # 领域优先词命中时的加分：压过"查一下这家公司"这类通用核查触发词
 _DOMAIN_BOOST = 4
 
+# 触发词是否含 CJK —— 去空格兜底匹配只对中文生效（英文去空格会造出跨界子串）
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+
 # skill_name → priority_keywords（注册表声明；命中则加 _DOMAIN_BOOST）
 _PRIORITY_KEYWORDS: dict[str, tuple[str, ...]] = {
     str(_skill["name"]): tuple(
@@ -332,6 +335,10 @@ def _score_skills(query: str) -> list[dict]:
 
     # ── 策略 2：逐触发词评分（使用预编译正则 _PRECOMPILED，无 re.compile 开销）──
     normed = _norm(query)
+    # 去空格版本：中文没有词边界，用户常写「查一下 这个人」（中间带空格），
+    # 若只按原串做子串匹配，注册的「查一下这个人」就永远命中不了。
+    # 词边界匹配仍用带空格的原串（避免跨界误报），只放宽子串匹配。
+    compact = normed.replace(" ", "")
     results = []
 
     from trade.skill_registry import _BLOCKED_SKILLS
@@ -352,15 +359,24 @@ def _score_skills(query: str) -> list[dict]:
                 triggers_matched.append(kw)
                 continue  # 词边界命中后不再尝试子串（避免重复计数）
             # 宽松子串匹配（substring_re 为 None 表示该触发词被禁止子串匹配，
-            # 见预编译处对 ≤2 字符 ASCII 缩写触发词的处理）
-            if substring_re is not None and substring_re.search(normed):
+            # 见预编译处对 ≤2 字符 ASCII 缩写触发词的处理）。
+            # 去空格兜底只对**含中文**的触发词生效：英文触发词去掉空格会造出
+            # 跨界子串（"enable table" → "enabletable" 命中 "bl"），正是词边界
+            # 要防的噪音。
+            if substring_re is not None and (
+                substring_re.search(normed)
+                or (_CJK_RE.search(kw) and substring_re.search(compact))
+            ):
                 total_score += _SUBSTRING_WEIGHT
                 substring_hits += 1
                 triggers_matched.append(kw)
 
         if total_score > 0:
             priority = _PRIORITY_KEYWORDS.get(skill_name)
-            if priority and any(k in normed for k in priority):
+            if priority and any(
+                k in normed or (_CJK_RE.search(k) and k in compact)
+                for k in priority
+            ):
                 total_score += _DOMAIN_BOOST
             results.append({
                 "skill_name": skill_name,

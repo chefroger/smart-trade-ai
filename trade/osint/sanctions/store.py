@@ -20,7 +20,6 @@ from trade.osint.sanctions.normalize import (
     FUZZY_THRESHOLD,
     HIT_THRESHOLD,
     SHORT_NAME_CHARS,
-    jaccard,
     normalize_name,
     token_key,
     tokens_of,
@@ -112,6 +111,8 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+
+
 # ── 写入（后台刷新调用）────────────────────────────────────────────────────
 
 
@@ -127,8 +128,9 @@ def save_list(conn: sqlite3.Connection, source, parsed, *, fetched_at: str | Non
         norm = normalize_name(name)
         if not norm:
             continue
+        toks = tokens_of(norm)
         payload.append(
-            (source.name, name, norm, token_key(tokens_of(norm)), country or "", kind or "entity")
+            (source.name, name, norm, token_key(toks), country or "", kind or "entity")
         )
     conn.executemany(
         "INSERT INTO entities(list, name, norm, tkey, country, kind) VALUES (?,?,?,?,?,?)",
@@ -280,7 +282,8 @@ def _candidates(conn: sqlite3.Connection, q_tokens: frozenset[str]) -> list[sqli
     clauses = " OR ".join("norm LIKE ?" for _ in q_tokens)
     params = [f"%{token}%" for token in sorted(q_tokens)]
     return conn.execute(
-        f"SELECT id, name, list, country, kind, tkey FROM entities WHERE {clauses} LIMIT 20000",
+        f"SELECT id, name, list, country, kind, tkey FROM entities "
+        f"WHERE {clauses} LIMIT 20000",
         params,
     ).fetchall()
 
@@ -307,7 +310,8 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
         return []
     try:
         exact_rows = conn.execute(
-            "SELECT id, name, list, country, kind, tkey FROM entities WHERE tkey = ? LIMIT 500",
+            "SELECT id, name, list, country, kind, tkey FROM entities "
+            "WHERE tkey = ? LIMIT 500",
             (q_key,),
         ).fetchall()
         candidates = [] if is_short else _candidates(conn, q_tokens)
@@ -334,24 +338,37 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
         consider(row, 1.0, "exact_name")
 
     if not is_short:
+        q_count = len(q_tokens)
         for row in candidates:
-            entry_tokens = frozenset((row["tkey"] or "").split())
-            if not entry_tokens:
+            tkey = row["tkey"] or ""
+            if not tkey:
                 continue
-            if entry_tokens == q_tokens:
+            n = tkey.count(" ") + 1
+            entry_tokens = tkey.split()
+            # 不用 frozenset：候选可能有上万行，逐行建集合是主要耗时。
+            # 直接用 list + q_tokens 的 O(1) 成员测试数交集。
+            shared = 0
+            for token in entry_tokens:
+                if token in q_tokens:
+                    shared += 1
+            if shared == q_count and n == q_count:
                 continue  # 精确命中已在上面处理
-            if q_tokens < entry_tokens:
-                consider(row, min(len(q_tokens) / len(entry_tokens) * 1.2, 0.95), "name_contains")
-            elif entry_tokens < q_tokens:
+            if shared == q_count:
+                # 查询是名单实体的 token 子集
+                consider(row, min(q_count / n * 1.2, 0.95), "name_contains")
+            elif shared == n:
+                # 名单实体是查询的 token 子集
                 consider(
                     row,
-                    min(len(entry_tokens) / len(q_tokens) * 1.2, 0.95),
+                    min(n / max(q_count, 1) * 1.2, 0.95),
                     "name_contained_in_query",
                 )
             else:
-                similarity = jaccard(q_tokens, entry_tokens)
-                if similarity >= FUZZY_THRESHOLD:
-                    consider(row, min(similarity * 0.9, 0.9), "name_similar")
+                union = n + q_count - shared
+                if union:
+                    similarity = shared / union
+                    if similarity >= FUZZY_THRESHOLD:
+                        consider(row, min(similarity * 0.9, 0.9), "name_similar")
 
     hits = list(best.values())
 

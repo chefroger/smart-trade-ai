@@ -185,6 +185,30 @@ class TestPromptsPointAtTheCommand:
                 f"{name} 没有写入联系人邮箱核验的上限"
             )
 
+    def _osint_prompts(self) -> list[tuple[str, str]]:
+        """只看背调提示词（email-intel 是单邮箱技能，不承担背调报告规则）。"""
+        return [(name, text) for name, text in self._prompts()
+                if "email-intel" not in name]
+
+    def test_prompts_require_sanctions_disclosure(self):
+        """2026-11-22 回归：报告少了制裁结论整层 —— 提示词必须强制写一行。"""
+        for name, text in self._osint_prompts():
+            assert "无论" in text and "制裁" in text, (
+                f"{name} 没有强制要求报告写入制裁比对结论"
+            )
+
+    def test_prompts_forbid_borrowing_company_context(self):
+        """背调外部对象时不得把本公司的业务范围套上去。"""
+        for name, text in self._osint_prompts():
+            assert "不套用本公司" in text, (
+                f"{name} 没有禁止把本公司上下文带进背调"
+            )
+
+    def test_prompts_require_address_type(self):
+        """地址必须标注类型（住宅/注册地/代理地址），不能把代理地址写成居住地。"""
+        for name, text in self._osint_prompts():
+            assert "代理注册地址" in text, f"{name} 没有要求标注地址类型"
+
     def test_prompts_use_the_cli_command(self):
         for name, text in self._prompts():
             assert "python -m trade.osint" in text, f"{name} 没有指向可执行的背调命令"
