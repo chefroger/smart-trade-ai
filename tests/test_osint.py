@@ -89,7 +89,7 @@ def _osint_stays_offline(monkeypatch):
 
     monkeypatch.setattr(_whois, "_query_whois_server", lambda domain, server, port=43, timeout=10: _FAKE_WHOIS_COM)
     monkeypatch.setattr(_email, "_query_mx_records", lambda domain: (["mx1.example.com"], True, None))
-    monkeypatch.setattr(_loader, "http_get", lambda url, timeout=30: None)  # 触发内置 fallback
+    monkeypatch.setattr(_loader, "http_get", lambda url, timeout=30, **_kw: None)  # 触发内置 fallback
     # Layer 1 邮箱注册检测走 holehe 子进程（真探测 120+ 站点，一个 orchestrator 用例 8~10s）
     monkeypatch.setattr(_intel, "email_background_check", _fake_email_background_check)
 

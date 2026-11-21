@@ -204,7 +204,7 @@ _SAFE_OPENER = urllib.request.build_opener(
 )
 
 
-def http_get(url: str, timeout: int = 30) -> str | None:
+def http_get(url: str, timeout: int = 30, max_bytes: int | None = None) -> str | None:
     """通过 urllib 发送 HTTP GET 请求，返回响应正文。
 
     所有子模块统一使用此函数，失败时返回 None 而非抛异常。
@@ -225,7 +225,15 @@ def http_get(url: str, timeout: int = 30) -> str | None:
         )
         with _SAFE_OPENER.open(req, timeout=timeout) as resp:
             charset = resp.headers.get_content_charset() or "utf-8"
-            return resp.read(_MAX_BODY_BYTES).decode(charset, errors="replace")
+            if max_bytes is None:
+                return resp.read(_MAX_BODY_BYTES).decode(charset, errors="replace")
+            # With max_bytes the body is read whole or not at all.
+            body = resp.read(max_bytes + 1)
+            if len(body) > max_bytes:
+                # A cut-off body is not a smaller valid file: callers would parse part of it.
+                logger.warning("HTTP GET body over %d bytes, dropped [%s]", max_bytes, url)
+                return None
+            return body.decode(charset, errors="replace")
     except Exception as e:
         logger.debug("HTTP GET 失败 [%s]: %s", url, e)
         return None

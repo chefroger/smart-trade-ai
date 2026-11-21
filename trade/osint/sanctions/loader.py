@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 _sanctions_cache: dict[str, list[dict]] = {
     "OFAC": [],
     "UN": [],
+    "US_CSL": [],
+    "US_RESTRICTED": [],
 }
 
 # 每份名单的**来源与健康度** —— 与 _sanctions_cache 分开存放（后者是「名字 → 条目列表」
@@ -45,6 +47,33 @@ _OFAC_URL_CANDIDATES = (
     "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.CSV",
     "https://www.treasury.gov/ofac/downloads/sdn.csv",
 )
+
+# SDN.CSV is about 6 MB and has NO header row: columns are ent_num, SDN_Name, SDN_Type,
+# Program, Title, Call_Sign, Vess_type, Tonnage, GRT, Vess_flag, Vess_owner, Remarks.
+# "-0-" marks an empty field.
+_SDN_CSV_COLUMNS = (
+    "ent_num", "SDN_Name", "SDN_Type", "Program", "Title", "Call_Sign",
+    "Vess_type", "Tonnage", "GRT", "Vess_flag", "Vess_owner", "Remarks",
+)
+_OFAC_MAX_BYTES = 16_000_000
+
+# trade.gov Consolidated Screening List (about 17 MB): BIS Entity List, Military End User
+# List, Unverified List, Denied Persons List, State ITAR debarments and nonproliferation
+# sanctions, OFAC non-SDN lists. Its SDN rows are skipped (the OFAC list above has them).
+_US_CSL_URL = (
+    "https://data.trade.gov/downloadable_consolidated_screening_list/v1/consolidated.csv"
+)
+_US_CSL_MAX_BYTES = 48_000_000
+_MIN_US_CSL_ENTRIES = 1000
+
+# The US lists that are in neither file: UFLPA Entity List (forced-labour import ban),
+# DoD 1260H Chinese military companies, Section 889 and the FCC Covered List. Rebuilt daily
+# from the Federal Register / dhs.gov / fcc.gov / eCFR, CC BY 4.0, one row per name.
+_US_RESTRICTED_URL = (
+    "https://github.com/Mattbusel/us-restricted-parties/releases/latest/download/all.csv"
+)
+_US_RESTRICTED_MAX_BYTES = 8_000_000
+_MIN_US_RESTRICTED_ENTRIES = 100
 
 # 文件缓存 TTL：24 小时后视为过期，触发重新下载
 _CACHE_TTL_SECONDS = 86400
@@ -226,29 +255,12 @@ def load_ofac_sanctions() -> None:
 
     for url in _OFAC_URL_CANDIDATES:
         try:
-            response = http_get(url, timeout=30)
+            response = http_get(url, timeout=60, max_bytes=_OFAC_MAX_BYTES)
             if not response:
                 errors.append(f"{url}: 无响应")
                 continue
 
-            parsed: list[dict] = []
-            # 用 csv.DictReader 解析 CSV，自动处理标题行
-            reader = csv.DictReader(io.StringIO(response))
-            for row in reader:
-                # 优先使用 SDN_Name 列（全名），为空时回退到 Last Name
-                name = row.get("SDN_Name", "").strip()
-                if not name:
-                    name = row.get("Last Name", "").strip()
-                if name:
-                    parsed.append(
-                        {
-                            "name": name,
-                            "label": "OFAC SDN",
-                            "type": row.get("SDN_Type", ""),
-                            "program": row.get("Program", ""),
-                            "country": row.get("Country", ""),
-                        }
-                    )
+            parsed = parse_sdn_csv(response)
 
             # 条目数下限校验：地址失效时往往返回错误页/空页，解析出 0~几条，
             # 若只看"有没有解析出东西"就会把错误页当成加载成功。
@@ -282,6 +294,133 @@ def load_ofac_sanctions() -> None:
         _get_fallback_ofac_entries(),
         "fallback",
         note="; ".join(errors),
+    )
+
+
+def _clean(value: str | None) -> str:
+    value = (value or "").strip()
+    return "" if value == "-0-" else value
+
+
+def parse_sdn_csv(text: str) -> list[dict]:
+    """Parse OFAC SDN.CSV, which has no header row (see _SDN_CSV_COLUMNS).
+
+    Reading it with csv.DictReader turns the first entity into the header, so no row
+    has an "SDN_Name" key and the whole list parses to zero entries.
+    """
+    parsed: list[dict] = []
+    for row in csv.reader(io.StringIO(text.lstrip("\ufeff"))):
+        if len(row) < 4:
+            continue  # the trailing EOF marker line
+        rec = dict(zip(_SDN_CSV_COLUMNS, row, strict=False))
+        name = _clean(rec.get("SDN_Name"))
+        if not name:
+            continue
+        parsed.append(
+            {
+                "name": name,
+                "label": "OFAC SDN",
+                "type": _clean(rec.get("SDN_Type")),
+                "program": _clean(rec.get("Program")),
+                "country": "",
+            }
+        )
+    return parsed
+
+
+def parse_us_csl_csv(text: str) -> list[dict]:
+    """Parse the trade.gov CSL CSV: one entry per name and per alt name, SDN rows skipped."""
+    parsed: list[dict] = []
+    for row in csv.DictReader(io.StringIO(text.lstrip("\ufeff"))):
+        source = (row.get("source") or "").strip()
+        if not source or source.startswith("Specially Designated Nationals"):
+            continue
+        label = source.split(" - ")[0]
+        country = (row.get("addresses") or "").rsplit(",", 1)[-1].strip()[:2]
+        names = [(row.get("name") or "").strip()]
+        names += [a.strip() for a in (row.get("alt_names") or "").split(";")]
+        for name in dict.fromkeys(n for n in names if n):
+            parsed.append(
+                {
+                    "name": name,
+                    "label": label,
+                    "type": (row.get("type") or "").strip(),
+                    "program": (row.get("programs") or "").strip(),
+                    "country": country,
+                }
+            )
+    return parsed
+
+
+def parse_us_restricted_csv(text: str) -> list[dict]:
+    """Parse us-restricted-parties all.csv (one row per primary name or alias)."""
+    parsed: list[dict] = []
+    for row in csv.DictReader(io.StringIO(text.lstrip("\ufeff"))):
+        name = (row.get("NAME") or "").strip()
+        if not name:
+            continue
+        parsed.append(
+            {
+                "name": name,
+                "label": (row.get("LIST_NAME") or "").strip(),
+                "type": "Entity",
+                "program": (row.get("DATA_SOURCE") or "").strip(),
+                "country": "",
+                "parent": (row.get("PARENT_NAME") or "").strip(),
+            }
+        )
+    return parsed
+
+
+def _load_downloaded_list(
+    list_name: str, url: str, parse, min_entries: int, max_bytes: int
+) -> None:
+    """File cache, then download, then stale cache; nothing loaded is marked degraded."""
+    cached = _load_from_file_cache(list_name)
+    if cached is not None:
+        _mark_loaded(list_name, cached, "cache")
+        return
+
+    error = ""
+    response = http_get(url, timeout=90, max_bytes=max_bytes)
+    if not response:
+        error = f"{url}: no response"
+    else:
+        try:
+            entries = parse(response)
+        except Exception as e:  # malformed download: keep the reason, fall through
+            entries = []
+            error = f"{url}: {e}"
+        if len(entries) >= min_entries:
+            logger.info("%s loaded: %d entries", list_name, len(entries))
+            _save_to_file_cache(list_name, entries)
+            _mark_loaded(list_name, entries, "network", note=url)
+            return
+        error = error or f"{url}: only {len(entries)} entries (minimum {min_entries})"
+
+    logger.warning("%s download failed: %s", list_name, error)
+    stale = _load_from_file_cache_expired(list_name)
+    if stale is not None:
+        _mark_loaded(list_name, stale, "cache", note="stale cache: " + error)
+        return
+    _mark_loaded(list_name, [], "fallback", note=error)
+
+
+def load_us_csl_sanctions() -> None:
+    """Load the trade.gov Consolidated Screening List (BIS, State, OFAC non-SDN lists)."""
+    _load_downloaded_list(
+        "US_CSL", _US_CSL_URL, parse_us_csl_csv, _MIN_US_CSL_ENTRIES, _US_CSL_MAX_BYTES
+    )
+
+
+def load_us_restricted_sanctions() -> None:
+    """Load UFLPA, DoD 1260H, Section 889 and the FCC Covered List."""
+    _load_downloaded_list(
+        "US_RESTRICTED",
+        _US_RESTRICTED_URL,
+        parse_us_restricted_csv,
+        _MIN_US_RESTRICTED_ENTRIES,
+        _US_RESTRICTED_MAX_BYTES,
     )
 
 
