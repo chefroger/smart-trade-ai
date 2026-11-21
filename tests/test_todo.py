@@ -140,7 +140,42 @@ class TestGrouping:
         assert [x["title"] for x in result["overdue"]] == ["逾期2", "逾期1"]
         assert {x["title"] for x in result["today_items"]} == {"今天1", "无期限"}
         assert [x["title"] for x in result["done"]] == ["今天完成"]
-        assert result["counts"] == {"overdue": 2, "today": 2, "done": 1}
+        assert result["upcoming"] == []
+        assert result["counts"] == {"overdue": 2, "today": 2, "done": 1, "upcoming": 0}
+
+    def test_future_todo_moves_between_groups(self, company_id):
+        """未来待办必须出现在 upcoming，且改日期后正确迁移（不能从列表消失）。"""
+        from trade import todo
+
+        today = "2026-11-21"
+        t = todo.create_todo(company_id, title="明天", due_date="2026-11-22")
+
+        # 明天：只在 upcoming
+        result = todo.list_todos(company_id, today=today)
+        assert [x["id"] for x in result["upcoming"]] == [t["id"]]
+        assert all(x["id"] != t["id"] for x in result["overdue"])
+        assert all(x["id"] != t["id"] for x in result["today_items"])
+
+        # 改成今天：移到 today_items
+        todo.update_todo(t["id"], company_id=company_id, due_date=today)
+        result = todo.list_todos(company_id, today=today)
+        assert any(x["id"] == t["id"] for x in result["today_items"])
+        assert all(x["id"] != t["id"] for x in result["upcoming"])
+
+        # 改成昨天：移到 overdue
+        todo.update_todo(t["id"], company_id=company_id, due_date="2026-11-20")
+        result = todo.list_todos(company_id, today=today)
+        assert any(x["id"] == t["id"] for x in result["overdue"])
+        assert all(x["id"] != t["id"] for x in result["upcoming"])
+
+        # counts 与各组长短一致
+        for key, group in (
+            ("overdue", "overdue"),
+            ("today", "today_items"),
+            ("done", "done"),
+            ("upcoming", "upcoming"),
+        ):
+            assert result["counts"][key] == len(result[group])
 
 
 class TestCrossCompanyIsolation:
@@ -151,7 +186,7 @@ class TestCrossCompanyIsolation:
         other = company.create(name="Other Co", slug="other-co")["id"]
 
         visible = todo.list_todos(other)
-        assert all(x["id"] != t["id"] for grp in ("overdue", "today_items", "done")
+        assert all(x["id"] != t["id"] for grp in ("overdue", "today_items", "upcoming", "done")
                    for x in visible[grp])
         assert todo.update_todo(t["id"], company_id=other, title="偷偷改") is None
         assert todo.delete_todo(t["id"], company_id=other) is False
@@ -201,6 +236,28 @@ class TestValidation:
         t = todo.create_todo(company_id, title="自己的")
         with pytest.raises(todo.TodoError):
             todo.update_todo(t["id"], company_id=company_id, customer_id=other_cust)
+
+
+class TestAsBool:
+    def test_string_booleans(self):
+        from trade.todo import _as_bool
+
+        for v in ("true", "1", "yes", True, 1):
+            assert _as_bool(v) is True
+        for v in ("false", "0", "no", "", "False", "No", None, 0):
+            assert _as_bool(v) is False
+        # 其余非空值按 Python 真值
+        assert _as_bool("whatever") is True
+
+    def test_done_accepts_string_false(self, company_id):
+        """前端传 "false" 不能被当成真（否则「取消完成」会翻回完成）。"""
+        from trade import todo
+
+        t = todo.create_todo(company_id, title="x")
+        todo.update_todo(t["id"], company_id=company_id, done=True)
+        undone = todo.update_todo(t["id"], company_id=company_id, done="false")
+        assert undone["done"] == 0
+        assert undone["done_at"] is None
 
 
 class TestCustomerDeleted:
@@ -295,6 +352,20 @@ class TestTodoApi:
             "/api/trade/todos", json={"title": "x", "due_date": "bad"}, headers=h
         )
         assert r.status_code == 400
+
+    def test_patch_done_string_false(self, api_client):
+        """PATCH 传字符串 "false" 应按未完成处理。"""
+        client, token, cid = api_client
+        h = _h(token, cid)
+
+        tid = client.post("/api/trade/todos", json={"title": "x"}, headers=h).json()["id"]
+        r = client.patch(f"/api/trade/todos/{tid}", json={"done": True}, headers=h)
+        assert r.json()["done"] == 1
+
+        r = client.patch(f"/api/trade/todos/{tid}", json={"done": "false"}, headers=h)
+        assert r.status_code == 200
+        assert r.json()["done"] == 0
+        assert r.json()["done_at"] is None
 
     def test_patch_missing_is_404(self, api_client):
         client, token, cid = api_client

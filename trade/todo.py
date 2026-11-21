@@ -27,6 +27,29 @@ class TodoError(Exception):
     """待办写入被拒（标题为空 / 日期格式错 / 客户不属于本公司）。"""
 
 
+def _as_bool(value) -> bool:
+    """把前端可能传来的字符串布尔解析成真正的 bool。
+
+    JSON 里本该是布尔，但历史/第三方调用可能传 "false" / "0" 之类的字符串；
+    Python 的真值判断会把非空字符串（包括 "false"）一律当 True，导致
+    「取消完成」反而被标记完成。这里显式白名单化。
+    """
+    # 布尔原样返回，避免无谓的字符串比较
+    if isinstance(value, bool):
+        return value
+    # 字符串先归一化（去空白 + 小写）再匹配白名单
+    if isinstance(value, str):
+        text = value.strip().lower()
+        # 常见「真」写法
+        if text in {"true", "1", "yes"}:
+            return True
+        # 常见「假」写法（含空串）
+        if text in {"false", "0", "no", ""}:
+            return False
+    # 其余值（数字、None、其它字符串）按 Python 真值处理
+    return bool(value)
+
+
 def _validate_title(title) -> str:
     """校验并规范化标题：去首尾空白、必须非空且不超过 200 字。"""
     text = str(title or "").strip()
@@ -90,7 +113,7 @@ def _fetch_todo(conn, todo_id: int, company_id: int) -> dict | None:
 
 
 def list_todos(company_id: int, *, today: str | None = None) -> dict:
-    """按「逾期 / 今天 / 已完成」三组列出本公司待办。
+    """按「逾期 / 今天 / 将来 / 已完成」四组列出本公司待办。
 
     参数 today 供测试注入固定日期；不传则用本机今天。
     """
@@ -113,7 +136,15 @@ def list_todos(company_id: int, *, today: str | None = None) -> dict:
             _SELECT_SQL
             + "WHERE t.company_id = ? AND t.done = 0 "
             "AND (t.due_date = ? OR t.due_date = '') "
-            "ORDER BY t.created_at ASC, t.id ASC",
+        "ORDER BY t.created_at ASC, t.id ASC",
+            (company_id, today),
+        ).fetchall()
+        # 将来：未完成、有截止日、且晚于今天（避免未来待办从右栏消失）
+        upcoming = conn.execute(
+            _SELECT_SQL
+            + "WHERE t.company_id = ? AND t.done = 0 AND t.due_date <> '' "
+            "AND t.due_date > ? "
+            "ORDER BY t.due_date ASC, t.id ASC",
             (company_id, today),
         ).fetchall()
         # 已完成：只列**今天完成**的，按完成时间倒序
@@ -128,15 +159,18 @@ def list_todos(company_id: int, *, today: str | None = None) -> dict:
 
     overdue_list = [dict(r) for r in overdue]
     today_list = [dict(r) for r in today_rows]
+    upcoming_list = [dict(r) for r in upcoming]
     done_list = [dict(r) for r in done_rows]
     return {
         "today": today,
         "overdue": overdue_list,
         "today_items": today_list,
+        "upcoming": upcoming_list,
         "done": done_list,
         "counts": {
             "overdue": len(overdue_list),
             "today": len(today_list),
+            "upcoming": len(upcoming_list),
             "done": len(done_list),
         },
     }
@@ -205,7 +239,8 @@ def update_todo(todo_id: int, *, company_id: int, **fields) -> dict | None:
             params.append(_coerce_customer_id(conn, updates["customer_id"], company_id))
         # 完成状态与完成时间一起维护：完成写 now，取消完成清空
         if "done" in updates:
-            flag = 1 if updates["done"] else 0
+            # 统一解析字符串布尔，避免 "false" 被 Python 真值当成已完成
+            flag = 1 if _as_bool(updates["done"]) else 0
             assignments.append(
                 "done = ?, done_at = CASE WHEN ? = 1 "
                 "THEN datetime('now','localtime') ELSE NULL END"
