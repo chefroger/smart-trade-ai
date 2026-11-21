@@ -1059,3 +1059,27 @@ def test_docs_do_not_teach_pinning_hermes():
         assert "git clone --branch v" not in text, (
             f"{name} 仍在教用户用固定 tag 克隆 Hermes"
         )
+
+
+def test_ci_covers_deployment_python_and_real_hermes_smoke():
+    """P2-6：CI 必须覆盖部署用的 3.14，并有加载真实 Hermes 的冒烟。
+
+    此前矩阵只有 3.11–3.13，而实际部署跑 3.14；普通测试全用 mock，
+    「Hermes import 副作用变了」这类事故永远测不出来。
+    """
+    test_yml = (ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    assert '"3.14"' in test_yml, "CI 矩阵缺 3.14（实际部署版本）"
+
+    smoke_path = ROOT / ".github" / "workflows" / "hermes-smoke.yml"
+    assert smoke_path.is_file(), "缺 Hermes 冒烟工作流"
+    smoke = smoke_path.read_text(encoding="utf-8")
+    # 定时跑才有意义：PR 上装 Hermes 太慢
+    assert "schedule:" in smoke, "Hermes 冒烟应每晚定时运行"
+    assert "scripts/hermes_smoke.py" in smoke, "冒烟工作流要调用真实脚本"
+
+    script = ROOT / "scripts" / "hermes_smoke.py"
+    assert script.is_file(), "缺冒烟脚本"
+    body = script.read_text(encoding="utf-8")
+    # 必须验证耦合点，而不是只 import run_agent
+    assert "prepare_hermes_import_paths" in body
+    assert "_MIN_HERMES_VERSION" in body

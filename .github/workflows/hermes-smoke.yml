@@ -1,0 +1,47 @@
+name: Hermes smoke (nightly)
+
+# 2026-11-21 审计 P2-6：普通 CI 全部用 mock，从不真正加载 Hermes ——
+# 而「Hermes 升级后 import 副作用变了」正是踩过的坑。这里每晚装一份**真实的、
+# 最新的** Hermes，跑 scripts/hermes_smoke.py 验证耦合点仍可导入。
+#
+# 为什么不在每个 PR 上跑：装 Hermes（几十个依赖）要几分钟，且依赖上游网络；
+# 每晚一次足以在用户遇到之前发现上游 breaking change。
+
+on:
+  schedule:
+    # 每天 18:00 UTC = 次日 02:00 CST，避开国内工作时间
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v6
+        with:
+          # 与部署一致：Hermes ≥0.21.6 只提供 3.14 的依赖集
+          python-version: "3.14"
+
+      # 按项目策略「跟随 Hermes 最新版」：直接装 main 上最新的那份，不钉 tag
+      - name: Install latest Hermes
+        run: |
+          mkdir -p "$HOME/.hermes"
+          git clone --depth 1 https://github.com/NousResearch/hermes-agent.git "$HOME/.hermes/hermes-agent"
+          cd "$HOME/.hermes/hermes-agent"
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Install Trade (no deps)
+        run: |
+          python -m pip install pyyaml packaging
+          pip install -e . --no-deps
+
+      - name: Run Hermes coupling smoke
+        run: python scripts/hermes_smoke.py

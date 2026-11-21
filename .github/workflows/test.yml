@@ -31,7 +31,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        # 3.14 是实际部署版本（Trade 进程内嵌 Hermes，必须与 Hermes 同 ABI）。
+        # 2026-11-21 审计 P2-6：此前只测 3.11–3.13，部署用的版本从没进过 CI。
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     runs-on: ${{ matrix.os }}
     steps:
