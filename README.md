@@ -39,7 +39,14 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.ps1 | iex
 ```
 
-脚本会自动检查 Python 3.14 环境、安装 Trade 本体和 44 个技能。**Hermes Agent 需要你先用官方安装器装好**（脚本会检查，缺了就提示你去装）。装完在终端输入 `trade`，浏览器自动打开聊天界面。
+脚本会自动检查 Python 3.14 环境、安装 Trade 本体和 44 个技能。**Hermes Agent 需要你先用官方安装器装好**（脚本会检查，缺了就提示你去装）。
+
+装完后：
+
+- **macOS**：打开「应用程序」里的 **Trade**（安装脚本会放在 `~/Applications/Trade.app`）——双击即可，不需要终端。首次双击若提示安全设置，右键选「打开」。
+- **Windows / Linux**（或想用命令行）：终端输入 `trade`。
+
+服务启动后浏览器会自动打开聊天界面（`http://127.0.0.1:9119/trade`）。
 
 > 首次使用需要一个大模型 API Key（推荐 DeepSeek）。想手动安装、让 Hermes 代装，或先看注意事项：
 > [安装步骤](#安装步骤三种方式) · [安装前须知](#安装前须知)

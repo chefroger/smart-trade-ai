@@ -123,6 +123,13 @@ curl -fsSL https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scrip
 
 The script handles: Python 3.14 check → Hermes Agent check → Smart Trade AI → 44 skills → database init. **Hermes Agent must be installed first** (the script only checks for it and tells you how to install it if missing).
 
+After installation:
+
+- **macOS**: open **Trade** from Applications (the installer creates `~/Applications/Trade.app`) — double-click, no terminal needed. If macOS warns the first time, right-click → Open.
+- **Windows / Linux** (or command-line users): run `trade` in a terminal.
+
+The browser opens at `http://127.0.0.1:9119/trade` once the server is up.
+
 > **Prefer to review before running?**
 > ```bash
 > curl -fsSLO https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/install.sh

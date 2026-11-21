@@ -394,6 +394,55 @@ LAUNCHER
 chmod +x "$HOME/.local/bin/trade"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# macOS：生成 ~/Applications/Trade.app（双击即用，不弹终端）
+#
+# 2026-11-21 审计 P2-11：此前 Mac 用户装完只被告知「在终端输入 trade」，
+# 而 launchd 又在后台自启 —— 用户不知道该打开哪个地址，也找不到入口。
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    APP_DIR="$HOME/Applications/Trade.app"
+    mkdir -p "$APP_DIR/Contents/MacOS"
+    cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>Trade</string>
+    <key>CFBundleDisplayName</key><string>Trade</string>
+    <key>CFBundleIdentifier</key><string>com.foreign-trade.trade</string>
+    <key>CFBundleVersion</key><string>1.0</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleExecutable</key><string>Trade</string>
+    <key>LSMinimumSystemVersion</key><string>11.0</string>
+</dict>
+</plist>
+PLIST
+    cat > "$APP_DIR/Contents/MacOS/Trade" << 'APPEXEC'
+#!/bin/bash
+# 双击启动 Trade：已在运行就只打开页面（不重复起服务）；否则后台起服务，
+# server.py 会自己用默认浏览器打开 /trade —— 全程不弹终端窗口。
+URL="http://127.0.0.1:9119/trade"
+if curl -sf -o /dev/null --max-time 2 "$URL"; then
+    open "$URL"
+    exit 0
+fi
+exec "$HOME/.local/bin/trade"
+APPEXEC
+    chmod +x "$APP_DIR/Contents/MacOS/Trade"
+    # 图标：仓库里带了就复用；没有也不影响启动
+    ICON_SRC="$TRADE_DIR/static/icon.icns"
+    if [ -f "$ICON_SRC" ]; then
+        mkdir -p "$APP_DIR/Contents/Resources"
+        cp "$ICON_SRC" "$APP_DIR/Contents/Resources/icon.icns"
+        /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon.icns" \
+            "$APP_DIR/Contents/Info.plist" >/dev/null 2>&1 || true
+    fi
+    # 变量名必须加花括号：macOS 自带 bash 3.2 会把紧跟其后的全角括号误当变量名的一部分
+    log_ok "已创建桌面应用：${APP_DIR}（双击即可打开，不需要终端）"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 检查 PATH 中是否有 ~/.local/bin
 # ─────────────────────────────────────────────────────────────────────────────
 if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$HOME/.local/bin"; then
@@ -437,6 +486,10 @@ echo ""
 echo -e "${BOLD}${GREEN}══ 安装完成 ══${NC}"
 echo ""
 echo -e "  启动方式:"
+# macOS 上双击应用即可，不再要求用户开终端
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo -e "    双击: ${BOLD}$HOME/Applications/Trade.app${NC}（推荐，不需要终端）"
+fi
 echo -e "    新终端: ${BOLD}trade${NC}"
 echo -e "    当前终端: ${BOLD}$HOME/.local/bin/trade${NC}"
 echo ""

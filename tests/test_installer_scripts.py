@@ -1103,3 +1103,18 @@ def test_frontend_smoke_workflow_is_isolated_from_default_ci():
     assert 'testpaths = ["tests"]' in pyproject, (
         "默认 pytest 必须只收集 tests/，否则 e2e 会被普通 CI 拉起"
     )
+
+
+def test_macos_creates_a_double_click_app():
+    """P2-11：Mac 装完后必须有可双击的入口，而不是只让用户开终端。
+
+    历史上 README 只写「在终端输入 trade」，launchd 又在后台自启 ——
+    用户既不知道入口在哪，也不知道该打开哪个地址。
+    """
+    text = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert "Applications/Trade.app" in text, "没有创建 .app 入口"
+    assert "Contents/MacOS/Trade" in text, "缺可执行文件"
+    # 已在运行时要只开页面，不能重复起一个抢端口的实例
+    assert "curl -sf" in text and 'open "$URL"' in text, "启动器要先探测已有实例"
+    # macOS 自带 bash 3.2：变量后紧接全角括号必须用花括号
+    assert "${APP_DIR}（" in text, "变量名要用花括号兜住，否则 bash 3.2 解析错"
