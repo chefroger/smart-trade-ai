@@ -291,7 +291,7 @@ Bound to `127.0.0.1` by default. The session token is **only issued to loopback 
 
 If you really need to reach the UI from another device, set `TRADE_ALLOW_REMOTE_UI=1` before starting — **this lowers security**: any device that can reach the port will be able to obtain the token and act on your behalf. The safer options remain an SSH tunnel or a reverse proxy with an extra authentication layer.
 
-> **Disclaimer**: Alibaba, LinkedIn, Facebook, Instagram, TikTok, YouTube, WhatsApp and other platform names mentioned in this documentation are trademarks of their respective owners. This tool provides analysis assistance for these platforms and is not affiliated with them. Sanctions data is sourced from OFAC/UN/EU public datasets — results are for reference only and do not constitute legal advice. See [SECURITY.md](SECURITY.md) for details.
+> **Disclaimer**: Alibaba, LinkedIn, Facebook, Instagram, TikTok, YouTube, WhatsApp and other platform names mentioned in this documentation are trademarks of their respective owners. This tool provides analysis assistance for these platforms and is not affiliated with them. Sanctions data is sourced from official OFAC/CSL/UN/EU/UK public datasets — results are for reference only and do not constitute legal advice. See [SECURITY.md](SECURITY.md) for details.
 
 ---
 

@@ -1,18 +1,8 @@
-"""制裁筛查必须区分「查过、没有」与「没查成」。
+"""制裁筛查必须区分「查过、没有」与「没查成」（工单 P0-1 重建后的口径）。
 
-## 为什么（业务风险最高的一条）
-
-`load_un_sanctions()` 无条件返回 2 条硬编码数据；`load_ofac_sanctions()` 的下载
-URL 实测 **HTTP 404**（返回的是 30KB HTML 错误页），解析不出任何条目 → 落到 2 条
-内置 fallback。也就是说**全新安装时，制裁筛查实际上只在比对 4 个字符串**。
-
-而 `check_sanctions` 的返回里没有任何「数据源健康度」信息：`risk_level: "none"`
-与「真的比对过上万条 SDN 记录」在响应里完全同形。于是报告输出绿色的
-「✅ 未在任何制裁名单中发现匹配项」—— 被制裁的公司也会被判「干净」。
-用户会拿这条结论去谈生意。
-
-修法：loader 记录每份名单的 `{entries, source, degraded}`，`check_sanctions`
-把它作为 `coverage` 一并返回；数据源降级时**不得**给出「未发现匹配」的结论。
+- 从未成功下载 → coverage.degraded=True，不得输出「未发现匹配」；
+- 有历史数据但本次刷新失败 → 沿用旧数据，degraded=False，附失败原因；
+- 数据源正常 → 允许给出「未发现匹配」的绿色结论。
 """
 
 from __future__ import annotations
@@ -26,86 +16,118 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 @pytest.fixture
-def fresh_sanctions(monkeypatch):
-    """重置 sanctions 模块的缓存与元数据，并把文件缓存指到临时目录。"""
-    from trade.osint.sanctions import loader
+def sanctions_db(monkeypatch, tmp_path):
+    """把制裁库指到临时路径（每个测试独立）。"""
+    import trade.osint.sanctions.store as store
 
-    monkeypatch.setattr(loader, "_sanctions_cache", {}, raising=False)
-    monkeypatch.setattr(loader, "_sanctions_meta", {}, raising=False)
-    monkeypatch.setattr(loader, "_load_from_file_cache", lambda _n: None, raising=False)
-    monkeypatch.setattr(
-        loader, "_load_from_file_cache_expired", lambda _n: None, raising=False
+    path = tmp_path / "sanctions.db"
+    monkeypatch.setattr(store, "db_path", lambda: path)
+    return path
+
+
+def _parsed(source, names, *, alias_names=()):
+    from trade.osint.sanctions.sources import ParsedList
+
+    rows = [(name, "", "entity") for name in names]
+    rows += [(name, "", "alias") for name in alias_names]
+    return ParsedList(
+        label=source.label,
+        source_url=source.urls[0],
+        primary=len(names),
+        aliases=len(alias_names),
+        rows_total=len(rows),
+        rows=rows,
     )
-    monkeypatch.setattr(loader, "_save_to_file_cache", lambda *_a, **_k: None, raising=False)
-    # http_get 一律失败 → 强制走 fallback 路径（模拟"下载不到"的真实处境）
-    monkeypatch.setattr(loader, "http_get", lambda *_a, **_k: None, raising=False)
-    return loader
 
 
-class TestDegradedIsVisible:
-    """数据源降级必须体现在返回值里。"""
-
-    def test_fallback_reports_degraded(self, fresh_sanctions):
+class TestNeverDownloaded:
+    def test_reports_degraded(self, sanctions_db):
         from trade.osint.sanctions import check_sanctions
 
         result = check_sanctions("Some Random Trading LLC")
 
-        assert "coverage" in result, "返回值必须带数据源健康度（否则无法区分「没查到」与「没查成」）"
-        assert result["coverage"]["degraded"] is True, "走 fallback 时 degraded 必须为 True"
+        assert result["coverage"]["degraded"] is True
+        assert result["coverage"]["total_entries"] == 0
 
-    def test_fallback_does_not_claim_clean(self, fresh_sanctions):
-        """核心断言：数据源不可用时，不得输出「未发现匹配」这种结论。"""
+    def test_does_not_claim_clean(self, sanctions_db):
+        """核心断言：从未成功下载时，不得输出「未发现匹配」。"""
         from trade.osint.sanctions import check_sanctions
 
         result = check_sanctions("Some Random Trading LLC")
 
-        assert "未在任何制裁名单中发现匹配项" not in result["suggestion"], (
-            "数据源降级时仍宣称「未发现匹配」—— 被制裁的公司会被判干净"
-        )
-        assert "数据源" in result["suggestion"] or "不可用" in result["suggestion"]
+        assert "未在任何制裁名单中发现匹配项" not in result["suggestion"]
+        assert "不构成" in result["suggestion"]
 
-    def test_coverage_reports_entry_counts(self, fresh_sanctions):
+
+class TestRefreshLifecycle:
+    def test_successful_refresh_makes_coverage_healthy(self, sanctions_db):
         from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.loader import refresh_all
+        from trade.osint.sanctions.sources import SOURCES
 
-        result = check_sanctions("Some Random Trading LLC")
-        cov = result["coverage"]
+        results = refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+        assert all(item["ok"] for item in results.values())
 
-        assert cov["total_entries"] >= 0
-        assert isinstance(cov.get("lists"), dict), "应能看出每份名单各加载了多少条"
+        coverage = check_sanctions("Some Random Trading LLC")["coverage"]
+        assert coverage["degraded"] is False
+        assert coverage["total_entries"] == len(SOURCES)
+        for source in SOURCES:
+            assert coverage["lists"][source.name]["entries"] == 1
+            assert coverage["lists"][source.name]["fetched_at"]
 
+        assert "未在任何制裁名单中发现匹配项" in check_sanctions("Random Name Ltd")["suggestion"]
 
-class TestHealthySourceStillWorks:
-    """数据源正常时，行为和以前一致（别把好路径改坏）。"""
-
-    def test_healthy_source_can_claim_clean(self, fresh_sanctions):
-        # 直接预置缓存：check_sanctions 只在缓存为空时才调 loader，
-        # 这样既模拟了"数据源健康"，也不必去改已绑定的模块引用。
-        big_list = [{"name": f"ENTITY NUMBER {i}", "label": "OFAC SDN"} for i in range(500)]
-        fresh_sanctions._mark_loaded("OFAC", big_list, "network")
-        fresh_sanctions._mark_loaded("UN", big_list, "network")
-
+    def test_exact_hit_reports_high_risk(self, sanctions_db):
         from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.loader import refresh_all
 
-        result = check_sanctions("Some Random Trading LLC")
+        refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+        result = check_sanctions("acme corp")
 
-        assert result["coverage"]["degraded"] is False
-        assert result["coverage"]["total_entries"] == 1000
-        assert "未在任何制裁名单中发现匹配项" in result["suggestion"]
-
-    def test_hit_still_reports_high_risk_when_degraded(self, fresh_sanctions):
-        """降级也不能掩盖真命中 —— fallback 里的真实实体要照常报高风险。"""
-        from trade.osint.sanctions import loader
-
-        # 用 fallback 数据里真实存在的名字
-        fallback = loader._get_fallback_ofac_entries()
-        target = fallback[0]["name"]
-
-        from trade.osint.sanctions import check_sanctions
-
-        result = check_sanctions(target)
-
-        assert result["is_sanctioned"] is True, f"命中 {target!r} 却未判为受制裁"
+        assert result["is_sanctioned"] is True
         assert result["risk_level"] == "high"
+
+    def test_failure_after_success_keeps_old_data(self, sanctions_db):
+        """本次刷新失败 → 沿用上次成功的数据，degraded 仍为 False。"""
+        from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.loader import refresh_all
+        from trade.osint.sanctions.sources import SOURCES
+
+        refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+
+        def _boom(source):
+            raise RuntimeError("network down")
+
+        refresh_all(fetch=_boom)
+
+        coverage = check_sanctions("ACME CORP")["coverage"]
+        assert coverage["degraded"] is False, "有历史数据时不应判 degraded"
+        assert coverage["total_entries"] == len(SOURCES)
+        first = coverage["lists"][SOURCES[0].name]
+        assert "本次刷新失败" in first["note"]
+        assert "network down" in first["note"]
+        # 旧数据仍能命中
+        assert check_sanctions("ACME CORP")["is_sanctioned"] is True
+
+    def test_first_failure_marks_that_list_degraded(self, sanctions_db):
+        from trade.osint.sanctions.loader import refresh_all
+        from trade.osint.sanctions.sources import SOURCES
+
+        def _partly(source):
+            if source is SOURCES[0]:
+                raise RuntimeError("blocked")
+            return _parsed(source, [f"{source.name} ENTITY"])
+
+        results = refresh_all(fetch=_partly)
+        assert results[SOURCES[0].name]["ok"] is False
+
+        from trade.osint.sanctions.store import get_coverage
+
+        coverage = get_coverage()
+        assert coverage["degraded"] is True
+        assert coverage["lists"][SOURCES[0].name]["degraded"] is True
+        assert coverage["lists"][SOURCES[0].name]["entries"] == 0
+        assert coverage["lists"][SOURCES[1].name]["degraded"] is False
 
 
 class TestScoringRespectsCoverage:
@@ -123,15 +145,13 @@ class TestScoringRespectsCoverage:
                 "is_sanctioned": False,
                 "risk_level": "none",
                 "suggestion": "…",
-                "coverage": {"degraded": True, "total_entries": 4, "lists": {}},
+                "coverage": {"degraded": True, "total_entries": 0, "lists": {}},
             }
         )
         joined = "\n".join(recs)
 
-        assert "✅ 未在任何制裁名单中发现匹配项" not in joined, (
-            "数据源降级时报告仍打绿勾 —— 用户会以为已核查通过"
-        )
-        assert "⚠️" in joined or "不可用" in joined, "应给出警示而非绿勾"
+        assert "✅ 未在任何制裁名单中发现匹配项" not in joined
+        assert "⚠️" in joined or "不可用" in joined
 
     def test_healthy_source_still_emits_green_check(self):
         recs = self._recs(
@@ -143,11 +163,8 @@ class TestScoringRespectsCoverage:
                 "coverage": {"degraded": False, "total_entries": 12000, "lists": {}},
             }
         )
-
         assert "✅ 未在任何制裁名单中发现匹配项" in "\n".join(recs)
 
     def test_missing_coverage_is_treated_as_degraded(self):
-        """老版本报告里没有 coverage 字段 —— 保守处理，不冒充已验证。"""
         recs = self._recs({"hits": [], "is_sanctioned": False, "risk_level": "none"})
-
         assert "✅ 未在任何制裁名单中发现匹配项" not in "\n".join(recs)

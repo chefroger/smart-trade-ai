@@ -54,6 +54,12 @@ def format_report(report: dict[str, Any]) -> str:
     flags = report.get("flags") or []
     lines.append("风险旗标：" + ("、".join(flags) if flags else "无"))
 
+    # 制裁名单抓取时间与过期提醒（P0-1：coverage 每份名单都带 fetched_at）
+    sanctions_cov = ((report.get("layers") or {}).get("sanctions") or {}).get("coverage") or {}
+    for code, info in (sanctions_cov.get("lists") or {}).items():
+        if info.get("stale_hours"):
+            lines.append(f"⚠ 制裁名单过期：{info.get('label', code)}（{info['stale_hours']} 小时未更新）")
+
     # 未核验 / 未查渠道：关键层缺失直接影响结论，必须写在报告头部
     for u in report.get("unverified") or []:
         if u.get("required"):
@@ -138,7 +144,7 @@ def format_report(report: dict[str, Any]) -> str:
             # 超时不是「查了没有」，必须写清楚本次未完成比对
             note = f" ｜ ⏱ {sa.get('error', '超时')}，本次未完成比对"
         elif cov.get("degraded"):
-            note = f" ｜ ⚠ 降级：数据源不可用，本次仅比对 {cov.get('total_entries', 0)} 条内置样本"
+            note = f" ｜ ⚠ 降级：名单尚未成功下载（本地 {cov.get('total_entries', 0)} 条）"
         elif cov.get("total_entries"):
             note = f" ｜ 覆盖 {cov['total_entries']} 条"
         lines.append(

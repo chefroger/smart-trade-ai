@@ -19,6 +19,10 @@ if "TRADE_HOME" not in os.environ:
 if "HERMES_HOME" not in os.environ:
     os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix="trade-test-hermes-")
 
+# 制裁名单后台刷新默认关闭：测试进程会活过 60 秒，一旦触发就会去打官方
+# 名单（几十 MB × 6），既慢又不可靠。需要刷新的测试显式调用 refresh_all()。
+os.environ.setdefault("TRADE_SANCTIONS_REFRESH", "off")
+
 
 @pytest.fixture(autouse=True)
 def _isolate_process_globals():

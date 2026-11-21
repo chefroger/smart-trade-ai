@@ -27,7 +27,7 @@ from trade.osint.scoring import (  # noqa: E402
 
 
 def _degraded_sanctions(total: int = 2) -> dict:
-    """制裁层：下载失败退化成内置样本（coverage.degraded = True）。"""
+    """制裁层：名单从未成功下载（coverage.degraded = True）。"""
     return {
         "is_sanctioned": False,
         "risk_level": "none",

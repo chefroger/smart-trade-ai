@@ -127,7 +127,8 @@ Phase 3: 深度背调 (Deep Verification)
        python -m trade.osint <目标> --json        # 需要结构化数据时
        python -m trade.osint --target="Acme Corp" # 公司名含空格时用 --target=
 
-   覆盖：邮箱注册检测（holehe）/ WHOIS / 企业邮箱验证 / 技术栈 / 制裁名单（OFAC/UN）
+   覆盖：邮箱注册检测（holehe）/ WHOIS / 企业邮箱验证 / 技术栈 /
+   制裁名单（OFAC SDN/非 SDN、US CSL、UN、EU、UK）
    / LinkedIn 核查指令 + 综合评分与建议。
 
    **终端工具调用一律传 `timeout=600`**：各层并发执行，单层 holehe 最多 90 秒，

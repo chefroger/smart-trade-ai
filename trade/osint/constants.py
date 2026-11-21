@@ -45,31 +45,6 @@ FREE_PLATFORMS: set[str] = {
 # technologies / platforms，是中性信号，不是红旗）。
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 制裁名单来源（公开 CSV URL，定期需更新）
-# ─────────────────────────────────────────────────────────────────────────────
-
-SANCTIONS_SOURCES: list[dict] = [
-    {
-        "name": "OFAC",
-        "label": "美国 OFAC SDN 列表",
-        "url": "https://ofac.treasury.gov/specially-designated-nationals-and-blocked-persons-list-sdn-human-readable-lists/sdn.csv",
-        "encoding": "utf-8",
-    },
-    {
-        "name": "UN",
-        "label": "联合国安理会制裁名单",
-        "url": "https://www.un.org/securitycouncil/sanctions/1267/aq_sanctionslist.shtml",
-        "encoding": "utf-8",
-    },
-    {
-        "name": "EU",
-        "label": "欧盟制裁名单",
-        "url": "https://data.europa.eu/euodp/en/data/dataset/consolidated-list-of-persons-groups-and-entities",
-        "encoding": "utf-8",
-    },
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
 # HTTP 工具函数（共享给 sanctions / tech_stack / linkedin）
 # ─────────────────────────────────────────────────────────────────────────────
 

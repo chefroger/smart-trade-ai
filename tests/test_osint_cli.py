@@ -67,7 +67,7 @@ class TestFormatReport:
     def test_degradation_is_stated_not_hidden(self):
         """制裁源降级必须如实标注 —— 这条是项目的诚实降级底线。"""
         text = cli.format_report(_sample_report())
-        assert "降级" in text and "2 条内置样本" in text
+        assert "降级" in text and "本地 2 条" in text
 
     def test_unexecuted_layers_say_so(self):
         """没跑的层要写"未执行"，不能被静默省略成"看起来查过了"。"""

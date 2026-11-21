@@ -383,7 +383,7 @@ $TradeHome\venv\Scripts\python.exe server.py
 
 确需从其它设备访问界面时，可在启动前设置环境变量 `TRADE_ALLOW_REMOTE_UI=1` 显式放行 —— **这会降低安全性**：任何能访问该端口的设备都能取得 token 并冒充操作。更稳妥的远程方案仍是 SSH 隧道或反向代理 + 额外认证层，而不是直接改 bind 地址。
 
-> **免责声明**：文档中提及的 Alibaba、LinkedIn、Facebook、Instagram、TikTok、YouTube、WhatsApp 等均为其各自所有者的商标。本工具仅提供对这些平台数据的分析辅助，与上述平台无关联。制裁名单数据来源于 OFAC/UN/EU 公开数据，结果仅供参考，不构成法律意见。详见 [SECURITY.md](SECURITY.md)。
+> **免责声明**：文档中提及的 Alibaba、LinkedIn、Facebook、Instagram、TikTok、YouTube、WhatsApp 等均为其各自所有者的商标。本工具仅提供对这些平台数据的分析辅助，与上述平台无关联。制裁名单数据来源于 OFAC/CSL/UN/EU/UK 官方公开数据，结果仅供参考，不构成法律意见。详见 [SECURITY.md](SECURITY.md)。
 
 ---
 

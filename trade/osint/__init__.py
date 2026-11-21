@@ -5,7 +5,7 @@ Comprehensive B2B due-diligence toolkit covering 6 layers:
   Layer 1 : holehe email registration (in trade/email_intel.py)
   Layer 2 : WHOIS domain lookup
   Layer 3 : corporate email verification (vs personal email)
-  Layer 4 : sanctions list screening (OFAC / UN / EU)
+  Layer 4 : sanctions screening (OFAC SDN/非 SDN, US CSL, UN, EU, UK)
   Layer 5 : tech stack detection (BuiltWith-style)
   Layer 6 : LinkedIn company page verification
 
@@ -20,7 +20,7 @@ Submodules
   constants.py         — shared constants (domain blacklists, HTTP utils)
   whois.py             — Layer 2: socket-based WHOIS domain lookup
   email_verify.py      — Layer 3: corporate vs personal email + MX DNS check
-  sanctions.py         — Layer 4: OFAC/UN/EU sanctions screening
+  sanctions/           — Layer 4: OFAC SDN/非 SDN、CSL、UN、EU、UK 本地库筛查
   tech_stack.py        — Layer 5: HTML regex tech stack detection
   linkedin_verify.py   — Layer 6: Google-search LinkedIn page verification
   scoring.py           — risk score computation + recommendation generation
@@ -39,7 +39,6 @@ Public API
 from trade.osint.constants import (
     FREE_PLATFORMS,
     PERSONAL_EMAIL_DOMAINS,
-    SANCTIONS_SOURCES,
     http_get,
 )
 from trade.osint.email_verify import verify_corporate_email
@@ -64,6 +63,5 @@ __all__ = [
     # Constants (for external consumers that need them)
     "PERSONAL_EMAIL_DOMAINS",
     "FREE_PLATFORMS",
-    "SANCTIONS_SOURCES",
     "http_get",
 ]

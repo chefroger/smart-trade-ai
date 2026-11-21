@@ -1106,6 +1106,17 @@ def create_app() -> FastAPI:
     _db_path = _init_db()
     print(f"  Database: {_db_path}")
 
+    # 制裁名单后台刷新（2026-11-21 工单 P0-1）：启动 60 秒后首次、之后每 24 小时。
+    # 查询路径不下载；失败只记日志，绝不影响服务启动。
+    try:
+        from trade.osint.sanctions.loader import start_background_refresh
+
+        start_background_refresh()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning("制裁名单后台刷新启动失败", exc_info=True)
+
     # 版本标记：记录「本进程实际运行的代码版本」，供 /api/status 上报。
     # 只在启动时写，升级流程不写 —— 这样没重启就一定显示旧版本（真话）。
     _running_version = _write_version_marker()

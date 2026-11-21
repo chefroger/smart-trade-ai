@@ -93,12 +93,12 @@ def assess_verification(
 ) -> list[dict]:
     """列出本次没查成的层（2026-11-21 工单 P0-2，fail-closed）。
 
-    背景：制裁层会因为下载失败退化成 2 条内置样本，WHOIS 的 43 端口在国内
+    背景：制裁名单可能从未成功下载（本地库为空），WHOIS 的 43 端口在国内
     常被拦 —— 旧逻辑照常给"没查到红旗"的报告打 low/100，用户会拿这条绿色
     结论去谈生意。这里把「查过且正常」与「没查成/没查」显式分开。
 
     关键层（对应工单）：制裁、域名。
-      - 制裁数据源降级 → required（"没查到"不代表"没有"）
+      - 制裁名单从未成功下载（coverage.degraded）→ required（"没查到"不代表"没有"）
       - 有域名但 WHOIS 失败 → required
       - 用户主动关闭制裁 → 只披露（skipped，不算未完成）
       - 公司名目标没有域名 → not_applicable（需先发现官网，属正常缺省）
@@ -131,7 +131,7 @@ def assess_verification(
             total = coverage.get("total_entries", 0)
             out.append(_unverified_entry(
                 "sanctions",
-                f"数据源不可用，本次仅比对 {total} 条内置样本",
+                f"名单尚未成功下载（本地可用 {total} 条）",
                 required=True,
             ))
 
@@ -320,8 +320,8 @@ def generate_recommendations(report: dict) -> list[str]:
             if coverage.get("degraded", True):
                 total = coverage.get("total_entries", 0)
                 recs.append(
-                    f"⚠️ 制裁名单数据源不可用（本次仅比对 {total} 条内置样本），"
-                    "不构成「无制裁记录」的结论，请通过 OFAC/UN 官网人工复核"
+                    f"⚠️ 制裁名单尚未成功下载（本地可用 {total} 条），"
+                    "不构成「无制裁记录」的结论，请通过 OFAC/UN/EU/UK 官网人工复核"
                 )
             else:
                 recs.append("✅ 未在任何制裁名单中发现匹配项")

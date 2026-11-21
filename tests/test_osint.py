@@ -71,31 +71,28 @@ class _FakeHTTPResponse:
 
 
 @pytest.fixture(autouse=True)
-def _osint_stays_offline(monkeypatch):
-    """把 OSINT 的四个传输层统一换成桩 —— 整套测试不打真网络。
+def _osint_stays_offline(monkeypatch, tmp_path):
+    """把 OSINT 的传输层统一换成桩 —— 整套测试不打真网络。
 
     - WHOIS socket → 返回一份真实形态的响应文本（考解析，不考网络）
     - DNS MX 查询 → 固定返回"有 MX"（考企业邮箱判定，不考 DNS）
-    - 制裁名单下载 → 拦掉下载，走内置 fallback 名单（考匹配与降级披露）
+    - 制裁名单 → 指向不存在的本地库（从未刷新 → degraded，考降级披露）
     - 官网抓取（公司名解析）→ 未显式注入 fetcher 时返回 None
 
     被拦的都是**传输**；各层的解析/判定/评分逻辑仍然是真代码。
     """
     import trade.osint.email_verify as _email
     import trade.osint.orchestrator as _orch
-    import trade.osint.sanctions.loader as _loader
+    import trade.osint.sanctions.store as _store
     import trade.osint.whois as _whois
     from trade import email_intel as _intel
 
     monkeypatch.setattr(_whois, "_query_whois_server", lambda domain, server, port=43, timeout=10: _FAKE_WHOIS_COM)
     monkeypatch.setattr(_email, "_query_mx_records", lambda domain: (["mx1.example.com"], True, None))
-    monkeypatch.setattr(_loader, "http_get", lambda url, timeout=30: None)  # 触发内置 fallback
+    # 制裁名单只查本地库：指向一个不存在的路径 = 模拟「从未成功刷新」
+    monkeypatch.setattr(_store, "db_path", lambda: tmp_path / "sanctions-not-downloaded.db")
     # Layer 1 邮箱注册检测走 holehe 子进程（真探测 120+ 站点，一个 orchestrator 用例 8~10s）
     monkeypatch.setattr(_intel, "email_background_check", _fake_email_background_check)
-
-    # 进程级内存缓存/健康度放的是上一次（可能联网）加载的结果 → 清掉，保证走桩路径
-    _loader._sanctions_cache.clear()
-    _loader._sanctions_meta.clear()
 
     real_resolve = _orch._resolve_entity_name
 
@@ -258,12 +255,11 @@ class TestSanctions:
         assert result["is_sanctioned"] is False
         assert result["risk_level"] == "none"
 
-    def test_known_sanctioned_entity(self):
-        """已知制裁实体应被精确匹配。"""
-        # AL-SHABAAB 在 UN fallback 列表中
+    def test_without_downloaded_lists_stays_degraded(self):
+        """名单从未成功下载时：不得宣称「未发现匹配」（P0-1 口径）。"""
         result = check_sanctions("AL-SHABAAB")
-        assert result["is_sanctioned"] is True
-        assert result["risk_level"] == "high"
+        assert result["coverage"]["degraded"] is True
+        assert "未在任何制裁名单中发现匹配项" not in result["suggestion"]
 
     def test_result_has_all_fields(self):
         """返回结果应包含所有定义字段。"""
