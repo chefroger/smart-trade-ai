@@ -31,6 +31,10 @@ def compute_risk_score(flags: list[str]) -> tuple[int, str]:
 
     每个红旗对应不同的扣分权重，敏感维度（制裁名单）扣分最多。
 
+    **注意**：本函数只看「查出来的问题」，不知道哪一层没查成。对外结论必须走
+    `compute_verdict()` —— 关键层未核验时它会把评级改成 "incomplete"，避免
+    「什么都没查到」被当成「低风险」。
+
     Args:
         flags: 红旗标记列表（如 "personal_email_domain", "sanctioned" 等）
 
@@ -59,6 +63,141 @@ def compute_risk_score(flags: list[str]) -> tuple[int, str]:
     return score, rating
 
 
+# 未核验层的可读名称（报告/CLI 直接展示，不暴露内部键名）
+_LAYER_LABELS = {
+    "sanctions": "制裁名单筛查",
+    "domain_intel": "WHOIS 域名情报",
+    "email_registration": "邮箱注册检测",
+    "tech_stack": "技术栈检测",
+}
+
+
+def _unverified_entry(layer: str, reason: str, *, required: bool,
+                      status: str = "unverified") -> dict:
+    """构造一条「未核验」记录。required=关键层（缺失即不能下结论）。"""
+    return {
+        "layer": layer,
+        "label": _LAYER_LABELS.get(layer, layer),
+        "status": status,       # unverified | skipped | not_applicable
+        "reason": reason,
+        "required": required,
+    }
+
+
+def assess_verification(
+    layers: dict,
+    *,
+    has_domain: bool,
+    sanctions_requested: bool = True,
+) -> list[dict]:
+    """列出本次没查成的层（2026-11-21 工单 P0-2，fail-closed）。
+
+    背景：制裁层会因为下载失败退化成 2 条内置样本，WHOIS 的 43 端口在国内
+    常被拦 —— 旧逻辑照常给"没查到红旗"的报告打 low/100，用户会拿这条绿色
+    结论去谈生意。这里把「查过且正常」与「没查成/没查」显式分开。
+
+    关键层（对应工单）：制裁、域名。
+      - 制裁数据源降级 → required（"没查到"不代表"没有"）
+      - 有域名但 WHOIS 失败 → required
+      - 用户主动关闭制裁 → 只披露（skipped，不算未完成）
+      - 公司名目标没有域名 → not_applicable（需先发现官网，属正常缺省）
+    其余层（holehe / 技术栈）失败只披露，不改变结论。
+
+    Args:
+        layers: report["layers"]
+        has_domain: 目标是否解析出了可查询域名
+        sanctions_requested: 用户是否开启制裁筛查
+
+    Returns:
+        [{layer, label, status, reason, required}, ...]
+    """
+    out: list[dict] = []
+
+    # ── 制裁名单（关键）──
+    sa = layers.get("sanctions")
+    if not sanctions_requested:
+        # 用户主动关闭：披露，但不判「未完成」——这是明确的范围排除
+        out.append(_unverified_entry(
+            "sanctions", "本次已关闭制裁筛查", required=False, status="skipped"))
+    elif not sa:
+        # 说好要查却没返回任何结果：不能当"干净"
+        out.append(_unverified_entry(
+            "sanctions", "制裁名单筛查未返回结果", required=True))
+    else:
+        # coverage 缺失按降级处理（旧版/外部构造的报告同样保守兜底）
+        coverage = sa.get("coverage") or {}
+        if coverage.get("degraded", True):
+            total = coverage.get("total_entries", 0)
+            out.append(_unverified_entry(
+                "sanctions",
+                f"数据源不可用，本次仅比对 {total} 条内置样本",
+                required=True,
+            ))
+
+    # ── 域名情报（关键，前提是目标里有域名）──
+    di = layers.get("domain_intel")
+    if not has_domain:
+        out.append(_unverified_entry(
+            "domain_intel",
+            "目标不含可查询域名（公司名需先发现官网）",
+            required=False,
+            status="not_applicable",
+        ))
+    elif not di:
+        out.append(_unverified_entry(
+            "domain_intel", "域名情报未执行", required=True))
+    elif di.get("skipped"):
+        # 编排器在无域名时才写 skipped；走到这里说明状态与 has_domain 矛盾，
+        # 处置为「不适用」但不静默（保留披露）
+        out.append(_unverified_entry(
+            "domain_intel",
+            f"域名情报跳过：{di.get('reason', '')}",
+            required=False,
+            status="not_applicable",
+        ))
+    elif di.get("error"):
+        out.append(_unverified_entry(
+            "domain_intel", f"WHOIS 查询失败：{di['error']}", required=True))
+
+    # ── 非关键层：失败也如实披露（不改变评级）──
+    er = layers.get("email_registration")
+    if er and er.get("error"):
+        out.append(_unverified_entry(
+            "email_registration", f"holehe 未执行或失败：{er['error']}", required=False))
+    ts = layers.get("tech_stack")
+    if ts and ts.get("error"):
+        out.append(_unverified_entry(
+            "tech_stack", f"网站抓取失败：{ts['error']}", required=False))
+
+    return out
+
+
+def compute_verdict(
+    flags: list[str],
+    unverified: list[dict],
+) -> tuple[int | None, str, int]:
+    """fail-closed 汇总：关键层没查成时不给数字结论。
+
+    Returns:
+        (overall_score, rating, provisional_score)
+
+        关键层未核验 → overall_score 为 None（报告显示"—"），rating 为
+        "incomplete"，同时保留 provisional_score 供日志/诊断参考。
+        已确认命中制裁 → 直接 high（结论已成立，不被「未完成」掩盖）。
+    """
+    score, rating = compute_risk_score(flags)
+
+    # 明确的制裁命中是确定结论：即使其它层降级，也不能弱化成「未完成」
+    if "sanctioned" in flags:
+        return score, "high", score
+
+    if any(u.get("required") for u in unverified):
+        # 不输出数字：未核验时任何分数都会被读成「结论」
+        return None, "incomplete", score
+
+    return score, rating, score
+
+
 def generate_recommendations(report: dict) -> list[str]:
     """根据各层检测结果生成结构化的行动建议。
 
@@ -72,6 +211,25 @@ def generate_recommendations(report: dict) -> list[str]:
     """
     recs: list[str] = []
     layers = report.get("layers", {})
+
+    # ── 核验完整性（fail-closed，P0-2）──
+    # 只在 orchestrator 生成的报告里有 unverified 字段；外部构造的报告不受影响。
+    # 各层原因由下面各自的建议分支展开，这里只给结论性的「未完成」。
+    unverified = report.get("unverified") or []
+    blocking = [u for u in unverified if u.get("required")]
+    if blocking:
+        names = "、".join(u.get("label", u.get("layer", "")) for u in blocking)
+        recs.append(
+            f"🚫 本次背调未完成核验（{names}），结论为「未完成」，"
+            "**不代表低风险**；原因与补齐方式见下方各层说明"
+        )
+    for u in unverified:
+        # 用户主动关闭的渠道：明确写出「未查」，不能当成「无风险」
+        if u.get("status") == "skipped":
+            recs.append(
+                f"ℹ️ {u.get('label', u.get('layer', ''))}本次未查（{u.get('reason', '')}），"
+                "不能作为「无风险」的依据"
+            )
 
     # ── 邮箱注册检测层（holehe）──
     # 这一层在全新安装的机器上从不执行（holehe 未被任何安装路径声明），

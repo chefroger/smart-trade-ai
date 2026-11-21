@@ -41,11 +41,21 @@ def format_report(report: dict[str, Any]) -> str:
     """
     lines: list[str] = []
     lines.append(f"══ 背调报告：{report.get('target', '')}（类型：{report.get('target_type', '?')}）══")
+    # 未完成核验时分数为 None：必须显示「—」，不能落到 0/100 或沿用旧分数
+    score = report.get("overall_score")
+    score_text = f"{score}/100" if isinstance(score, int) else "—（未完成核验）"
     lines.append(
-        f"综合评分：{report.get('overall_score', 0)}/100 ｜ 风险等级：{report.get('overall_rating', 'unknown')}"
+        f"综合评分：{score_text} ｜ 风险等级：{report.get('overall_rating', 'unknown')}"
     )
     flags = report.get("flags") or []
     lines.append("风险旗标：" + ("、".join(flags) if flags else "无"))
+
+    # 未核验 / 未查渠道：关键层缺失直接影响结论，必须写在报告头部
+    for u in report.get("unverified") or []:
+        if u.get("required"):
+            lines.append(f"⚠ 未核验：{u.get('label', u.get('layer'))} —— {u.get('reason', '')}")
+        elif u.get("status") == "skipped":
+            lines.append(f"未查（已关闭）：{u.get('label', u.get('layer'))}")
 
     layers = report.get("layers") or {}
 

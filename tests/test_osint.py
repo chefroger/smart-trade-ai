@@ -516,8 +516,12 @@ class TestOrchestrator:
         )
         assert "overall_score" in result
         assert "overall_rating" in result
-        assert result["overall_score"] >= 0
-        assert result["overall_score"] <= 100
+        # 离线桩下制裁下载被拦 → fallback → 关键层未核验 → fail-closed：
+        # 评级允许 "incomplete"，分数可能为 None（不输出假结论）。
+        assert result["overall_rating"] in {"low", "medium", "high", "incomplete"}
+        assert result["overall_score"] is None or 0 <= result["overall_score"] <= 100
+        assert isinstance(result["provisional_score"], int)
+        assert result["unverified"], "未核验层必须被列出来"
 
 
 # ── Target Type Detection ───────────────────────────────────────────────────

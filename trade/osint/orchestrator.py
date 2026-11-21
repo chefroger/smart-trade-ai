@@ -14,7 +14,11 @@ from trade import email_intel
 from trade.osint.email_verify import verify_corporate_email
 from trade.osint.linkedin_verify import linkedin_company_verify
 from trade.osint.sanctions import check_sanctions
-from trade.osint.scoring import compute_risk_score, generate_recommendations
+from trade.osint.scoring import (
+    assess_verification,
+    compute_verdict,
+    generate_recommendations,
+)
 from trade.osint.tech_stack import detect_tech_stack
 from trade.osint.whois import domain_whois
 
@@ -42,8 +46,10 @@ async def osint_full_check(
         {
             "target": str,
             "target_type": str,       # "email" | "domain" | "url" | "company"
-            "overall_rating": str,    # "low" | "medium" | "high" | "unknown"
-            "overall_score": int,     # 0-100
+            "overall_rating": str,    # "low" | "medium" | "high" | "incomplete"
+            "overall_score": int | None,   # 0-100；None = 关键层未核验
+            "provisional_score": int,      # 诊断用分数，非对外结论
+            "unverified": list[dict],      # 未核验/未查的层及原因
             "flags": list[str],       # 红旗标记列表
             "layers": {               # 各层检测结果
                 "email_registration": dict | None,
@@ -167,10 +173,19 @@ async def osint_full_check(
         # 用户关闭 LinkedIn 验证或缺少域名，跳过此层
         report["layers"]["linkedin"] = None
 
-    # ── 综合评分 ───────────────────────────────────────────────────────
-    score, rating = compute_risk_score(report["flags"])
-    report["overall_score"] = score
+    # ── 核验完整性 + 综合评分（fail-closed，工单 P0-2）────────────────
+    # 先列出哪些关键层没查成：制裁数据源降级、有域名但 WHOIS 失败。
+    # 这些情况下 compute_verdict 会把评级改为 "incomplete"、分数置 None，
+    # 避免「没查成」被当成「没风险」。
+    report["unverified"] = assess_verification(
+        report["layers"],
+        has_domain=bool(lookup_domain),
+        sanctions_requested=include_sanctions,
+    )
+    score, rating, provisional = compute_verdict(report["flags"], report["unverified"])
+    report["overall_score"] = score          # None = 未完成核验，不展示数字
     report["overall_rating"] = rating
+    report["provisional_score"] = provisional  # 仅供诊断，不是对外结论
 
     # ── 生成建议 ───────────────────────────────────────────────────────
     report["recommendations"] = generate_recommendations(report)
