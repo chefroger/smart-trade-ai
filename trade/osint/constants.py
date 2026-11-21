@@ -151,6 +151,62 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _same_ip(left: str, right: str) -> bool:
+    """两个 IP 字符串是否指同一地址（IPv4-mapped IPv6 归一后比较）。"""
+    try:
+        a = ipaddress.ip_address(left)
+        b = ipaddress.ip_address(right)
+    except ValueError:
+        return False
+    # ::ffff:127.0.0.1 与 127.0.0.1 视为同一个
+    if isinstance(a, ipaddress.IPv6Address) and a.ipv4_mapped is not None:
+        a = a.ipv4_mapped
+    if isinstance(b, ipaddress.IPv6Address) and b.ipv4_mapped is not None:
+        b = b.ipv4_mapped
+    return a == b
+
+
+def _is_configured_proxy(peer_ip: str, peer_port: int) -> bool:
+    """对端是否就是本机配置的 HTTP(S) 代理（2026-11-21 审计 P0-3）。
+
+    系统代理模式下（Clash 等 `HTTPS_PROXY=http://127.0.0.1:7890`），
+    所有请求的对端都是回环地址，会被对端校验当成内网而全部拦掉 ——
+    结果是背调各层静默失败。这里只在「即将拦截」时才解析代理地址，
+    不给正常直连路径增加任何开销。
+
+    **安全性**：放行代理不会削弱 SSRF 防护 —— 目标主机已在 `http_get()`
+    入口单独用 `_is_private_host()` 校验，重定向也有逐跳复查。
+    """
+    # 必须与 opener 用的是**同一份**代理快照：ProxyHandler 在 build_opener 时
+    # 就把配置存下来了，用实时 getproxies() 比对会出现「opener 走 A 代理、
+    # 校验按 B 代理判断」的错配（2026-11-21 测试实测踩到）。
+    proxies = _CONFIGURED_PROXIES
+    for scheme in ("https", "http", "all"):
+        raw = proxies.get(scheme)
+        if not raw:
+            continue
+        parsed = urllib.parse.urlparse(raw if "://" in raw else "http://" + raw)
+        host = parsed.hostname
+        if not host:
+            continue
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            ipaddress.ip_address(host)
+            is_ip_literal = True
+        except ValueError:
+            is_ip_literal = False
+        # 配置里直接写 IP（最常见）：只比对，不做 DNS
+        if is_ip_literal:
+            if _same_ip(host, peer_ip) and port == peer_port:
+                return True
+            continue
+        # 代理写成域名：解析后比对（慢路径，仅拦截前发生）
+        for addr in _resolve_addresses(host):
+            if _same_ip(addr, peer_ip) and port == peer_port:
+                return True
+    return False
+
+
 class _PeerVerifiedMixin:
     """TCP 建连后校验对端 IP，堵住 DNS 重绑定（TOCTOU，审计 P1-4）。
 
@@ -165,15 +221,18 @@ class _PeerVerifiedMixin:
         if sock is None:
             return
         try:
-            peer = sock.getpeername()[0]
+            peer_ip, peer_port = sock.getpeername()[:2]
         except OSError:
             return
-        if peer and _is_blocked_address(peer):
+        if peer_ip and _is_blocked_address(peer_ip):
+            # 对端是本机配置的代理：放行（目标主机已在 http_get 入口校验过）
+            if _is_configured_proxy(peer_ip, peer_port):
+                return
             try:
                 sock.close()
             finally:
                 self.sock = None
-            raise OSError(f"SSRF blocked: connected to private address {peer}")
+            raise OSError(f"SSRF blocked: connected to private address {peer_ip}")
 
 
 class _PinnedHTTPConnection(_PeerVerifiedMixin, http.client.HTTPConnection):
@@ -199,9 +258,25 @@ class _SafeHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
 
 
-_SAFE_OPENER = urllib.request.build_opener(
-    _SafeRedirectHandler(), _SafeHTTPHandler(), _SafeHTTPSHandler(),
-)
+def _build_opener() -> tuple[urllib.request.OpenerDirector, dict]:
+    """构建带 SSRF 复查的 opener，并返回它使用的代理快照。
+
+    显式传入 ProxyHandler(proxies)，保证「实际走哪个代理」与
+    `_is_configured_proxy()` 的判定完全一致（不显式传的话 build_opener 会
+    自己再读一次 getproxies()，两次快照可能不同）。
+    """
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        proxies = {}
+    opener = urllib.request.build_opener(
+        _SafeRedirectHandler(), _SafeHTTPHandler(), _SafeHTTPSHandler(),
+        urllib.request.ProxyHandler(proxies),
+    )
+    return opener, proxies
+
+
+_SAFE_OPENER, _CONFIGURED_PROXIES = _build_opener()
 
 
 def http_get(url: str, timeout: int = 30) -> str | None:

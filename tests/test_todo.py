@@ -111,18 +111,21 @@ class TestTodoCrud:
 
 class TestGrouping:
     def test_overdue_today_and_done_groups(self, company_id, test_db):
+        # 日期必须相对「真实今天」：done=True 写的是 now，写死日期会跨天失效
+        from datetime import date, timedelta
+
         from trade import todo
 
-        today = "2026-11-21"
+        today = date.today().isoformat()
         # 逾期：due_date < today，按 date 升序
-        todo.create_todo(company_id, title="逾期1", due_date="2026-11-20")
-        todo.create_todo(company_id, title="逾期2", due_date="2026-11-01")
+        todo.create_todo(company_id, title="逾期1", due_date=(date.today() - timedelta(days=1)).isoformat())
+        todo.create_todo(company_id, title="逾期2", due_date=(date.today() - timedelta(days=30)).isoformat())
         # 今天：due_date == today
         todo.create_todo(company_id, title="今天1", due_date=today)
         # 无期限：归入今天
         todo.create_todo(company_id, title="无期限")
         # 今天完成
-        t_done = todo.create_todo(company_id, title="今天完成", due_date="2026-11-01")
+        t_done = todo.create_todo(company_id, title="今天完成", due_date="2026-11-01")  # 截止日不影响完成分组
         todo.update_todo(t_done["id"], company_id=company_id, done=True)
         # 过去完成：直接改写 done_at，不应出现在今天的「已完成」里
         t_old = todo.create_todo(company_id, title="旧完成")
