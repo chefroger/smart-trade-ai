@@ -457,6 +457,24 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
+-- 用户待办（P2-12）：公司内独立清单，与定时任务无关
+CREATE TABLE IF NOT EXISTS todos (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    title       TEXT    NOT NULL,
+    due_date    TEXT    DEFAULT '',   -- YYYY-MM-DD；空=无期限（归入「今天」）
+    customer_id INTEGER,              -- 可选关联客户；客户被删后保留原值，读取时 JOIN 不到即当作无关联
+    done        INTEGER NOT NULL DEFAULT 0,
+    done_at     TEXT,                 -- 完成时间（本地时间字符串）
+    source      TEXT    NOT NULL DEFAULT 'manual',
+    created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at  TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1      TEXT    DEFAULT '{}',
+    extra2      TEXT    DEFAULT '{}',
+    extra3      TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_todos_company ON todos(company_id, done, due_date);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
@@ -714,7 +732,7 @@ _EXPECTED_TABLES = frozenset({
     "usage_ledger", "cron_job_companies", "trial_events", "doc_extractions",
     "mailboxes", "emails", "contacts",
     "customer_facts", "customer_gifts", "inquiries", "visit_plans",
-    "app_settings",
+    "app_settings", "todos",
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
