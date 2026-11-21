@@ -20,7 +20,7 @@ triggers:
   - 查一下这个邮箱
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.0.0
+version: 1.0.1
 author: Foreign Trade Assistant
 
 ---
@@ -53,6 +53,20 @@ author: Foreign Trade Assistant
 ```
 
 **重要边界**：平台接口可能变更、限速或返回不完整结果；"未发现"不等于"不存在"，"已注册"也不等于邮箱所有者身份已验证。
+
+## 机器判定（命令行）
+
+单个邮箱的注册检测走确定性管线：
+
+```
+python -m trade.osint <邮箱> --no-sanctions --no-tech-stack --no-linkedin
+```
+
+- **终端工具调用必须传 `timeout=600`**：holehe 单层最多探测 90 秒，终端默认超时会提前截断。
+- **结论照抄命令输出**：它标注「降级」（如 holehe 未安装）或「未完成核验」时如实转述，
+  不得写成「未发现注册记录」。
+- **一次最多核验 5 个邮箱**；超过时先核验决策人（批量模式尚未提供）。
+
 ## 技术实现
 
 内部使用 [holehe](https://github.com/megadose/holehe) 开源工具，通过以下方式获取信息：

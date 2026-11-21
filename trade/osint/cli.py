@@ -29,7 +29,11 @@ from trade.osint.orchestrator import osint_full_check
 
 _USAGE = (
     "用法：python -m trade.osint <邮箱|域名|公司名> "
-    "[--json] [--no-sanctions] [--no-tech-stack] [--no-linkedin]"
+    "[--json] [--progress] [--budget=150] [--target=<目标>] "
+    "[--no-sanctions] [--no-tech-stack] [--no-linkedin]\n"
+    "  --target=  显式指定目标（公司名含空格时可直接写，不必加引号）\n"
+    "  --budget=  全局时间预算（秒，默认 150）\n"
+    "  --progress 向 stderr 逐层输出 JSONL 进度事件"
 )
 
 
@@ -63,6 +67,8 @@ def format_report(report: dict[str, Any]) -> str:
     er = layers.get("email_registration")
     if er is None:
         lines.append("\n① 邮箱注册检测：未执行（目标不是邮箱）")
+    elif er.get("timed_out"):
+        lines.append(f"\n① 邮箱注册检测：超时 —— {er['error']}")
     elif er.get("error"):
         lines.append(f"\n① 邮箱注册检测：降级 —— {er['error']}")
     else:
@@ -78,6 +84,8 @@ def format_report(report: dict[str, Any]) -> str:
     di = layers.get("domain_intel") or {}
     if di.get("skipped"):
         lines.append(f"\n② 域名情报：跳过（{di.get('reason', '')}）")
+    elif di.get("timed_out"):
+        lines.append(f"\n② 域名情报：超时 —— {di['error']}")
     elif di.get("error"):
         lines.append(f"\n② 域名情报：降级 —— {di['error']}")
     elif di:
@@ -93,6 +101,8 @@ def format_report(report: dict[str, Any]) -> str:
     ev = layers.get("email_verification")
     if ev is None:
         lines.append("\n③ 企业邮箱验证：未执行（目标不是邮箱）")
+    elif ev.get("timed_out"):
+        lines.append(f"\n③ 企业邮箱验证：超时 —— {ev.get('error', '')}")
     else:
         tail = f"（MX 查询未成：{ev['mx_error']}）" if ev.get("mx_error") else ""
         lines.append(
@@ -105,6 +115,8 @@ def format_report(report: dict[str, Any]) -> str:
     ts = layers.get("tech_stack")
     if ts is None:
         lines.append("\n④ 技术栈检测：未执行")
+    elif ts.get("timed_out"):
+        lines.append(f"\n④ 技术栈检测：超时 —— {ts['error']}")
     elif ts.get("error"):
         lines.append(f"\n④ 技术栈检测：降级 —— {ts['error']}")
     else:
@@ -122,7 +134,10 @@ def format_report(report: dict[str, Any]) -> str:
     else:
         cov = sa.get("coverage") or {}
         note = ""
-        if cov.get("degraded"):
+        if sa.get("timed_out"):
+            # 超时不是「查了没有」，必须写清楚本次未完成比对
+            note = f" ｜ ⏱ {sa.get('error', '超时')}，本次未完成比对"
+        elif cov.get("degraded"):
             note = f" ｜ ⚠ 降级：数据源不可用，本次仅比对 {cov.get('total_entries', 0)} 条内置样本"
         elif cov.get("total_entries"):
             note = f" ｜ 覆盖 {cov['total_entries']} 条"
@@ -157,15 +172,47 @@ def main(argv: list[str] | None = None) -> int:
     # 否则会崩在"已经查完之后"，agent 只看到 UnicodeEncodeError，白跑一次。
     reconfigure_streams()
     args = list(sys.argv[1:] if argv is None else argv)
-    opts = {a for a in args if a.startswith("--")}
-    targets = [a for a in args if not a.startswith("--")]
+    opts: set[str] = set()
+    targets: list[str] = []
+    target_opt: str | None = None
+    budget = 150.0
 
-    if not targets:
+    for arg in args:
+        if arg.startswith("--target="):
+            # --target=Acme Corp（带空格的公司名）走显式目标
+            target_opt = arg.split("=", 1)[1].strip()
+        elif arg.startswith("--budget="):
+            raw = arg.split("=", 1)[1].strip()
+            try:
+                budget = float(raw)
+            except ValueError:
+                print(f"✗ --budget 需要数字（收到 {raw!r}）。\n{_USAGE}")
+                return 2
+            if budget <= 0:
+                print(f"✗ --budget 必须大于 0（收到 {budget}）。\n{_USAGE}")
+                return 2
+        elif arg.startswith("--"):
+            opts.add(arg)
+        else:
+            targets.append(arg)
+
+    if target_opt is not None:
+        # 同时给 --target 和位置参数 → 目标不明确
+        if targets:
+            print(f"✗ --target 与位置参数不能同时使用。\n{_USAGE}")
+            return 2
+        targets = [target_opt]
+
+    if not targets or not targets[0]:
         print(_USAGE)
         return 2
     if len(targets) > 1:
         print(f"✗ 一次只接受一个目标（收到 {len(targets)} 个）。\n{_USAGE}")
         return 2
+
+    # --progress：逐层 JSONL 写到 stderr，stdout 的报告格式保持不变
+    def _emit_progress(event: dict) -> None:
+        print(json.dumps(event, ensure_ascii=False), file=sys.stderr, flush=True)
 
     try:
         report = asyncio.run(osint_full_check(
@@ -173,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
             include_sanctions="--no-sanctions" not in opts,
             include_tech_stack="--no-tech-stack" not in opts,
             include_linkedin="--no-linkedin" not in opts,
+            budget=budget,
+            on_event=_emit_progress if "--progress" in opts else None,
         ))
     except Exception as e:  # 管线内部各层已各自兜底；这里只兜"整条起不来"
         print(f"✗ 背调执行失败：{type(e).__name__}: {e}")

@@ -169,8 +169,21 @@ class TestPromptsPointAtTheCommand:
         root = Path(__file__).resolve().parent.parent
         return [
             ("skills/b2b-osint/SKILL.md", (root / "skills/b2b-osint/SKILL.md").read_text(encoding="utf-8")),
+            ("skills/b2b-email-intel/SKILL.md", (root / "skills/b2b-email-intel/SKILL.md").read_text(encoding="utf-8")),
             ("trade/skill_registry.py", (root / "trade/skill_registry.py").read_text(encoding="utf-8")),
         ]
+
+    def test_prompts_tell_model_to_pass_terminal_timeout(self):
+        """P0-4：模型调用终端必须传 timeout=600，否则默认超时截断背调。"""
+        for name, text in self._prompts():
+            assert "timeout=600" in text, f"{name} 没有要求终端传 timeout=600"
+
+    def test_prompts_cap_contact_email_verification(self):
+        """P0-4：联系人邮箱逐条核验必须限制数量（批量模式尚未提供）。"""
+        for name, text in self._prompts():
+            assert "最多" in text and "5 个" in text, (
+                f"{name} 没有写入联系人邮箱核验的上限"
+            )
 
     def test_prompts_use_the_cli_command(self):
         for name, text in self._prompts():

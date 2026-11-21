@@ -2,25 +2,50 @@
 Trade AI Assistant — OSINT 编排器：完整尽职调查流程。
 
 osint_full_check() 是 OSINT 模块的统一入口，接收邮箱/域名/公司名，
-自动识别类型后依次执行 6 层检测，最终输出综合风险评分报告。
+自动识别类型后并发执行各层检测，最终输出综合风险评分报告。
+
+并发与超时（2026-11-21 工单 P0-4）：
+  - 各层互不依赖（都只依赖 target / 已解析的域名），用 asyncio.gather 并发；
+  - 每层独立超时，另有全局预算 budget（默认 150 秒）；
+  - 阻塞层跑在**守护线程**里 —— run_in_executor 的线程是非守护的，超时后
+    仍在跑、解释器退出时要 join，一层卡 300 秒 CLI 就得陪 300 秒。
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+import threading
+import time
+from collections.abc import Callable
 
 from trade import email_intel
 from trade.osint.email_verify import verify_corporate_email
 from trade.osint.linkedin_verify import linkedin_company_verify
 from trade.osint.sanctions import check_sanctions
 from trade.osint.scoring import (
+    _LAYER_LABELS,
     assess_verification,
     compute_verdict,
     generate_recommendations,
 )
 from trade.osint.tech_stack import detect_tech_stack
 from trade.osint.whois import domain_whois
+
+# 单层超时（秒）。全局预算另由 osint_full_check(budget=...) 限制。
+# sanctions 给 60 秒：首次运行要下载名单文件（下载本身在 check_sanctions 内部）；
+# 工单 P0-1 改成后台每日刷新后，这里可以降到 20 秒左右。
+_LAYER_TIMEOUTS: dict[str, float] = {
+    "email_registration": 90.0,  # holehe 要探测 120+ 站点
+    "domain_intel": 20.0,
+    "email_verification": 20.0,
+    "tech_stack": 20.0,
+    "sanctions": 60.0,
+    "linkedin": 10.0,
+}
+
+# 进度事件回调类型：CLI --progress 用它往 stderr 写 JSONL
+EventCallback = Callable[[dict], None]
 
 
 async def osint_full_check(
@@ -29,17 +54,24 @@ async def osint_full_check(
     include_sanctions: bool = True,
     include_tech_stack: bool = True,
     include_linkedin: bool = True,
+    budget: float = 150.0,
+    on_event: EventCallback | None = None,
 ) -> dict:
-    """完整 OSINT 尽职调查（异步编排，LLM 友好）。
+    """完整 OSINT 尽职调查（异步并发编排，LLM 友好）。
 
-    接收邮箱 / 域名 / 公司名，自动识别类型，依次执行各层检测，
+    接收邮箱 / 域名 / 公司名，自动识别类型，**并发**执行各层检测，
     最终输出综合风险评分报告。
+
+    各层互不依赖，并发执行；单层超时 + 全局预算两层保护。任一层的失败、
+    超时、缺依赖都只影响该层自身（标 error/timeout），不会拖垮整份报告。
 
     Args:
         target: 邮箱 / 域名 / 公司名（自动识别）
         include_sanctions: 是否包含制裁名单筛查（默认 True）
         include_tech_stack: 是否包含技术栈检测（默认 True）
         include_linkedin: 是否包含 LinkedIn 验证（默认 True）
+        budget: 全局时间预算（秒），默认 150；预算耗尽时未完成的层标 timeout
+        on_event: 可选进度回调，收到 source_start / source_done 事件 dict
 
     Returns:
         完整报告 dict，结构见需求文档 3.11.8 节：
@@ -76,8 +108,6 @@ async def osint_full_check(
     }
 
     # ── 确定用于域名查询的目标 ──
-    loop = asyncio.get_running_loop()
-
     if target_type == "email":
         # 从邮箱提取域名，用于后续各层检测
         domain_from_email = target.split("@", 1)[1]
@@ -87,88 +117,107 @@ async def osint_full_check(
 
     lookup_domain = _extract_lookup_domain(target, target_type, domain_from_email)
 
-    # ── Layer 1: Email registration (holehe) ─────────────────────────────
-    if target_type == "email":
-        # 目标为邮箱时，执行 holehe 注册检测
-        email_result = await _run_email_check(target)
-        report["layers"]["email_registration"] = email_result
-    else:
-        # 非邮箱目标，跳过邮箱注册检测
-        report["layers"]["email_registration"] = None
+    # ── 规划各层：互不依赖，全部并发 ────────────────────────────────────
+    # 每项: (阻塞函数, 位置参数)。真正的执行统一走 _run_layer（超时 + 进度）。
+    planned: dict[str, tuple[Callable, tuple]] = {}
 
-    # ── Layer 2: WHOIS 域名查询（放入 executor 避免阻塞事件循环）─────────
+    if target_type == "email":
+        # Layer 1: holehe 邮箱注册检测
+        planned["email_registration"] = (email_intel.email_background_check, (target,))
+        # Layer 3: 企业邮箱验证（DNS MX）
+        planned["email_verification"] = (verify_corporate_email, (target,))
+
     if lookup_domain:
-        whois_result = await loop.run_in_executor(None, domain_whois, lookup_domain)
-        report["layers"]["domain_intel"] = whois_result
+        # Layer 2: WHOIS 域名情报
+        planned["domain_intel"] = (domain_whois, (lookup_domain,))
 
-        if whois_result.get("age_category") == "new":
-            report["flags"].append("domain_age_new")
-        if whois_result.get("days_old") and whois_result["days_old"] > 3650:
-            report["flags"].append("domain_age_old")
+        if include_tech_stack:
+            # Layer 4: 技术栈检测（依赖域名，不依赖 WHOIS 结果）
+            planned["tech_stack"] = (detect_tech_stack, (f"https://{lookup_domain}",))
+
+    if include_sanctions:
+        # Layer 5: 制裁筛查。公司名解析（抓官网 title）与名单比对合成一个
+        # 阻塞任务，整体受本层超时约束。
+        planned["sanctions"] = (
+            _sanctions_and_screen,
+            (lookup_domain, domain_from_email or target),
+        )
+
+    deadline = time.monotonic() + max(0.0, budget)
+    tasks = {
+        source: _run_layer(
+            source,
+            fn,
+            *args,
+            timeout=min(_LAYER_TIMEOUTS[source], max(0.0, deadline - time.monotonic())),
+            on_event=on_event,
+        )
+        for source, (fn, args) in planned.items()
+    }
+    results = dict(zip(tasks, await asyncio.gather(*tasks.values()), strict=True))
+
+    # ── 落报告：未规划的层写 None / skipped ─────────────────────────────
+    report["layers"]["email_registration"] = (
+        results.get("email_registration") if target_type == "email" else None
+    )
+    if lookup_domain:
+        report["layers"]["domain_intel"] = results["domain_intel"]
     else:
+        # 公司名无法直接提取域名（需先用搜索发现官网）
         report["layers"]["domain_intel"] = {
-            "skipped": True, "reason": "Company target — domain discovery requires web search first"
+            "skipped": True,
+            "reason": "Company target — domain discovery requires web search first",
         }
+    report["layers"]["email_verification"] = (
+        results.get("email_verification") if target_type == "email" else None
+    )
+    report["layers"]["tech_stack"] = results.get("tech_stack")
+    report["layers"]["sanctions"] = results.get("sanctions")
 
-    # ── Layer 3: 企业邮箱验证 ───────────────────────────────────────────
-    if target_type == "email":
-        # 目标为邮箱时，验证是否为企业邮箱
-        # 放入 executor 以避免 DNS socket 调用阻塞事件循环
-        email_verify_result = await loop.run_in_executor(None, verify_corporate_email, target)
-        report["layers"]["email_verification"] = email_verify_result
+    # ── 红旗映射（只认已核验的数据）────────────────────────────────────
+    di = report["layers"]["domain_intel"]
+    if di and not di.get("error") and not di.get("skipped"):
+        if di.get("age_category") == "new":
+            report["flags"].append("domain_age_new")
+        if di.get("days_old") and di["days_old"] > 3650:
+            report["flags"].append("domain_age_old")
 
+    ev = report["layers"]["email_verification"]
+    if ev:
         # 按**具体红旗**映射到评分用的标记名。
         # 历史上这里把任何 risk_flag 一律写成 "personal_email_domain" ——
         # 于是"域名没有 MX 记录"也被标成"个人邮箱"，扣分理由与事实不符。
-        report["flags"].extend(_map_email_flags(email_verify_result.get("risk_flags") or []))
-    else:
-        # 非邮箱目标，跳过企业邮箱验证
-        report["layers"]["email_verification"] = None
+        report["flags"].extend(_map_email_flags(ev.get("risk_flags") or []))
 
-    # ── Layer 4 (可选): 技术栈检测 ─────────────────────────────────────
-    if include_tech_stack and lookup_domain:
-        # 用户选择检测技术栈且存在可查询域名时，执行 BuiltWith 风格检测
-        # 放入 executor 以避免 HTTP 请求阻塞事件循环
-        tech_result = await loop.run_in_executor(None, detect_tech_stack, f"https://{lookup_domain}")
-        report["layers"]["tech_stack"] = tech_result
+    ts = report["layers"]["tech_stack"]
+    if ts and ts.get("is_free_platform"):
+        # 网站使用免费建站工具（如 Wix/Shopify），可能为低预算公司
+        report["flags"].append("free_platform")
 
-        if tech_result.get("is_free_platform"):
-            # 网站使用免费建站工具（如 Wix/Shopify），可能为低预算公司
-            report["flags"].append("free_platform")
-    else:
-        # 用户关闭技术栈检测或缺少域名，跳过此层
-        report["layers"]["tech_stack"] = None
+    sa = report["layers"]["sanctions"]
+    if sa and sa.get("is_sanctioned"):
+        # 目标出现在制裁名单中，标记为严重风险
+        report["flags"].append("sanctioned")
 
-    # ── Layer 5 (可选): 制裁名单筛查 ───────────────────────────────────
-    if include_sanctions:
-        # 用户选择制裁筛查时，优先用公司名匹配（优化路线 P0-3）。
-        # 直接拿域名（如 acme.com）去匹配公司名名单命中率很低，
-        # 先尝试从官网 title 解析公司名，失败则回退用域名原文（保持原行为）。
-        #
-        # 解析会发一次官网 HTTP 请求（阻塞）→ 必须进 executor，与本文件其它
-        # 阻塞调用（whois / 邮箱验证 / 制裁下载）同一规矩，别卡住事件循环。
-        resolved_name = await loop.run_in_executor(None, _resolve_entity_name, lookup_domain)
-        sanctions_name = resolved_name or (domain_from_email or target)
-        # 制裁筛查可能涉及文件下载，放入 executor
-        sanctions_result = await loop.run_in_executor(None, check_sanctions, sanctions_name)
-        report["layers"]["sanctions"] = sanctions_result
-
-        if sanctions_result.get("is_sanctioned"):
-            # 目标出现在制裁名单中，标记为严重风险
-            report["flags"].append("sanctioned")
-    else:
-        # 用户关闭制裁筛查，跳过此层
-        report["layers"]["sanctions"] = None
-
-    # ── Layer 6: LinkedIn 验证（生成 browser_navigate 指令）─────────────
+    # ── Layer 6: LinkedIn 验证（纯本地生成 browser_navigate 指令）──────
     if include_linkedin and lookup_domain:
-        # 用户选择 LinkedIn 验证且存在可查询域名时，生成浏览器导航指令
         # 当 target 不是公司名时（如 email），用域名作为公司名线索
         _company_hint = target if target_type == "company" else lookup_domain
-        linkedin_result = linkedin_company_verify(lookup_domain, _company_hint)
-        report["layers"]["linkedin"] = linkedin_result
-        # LinkedIn 验证通过 Hermes browser_navigate 执行，无网络请求风险
-        # 此处不做自动评分（需 Agent 实际执行后人工/LLM 判断）
+        if on_event:
+            on_event({
+                "event": "source_start",
+                "source": "linkedin",
+                "label": _LAYER_LABELS.get("linkedin", "linkedin"),
+            })
+        started = time.monotonic()
+        report["layers"]["linkedin"] = linkedin_company_verify(lookup_domain, _company_hint)
+        if on_event:
+            on_event({
+                "event": "source_done",
+                "source": "linkedin",
+                "status": "skipped",  # 只生成指令，需人工/浏览器实际执行
+                "ms": int((time.monotonic() - started) * 1000),
+            })
     else:
         # 用户关闭 LinkedIn 验证或缺少域名，跳过此层
         report["layers"]["linkedin"] = None
@@ -191,6 +240,171 @@ async def osint_full_check(
     report["recommendations"] = generate_recommendations(report)
 
     return report
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 并发执行器：守护线程 + 单层超时 + 进度事件
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _spawn_blocking(fn: Callable, *args) -> asyncio.Future:
+    """在守护线程里执行阻塞函数，返回可 await 的 Future。
+
+    为什么不用 loop.run_in_executor：默认 ThreadPoolExecutor 的线程是
+    **非守护**的，超时后任务仍在跑，解释器退出时会 join 它们 —— 一层卡
+    300 秒，CLI 就得陪 300 秒（验收要求 budget+5 秒内返回）。守护线程
+    超时后直接遗弃，进程可以按时退出。
+
+    结果交付前检查 future 是否已结束（超时会被 wait_for 取消），
+    事件循环已关闭时也不抛错。
+    """
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+
+    def _deliver(setter: Callable, value) -> None:
+        if fut.done():
+            return  # 已超时取消：结果没人要了
+        setter(value)
+
+    def _work() -> None:
+        try:
+            value = fn(*args)
+        except Exception as exc:  # noqa: BLE001 —— 统一转交给事件循环处理
+            outcome: tuple[bool, object] = (False, exc)
+        else:
+            outcome = (True, value)
+
+        ok, payload = outcome
+
+        def _apply() -> None:
+            if ok:
+                _deliver(fut.set_result, payload)
+            else:
+                _deliver(fut.set_exception, payload)
+
+        try:
+            loop.call_soon_threadsafe(_apply)
+        except RuntimeError:
+            # 事件循环已关闭（CLI 提前退出 / 宿主卸载）：忽略迟到结果
+            pass
+
+    threading.Thread(
+        target=_work,
+        daemon=True,
+        name=f"osint-{getattr(fn, '__name__', 'layer')}",
+    ).start()
+    return fut
+
+
+async def _run_layer(
+    source: str,
+    fn: Callable,
+    *args,
+    timeout: float,
+    on_event: EventCallback | None = None,
+) -> dict:
+    """执行一层：超时保护 + 异常兜底 + 进度事件。
+
+    Returns:
+        该层结果 dict。失败/超时时返回带 ``error``（及 ``timed_out``）的桩，
+        形状与该层正常返回一致，调用方无需特判。
+    """
+    label = _LAYER_LABELS.get(source, source)
+    if on_event:
+        on_event({"event": "source_start", "source": source, "label": label})
+
+    started = time.monotonic()
+    if timeout <= 0:
+        # 全局预算已耗尽：不启动线程，直接标 timeout
+        result = _failure_layer(source, "budget")
+        status = "timeout"
+    else:
+        try:
+            result = await asyncio.wait_for(_spawn_blocking(fn, *args), timeout=timeout)
+            status = _status_for(source, result)
+        except TimeoutError:
+            result = _failure_layer(source, "timeout", timeout)
+            status = "timeout"
+        except Exception as exc:  # noqa: BLE001 —— 单层失败不拖垮整份报告
+            result = _failure_layer(source, "error", detail=str(exc))
+            status = "error"
+
+    if on_event:
+        on_event({
+            "event": "source_done",
+            "source": source,
+            "status": status,
+            "ms": int((time.monotonic() - started) * 1000),
+        })
+    return result
+
+
+def _status_for(source: str, layer: dict) -> str:
+    """把某层结果映射成进度事件状态：hit | miss | error | skipped | timeout。"""
+    if not layer:
+        return "skipped"
+    if layer.get("timed_out"):
+        return "timeout"
+    if layer.get("error"):
+        return "error"
+    if source == "email_registration":
+        return "hit" if layer.get("found_count") else "miss"
+    if source == "domain_intel":
+        # registered=False 且无错误：域名不存在（属查到的结论，不是 miss 的网络含义）
+        return "hit" if layer.get("registered") else "miss"
+    if source == "email_verification":
+        return "hit" if layer.get("risk_flags") else "miss"
+    if source == "tech_stack":
+        return "hit" if layer.get("technologies") else "miss"
+    if source == "sanctions":
+        if layer.get("is_sanctioned") or layer.get("hits"):
+            return "hit"
+        # 数据源降级时「没查到」不构成结论，按 error 上报
+        coverage = layer.get("coverage") or {}
+        return "error" if coverage.get("degraded", True) else "miss"
+    return "miss"
+
+
+def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str = "") -> dict:
+    """构造失败层的返回桩（形状与正常结果一致）。"""
+    if kind == "timeout":
+        reason = f"超时（{timeout:.0f} 秒）"
+    elif kind == "budget":
+        reason = "预算耗尽，未执行"
+    else:
+        reason = detail or "未知错误"
+
+    stub: dict = {"error": reason, "timed_out": kind in ("timeout", "budget")}
+    if source == "sanctions":
+        # 关键：不能因为超时就让调用方以为「已查且无命中」
+        stub.update({
+            "hits": [],
+            "is_sanctioned": False,
+            "risk_level": "none",
+            "coverage": {"degraded": True, "total_entries": 0, "lists": {}},
+            "suggestion": f"制裁名单筛查未完成（{reason}），不构成「无制裁记录」的结论。",
+        })
+    elif source == "email_registration":
+        stub.update({"checked_count": 0, "found_count": 0, "results": []})
+    elif source == "email_verification":
+        stub.update({
+            "risk_flags": [],
+            "mx_error": reason,
+            "mx_found": None,
+            "is_personal": None,
+            "is_corporate": None,
+        })
+    elif source == "domain_intel":
+        stub.update({"domain": "", "registered": False})
+    elif source == "tech_stack":
+        stub.update({"technologies": []})
+    return stub
+
+
+def _sanctions_and_screen(domain: str | None, fallback_name: str) -> dict:
+    """制裁层：域名 → 公司名（官网 title）→ 名单比对，合成一个阻塞任务。"""
+    resolved = _resolve_entity_name(domain)
+    return check_sanctions(resolved or fallback_name)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,20 +517,3 @@ def _resolve_entity_name(domain: str | None, *, fetcher=None) -> str | None:
     except Exception:
         pass
     return None
-
-
-async def _run_email_check(email: str) -> dict:
-    """在线程池中运行 holehe 邮箱检测（同步 → 异步适配）。
-
-    email_intel.email_background_check 是同步的，不适合在 async 上下文中直接调用，
-    所以放到 executor 中执行。
-    """
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(
-            None, email_intel.email_background_check, email
-        )
-        return result
-    except Exception as e:
-        # holehe 执行失败（网络超时、API 异常等），返回带错误信息的空结果
-        return {"error": str(e), "checked_count": 0, "found_count": 0}

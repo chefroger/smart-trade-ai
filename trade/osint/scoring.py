@@ -69,6 +69,7 @@ _LAYER_LABELS = {
     "domain_intel": "WHOIS 域名情报",
     "email_registration": "邮箱注册检测",
     "tech_stack": "技术栈检测",
+    "linkedin": "LinkedIn 核查",
 }
 
 
