@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.9.1 — 2026-11-21
+
+- Hermes 缺失时降级启动；macOS 双击入口；CI 覆盖 3.14 与前端/嵌入冒烟
+- `1e9110c` feat(installer): macOS 生成可双击的 Trade.app（P2-11）
+- `e4a53a6` ci(e2e): 启动失败时带上服务端日志；依赖对齐 test.yml
+- `f7a7be0` test(e2e): Playwright 前端冒烟（P2-7）+ 修 Hermes 缺失时的启动崩溃
+- `2233b58` ci: Hermes 冒烟改用官方安装脚本
+- `9478878` ci: 覆盖部署用的 Python 3.14，并增加每晚 Hermes 冒烟（P2-6）
+
 ## v0.9.0 — 2026-11-21
 
 - 新增独立待办（逾期/今天/将来/已完成，支持截止日与关联客户）
