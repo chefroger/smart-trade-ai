@@ -5,6 +5,7 @@ Trade AI Assistant — 共享辅助函数。
 两个端点各自重复约 90 行代码。
 """
 
+import inspect
 import json
 import os
 import re
@@ -339,7 +340,33 @@ def create_agent(
         agent_kwargs["connection_callback"] = connection_callback
     if side_agent is not None:
         agent_kwargs["side_agent"] = side_agent
+    # 一轮任务的运行预算（秒）：Hermes 会按剩余预算提醒 Agent 收尾，避免
+    # 跑到外层 10/30 分钟兜底超时才被动中止（工单 P0-5）。
+    # 旧版 AIAgent 没有这个参数 —— 按签名探测，不支持就不传（绝不硬塞）。
+    budget = _run_budget_seconds()
+    if budget is not None:
+        try:
+            supports_budget = "run_budget_seconds" in inspect.signature(AIAgent).parameters
+        except (TypeError, ValueError):
+            supports_budget = False
+        if supports_budget:
+            agent_kwargs["run_budget_seconds"] = budget
     return AIAgent(**agent_kwargs)
+
+
+def _run_budget_seconds() -> int | None:
+    """读取一轮任务的运行预算（TRADE_RUN_BUDGET_SECONDS，默认 1500 秒）。
+
+    非法值退回默认值；显式设为 0/负数视为「关闭」并返回 None。
+    """
+    raw = os.environ.get("TRADE_RUN_BUDGET_SECONDS", "").strip()
+    if not raw:
+        return 1500
+    try:
+        value = int(float(raw))
+    except ValueError:
+        return 1500
+    return value if value > 0 else None
 
 
 # ── Token estimation helpers ──────────────────────────────────────────────────

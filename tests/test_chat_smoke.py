@@ -132,6 +132,22 @@ class TestSmokeChatModule:
             assert captured["cwd"] == "/tmp/work"
             assert captured["side_agent"] is True
             assert "connection_callback" in captured
+            # 旧版 AIAgent（**kwargs 签名）没有 run_budget_seconds → 绝不能硬塞
+            assert "run_budget_seconds" not in captured
+
+            # 新版 AIAgent 支持 run_budget_seconds → 默认 1500，可用环境变量覆盖
+            budget_seen = {}
+
+            class _BudgetAgent:
+                def __init__(self, run_budget_seconds=None, **kw):
+                    budget_seen["value"] = run_budget_seconds
+
+            run_agent.AIAgent = _BudgetAgent
+            create_agent()
+            assert budget_seen["value"] == 1500
+            monkeypatch.setenv("TRADE_RUN_BUDGET_SECONDS", "600")
+            create_agent()
+            assert budget_seen["value"] == 600
 
             # create_agent should NOT set HERMES_YOLO_MODE (moved to server.py startup)
             assert os.environ.get("HERMES_YOLO_MODE", "") != "true"

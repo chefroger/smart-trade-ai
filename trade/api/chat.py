@@ -43,6 +43,11 @@ from trade.helpers import build_query, create_agent
 from trade.hermes_chat_memory_plugin.doc_skip import register as register_doc_skip
 from trade.hermes_chat_memory_plugin.doc_skip import release as release_doc_skip
 from trade.hermes_compat import release_read_coverage, snapshot_read_coverage
+from trade.partial_report import (
+    CompletedToolTracker,
+    build_partial_report,
+    build_summary_prompt,
+)
 from trade.prompt import detect_reply_language
 from trade.read_evidence import ReadEvidenceCollector
 
@@ -485,24 +490,64 @@ async def trade_chat(
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
     # 即使没有文档计划也收集（用于"读到哪些就预热哪些"）。
     evidence = ReadEvidenceCollector()
+    # 所有工具调用的完成记录：任务中止时写「已查渠道」，以及只基于已有结果总结
+    tools = CompletedToolTracker()
+
+    def _sync_tool_start(tc_id, name, args):
+        tools.on_start(name, args)
+        evidence.on_start(tc_id, name, args)
+
+    def _sync_tool_complete(tc_id, name, args, result):
+        tools.on_complete(name, args, result)
+        evidence.on_complete(tc_id, name, args, result)
 
     # 超时后主线程要靠它中断仍在跑的 agent；列表用于跨线程传引用
     agent_holder: list = []
     cancelled = threading.Event()
 
-    def _call_agent() -> tuple[str, bool]:
-        """返回 (回复文本, 是否成功)；失败文本不得用于门禁判定。"""
+    def _summarize_after_tools(reason: str) -> tuple[str, str]:
+        """工具已跑过：只基于已有结果做**一次**总结调用，不再整轮重跑。
+
+        enabled_toolsets=[] 禁用工具 —— 总结不应该再执行任何工具（否则就是
+        换一种方式重跑）。总结失败时退回本地生成的未完成报告，绝不丢证据。
+        """
+        try:
+            agent = create_agent(
+                ephemeral_system_prompt=skill_hint,
+                skill_name=current_skill,
+                enabled_toolsets=[],
+            )
+            agent_holder.clear()
+            agent_holder.append(agent)
+            if cancelled.is_set():
+                return "", "failed"
+            text = agent.chat(build_summary_prompt(query, tools))
+            usage_module.record_agent_usage(
+                agent, company_id=cid, skill=current_skill or "",
+            )
+            if text and not cancelled.is_set():
+                return text, "ok"
+        except Exception:
+            _log.exception("总结调用失败（已有工具结果）")
+        return build_partial_report(reason, tools, evidence), "partial"
+
+    def _call_agent() -> tuple[str, str]:
+        """返回 (回复文本, 状态)；状态 = ok | partial | failed。
+
+        partial = 任务中止时生成的「未完成报告」：有已完成的工具结果，
+        但没有最终回答。failed = 连工具都没跑成的失败兜底文案。
+        """
         last_error = ""
         for attempt in range(_MAX_AGENT_RETRIES + 1):
             # 已超时：不再发起新尝试（用户早已拿到"已中止"）
             if cancelled.is_set():
-                return "", False
+                return "", "failed"
             try:
                 agent = create_agent(
                     ephemeral_system_prompt=skill_hint,
                     skill_name=current_skill,
-                    tool_start_callback=evidence.on_start,
-                    tool_complete_callback=evidence.on_complete,
+                    tool_start_callback=_sync_tool_start,
+                    tool_complete_callback=_sync_tool_complete,
                 )
                 agent_holder.clear()
                 agent_holder.append(agent)
@@ -511,10 +556,10 @@ async def trade_chat(
 
                 block_reason = tool_guard_chat_block_reason()
                 if block_reason:
-                    return block_reason, False
+                    return block_reason, "failed"
                 # 构造期间已超时：别再启动这一轮（主线程的 abort 会正好错过它）
                 if cancelled.is_set():
-                    return "", False
+                    return "", "failed"
                 # 绑定公司身份：chat-memory 等插件工具只认服务端绑定，
                 # 不再信任模型自填的 company_id（审计 P0-2）。
                 try:
@@ -534,26 +579,35 @@ async def trade_chat(
                     )
                 if cancelled.is_set():
                     # 超时后迟到的结果：用户已收到中止提示，不能再当成功回复
-                    return "", False
+                    return "", "failed"
                 if result:
-                    return result, True
+                    return result, "ok"
+                # 空响应：本轮已经跑过工具 → 不再整轮重跑（会重复执行工具），
+                # 改为「只基于已有结果出总结」的一次调用。
+                if tools.has_completed():
+                    return _summarize_after_tools("Agent 返回空响应")
                 if attempt < _MAX_AGENT_RETRIES:
                     _log.warning("Agent returned empty, retry %d/%d", attempt + 1, _MAX_AGENT_RETRIES)
                     time.sleep(2 ** attempt)
                     continue
-                return "Agent 返回了空响应。", False
+                return "Agent 返回了空响应。", "failed"
             except ImportError:
-                return "⚠️ AI Agent 模块未加载。", False
+                return "⚠️ AI Agent 模块未加载。", "failed"
             except RuntimeError as e:
                 last_error = str(e)
+                # 已经跑过工具：重跑整轮会重复执行工具，只做一次总结
+                if tools.has_completed():
+                    return _summarize_after_tools(f"Agent 报错：{e}")
                 if attempt < _MAX_AGENT_RETRIES:
                     _log.warning("Agent RuntimeError, retry %d/%d: %s", attempt + 1, _MAX_AGENT_RETRIES, e)
                     time.sleep(2 ** attempt)
                     continue
-                return f"⚠️ {e}", False
+                return f"⚠️ {e}", "failed"
             except Exception as e:
                 last_error = str(e) or f"Agent call failed (attempt {attempt + 1})"
                 _log.exception("Agent call failed (attempt %d/%d)", attempt + 1, _MAX_AGENT_RETRIES)
+                if tools.has_completed():
+                    return _summarize_after_tools(f"Agent 异常：{e}")
                 if attempt < _MAX_AGENT_RETRIES:
                     time.sleep(2 ** attempt)
                     continue
@@ -566,14 +620,13 @@ async def trade_chat(
                 _log.error(
                     "Agent terminated with %s: %s", type(e).__name__, e, exc_info=True
                 )
-                return f"⚠️ Agent 异常终止（{type(e).__name__}）：{e}", False
+                return f"⚠️ Agent 异常终止（{type(e).__name__}）：{e}", "failed"
         fallback = f"⚠️ Agent 调用失败: {last_error}" if last_error else "⚠️ Agent 调用失败，请稍后重试。"
-        return fallback, False
+        return fallback, "failed"
 
     loop = asyncio.get_running_loop()
-    agent_ok = True
     try:
-        response, agent_ok = await asyncio.wait_for(
+        response, status = await asyncio.wait_for(
             loop.run_in_executor(None, _call_agent),
             timeout=_SYNC_TIMEOUT_SECONDS,
         )
@@ -582,7 +635,16 @@ async def trade_chat(
         # 再尽力中断 agent，让正在跑的工具调用停下来（审计 P1-21）。
         cancelled.set()
         _abort_running_agent(agent_holder[0] if agent_holder else None)
-        response, agent_ok = "⏰ Agent 执行时间过长（超过 10 分钟），已自动中止。请简化问题后重试。", False
+        if tools.has_completed():
+            # 已经跑过工具：留下「未完成报告」（partial=true），别让证据消失
+            response = build_partial_report("超过 10 分钟自动中止", tools, evidence)
+            status = "partial"
+        else:
+            response = "⏰ Agent 执行时间过长（超过 10 分钟），已自动中止。请简化问题后重试。"
+            status = "failed"
+
+    agent_ok = status == "ok"
+    partial = status == "partial"
 
     gate_result = None
     incomplete = False
@@ -626,7 +688,7 @@ async def trade_chat(
     if agent_ok and response:
         response, response_blocks = parse_trade_json_blocks(response)
     conv = None
-    if agent_ok:
+    if agent_ok or partial:
         conv = chat_memory.save_with_context(
             company_id=cid, library_id=payload.library_id, query=query,
             response=response, library_name=lib_name,
@@ -636,10 +698,15 @@ async def trade_chat(
             context=payload.context or "",
             skill=current_skill or "",
             blocks=response_blocks,
+            partial=partial,
+            retain_to_memory=not partial,
         )
     payload_out = {"response": response, "conversation": conv}
     if response_blocks:
         payload_out["blocks"] = response_blocks
+    if partial:
+        # 前端可据此区分「最终回答」与「任务中止时的未完成报告」
+        payload_out["partial"] = True
     if cache_evidence and not gate_required:
         # 概览/定位用了哪些文件的缓存摘要（不是“已读”，只是上下文来源）
         payload_out["analysis_cache_context"] = sorted(
@@ -736,6 +803,8 @@ async def trade_chat_stream(
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
     # 即使没有文档计划也收集（用于"读到哪些就预热哪些"）。
     evidence = ReadEvidenceCollector()
+    # 所有工具调用的完成记录：任务中止时写「已查渠道」，以及只基于已有结果总结
+    tools = CompletedToolTracker()
 
     loop = asyncio.get_running_loop()
     event_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -772,12 +841,14 @@ async def trade_chat_stream(
         loop.call_soon_threadsafe(_safe_put, event_type, data or {})
 
     def _tool_start(tc_id, name, args):
+        tools.on_start(name, args)
         if evidence is not None:
             evidence.on_start(tc_id, name, args)
         _emit_threadsafe("tool_start", {"tool_call_id": tc_id, "name": name, "args": args})
 
     def _tool_complete(tc_id, name, args, result):
         # 证据收集与 SSE 推送解耦：队列满丢事件不影响完整性判定。
+        tools.on_complete(name, args, result)
         if evidence is not None:
             evidence.on_complete(tc_id, name, args, result)
         preview = ""
@@ -792,6 +863,171 @@ async def trade_chat_stream(
     _MAX_AGENT_RETRIES = 2
     cancel_event = threading.Event()  # 客户端断连时置位，阻止重试继续浪费 token
     agent_holder: list = []  # 断连/超时时靠它中断仍在跑的 agent（见 _abort_running_agent）
+
+    # ── 未完成报告（P0-5）───────────────────────────────────────────────
+    partial_lock = threading.Lock()
+    partial_state = {"saved": False}   # 只写一次（超时分支与 finally 都会尝试）
+    delivered = {"ok": False}          # 正常回答是否已落库并下发
+
+    def _save_partial(reason: str) -> tuple[str | None, int | None]:
+        """把「未完成报告」写进历史（幂等）。没有完成的工具调用则不写。"""
+        if not tools.has_completed():
+            return None, None
+        with partial_lock:
+            if partial_state["saved"]:
+                return None, None
+            partial_state["saved"] = True
+        text = build_partial_report(reason, tools, evidence)
+        conv_id = None
+        try:
+            conv = chat_memory.save_with_context(
+                company_id=cid, library_id=payload.library_id, query=query,
+                response=text, customer_id=payload.customer_id,
+                context=payload.context or "", skill=current_skill or "",
+                partial=True, retain_to_memory=False,
+            )
+            if conv:
+                conv_id = conv.get("id")
+        except Exception:
+            _log.exception("save partial report failed")
+        return text, conv_id
+
+    def _emit_partial_response(text: str | None, conv_id: int | None) -> None:
+        """把未完成报告作为 response 事件下发（前端据此显示半成品）。"""
+        if not text:
+            _emit_threadsafe("error", {"message": "Agent 未能产出结果，请稍后重试。"})
+            return
+        _emit_threadsafe("response", {
+            "text": text,
+            "elapsed_sec": 0.0,
+            "conversation_id": conv_id,
+            "partial": True,
+        })
+
+    def _summarize_after_tools(reason: str) -> str | None:
+        """工具已跑过：只基于已有结果做**一次**总结（工具禁用，不重跑）。"""
+        _emit_threadsafe("thinking", {"message": "正在根据已完成的工具结果整理答复..."})
+        try:
+            agent = create_agent(
+                ephemeral_system_prompt=skill_hint,
+                skill_name=current_skill,
+                enabled_toolsets=[],
+            )
+            agent_holder.clear()
+            agent_holder.append(agent)
+            if cancel_event.is_set():
+                return None
+            text = agent.chat(build_summary_prompt(query, tools))
+            usage_module.record_agent_usage(
+                agent, company_id=cid, skill=current_skill or "",
+            )
+            if text and not cancel_event.is_set():
+                return text
+        except Exception:
+            _log.exception("总结调用失败（已有工具结果）")
+        return None
+
+    def _finish_after_tools(reason: str) -> str | None:
+        """工具已跑过时的收尾：先试一次总结，不行就落未完成报告。"""
+        summary = _summarize_after_tools(reason)
+        if summary:
+            return _finalize(summary, 0.0)
+        text, conv_id = _save_partial(reason)
+        _emit_partial_response(text, conv_id)
+        return None
+
+    def _finalize(result: str, elapsed: float) -> str | None:
+        """正常收尾：门禁判定 → 保存历史 → 下发 response 事件。"""
+        gate_result = None
+        if document_task and request_task_id:
+            try:
+                if gate_required and result:
+                    gate_result = _document_gate(
+                        document_task, request_task_id, evidence,
+                        request_scope=request_scope,
+                        cache_evidence=cache_evidence,
+                    )
+                    if gate_result is not None:
+                        if gate_result.status == "incomplete":
+                            # 不通过时把原因作为回答下发，不报错也不给不完整结论。
+                            result = format_incomplete_report(gate_result)
+                        _emit_threadsafe("analysis_gate", {
+                            "status": gate_result.status,
+                            "files": gate_result.complete,
+                            "cache_files": gate_result.cache_complete,
+                            "missing": gate_result.missing,
+                            "errors": gate_result.errors,
+                            "skipped": gate_result.skipped,
+                            "coverage_note": gate_result.coverage_note,
+                        })
+                elif result and cache_block and not gate_required:
+                    result += (
+                        f"\n\n（本次参考了 {len(cache_evidence)} 个文件的缓存摘要；"
+                        "具体事实请以本次读取为准。）"
+                    )
+            finally:
+                # 读到哪些就预热哪些（不依赖门禁是否通过），再释放读记录。
+                _warm_after_read(request_task_id, evidence, cid)
+                release_read_coverage(request_task_id)
+                release_doc_skip(request_task_id)
+        elif not gate_required:
+            # 没有门禁的普通请求：回调证据同样可以预热（有 task_id 时也读快照）。
+            _warm_after_read(request_task_id, evidence, cid)
+
+        lib_name = ""
+        if payload.library_id:
+            lib = library_module.get(payload.library_id, company_id=cid)
+            if lib:
+                lib_name = lib["name"]
+
+        # 客户端已断连/已超时：迟到的回答不能再写进历史 —— 用户已经收到
+        # 中止提示，存档后会被下一轮当上下文注入（复审 P1-21 残口）。
+        if cancel_event.is_set():
+            return None
+
+        # W10：先剥 trade-json 围栏，再入库并推 SSE（失败静默为纯文本）
+        reply_text = result or "Agent 返回了空响应。"
+        reply_blocks = None
+        try:
+            reply_text, reply_blocks = parse_trade_json_blocks(reply_text)
+        except Exception:
+            reply_blocks = None
+
+        # 先保存对话，再发送响应 —— 确保前端能拿到 conversation_id 做评分
+        conv_id = None
+        try:
+            conv = chat_memory.save_with_context(
+                company_id=cid, library_id=payload.library_id,
+                query=query, response=reply_text,
+                library_name=lib_name,
+                customer_id=payload.customer_id,
+                files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
+                            if gate_result else None),
+                context=payload.context or "",
+                skill=current_skill or "",
+                blocks=reply_blocks,
+            )
+            if conv:
+                conv_id = conv.get("id")
+        except Exception as exc:
+            _log.exception("save_with_context failed in stream")
+            # 不能静默：回答能显示但 conversation_id 为空，评分/引用链路
+            # 会断，用户却不知道（审计 P2-33）。发一条警告事件让前端提示。
+            _emit_threadsafe("warning", {
+                "message": f"对话已回复，但保存到历史失败（{type(exc).__name__}），"
+                           "本轮无法评分或后续引用。",
+            })
+
+        resp_payload = {
+            "text": reply_text,
+            "elapsed_sec": round(elapsed, 1),
+            "conversation_id": conv_id,
+        }
+        if reply_blocks:
+            resp_payload["blocks"] = reply_blocks
+        _emit_threadsafe("response", resp_payload)
+        delivered["ok"] = True
+        return result
 
     def _run_agent() -> str | None:
         last_error = ""
@@ -841,107 +1077,27 @@ async def trade_chat_stream(
                     )
                 elapsed = time.time() - start
 
-                if not result and attempt < _MAX_AGENT_RETRIES:
-                    if cancel_event.is_set():
-                        return None
-                    _log.warning("Agent returned empty in stream, retry %d/%d", attempt + 1, _MAX_AGENT_RETRIES)
-                    time.sleep(2 ** attempt)
-                    continue
+                if not result:
+                    # 空响应：本轮已经跑过工具 → 不再整轮重跑（会重复执行工具），
+                    # 只基于已有结果做一次总结；总结也失败则落未完成报告。
+                    if tools.has_completed():
+                        return _finish_after_tools("Agent 返回空响应")
+                    if attempt < _MAX_AGENT_RETRIES:
+                        if cancel_event.is_set():
+                            return None
+                        _log.warning("Agent returned empty in stream, retry %d/%d", attempt + 1, _MAX_AGENT_RETRIES)
+                        time.sleep(2 ** attempt)
+                        continue
 
-                gate_result = None
-                if document_task and request_task_id:
-                    try:
-                        if gate_required and result:
-                            gate_result = _document_gate(
-                                document_task, request_task_id, evidence,
-                                request_scope=request_scope,
-                                cache_evidence=cache_evidence,
-                            )
-                            if gate_result is not None:
-                                if gate_result.status == "incomplete":
-                                    # 不通过时把原因作为回答下发，不报错也不给不完整结论。
-                                    result = format_incomplete_report(gate_result)
-                                _emit_threadsafe("analysis_gate", {
-                                    "status": gate_result.status,
-                                    "files": gate_result.complete,
-                                    "cache_files": gate_result.cache_complete,
-                                    "missing": gate_result.missing,
-                                    "errors": gate_result.errors,
-                                    "skipped": gate_result.skipped,
-                                    "coverage_note": gate_result.coverage_note,
-                                })
-                        elif result and cache_block and not gate_required:
-                            result += (
-                                f"\n\n（本次参考了 {len(cache_evidence)} 个文件的缓存摘要；"
-                                "具体事实请以本次读取为准。）"
-                            )
-                    finally:
-                        # 读到哪些就预热哪些（不依赖门禁是否通过），再释放读记录。
-                        _warm_after_read(request_task_id, evidence, cid)
-                        release_read_coverage(request_task_id)
-                        release_doc_skip(request_task_id)
-                elif not gate_required:
-                    # 没有门禁的普通请求：回调证据同样可以预热（有 task_id 时也读快照）。
-                    _warm_after_read(request_task_id, evidence, cid)
-
-                lib_name = ""
-                if payload.library_id:
-                    lib = library_module.get(payload.library_id, company_id=cid)
-                    if lib:
-                        lib_name = lib["name"]
-
-                # 客户端已断连/已超时：迟到的回答不能再写进历史 —— 用户已经收到
-                # 中止提示，存档后会被下一轮当上下文注入（复审 P1-21 残口）。
-                if cancel_event.is_set():
-                    return None
-
-                # W10：先剥 trade-json 围栏，再入库并推 SSE（失败静默为纯文本）
-                reply_text = result or "Agent 返回了空响应。"
-                reply_blocks = None
-                try:
-                    reply_text, reply_blocks = parse_trade_json_blocks(reply_text)
-                except Exception:
-                    reply_blocks = None
-
-                # 先保存对话，再发送响应 —— 确保前端能拿到 conversation_id 做评分
-                conv_id = None
-                try:
-                    conv = chat_memory.save_with_context(
-                        company_id=cid, library_id=payload.library_id,
-                        query=query, response=reply_text,
-                        library_name=lib_name,
-                        customer_id=payload.customer_id,
-                        files_read=([{"file": path, "status": "complete"} for path in gate_result.complete]
-                                    if gate_result else None),
-                        context=payload.context or "",
-                        skill=current_skill or "",
-                        blocks=reply_blocks,
-                    )
-                    if conv:
-                        conv_id = conv.get("id")
-                except Exception as exc:
-                    _log.exception("save_with_context failed in stream")
-                    # 不能静默：回答能显示但 conversation_id 为空，评分/引用链路
-                    # 会断，用户却不知道（审计 P2-33）。发一条警告事件让前端提示。
-                    _emit_threadsafe("warning", {
-                        "message": f"对话已回复，但保存到历史失败（{type(exc).__name__}），"
-                                   "本轮无法评分或后续引用。",
-                    })
-
-                resp_payload = {
-                    "text": reply_text,
-                    "elapsed_sec": round(elapsed, 1),
-                    "conversation_id": conv_id,
-                }
-                if reply_blocks:
-                    resp_payload["blocks"] = reply_blocks
-                _emit_threadsafe("response", resp_payload)
-                return result
+                return _finalize(result, elapsed)
             except ImportError:
                 _emit_threadsafe("error", {"message": "AI Agent 模块未加载。"})
                 return None
             except RuntimeError as e:
                 last_error = str(e)
+                # 已经跑过工具：重跑整轮会重复执行工具，只做一次总结
+                if tools.has_completed():
+                    return _finish_after_tools(f"Agent 报错：{e}")
                 if attempt < _MAX_AGENT_RETRIES and not cancel_event.is_set():
                     _log.warning("Agent RuntimeError in stream, retry %d/%d: %s", attempt + 1, _MAX_AGENT_RETRIES, e)
                     time.sleep(2 ** attempt)
@@ -951,6 +1107,8 @@ async def trade_chat_stream(
             except Exception as e:
                 last_error = str(e) or f"Agent stream failed (attempt {attempt + 1})"
                 _log.exception("Agent stream failed (attempt %d/%d)", attempt + 1, _MAX_AGENT_RETRIES)
+                if tools.has_completed():
+                    return _finish_after_tools(f"Agent 异常：{e}")
                 if attempt < _MAX_AGENT_RETRIES and not cancel_event.is_set():
                     time.sleep(2 ** attempt)
                     continue
@@ -982,6 +1140,7 @@ async def trade_chat_stream(
         # 30 分钟 Agent 兜底超时 — 网站诊断等长任务也应在 30min 内完成
         # 超时后发 error 事件并取消 agent，防止永久挂起
         deadline = time.time() + _STREAM_DEADLINE_SECONDS
+        timed_out = {"value": False}
         try:
             while True:
                 remaining = deadline - time.time()
@@ -991,7 +1150,13 @@ async def trade_chat_stream(
                     # 取到（历史 bug —— 超时后用户只看到「未返回有效回复」，既不知道
                     # 是超时、也不知道任务已被中止）。
                     _log.error("Agent stream exceeded %.0fs deadline; aborting", _STREAM_DEADLINE_SECONDS)
-                    yield _sse("error", {"message": "⏰ Agent 执行超过 30 分钟，已自动中止。请简化问题或联系支持。"})
+                    timed_out["value"] = True
+                    # 已跑过工具 → 留下未完成报告（partial=true），别让证据消失
+                    partial_text, _conv_id = _save_partial("超过 30 分钟自动中止")
+                    message = "⏰ Agent 执行超过 30 分钟，已自动中止。请简化问题或联系支持。"
+                    if partial_text:
+                        message = f"{message}\n\n{partial_text}"
+                    yield _sse("error", {"message": message})
                     break
                 try:
                     # 取 15s 心跳与剩余 deadline 的较小值，确保 deadline 到期时能及时触发
@@ -1037,6 +1202,15 @@ async def trade_chat_stream(
                     release_doc_skip(request_task_id)
                 except Exception:
                     _log.exception("release read coverage / doc skip failed")
+            # 没有正常下发回答（超时 / 断连 / 用户停止 / Agent 报错）但已有
+            # 工具结果 → 补一份未完成报告进历史（幂等：超时分支可能已写过）。
+            if not delivered["ok"]:
+                reason = (
+                    "超过 30 分钟自动中止"
+                    if timed_out["value"]
+                    else "客户端断开或用户停止"
+                )
+                _save_partial(reason)
             yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(

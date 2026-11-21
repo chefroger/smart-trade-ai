@@ -60,12 +60,14 @@ def save(
     skill: str = "",
     customer_id: int | None = None,
     blocks: dict | None = None,
+    partial: bool = False,
 ) -> dict:
     """保存一条对话记录，作用域限定到指定公司。返回新插入的行，以字典形式呈现。
 
     skill 参数记录本次查询匹配到的技能名（存入 extra3），供质量统计按技能聚合评分。
     customer_id 记录这条对话属于哪个客户（None = 未关联客户），历史注入按它过滤。
     blocks 是 W10 的 trade-json 结构化块，存 extra1，供历史回放与下一轮 AI 上下文。
+    partial=True 表示这是任务中止时的「未完成报告」，不是最终回答（工单 P0-5）。
     """
     if company_id is None:
         raise ValueError("company_id is required for conversation isolation")
@@ -98,11 +100,14 @@ def save(
 
         # extra3 记录匹配到的 skill（空则不写，保持旧行为兼容）
         extra3 = json.dumps({"skill": skill}, ensure_ascii=False) if skill else "{}"
-        # extra1 存结构化块（W10）；只接受 dict，防止把任意值塞进历史
-        extra1 = (
-            json.dumps({"trade_blocks": blocks}, ensure_ascii=False)
-            if isinstance(blocks, dict) and blocks else "{}"
-        )
+        # extra1 存结构化块（W10）；只接受 dict，防止把任意值塞进历史。
+        # partial 与 blocks 共用 extra1，保持老记录形状不变（partial 仅在有值时写入）。
+        extra1_payload: dict = {}
+        if isinstance(blocks, dict) and blocks:
+            extra1_payload["trade_blocks"] = blocks
+        if partial:
+            extra1_payload["partial"] = True
+        extra1 = json.dumps(extra1_payload, ensure_ascii=False) if extra1_payload else "{}"
         cur = conn.execute(
             "INSERT INTO conversations "
             "(company_id, customer_id, library_id, query, response, files_read, "
@@ -429,16 +434,22 @@ def save_with_context(
     context: str = "",
     skill: str = "",
     blocks: dict | None = None,
+    partial: bool = False,
 ) -> dict:
     """保存一条对话记录到 SQLite，并可选择同步到 Hindsight 长期记忆。
 
     这是 B2B 对话日志记录推荐使用的入口函数。
     skill 记录本次匹配到的技能名，供质量统计（get_quality_stats）按技能聚合评分。
     customer_id 供后续按客户过滤历史。
+    partial=True 时标记「未完成报告」，并跳过长期记忆 —— 半成品结论不能被
+    当成对用户的正式回答注入后续对话（工单 P0-5）。
     """
+    if partial:
+        retain_to_memory = False
     result = save(
         company_id, query, response, library_id, files_read,
         context=context, skill=skill, customer_id=customer_id, blocks=blocks,
+        partial=partial,
     )
     # 试用期价值小结：每保存一轮对话记一次「处理询盘」（旁路统计，失败不影响保存）
     try:
