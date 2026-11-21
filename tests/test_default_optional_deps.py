@@ -140,8 +140,21 @@ class TestDegradationGuardsStillIntact:
         assert "except ImportError" in EMBEDDINGS_PY
         assert "sentence_transformers" in EMBEDDINGS_PY
 
-    def test_version_is_080(self):
-        # 每次发版都要同步这里：版本号漏改会让「用户在哪一版」失去意义
-        assert re.search(r'^version = "0\.8\.0"$', PYPROJECT, re.M), (
-            "版本号应为 0.8.0"
+    def test_version_has_changelog_entry(self):
+        """pyproject 的版本号必须在 CHANGELOG 里有对应小节。
+
+        不再写死具体版本（那样每次发版都要改测试，且脚本 bump 后必红）；
+        改为交叉校验：漏写 CHANGELOG 或版本号与发布说明脱节，都会在这里被抓住。
+        发版脚本 promote-stable.sh 同时改这两处，所以它跑完必然一致。
+        """
+        from pathlib import Path
+
+        m = re.search(r'^version = "([^"]+)"$', PYPROJECT, re.M)
+        assert m, "pyproject.toml 里找不到 version"
+        version = m.group(1)
+        changelog = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(
+            encoding="utf-8"
+        )
+        assert f"## v{version}" in changelog, (
+            f"CHANGELOG.md 缺少 v{version} 的小节 —— 版本号与发布说明脱节"
         )
