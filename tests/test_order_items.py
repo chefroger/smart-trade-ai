@@ -380,6 +380,57 @@ class TestItemsApi:
         assert len(o["items"]) == 2
         assert o["total_amount"] == pytest.approx(32)
 
+    def test_flat_create_rejects_bad_currency(self, db):
+        """单商品平铺创建同样校验币种：非法值 400（审计 P2-2）。"""
+        from fastapi import HTTPException
+
+        from trade.api.models import OrderCreate
+        from trade.api.orders import create_order
+
+        co, cust = self._mk(db)
+        with pytest.raises(HTTPException) as exc:
+            create_order(
+                OrderCreate(
+                    customer_id=cust["id"], product_name="A", quantity=1,
+                    unit_price=1, currency="<img src=x onerror=alert(1)>",
+                ),
+                cid=co["id"],
+            )
+
+        assert exc.value.status_code == 400
+
+    def test_flat_create_normalizes_currency_case(self, db):
+        """小写币种先规范化为大写再落库，不把 "usd" 原样写进订单。"""
+        from trade.api.models import OrderCreate
+        from trade.api.orders import create_order
+
+        co, cust = self._mk(db)
+        o = create_order(
+            OrderCreate(
+                customer_id=cust["id"], product_name="A", quantity=1,
+                unit_price=1, currency="usd",
+            ),
+            cid=co["id"],
+        )
+
+        assert o["currency"] == "USD"
+
+    def test_flat_create_defaults_currency_to_usd(self, db):
+        """不传币种时保持原有默认 USD。"""
+        from trade.api.models import OrderCreate
+        from trade.api.orders import create_order
+
+        co, cust = self._mk(db)
+        o = create_order(
+            OrderCreate(
+                customer_id=cust["id"], product_name="A", quantity=1,
+                unit_price=1,
+            ),
+            cid=co["id"],
+        )
+
+        assert o["currency"] == "USD"
+
     def test_create_without_name_or_items_rejected(self, db):
         from fastapi import HTTPException
 

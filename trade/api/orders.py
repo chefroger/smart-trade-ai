@@ -202,7 +202,8 @@ def create_order(payload: OrderCreate, cid: int = Depends(require_company)):
         quantity=quantity,
         unit=payload.unit or "",
         unit_price=unit_price,
-        currency=payload.currency or "USD",
+        # 单商品平铺路径同样要过币种校验：非法值 400，小写规范化为大写
+        currency=_clean_currency(payload.currency) or "USD",
         total_amount=total_amount,
         status=payload.status or "报价中",
         delivery_date=payload.delivery_date or "",

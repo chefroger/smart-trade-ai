@@ -178,11 +178,13 @@ function initFxBackground() {
     if (btn) btn.addEventListener('click', toggleFx);
 
     // 时钟走秒 + 状态文案轮播
+    // 中性文案：只表达产品定位，不声称任何同步/逾期状态（2026-11-21 审计 P2-1）。
+    // 真实指标在「今日简报」右栏，那里读的是 /brief/today 的真实数据。
     const STATUS = [
-        '系统就绪 · SYSTEM READY',
-        '客户档案已同步 · PROFILES SYNCED',
-        '今日待跟进请留意 · FOLLOW-UPS DUE',
-        '逾期客户已标红 · FOLLOW-UP OVERDUE',
+        'B2B 外贸助手 · TRADE',
+        '客户开发 · LEAD GEN',
+        '背调与画像 · DUE DILIGENCE',
+        '文档与报价 · DOCUMENTS',
     ];
     let statusIdx = 0;
     function pad2(n) { return (n < 10 ? '0' : '') + n; }
@@ -212,7 +214,7 @@ function initFxBackground() {
         const topEl = document.getElementById('app-top-status');
         // 画像页的统计状态由 customers.js 接管，轮播不得覆盖
         if (topEl && !document.body.classList.contains('profile-open')) topEl.textContent = text;
-    }, 4000);
+    }, 8000); // 纯装饰轮播，放慢节奏减少跳动（审计 P2-1）
 
     // reduced-motion / 用户偏好 / THREE 缺失 → 关
     try {
