@@ -77,9 +77,26 @@ def live_server(tmp_path_factory):
         stderr=subprocess.STDOUT,
         text=True,
     )
+    # 边跑边收集服务端输出：启动失败时要把原因带进断言，而不是只报 connection refused
+    from collections import deque
+    from threading import Thread
+
+    server_log: deque[str] = deque(maxlen=200)
+
+    def _pump():
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            server_log.append(line.rstrip())
+
+    Thread(target=_pump, daemon=True).start()
+
     base = f"http://127.0.0.1:{port}"
     try:
-        _wait_http(base + "/api/status")
+        try:
+            _wait_http(base + "/api/status")
+        except RuntimeError as exc:
+            tail = "\n".join(list(server_log)[-40:])
+            raise RuntimeError(f"{exc}\n--- 服务端输出（末尾 40 行）---\n{tail}") from exc
         # 从页面里取 session token（与真实前端同一方式）
         html = urllib.request.urlopen(base + "/trade", timeout=5).read().decode("utf-8")
         m = re.search(r'let TOKEN = "([^"]+)"', html)

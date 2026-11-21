@@ -31,12 +31,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 冒烟不加载 Hermes（兼容检查在浏览器层被桩掉），只需服务端最小依赖
+      # 冒烟不加载 Hermes（兼容检查在浏览器层被桩掉），但服务端启动所需的
+      # 依赖与 test.yml 保持一致，避免「CI 能跑、这里起不来」
       - name: Install server deps
         run: |
           python -m pip install --upgrade pip
-          pip install pytest fastapi "uvicorn[standard]" pydantic pyyaml packaging python-multipart
-          pip install pytest-playwright playwright
+          pip install pytest pytest-asyncio httpx
+          pip install fastapi "uvicorn[standard]" pydantic pyyaml packaging python-multipart
+          pip install pymupdf openpyxl python-docx python-pptx xlrd beautifulsoup4
+          pip install cryptography psutil dnspython
+          pip install openai==2.24.0 anthropic==0.87.0
+          pip install playwright
           pip install -e . --no-deps
 
       - name: Install Chromium
