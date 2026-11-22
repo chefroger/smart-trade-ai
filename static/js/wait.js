@@ -112,6 +112,13 @@
     cancel.type = 'button';
     cancel.addEventListener('click', function () {
       if (self.final) return;
+      // “收起/关闭”不是取消：只隐藏面板，任务继续，完成态仍可再出现
+      // （2026-11-22 审计 P2-11：此前复用取消按钮，点完 finish(aborted)，
+      //  后续 done/acquired 全部被 final 守卫吞掉）
+      if (typeof self.opts.onDismiss === 'function') {
+        self.opts.onDismiss();
+        return;
+      }
       if (typeof self.opts.onCancel === 'function') self.opts.onCancel();
       self.finish({ phase: 'aborted' });
     });

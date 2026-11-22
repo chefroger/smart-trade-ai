@@ -138,28 +138,37 @@ def create_job(company_id: int, target: str) -> tuple[dict, bool]:
     )
     conn = get_connection()
     try:
-        # 只复用**还在排队/运行**的任务。复用已完成任务会让用户以为“又背调了一次”，
-        # 实际看到的是几分钟前的旧结果，且大动画不会出现（界面按设计跳过已完成任务）。
-        # 2026-11-22 实机：同目标连点两次，第二次静默复用 done 任务 → 只见报告、无动画。
-        row = conn.execute(
-            "SELECT * FROM osint_jobs WHERE company_id = ? AND lower(target) = lower(?) "
-            "AND created_at >= ? AND status IN ('queued', 'running') "
-            "ORDER BY id DESC LIMIT 1",
-            (company_id, target, cutoff),
-        ).fetchone()
-        if row:
-            return _row_to_job(row), False
+        # check-then-insert 必须串行化（2026-11-22 审计 P2-1）：两个并发请求同时
+        # SELECT 看不到对方、再各自 INSERT，10 分钟去重就被击穿，整条背调重复外部采集。
+        # BEGIN IMMEDIATE 拿写锁（busy_timeout=30s），跨进程也成立。
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # 只复用**还在排队/运行**的任务。复用已完成任务会让用户以为“又背调了一次”，
+            # 实际看到的是几分钟前的旧结果，且大动画不会出现（界面按设计跳过已完成任务）。
+            # 2026-11-22 实机：同目标连点两次，第二次静默复用 done 任务 → 只见报告、无动画。
+            row = conn.execute(
+                "SELECT * FROM osint_jobs WHERE company_id = ? AND lower(target) = lower(?) "
+                "AND created_at >= ? AND status IN ('queued', 'running') "
+                "ORDER BY id DESC LIMIT 1",
+                (company_id, target, cutoff),
+            ).fetchone()
+            if row:
+                conn.commit()
+                return _row_to_job(row), False
 
-        cur = conn.execute(
-            "INSERT INTO osint_jobs(company_id, target, target_type, status) "
-            "VALUES (?, ?, '', 'queued')",
-            (company_id, target),
-        )
-        conn.commit()
-        row = conn.execute(
-            "SELECT * FROM osint_jobs WHERE id = ?", (cur.lastrowid,)
-        ).fetchone()
-        return _row_to_job(row), True
+            cur = conn.execute(
+                "INSERT INTO osint_jobs(company_id, target, target_type, status) "
+                "VALUES (?, ?, '', 'queued')",
+                (company_id, target),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM osint_jobs WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
+            return _row_to_job(row), True
+        except Exception:
+            conn.rollback()
+            raise
     finally:
         conn.close()
 
@@ -210,11 +219,36 @@ def recover_stale_jobs() -> int:
 # ── 执行 ────────────────────────────────────────────────────────────────────
 
 
+def _current_status(job_id: int) -> str:
+    """读任务状态（不带公司过滤；调用方已持有 job_id）。"""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT status FROM osint_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row["status"]) if row else ""
+
+
 def start_job(job_id: int, target: str, budget: float | None = None) -> None:
-    """后台线程执行；并发上限 2，排队任务保持 queued。"""
+    """后台线程执行；并发上限 2，排队任务保持 queued。
+
+    2026-11-22 审计 P2-2：create → cancel → start 的间隙里任务已被取消，
+    旧实现仍会跑完整条外部采集（事件再落到已取消任务上）。这里启动前重读状态：
+    - 先登记 active 再把取消标记复位（并发 cancel 会看到 active 并置标记）
+    - 重读状态，非 queued/running 直接退出
+    - cancel 发生在重读之后、线程启动之前：cancel 会看到 active 置标记，
+      `_run_job` 拿到信号量后会再次检查并退出
+    """
     with _cancel_lock:
         _active.add(job_id)
         _cancelled.discard(job_id)
+    if _current_status(job_id) not in ("queued", "running"):
+        with _cancel_lock:
+            _active.discard(job_id)
+            _cancelled.discard(job_id)
+        return
     thread = threading.Thread(
         target=_run_job,
         args=(job_id, target, budget if budget is not None else _DEFAULT_BUDGET),

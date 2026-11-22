@@ -218,6 +218,34 @@ class TestDownloadGuard:
         with pytest.raises(ValueError):
             download_official("http://sanctionslistservice.ofac.treas.gov/SDN.CSV")
 
+    def test_rejects_redirect_to_non_official_host(self, monkeypatch):
+        """通用 opener 只拦内网；重定向到白名单外主机必须拒绝（审计 P2-8）。"""
+        from trade.osint.sanctions import sources
+
+        class _Resp:
+            headers = {}
+
+            def geturl(self):
+                return "https://evil.example/payload.csv"
+
+            def read(self, n):
+                return b""
+
+        class _Ctx:
+            def __enter__(self):
+                return _Resp()
+
+            def __exit__(self, *a):
+                return False
+
+        class _Opener:
+            def open(self, *a, **kw):
+                return _Ctx()
+
+        monkeypatch.setattr(sources, "_current_opener", lambda: _Opener())
+        with pytest.raises(ValueError, match="重定向"):
+            sources.download_official("https://sanctionslistservice.ofac.treas.gov/SDN.CSV")
+
     def test_background_refresh_can_be_disabled(self, monkeypatch):
         """测试 / 离线环境用 TRADE_SANCTIONS_REFRESH=off 关闭后台线程。"""
         monkeypatch.setenv("TRADE_SANCTIONS_REFRESH", "off")

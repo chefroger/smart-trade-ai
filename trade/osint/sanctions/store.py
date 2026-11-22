@@ -244,7 +244,8 @@ def get_coverage() -> dict:
         try:
             fetched = datetime.fromisoformat(row["fetched_at"])
             age_hours = max(0.0, (now - fetched).total_seconds() / 3600)
-        except ValueError:
+        except (ValueError, TypeError):
+            # 无时区/损坏的 fetched_at 不能让整个制裁层瘫痪（审计 P2-7）
             age_hours = 0.0
         if age_hours > STALE_AFTER_HOURS:
             entry["stale_hours"] = round(age_hours, 1)

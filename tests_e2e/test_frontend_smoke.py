@@ -332,8 +332,8 @@ def test_task_panel_recovers_after_history_rerender(live_server):
         page.wait_for_timeout(1200)   # 等历史渲染完成
         page.evaluate("async () => { await loadOsintJobs(false); }")
         page.wait_for_selector("#wait-dock .sw-task", timeout=15000)
-        # 模拟聊天历史异步渲染：消息区被清空
-        page.evaluate("document.querySelector('#chat-messages').innerHTML = '';")
+        # 模拟刷新：浮层与读取器全部丢弃，再由 loadOsintJobs 按 seq 0 重建
+        page.evaluate("() => { _detachOsintTaskPanels(); _abortOsintJobReaders(); }")
         page.evaluate("async () => { await loadOsintJobs(true); }")
         page.wait_for_selector("#wait-dock .sw-task", timeout=10000)
         assert "RDAP 域名注册" in page.inner_text("#wait-dock .sw-log")
@@ -369,6 +369,17 @@ def test_hermes_upgrade_uses_task_panel_and_filters_paths(live_server):
         assert "UPGRADE" in text
         assert "/Users/" not in text, "升级读数是日志原文，路径没有过滤"
         assert "a" * 40 not in text, "升级读数是日志原文，长 token 没有过滤"
+
+        # “收起”只是隐藏，不是取消；完成后必须还能自动显示完成态（审计 P2-11）
+        page.click("#hermes-upgrade-wait .sw-btn")
+        assert page.evaluate("_hermesWait.final") is False, "收起被当成了取消"
+        assert page.evaluate("getComputedStyle(document.getElementById('hermes-upgrade-wait')).display") == "none"
+        page.evaluate("applyHermesUpgradeState({status:'done', message:''})")
+        page.wait_for_timeout(200)
+        assert page.evaluate("getComputedStyle(document.getElementById('hermes-upgrade-wait')).display") != "none"
+        assert page.evaluate("_hermesWait.final") is True
+        assert "TARGET" in page.inner_text("#hermes-upgrade-wait .sw-phrase")
+        assert "升级完成" in page.inner_text("#hermes-upgrade-wait .sw-phrase")
         browser.close()
 
 
@@ -393,15 +404,16 @@ def test_3d_context_loss_falls_back_and_only_one_instance(live_server):
         page.wait_for_timeout(800)
         renders = page.evaluate(
             "Array.from(document.querySelectorAll('.sw-task')).map(e=>[e.getAttribute('data-render'), e.getAttribute('data-3d-drop')])")
-        if renders and renders[0][0] == "three":
-            assert renders[1][0] == "2d", "第二个 task 面板不得再建 WebGL 实例"
-            assert renders[1][1] == "busy"
-            page.evaluate(
-                "() => { const gl=_fxRenderer.getContext();"
-                " gl.getExtension('WEBGL_lose_context').loseContext(); }")
-            page.wait_for_timeout(800)
-            assert page.get_attribute("#t1 .sw-task", "data-render") == "2d"
-            assert page.get_attribute("#t1 .sw-task", "data-3d-drop") == "contextlost"
+        # 不允许条件跳过：WebGL 不可用应让本用例失败（审计 P2-12）
+        assert renders and renders[0][0] == "three", f"首个 task 面板未走 3D：{renders}"
+        assert renders[1][0] == "2d", "第二个 task 面板不得再建 WebGL 实例"
+        assert renders[1][1] == "busy"
+        page.evaluate(
+            "() => { const gl=_fxRenderer.getContext();"
+            " gl.getExtension('WEBGL_lose_context').loseContext(); }")
+        page.wait_for_timeout(800)
+        assert page.get_attribute("#t1 .sw-task", "data-render") == "2d"
+        assert page.get_attribute("#t1 .sw-task", "data-3d-drop") == "contextlost"
         # 取消按钮始终可点
         page.evaluate("window.__w1.cancelBtn.click()")
         assert page.evaluate("window.__w1.phaseKey") == "aborted"

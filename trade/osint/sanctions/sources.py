@@ -106,6 +106,10 @@ def download_official(url: str, *, timeout: int = _DOWNLOAD_TIMEOUT) -> bytes:
     request = _make_request(url)
     buffer = bytearray()
     with opener.open(request, timeout=timeout) as response:
+        # 跟随重定向后复查最终主机：通用 opener 只拦内网，不认名单白名单（审计 P2-8）
+        final = urlparse(response.geturl())
+        if final.scheme != "https" or final.hostname not in ALLOWED_HOSTS:
+            raise ValueError(f"重定向到非官方名单主机，拒绝下载: {response.geturl()}")
         declared = response.headers.get("Content-Length")
         if declared and declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
             raise ValueError(f"文件过大（{declared} 字节）: {url}")

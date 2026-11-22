@@ -174,3 +174,69 @@ class TestRecovery:
         assert recovered >= 1
         job = osint_jobs.get_job(companies["first"], job_id)
         assert job["status"] == "partial"
+
+
+class TestConcurrencyAndCancelRace:
+    """2026-11-22 审计 P2-1/P2-2：并发去重与 create→cancel→start 竞态。"""
+
+    def test_concurrent_create_keeps_single_row(self, companies):
+        import threading
+
+        from trade.database import get_connection
+
+        n = 12
+        barrier = threading.Barrier(n)
+        results: list[tuple[int, bool]] = []
+        errors: list[BaseException] = []
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                job, created = osint_jobs.create_job(companies["first"], "race.example")
+                results.append((job["id"], created))
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, errors
+        assert len(results) == n
+        assert len({job_id for job_id, _ in results}) == 1, results
+        assert sum(1 for _, created in results if created) == 1
+
+        conn = get_connection()
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM osint_jobs WHERE company_id=? AND target=?",
+                (companies["first"], "race.example"),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 1
+
+    def test_cancel_before_start_skips_orchestrator(self, companies, monkeypatch):
+        calls: list[str] = []
+
+        async def _fake(target, budget=0, on_event=None, **_kw):
+            calls.append(target)
+            return {"target": target, "overall_rating": "low"}
+
+        import trade.osint.orchestrator as orch
+
+        monkeypatch.setattr(orch, "osint_full_check", _fake)
+
+        job, _ = osint_jobs.create_job(companies["first"], "cancelled.example")
+        cancelled = osint_jobs.cancel_job(companies["first"], job["id"])
+        assert cancelled["status"] == "cancelled"
+
+        osint_jobs.start_job(job["id"], "cancelled.example")
+        time.sleep(0.15)
+
+        assert calls == [], "已取消的任务仍执行了完整背调"
+        assert osint_jobs.get_job(companies["first"], job["id"])["status"] == "cancelled"
+        types = [event["type"] for event in osint_jobs.list_events(job["id"])]
+        assert "job_start" not in types

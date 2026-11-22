@@ -144,6 +144,15 @@ class TestTargetType:
             "天津赛得进出口有限公司", "company")
         assert _split_type_prefix("企业:某某公司") == ("某某公司", "company")
 
+    def test_fullwidth_colon_prefix_is_stripped(self):
+        """2026-11-22 审计 P2-6：模型会写全角冒号，不能把前缀带进制裁查询串。"""
+        assert _split_type_prefix("公司：天津赛得进出口有限公司") == (
+            "天津赛得进出口有限公司", "company")
+        assert _split_type_prefix("domain：spiderimpex.com") == ("spiderimpex.com", "domain")
+        from trade.osint.orchestrator import _split_username_prefix
+
+        assert _split_username_prefix("username：Mattbusel") == ("Mattbusel", "Mattbusel")
+
     def test_unknown_prefix_with_domain_is_not_downgraded(self):
         """未知前缀 + 域名 → 仍按域名查，不静默降级成公司名。"""
         assert _detect_target_type("foo:spiderimpex.com") == "domain"

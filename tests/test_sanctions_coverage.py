@@ -242,3 +242,23 @@ class TestEmptyParseDoesNotWipeLists:
         assert coverage["degraded"] is True
         assert coverage["lists"][SOURCES[0].name]["degraded"] is True
         assert "0 条" in coverage["lists"][SOURCES[0].name]["note"]
+
+    def test_naive_fetched_at_does_not_crash(self, sanctions_db):
+        """无时区 fetched_at 不能让整个制裁层抛 TypeError（审计 P2-7）。"""
+        from trade.osint.sanctions import store
+        from trade.osint.sanctions.loader import refresh_all
+        from trade.osint.sanctions.sources import SOURCES
+
+        refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+        conn = store._connect(write=True)
+        try:
+            conn.execute(
+                "UPDATE lists SET fetched_at = ? WHERE name = ?",
+                ("2026-11-22T00:00:00", SOURCES[0].name),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        coverage = store.get_coverage()   # 不应抛 TypeError
+        assert coverage["lists"][SOURCES[0].name]["entries"] == 1

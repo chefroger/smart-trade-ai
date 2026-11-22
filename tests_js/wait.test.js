@@ -178,6 +178,22 @@ test('取消按钮触发 onCancel 并进入 aborted', () => {
   wait.destroy();
 });
 
+test('onDismiss 只收起，不结束任务', () => {
+  const env = loadComponent();
+  const host = makeEl('div');
+  let dismissed = 0;
+  const wait = env.SW.mount(host, {
+    mode: 'task',
+    cancelText: '收起',
+    onDismiss: () => { dismissed++; },
+  });
+  wait.cancelBtn._click();
+  assert.strictEqual(dismissed, 1);
+  assert.strictEqual(wait.final, false, '收起不应结束任务');
+  assert.notStrictEqual(wait.phaseKey, 'aborted');
+  wait.destroy();
+});
+
 test('连续高帧耗时降级到静态档', () => {
   const env = loadComponent();
   const { wait } = mountTask(env);

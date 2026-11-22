@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # 目标前缀（与 orchestrator 的白名单保持一致）
 _PREFIX_RE = re.compile(
-    r"^(?:person|company|domain|username|人名|公司|企业|域名|网址)\s*:\s*",
+    r"^(?:person|company|domain|username|人名|公司|企业|域名|网址)\s*[:：]\s*",
     re.IGNORECASE,
 )
 

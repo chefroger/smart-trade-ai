@@ -1230,17 +1230,21 @@ async function pollImportJob(jobId) {
     const status = document.getElementById('imp-status');
     // task 模式面板：阶段只跟着真实的 status/phase 走，不估算、不显示百分比
     let wait = null;
+    let waitHost = null;
+    const revealWait = function () { if (waitHost) waitHost.style.display = ''; };
     if (status && status.parentNode && typeof TradeWait !== 'undefined') {
         const host = document.createElement('div');
         host.className = 'wait-import-host';
         status.parentNode.insertBefore(host, status);
+        waitHost = host;
         try {
             wait = TradeWait.mount(host, {
                 mode: 'task',
                 title: '导入公司数据包',
                 statusLabel: '导入公司数据包',
                 cancelText: '关闭',
-                onCancel: function () {}
+                // “关闭”只收起面板，后台导入继续；完成/失败时自动重新显示
+                onDismiss: function () { host.style.display = 'none'; }
             });
             wait.phase('working', '排队中');
         } catch (e) { console.warn('导入等待面板挂载失败', e); wait = null; }
@@ -1255,6 +1259,7 @@ async function pollImportJob(jobId) {
             data = await resp.json();
             if (!resp.ok) {
                 // 任务只存在进程内存里：服务重启后 404，再轮询 30 分钟也没用
+                revealWait();
                 if (wait) wait.finish({phase: 'failed'});
                 if (status) {
                     status.textContent = resp.status === 404
@@ -1269,6 +1274,7 @@ async function pollImportJob(jobId) {
         if (!data) continue;
         if (data.status === 'done') {
             const report = data.report || {};
+            revealWait();
             if (wait) wait.finish({phase: 'acquired', zh: '导入完成'});
             if (status) {
                 status.textContent = '导入完成：' + (report.mode === 'created' ? '已新建公司' : '已合并到已有公司')
@@ -1294,6 +1300,7 @@ async function pollImportJob(jobId) {
             return;
         }
         if (data.status === 'error') {
+            revealWait();
             if (wait) wait.finish({phase: 'failed'});
             if (data.code === 'ambiguous_company') {
                 // prompt() 是纯文本，不能走 esc()（HTML 转义会把 A&B 显示成 A&amp;B），
@@ -1316,6 +1323,7 @@ async function pollImportJob(jobId) {
         if (wait) wait.phase('working', data.phase === 'queued' ? '排队中' : '正在导入');
         if (status) status.textContent = '导入中…（' + (data.phase || data.status) + '）';
     }
+    revealWait();
     if (wait) wait.finish({phase: 'failed', zh: '导入超时'});
     if (status) status.textContent = '导入超时，请查看日志或重试。';
 }
@@ -1464,6 +1472,7 @@ const HERMES_UPGRADE_TEXT = {
 
 let _hermesUpgradeAbort = null;
 let _hermesWait = null;
+let _hermesWaitHost = null;
 
 /** 升级等待面板：task 模式；读数行来自真实日志，先过滤路径与长 token。 */
 function _mountHermesWait() {
@@ -1474,13 +1483,16 @@ function _mountHermesWait() {
     if (_hermesWait) return _hermesWait;
     const host = $('hermes-upgrade-wait');
     if (!host || typeof TradeWait === 'undefined') return null;
+    _hermesWaitHost = host;
+    host.style.display = '';
     try {
         _hermesWait = TradeWait.mount(host, {
             mode: 'task',
             title: 'Hermes 升级 · UPGRADE',
             statusLabel: 'Hermes 升级中',
             cancelText: '收起',
-            onCancel: function () {}
+            // “收起”只隐藏面板，升级继续；完成/失败时自动重新显示
+            onDismiss: function () { host.style.display = 'none'; }
         });
         _hermesWait.phase('working', '升级中');
     } catch (e) {
@@ -1619,6 +1631,9 @@ function applyHermesUpgradeState(upgrade) {
     if (stepsBox) stepsBox.style.display = (status === 'upgrading' || status === 'checking_network' || status === 'done' || status === 'rebuilding') ? 'none' : 'block';
     // 统一等待面板跟着真实状态走
     if (_hermesWait) {
+        if (status === 'done' || status === 'failed' || status === 'offline') {
+            if (_hermesWaitHost) _hermesWaitHost.style.display = '';
+        }
         if (status === 'done') _hermesWait.finish({phase: 'acquired', zh: '升级完成'});
         else if (status === 'failed' || status === 'offline') _hermesWait.finish({phase: 'failed'});
         else if (status === 'upgrading') _hermesWait.phase('working', '升级中');

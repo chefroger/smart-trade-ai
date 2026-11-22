@@ -44,6 +44,7 @@ class TestNormalizeSubject:
         assert osint_facts.normalize_subject("company:ACME") == "ACME"
         assert osint_facts.normalize_subject("公司:天津赛得进出口有限公司") == "天津赛得进出口有限公司"
         assert osint_facts.normalize_subject("domain:spiderimpex.com") == "spiderimpex.com"
+        assert osint_facts.normalize_subject("公司：天津赛得进出口有限公司") == "天津赛得进出口有限公司"
 
     def test_domain_is_lowercased(self):
         assert osint_facts.normalize_subject("SpiderImpex.COM") == "spiderimpex.com"

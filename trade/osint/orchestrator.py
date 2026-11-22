@@ -515,16 +515,22 @@ def _split_type_prefix(target: str) -> tuple[str, str | None]:
     text = str(target or "").strip()
     lowered = text.casefold()
     for prefix, kind in _TYPE_PREFIXES:
-        if lowered.startswith(prefix):
-            return text.split(":", 1)[1].strip(), kind
+        # 全角冒号也认（模型会写 `公司：天津…`），否则前缀整段进查询串
+        for sep in (":", "："):
+            p = prefix[:-1] + sep
+            if lowered.startswith(p):
+                return text.split(sep, 1)[1].strip(), kind
     return text, None
 
 
 def _split_username_prefix(target: str) -> tuple[str, str | None]:
     """剥离显式用户名前缀：`username:foo`。"""
     text = str(target or "").strip()
-    if text.casefold().startswith("username:"):
-        return text.split(":", 1)[1].strip(), text.split(":", 1)[1].strip()
+    lowered = text.casefold()
+    for sep in (":", "："):
+        if lowered.startswith("username" + sep):
+            value = text.split(sep, 1)[1].strip()
+            return value, value
     return text, None
 
 
@@ -685,8 +691,8 @@ def _extract_lookup_domain(target: str, target_type: str, domain_from_email: str
 
     if target_type == "domain":
         # 未知前缀的情形（如 `foo:example.com`）：去掉前缀再取域名
-        if ":" in target:
-            target = target.rsplit(":", 1)[1].strip()
+        if ":" in target or "：" in target:
+            target = re.split(r"[:：]", target)[-1].strip()
         return target.lower().removeprefix("www.")
 
     # company / unknown — 无法直接提取域名
@@ -727,8 +733,8 @@ def _detect_target_type(target: str) -> str:
     # 未知前缀 + 域名（`domain:example.com` / `foo:example.com`）：
     # 冒号后是域名就按域名查，不静默降级成公司名（2026-11-22 修：
     # 之前 domain: 前缀不被识别，域名层被静默跳过，报告还写“目标不含域名”）。
-    if ":" in target:
-        suffix = target.rsplit(":", 1)[1].strip()
+    if ":" in target or "：" in target:
+        suffix = re.split(r"[:：]", target)[-1].strip()
         if suffix and _looks_like_domain(suffix):
             return "domain"
     # 人名启发式（2–4 个词且不含公司后缀）→ person；

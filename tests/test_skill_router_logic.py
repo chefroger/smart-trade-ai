@@ -31,6 +31,10 @@ import pytest
         ("帮我查一下这个人", "b2b-osint"),
         ("帮我查一下 这个人", "b2b-osint"),
         ("这个人是谁", "b2b-osint"),
+        # 2026-11-22 审计 P2-4：含糊查人问法也必须进背调（此前仍被 marketing 劫持）
+        ("这个 LinkedIn 上的人靠谱吗？", "b2b-osint"),
+        ("查一下这个LinkedIn的人", "b2b-osint"),
+        ("这个领英上的人可信吗", "b2b-osint"),
         # 营销意图仍然归 marketing
         ("优化我的 LinkedIn profile", "b2b-linkedin-marketing"),
         ("帮我把这个人加好友", "b2b-linkedin-marketing"),
