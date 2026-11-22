@@ -203,7 +203,8 @@ OSINT_JOB_START_SCHEMA = _schema(
     "启动一个**后台**背调任务（6 层 + 公开来源），立即返回 job_id，不阻塞聊天。"
     "目标可以是公司名/域名/邮箱/人名；人名用 person: 前缀，域名用 domain: 前缀，"
     "用户名用 username: 前缀。"
-    "10 分钟内同公司同目标会复用已有任务。启动后用 osint_job_result 读取进度与结果。"
+    "10 分钟内同公司同目标的**排队/运行中**任务会复用；已完成的任务会重新跑"
+    "（否则用户只会看到旧结果、也没有进度动画）。启动后用 osint_job_result 读取进度与结果。"
     "返回里带 known_facts：此前已核实过的事实（同目标），先看它，别重复查。",
     {
         "target": _str("背调目标，例如 acme.com / domain:acme.com / person:\"Matthew Busel\" / username:Mattbusel"),

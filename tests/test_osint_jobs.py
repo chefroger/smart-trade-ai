@@ -83,6 +83,26 @@ class TestCreateAndDedupe:
         assert created_again is False
         assert again["id"] == job["id"]
 
+    def test_done_job_is_not_reused(self, companies):
+        """2026-11-22：已完成任务不再被复用。
+
+        复用 done 任务会让用户以为“又背调了一次”，实际看到的是旧结果，
+        大动画也不会出现（界面跳过已完成任务）。只有排队/运行中的任务才复用。
+        """
+        from trade.database import get_connection
+
+        job, _ = osint_jobs.create_job(companies["first"], "acme.com")
+        conn = get_connection()
+        try:
+            conn.execute("UPDATE osint_jobs SET status='done' WHERE id=?", (job["id"],))
+            conn.commit()
+        finally:
+            conn.close()
+
+        again, created_again = osint_jobs.create_job(companies["first"], "ACME.com")
+        assert created_again is True
+        assert again["id"] != job["id"]
+
     def test_list_jobs_is_company_scoped(self, companies):
         job, _ = osint_jobs.create_job(companies["first"], "acme.com")
         mine = osint_jobs.list_jobs(companies["first"])

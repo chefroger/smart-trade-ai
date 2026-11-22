@@ -138,9 +138,12 @@ def create_job(company_id: int, target: str) -> tuple[dict, bool]:
     )
     conn = get_connection()
     try:
+        # 只复用**还在排队/运行**的任务。复用已完成任务会让用户以为“又背调了一次”，
+        # 实际看到的是几分钟前的旧结果，且大动画不会出现（界面按设计跳过已完成任务）。
+        # 2026-11-22 实机：同目标连点两次，第二次静默复用 done 任务 → 只见报告、无动画。
         row = conn.execute(
             "SELECT * FROM osint_jobs WHERE company_id = ? AND lower(target) = lower(?) "
-            "AND created_at >= ? AND status NOT IN ('failed', 'cancelled') "
+            "AND created_at >= ? AND status IN ('queued', 'running') "
             "ORDER BY id DESC LIMIT 1",
             (company_id, target, cutoff),
         ).fetchone()
