@@ -201,12 +201,41 @@ def handle_chat_memory_list(args: dict[str, Any], **_kw) -> str:
 OSINT_JOB_START_SCHEMA = _schema(
     "osint_job_start",
     "启动一个**后台**背调任务（6 层 + 公开来源），立即返回 job_id，不阻塞聊天。"
-    "目标可以是公司名/域名/邮箱/人名；人名用 person: 前缀，用户名用 username: 前缀。"
-    "10 分钟内同公司同目标会复用已有任务。启动后用 osint_job_result 读取进度与结果。",
+    "目标可以是公司名/域名/邮箱/人名；人名用 person: 前缀，域名用 domain: 前缀，"
+    "用户名用 username: 前缀。"
+    "10 分钟内同公司同目标会复用已有任务。启动后用 osint_job_result 读取进度与结果。"
+    "返回里带 known_facts：此前已核实过的事实（同目标），先看它，别重复查。",
     {
-        "target": _str("背调目标，例如 acme.com / person:\"Matthew Busel\" / username:Mattbusel"),
+        "target": _str("背调目标，例如 acme.com / domain:acme.com / person:\"Matthew Busel\" / username:Mattbusel"),
     },
     ["target"],
+)
+
+OSINT_FACT_SAVE_SCHEMA = _schema(
+    "osint_fact_save",
+    "登记一条背调事实（字段 / 值 / 来源），存进本公司的背调事实库。"
+    "**查到就登记**：下次同目标背调会直接复用，不必再赌一次反爬。"
+    "同一字段查到不同值时照实再登记一次，系统会标为冲突（报告要并列写出，不要挑一个）。"
+    "只登记有来源的事实；没有来源的推测不要登记。",
+    {
+        "target": _str("这条事实属于哪个目标（公司名 / 域名 / 人名）"),
+        "field": _str("字段名，如「注册资本」「法定代表人」「统一社会信用代码」「员工人数」"),
+        "value": _str("字段值，照抄来源原文"),
+        "source_url": _str("来源 URL（有就填，没有留空）"),
+        "source_name": _str("来源站点名，如「企查查」「阿里巴巴」"),
+    },
+    ["target", "field", "value"],
+)
+
+OSINT_FACT_LIST_SCHEMA = _schema(
+    "osint_fact_list",
+    "读取本公司的背调事实库（此前已核实的字段 / 值 / 来源）。"
+    "给了 target 就只读该目标；不填就列出全部。"
+    "conflict=true 的字段说明两次查到了不同值 —— 报告里要并列写出两个值并标注来源。",
+    {
+        "target": _str("目标（公司名 / 域名 / 人名）；不填则列出全部已登记事实"),
+    },
+    [],
 )
 
 OSINT_JOB_RESULT_SCHEMA = _schema(
@@ -252,11 +281,68 @@ def handle_osint_job_start(args: dict[str, Any], **_kw) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(f"创建背调任务失败：{exc}")
 
+    # 同目标此前核实过的事实：让模型先看它，别重复查（也不必再赌一次反爬）
+    known: dict = {}
+    try:
+        from trade import osint_facts
+
+        known = osint_facts.known_facts(company_id, target)
+    except Exception:  # noqa: BLE001 —— 事实库是增强项，读不到不影响背调
+        known = {}
+
     return _json({
         "job_id": job["id"],
         "status": job["status"],
         "reused": not created,
         "target": target,
+        "known_facts": known,
+    })
+
+
+def handle_osint_fact_save(args: dict[str, Any], **_kw) -> str:
+    """登记一条背调事实（供下次复用）。"""
+    target = str(args.get("target") or "").strip()
+    field = str(args.get("field") or "").strip()
+    value = str(args.get("value") or "").strip()
+    if not target or not field or not value:
+        return _err("target / field / value 都是必填")
+    company_id = _bound_company()
+    if company_id is None:
+        return _err("没有公司上下文，拒绝登记事实")
+
+    try:
+        from trade import osint_facts
+
+        row = osint_facts.save_fact(
+            company_id, target, field, value,
+            source_url=str(args.get("source_url") or ""),
+            source_name=str(args.get("source_name") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"登记事实失败：{exc}")
+
+    if row is None:
+        return _err("事实内容为空或过长，未登记")
+    return _json({"saved": True, "fact": row})
+
+
+def handle_osint_fact_list(args: dict[str, Any], **_kw) -> str:
+    """读取本公司的背调事实库。"""
+    company_id = _bound_company()
+    if company_id is None:
+        return _err("没有公司上下文，拒绝读取事实库")
+    target = str(args.get("target") or "").strip() or None
+    try:
+        from trade import osint_facts
+
+        known = osint_facts.known_facts(company_id, target)
+        rows = osint_facts.list_facts(company_id, target)
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"读取事实库失败：{exc}")
+    return _json({
+        "known_facts": known,
+        "conflicts": [f for f, b in known.items() if b.get("conflict")],
+        "facts": rows,
     })
 
 
@@ -286,6 +372,15 @@ def handle_osint_job_result(args: dict[str, Any], **_kw) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(f"读取背调任务失败：{exc}")
 
+    # 已核实过的事实：报告写作时用（复用 + 冲突并列）
+    known: dict = {}
+    try:
+        from trade import osint_facts
+
+        known = osint_facts.known_facts(company_id, job.get("target"))
+    except Exception:  # noqa: BLE001
+        known = {}
+
     return _json({
         "job": {
             "id": job["id"],
@@ -296,6 +391,8 @@ def handle_osint_job_result(args: dict[str, Any], **_kw) -> str:
             "report": job.get("report"),
         },
         "events": events,
+        "known_facts": known,
+        "conflicts": [f for f, b in known.items() if b.get("conflict")],
         "next_after_seq": events[-1]["seq"] if events else after_seq,
     })
 

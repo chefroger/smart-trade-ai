@@ -245,6 +245,20 @@ class TestPromptsPointAtTheCommand:
                 f"{name} 没有禁止用 terminal 跑长背调（切公司会中断）"
             )
 
+    def test_prompts_teach_prefixes_and_fact_store(self):
+        """2026-11-22：两次背调结果不一致的三个防线。
+
+        ① 目标前缀（domain: 等）写错 → 域名层静默跳过；
+        ② 查到的事实要登记进事实库 → 下次复用，不赌反爬；
+        ③ 冲突要并列写出，不挑一个当定论。
+        """
+        for name, text in self._osint_prompts():
+            assert "domain:" in text, f"{name} 没有教 domain: 前缀"
+            assert "osint_fact_save" in text, f"{name} 没有教把查到的事实登记进事实库"
+            assert "osint_fact_list" in text, f"{name} 没有教读事实库（复用）"
+            assert "known_facts" in text, f"{name} 没有教看 osint_job_start 返回的已知事实"
+            assert "冲突" in text, f"{name} 没有要求把冲突并列写出"
+
     def test_prompts_use_the_cli_command(self):
         for name, text in self._prompts():
             assert "python -m trade.osint" in text, f"{name} 没有指向可执行的背调命令"

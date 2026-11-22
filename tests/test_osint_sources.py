@@ -129,6 +129,34 @@ class TestTargetType:
         assert _split_type_prefix("company:ACME Trading") == ("ACME Trading", "company")
         assert _split_type_prefix("ACME") == ("ACME", None)
 
+    def test_domain_prefix_is_recognised(self):
+        """2026-11-22 回归：`domain:` 前缀此前不被识别 → 域名层静默跳过。
+
+        表现：模型写了 `domain:spiderimpex.com`，orchestrator 把它当公司名，
+        domain_intel 层 skipped，报告还写“目标不含域名”，看着查过其实跑空。
+        """
+        assert _split_type_prefix("domain:spiderimpex.com") == ("spiderimpex.com", "domain")
+        assert _split_type_prefix("域名:example.com") == ("example.com", "domain")
+
+    def test_chinese_prefix_is_stripped(self):
+        """中文前缀此前没被剥掉，目标串带着 `公司:` 去查制裁名单，查询被污染。"""
+        assert _split_type_prefix("公司:天津赛得进出口有限公司") == (
+            "天津赛得进出口有限公司", "company")
+        assert _split_type_prefix("企业:某某公司") == ("某某公司", "company")
+
+    def test_unknown_prefix_with_domain_is_not_downgraded(self):
+        """未知前缀 + 域名 → 仍按域名查，不静默降级成公司名。"""
+        assert _detect_target_type("foo:spiderimpex.com") == "domain"
+
+    def test_prefixed_domain_resolves_lookup_domain(self):
+        """带前缀的域名目标必须真的解析出域名（否则 WHOIS/CT 层不会跑）。"""
+        from trade.osint.orchestrator import _extract_lookup_domain
+
+        target, forced = _split_type_prefix("domain:spiderimpex.com")
+        ttype = forced or _detect_target_type(target)
+        assert ttype == "domain"
+        assert _extract_lookup_domain(target, ttype, None) == "spiderimpex.com"
+
     def test_title_split_on_colon(self):
         html = "<html><head><title>Tensorust: the money is in the join</title></head></html>"
         assert _resolve_entity_name("tensorust.com", fetcher=lambda *a, **k: html) == "Tensorust"

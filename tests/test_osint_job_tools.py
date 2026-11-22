@@ -106,8 +106,82 @@ class TestRegistrationGate:
         importlib.reload(plugin)
         names = {name for name, *_ in plugin._TOOLS}
         assert {"osint_job_start", "osint_job_result"} <= names
+        assert {"osint_fact_save", "osint_fact_list"} <= names
 
         monkeypatch.delenv("TRADE_HOST", raising=False)
         importlib.reload(plugin)
         names = {name for name, *_ in plugin._TOOLS}
         assert "osint_job_start" not in names
+        assert "osint_fact_save" not in names
+
+
+class TestFactTools:
+    """事实库工具：查到就登记，下次同目标复用；不同值标冲突。"""
+
+    def test_save_and_read_back(self, companies):
+        with bind_company(companies["first"]):
+            saved = json.loads(tools.handle_osint_fact_save({
+                "target": "天津赛得进出口有限公司",
+                "field": "注册资本",
+                "value": "100万元人民币",
+                "source_url": "https://example.com/x",
+                "source_name": "企查查",
+            }))
+            assert saved["saved"] is True
+
+            listed = json.loads(tools.handle_osint_fact_list({"target": "天津赛得进出口有限公司"}))
+        assert listed["known_facts"]["注册资本"]["values"] == ["100万元人民币"]
+        assert listed["known_facts"]["注册资本"]["conflict"] is False
+        assert listed["conflicts"] == []
+
+    def test_conflicting_values_are_flagged(self, companies):
+        with bind_company(companies["first"]):
+            tools.handle_osint_fact_save({
+                "target": "acme.com", "field": "员工人数",
+                "value": "8", "source_name": "平台A",
+            })
+            tools.handle_osint_fact_save({
+                "target": "acme.com", "field": "员工人数",
+                "value": "25", "source_name": "平台B",
+            })
+            listed = json.loads(tools.handle_osint_fact_list({"target": "acme.com"}))
+        assert listed["known_facts"]["员工人数"]["conflict"] is True
+        assert sorted(listed["known_facts"]["员工人数"]["values"]) == ["25", "8"]
+        assert listed["conflicts"] == ["员工人数"]
+
+    def test_known_facts_returned_by_job_start(self, companies, fake_orchestrator):
+        """同目标第二次背调：osint_job_start 直接带回已知事实。"""
+        with bind_company(companies["first"]):
+            tools.handle_osint_fact_save({
+                "target": "acme.com", "field": "法定代表人", "value": "张三",
+            })
+            started = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
+        assert started["known_facts"]["法定代表人"]["values"] == ["张三"]
+
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if osint_jobs.get_job(companies["first"], started["job_id"])["status"] in osint_jobs.TERMINAL:
+                break
+            time.sleep(0.02)
+
+    def test_facts_are_company_scoped(self, companies):
+        with bind_company(companies["first"]):
+            tools.handle_osint_fact_save({
+                "target": "acme.com", "field": "注册资本", "value": "100万",
+            })
+        with bind_company(companies["second"]):
+            listed = json.loads(tools.handle_osint_fact_list({"target": "acme.com"}))
+        assert listed["known_facts"] == {}
+
+    def test_save_requires_bound_company(self, companies):
+        result = json.loads(tools.handle_osint_fact_save({
+            "target": "acme.com", "field": "注册资本", "value": "100万",
+        }))
+        assert "error" in result
+
+    def test_save_rejects_empty_fields(self, companies):
+        with bind_company(companies["first"]):
+            result = json.loads(tools.handle_osint_fact_save({
+                "target": "acme.com", "field": "", "value": "x",
+            }))
+        assert "error" in result

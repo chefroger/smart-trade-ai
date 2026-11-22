@@ -23,9 +23,13 @@ from trade.hermes_chat_memory_plugin.doc_skip import on_pre_tool_call as on_doc_
 from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call, report_hook_support
 from trade.hermes_chat_memory_plugin.tools import (
     CHAT_MEMORY_LIST_SCHEMA,
+    OSINT_FACT_LIST_SCHEMA,
+    OSINT_FACT_SAVE_SCHEMA,
     OSINT_JOB_RESULT_SCHEMA,
     OSINT_JOB_START_SCHEMA,
     handle_chat_memory_list,
+    handle_osint_fact_list,
+    handle_osint_fact_save,
     handle_osint_job_result,
     handle_osint_job_start,
 )
@@ -43,6 +47,8 @@ if os.environ.get("TRADE_HOST") == "1":
     _TOOLS += (
         ("osint_job_start", OSINT_JOB_START_SCHEMA, handle_osint_job_start, "🔎"),
         ("osint_job_result", OSINT_JOB_RESULT_SCHEMA, handle_osint_job_result, "📊"),
+        ("osint_fact_save", OSINT_FACT_SAVE_SCHEMA, handle_osint_fact_save, "📝"),
+        ("osint_fact_list", OSINT_FACT_LIST_SCHEMA, handle_osint_fact_list, "🗂"),
     )
 
 

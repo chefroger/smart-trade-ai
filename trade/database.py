@@ -497,6 +497,25 @@ CREATE TABLE IF NOT EXISTS osint_job_events (
     PRIMARY KEY (job_id, seq)
 );
 
+-- 背调事实库（2026-11-22）：模型查到的关键事实结构化落盘，供下次同目标复用。
+-- 同一 (company, subject, field, value, source_url) 唯一 → 重复查到只更新查询时间；
+-- 同一 subject 的同一 field 出现不同 value → 视为冲突（报告并列写出）。
+CREATE TABLE IF NOT EXISTS osint_facts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    subject     TEXT    NOT NULL,   -- 归一化目标（去前缀；域名小写）
+    subject_raw TEXT    NOT NULL DEFAULT '',
+    field       TEXT    NOT NULL,   -- 字段名，如「注册资本」
+    value       TEXT    NOT NULL,   -- 字段值
+    source_url  TEXT    NOT NULL DEFAULT '',
+    source_name TEXT    NOT NULL DEFAULT '',
+    note        TEXT    NOT NULL DEFAULT '',
+    observed_at TEXT    DEFAULT (datetime('now', 'localtime')),
+    created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
+    UNIQUE (company_id, subject, field, value, source_url)
+);
+CREATE INDEX IF NOT EXISTS idx_osint_facts_subject ON osint_facts(company_id, subject);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
@@ -755,6 +774,7 @@ _EXPECTED_TABLES = frozenset({
     "mailboxes", "emails", "contacts",
     "customer_facts", "customer_gifts", "inquiries", "visit_plans",
     "app_settings", "todos",
+    "osint_jobs", "osint_job_events", "osint_facts",
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用

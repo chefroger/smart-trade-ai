@@ -494,11 +494,27 @@ def _run_public_source(module, ctx: TargetContext, fetcher) -> dict:
     return module.run(ctx, fetch=fetcher).to_dict()
 
 
+# 显式类型前缀（大小写不敏感）。中文前缀一并支持：模型实际会写 `公司:…`。
+_TYPE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("person:", "person"), ("人名:", "person"),
+    ("company:", "company"), ("公司:", "company"), ("企业:", "company"),
+    ("domain:", "domain"), ("域名:", "domain"), ("网址:", "domain"),
+)
+
+
 def _split_type_prefix(target: str) -> tuple[str, str | None]:
-    """剥离显式类型前缀：`person:` / `company:`（大小写不敏感）。"""
+    """剥离显式类型前缀：`person:` / `company:` / `domain:`（大小写不敏感）。
+
+    2026-11-22 修两处：
+    1. 补 `domain:` —— 模型用它指定域名目标，但此前不在白名单里，于是
+       `domain:spiderimpex.com` 被当成**公司名**：域名层静默跳过，报告还写
+       “目标不含域名”，看起来查过了其实跑空（两次背调覆盖范围因此不同）。
+    2. 补中文前缀（`公司:` 等）—— 此前 `公司:天津赛得进出口有限公司` 的前缀
+       没被剥掉，目标串带着前缀去查制裁名单，查询串被污染。
+    """
     text = str(target or "").strip()
     lowered = text.casefold()
-    for prefix, kind in (("person:", "person"), ("company:", "company")):
+    for prefix, kind in _TYPE_PREFIXES:
         if lowered.startswith(prefix):
             return text.split(":", 1)[1].strip(), kind
     return text, None
@@ -668,10 +684,24 @@ def _extract_lookup_domain(target: str, target_type: str, domain_from_email: str
         return netloc or None
 
     if target_type == "domain":
+        # 未知前缀的情形（如 `foo:example.com`）：去掉前缀再取域名
+        if ":" in target:
+            target = target.rsplit(":", 1)[1].strip()
         return target.lower().removeprefix("www.")
 
     # company / unknown — 无法直接提取域名
     return None
+
+
+def _looks_like_domain(text: str) -> bool:
+    """是否符合域名格式（含 . 和合法 TLD，支持 IDN punycode）。"""
+    try:
+        ascii_text = text.encode("idna").decode("ascii")
+    except Exception:
+        ascii_text = text
+    # TLD 既可能是纯字母（com/de/io），也可能是 **punycode**（中文域名的顶级域，
+    # 如 中国 → xn--fiqs8s）—— 后者含数字和连字符，只写 [a-z]{2,} 会漏判 IDN 域名。
+    return bool(re.match(r"^[a-z0-9]([a-z0-9-]+\.)+([a-z]{2,}|xn--[a-z0-9]+)$", ascii_text.lower()))
 
 
 def _detect_target_type(target: str) -> str:
@@ -681,6 +711,7 @@ def _detect_target_type(target: str) -> str:
       - 含 @ → email
       - 含 http(s):// → url
       - 符合域名格式 (含 . 和合法 TLD) → domain
+      - `未知前缀:域名` → domain（冒号后是域名就按域名查）
       - 否则 → company
     """
     target = target.strip()
@@ -690,16 +721,16 @@ def _detect_target_type(target: str) -> str:
     if target.startswith(("http://", "https://")):
         # 以 http(s):// 开头 → 视为 URL
         return "url"
-    # IDN（中文域名等）先转 punycode 再匹配，否则"例子.中国"会被误判成公司名
-    try:
-        ascii_target = target.encode("idna").decode("ascii")
-    except Exception:
-        ascii_target = target
-    # TLD 既可能是纯字母（com/de/io），也可能是 **punycode**（中文域名的顶级域，
-    # 如 中国 → xn--fiqs8s）—— 后者含数字和连字符，只写 [a-z]{2,} 会漏判 IDN 域名。
-    if re.match(r"^[a-z0-9]([a-z0-9-]+\.)+([a-z]{2,}|xn--[a-z0-9]+)$", ascii_target.lower()):
+    if _looks_like_domain(target):
         # 符合标准域名格式（如 example.com / 例子.中国）→ 视为域名
         return "domain"
+    # 未知前缀 + 域名（`domain:example.com` / `foo:example.com`）：
+    # 冒号后是域名就按域名查，不静默降级成公司名（2026-11-22 修：
+    # 之前 domain: 前缀不被识别，域名层被静默跳过，报告还写“目标不含域名”）。
+    if ":" in target:
+        suffix = target.rsplit(":", 1)[1].strip()
+        if suffix and _looks_like_domain(suffix):
+            return "domain"
     # 人名启发式（2–4 个词且不含公司后缀）→ person；
     # 个人背调与公司背调的可用来源不同，类型判错会整层走错。
     if _looks_like_person(target):

@@ -123,6 +123,7 @@ class TestW7OrderLogistics:
             "mailboxes", "emails", "contacts",
             "customer_facts", "customer_gifts", "inquiries", "visit_plans",
             "app_settings", "todos",
+            "osint_jobs", "osint_job_events", "osint_facts",
         ):
             if table == "orders":
                 conn.execute(
