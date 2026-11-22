@@ -14,10 +14,12 @@ osint_full_check() 是 OSINT 模块的统一入口，接收邮箱/域名/公司�
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from trade import email_intel
 from trade.osint.email_verify import verify_corporate_email
@@ -28,6 +30,14 @@ from trade.osint.scoring import (
     assess_verification,
     compute_verdict,
     generate_recommendations,
+)
+from trade.osint.sources import (
+    SOURCE_LABELS,
+    TargetContext,
+    sources_enabled,
+)
+from trade.osint.sources import (
+    SOURCES as PUBLIC_SOURCES,
 )
 from trade.osint.tech_stack import detect_tech_stack
 from trade.osint.whois import domain_whois
@@ -42,7 +52,15 @@ _LAYER_TIMEOUTS: dict[str, float] = {
     "tech_stack": 20.0,
     "sanctions": 60.0,
     "linkedin": 10.0,
+    # 公开来源（P2-2）：单源 15 秒
+    "rdap": 15.0,
+    "ct": 15.0,
+    "wayback": 15.0,
+    "github": 15.0,
 }
+
+# 进度事件用的完整标签表（6 层 + 公开来源）
+_PROGRESS_LABELS = {**_LAYER_LABELS, **SOURCE_LABELS}
 
 # 进度事件回调类型：CLI --progress 用它往 stderr 写 JSONL
 EventCallback = Callable[[dict], None]
@@ -56,34 +74,37 @@ async def osint_full_check(
     include_linkedin: bool = True,
     budget: float = 150.0,
     on_event: EventCallback | None = None,
+    source_fetcher=None,
 ) -> dict:
     """完整 OSINT 尽职调查（异步并发编排，LLM 友好）。
 
-    接收邮箱 / 域名 / 公司名，自动识别类型，**并发**执行各层检测，
-    最终输出综合风险评分报告。
+    接收邮箱 / 域名 / 公司名 / 人名，自动识别类型，**并发**执行各层检测，
+    最终输出综合风险评分报告。人名可加显式前缀 `person:`，公司名可加
+    `company:` 覆盖自动识别。
 
     各层互不依赖，并发执行；单层超时 + 全局预算两层保护。任一层的失败、
     超时、缺依赖都只影响该层自身（标 error/timeout），不会拖垮整份报告。
 
     Args:
-        target: 邮箱 / 域名 / 公司名（自动识别）
+        target: 邮箱 / 域名 / 公司名 / 人名（支持 `person:` / `company:` 前缀）
         include_sanctions: 是否包含制裁名单筛查（默认 True）
         include_tech_stack: 是否包含技术栈检测（默认 True）
         include_linkedin: 是否包含 LinkedIn 验证（默认 True）
         budget: 全局时间预算（秒），默认 150；预算耗尽时未完成的层标 timeout
         on_event: 可选进度回调，收到 source_start / source_done 事件 dict
+        source_fetcher: 测试注入的公开来源取数函数（默认走真实 HTTP）
 
     Returns:
         完整报告 dict，结构见需求文档 3.11.8 节：
         {
             "target": str,
-            "target_type": str,       # "email" | "domain" | "url" | "company"
+            "target_type": str,       # email | domain | url | company | person
             "overall_rating": str,    # "low" | "medium" | "high" | "incomplete"
             "overall_score": int | None,   # 0-100；None = 关键层未核验
             "provisional_score": int,      # 诊断用分数，非对外结论
             "unverified": list[dict],      # 未核验/未查的层及原因
             "flags": list[str],       # 红旗标记列表
-            "layers": {               # 各层检测结果
+            "layers": {               # 6 层检测结果
                 "email_registration": dict | None,
                 "domain_intel": dict,
                 "email_verification": dict | None,
@@ -91,11 +112,14 @@ async def osint_full_check(
                 "sanctions": dict | None,
                 "linkedin": dict | None,
             },
+            "sources": {              # 公开来源（P2-2）
+                "rdap": dict, "ct": dict, "wayback": dict, "github": dict,
+            },
             "recommendations": list[str],  # 行动建议
         }
     """
-    target = target.strip()
-    target_type = _detect_target_type(target)
+    target, forced_type = _split_type_prefix(target)
+    target_type = forced_type or _detect_target_type(target)
 
     report: dict = {
         "target": target,
@@ -104,6 +128,7 @@ async def osint_full_check(
         "overall_score": 0,
         "flags": [],
         "layers": {},
+        "sources": {},
         "recommendations": [],
     }
 
@@ -143,6 +168,25 @@ async def osint_full_check(
             (lookup_domain, domain_from_email or target),
         )
 
+    # ── 公开来源（P2-2）：RDAP / CT / Wayback / GitHub ─────────────────
+    # 与 6 层并发；RDAP/CT/Wayback 必须有域名，GitHub 按域名/人名/公司名搜索。
+    public_planned: dict[str, Callable] = {}
+    if sources_enabled():
+        ctx = TargetContext(
+            target=target,
+            target_type=target_type,
+            domain=lookup_domain,
+            email=target if target_type == "email" else None,
+            person_name=target if target_type == "person" else None,
+            company_name=target if target_type == "company" else None,
+        )
+        for module in PUBLIC_SOURCES:
+            if module.NAME in ("rdap", "ct", "wayback") and not lookup_domain:
+                continue
+            public_planned[module.NAME] = functools.partial(
+                _run_public_source, module, ctx, source_fetcher,
+            )
+
     deadline = time.monotonic() + max(0.0, budget)
     tasks = {
         source: _run_layer(
@@ -154,7 +198,18 @@ async def osint_full_check(
         )
         for source, (fn, args) in planned.items()
     }
+    for name, fn in public_planned.items():
+        tasks[name] = _run_layer(
+            name,
+            fn,
+            timeout=min(
+                _LAYER_TIMEOUTS.get(name, 15.0),
+                max(0.0, deadline - time.monotonic()),
+            ),
+            on_event=on_event,
+        )
     results = dict(zip(tasks, await asyncio.gather(*tasks.values()), strict=True))
+    report["sources"] = {name: results[name] for name in public_planned}
 
     # ── 落报告：未规划的层写 None / skipped ─────────────────────────────
     report["layers"]["email_registration"] = (
@@ -163,16 +218,19 @@ async def osint_full_check(
     if lookup_domain:
         report["layers"]["domain_intel"] = results["domain_intel"]
     else:
-        # 公司名无法直接提取域名（需先用搜索发现官网）
+        # 人名/公司名无法直接提取域名（需先用搜索发现官网）
         report["layers"]["domain_intel"] = {
             "skipped": True,
-            "reason": "Company target — domain discovery requires web search first",
+            "reason": "目标名不含域名（人名/公司名需先发现官网）",
         }
     report["layers"]["email_verification"] = (
         results.get("email_verification") if target_type == "email" else None
     )
     report["layers"]["tech_stack"] = results.get("tech_stack")
     report["layers"]["sanctions"] = results.get("sanctions")
+
+    # RDAP 补位：WHOIS 失败/无日期时用 RDAP 注册信息（P2-2）
+    _apply_rdap_fallback(report)
 
     # ── 红旗映射（只认已核验的数据）────────────────────────────────────
     di = report["layers"]["domain_intel"]
@@ -309,7 +367,7 @@ async def _run_layer(
         该层结果 dict。失败/超时时返回带 ``error``（及 ``timed_out``）的桩，
         形状与该层正常返回一致，调用方无需特判。
     """
-    label = _LAYER_LABELS.get(source, source)
+    label = _PROGRESS_LABELS.get(source, source)
     if on_event:
         on_event({"event": "source_start", "source": source, "label": label})
 
@@ -343,6 +401,9 @@ def _status_for(source: str, layer: dict) -> str:
     """把某层结果映射成进度事件状态：hit | miss | error | skipped | timeout。"""
     if not layer:
         return "skipped"
+    if source in SOURCE_LABELS:
+        # 公开来源自带 status（hit/miss/error/skipped）
+        return layer.get("status") or "miss"
     if layer.get("timed_out"):
         return "timeout"
     if layer.get("error"):
@@ -375,6 +436,14 @@ def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str 
         reason = detail or "未知错误"
 
     stub: dict = {"error": reason, "timed_out": kind in ("timeout", "budget")}
+    if source in SOURCE_LABELS:
+        # 公开来源桩：字段与 SourceResult.to_dict() 对齐
+        stub.update({
+            "status": "timeout" if kind in ("timeout", "budget") else "error",
+            "facts": [],
+            "data": {},
+        })
+        return stub
     if source == "sanctions":
         # 关键：不能因为超时就让调用方以为「已查且无命中」
         stub.update({
@@ -405,6 +474,102 @@ def _sanctions_and_screen(domain: str | None, fallback_name: str) -> dict:
     """制裁层：域名 → 公司名（官网 title）→ 名单比对，合成一个阻塞任务。"""
     resolved = _resolve_entity_name(domain)
     return check_sanctions(resolved or fallback_name)
+
+
+def _run_public_source(module, ctx: TargetContext, fetcher) -> dict:
+    """跑一个公开来源模块，统一转成 dict（供 _run_layer 处理）。"""
+    return module.run(ctx, fetch=fetcher).to_dict()
+
+
+def _split_type_prefix(target: str) -> tuple[str, str | None]:
+    """剥离显式类型前缀：`person:` / `company:`（大小写不敏感）。"""
+    text = str(target or "").strip()
+    lowered = text.casefold()
+    for prefix, kind in (("person:", "person"), ("company:", "company")):
+        if lowered.startswith(prefix):
+            return text.split(":", 1)[1].strip(), kind
+    return text, None
+
+
+# 出现这些词基本可判定为公司（用于人名启发式，避免把 "ACME Trading" 判成人）
+_COMPANY_WORDS = frozenset({
+    "ltd", "limited", "llc", "llp", "inc", "incorporated", "corp", "corporation",
+    "co", "gmbh", "ag", "sa", "sas", "srl", "spa", "bv", "nv", "plc", "pte",
+    "pty", "wll", "group", "holdings", "holding", "trading", "traders", "company",
+    "enterprise", "enterprises", "industries", "industry", "international",
+    "import", "exports", "export", "imports", "contracting", "construction",
+    "manufacturing", "logistics", "technology", "technologies", "tech",
+    "solutions", "systems", "services", "partners", "associates", "consulting",
+    "ventures", "capital", "labs", "supply", "supplies", "studio", "studios",
+})
+
+
+def _looks_like_person(value: str) -> bool:
+    """启发式判断人名（个人背调用；公司名仍走 company）。
+
+    - 中文：2–4 个汉字，且不含「公司/集团/厂/店/有限/股份」
+    - 英文：2–4 个字母词，且不含 Ltd/LLC/Group 这类公司后缀
+    """
+    text = value.strip()
+    if not text or "@" in text:
+        return False
+
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text):
+        return not re.search(r"公司|集团|工厂|贸易|有限|股份", text)
+
+    if not re.fullmatch(r"[A-Za-z][A-Za-z .'-]*", text):
+        return False
+    tokens = re.findall(r"[A-Za-z][A-Za-z.'-]*", text)
+    if not 2 <= len(tokens) <= 4:
+        return False
+    normalized = [token.casefold().strip(".'-") for token in tokens]
+    if any(token in _COMPANY_WORDS for token in normalized):
+        return False
+    return any(len(token) >= 3 for token in normalized)
+
+
+def _apply_rdap_fallback(report: dict) -> None:
+    """WHOIS 失败/缺日期时，用 RDAP 的注册信息补位（P2-2）。
+
+    RDAP 已经是域名注册的首选来源；这里只在 WHOIS 没给出日期（或整层失败）
+    时填充，避免覆盖 WHOIS 已成功解析的数据。
+    """
+    rdap = (report.get("sources") or {}).get("rdap") or {}
+    if rdap.get("status") != "hit":
+        return
+    data = rdap.get("data") or {}
+    creation = data.get("creation_date")
+    if not creation:
+        return
+
+    di = report["layers"].get("domain_intel") or {}
+    if not (di.get("error") or di.get("skipped") or not di.get("creation_date")):
+        return
+
+    days_old = None
+    category = None
+    try:
+        created = datetime.fromisoformat(str(creation).replace("Z", "+00:00"))
+        days_old = (datetime.now(UTC) - created).days
+        category = "new" if days_old < 365 else "medium" if days_old < 1095 else "old"
+    except (ValueError, TypeError):
+        pass
+
+    report["layers"]["domain_intel"] = {
+        "domain": di.get("domain") or "",
+        "registered": True,
+        "registrar": di.get("registrar") or data.get("registrar") or None,
+        "creation_date": creation,
+        "expiry_date": di.get("expiry_date") or data.get("expiry_date"),
+        "days_old": days_old,
+        "age_category": category,
+        "dns_servers": di.get("dns_servers") or data.get("nameservers") or [],
+        "registrant_name": None,
+        "whois_server": "rdap",
+        "status": di.get("status"),
+        "error": None,
+        "via": "rdap",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,6 +643,10 @@ def _detect_target_type(target: str) -> str:
     if re.match(r"^[a-z0-9]([a-z0-9-]+\.)+([a-z]{2,}|xn--[a-z0-9]+)$", ascii_target.lower()):
         # 符合标准域名格式（如 example.com / 例子.中国）→ 视为域名
         return "domain"
+    # 人名启发式（2–4 个词且不含公司后缀）→ person；
+    # 个人背调与公司背调的可用来源不同，类型判错会整层走错。
+    if _looks_like_person(target):
+        return "person"
     # 以上都不匹配 → 视为公司名称
     return "company"
 
@@ -510,8 +679,9 @@ def _resolve_entity_name(domain: str | None, *, fetcher=None) -> str | None:
             m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
             if m:
                 title = re.sub(r"\s+", " ", m.group(1)).strip()
-                # 去掉分隔符后的后缀："ACME Corp | Official Site" -> "ACME Corp"
-                title = re.split(r"\s*[|\-–—]\s*", title)[0].strip()
+                # 去掉分隔符后的后缀："ACME Corp | Official Site" -> "ACME Corp"；
+                # 冒号也要切（"Tensorust: the money is in the join" → "Tensorust"）
+                title = re.split(r"\s*[|\-–—:]\s*", title)[0].strip()
                 if len(title) >= 3:
                     return title
     except Exception:

@@ -26,14 +26,16 @@ from typing import Any
 
 from trade.console import reconfigure_streams
 from trade.osint.orchestrator import osint_full_check
+from trade.osint.sources import SOURCE_LABELS
 
 _USAGE = (
-    "用法：python -m trade.osint <邮箱|域名|公司名> "
+    "用法：python -m trade.osint <邮箱|域名|公司名|人名> "
     "[--json] [--progress] [--budget=150] [--target=<目标>] "
     "[--no-sanctions] [--no-tech-stack] [--no-linkedin]\n"
-    "  --target=  显式指定目标（公司名含空格时可直接写，不必加引号）\n"
+    "  --target=  显式指定目标（含空格时可直接写，不必加引号）\n"
     "  --budget=  全局时间预算（秒，默认 150）\n"
-    "  --progress 向 stderr 逐层输出 JSONL 进度事件"
+    "  --progress 向 stderr 逐层输出 JSONL 进度事件\n"
+    "  目标可加类型前缀：person:\"Matthew Busel\" / company:\"ACME Trading\""
 )
 
 
@@ -177,6 +179,25 @@ def format_report(report: dict[str, Any]) -> str:
         lines.append("\n⑥ LinkedIn 核查：已生成浏览器操作指令（**需人工/浏览器实际执行后才能下结论**）：")
         for s in li.get("steps") or []:
             lines.append(f"    · {s.get('url')}")
+
+    # ⑦ 公开来源（P2-2）：RDAP / CT / Wayback / GitHub —— 每条事实都带 URL
+    sources = report.get("sources") or {}
+    if sources:
+        lines.append("\n⑦ 公开来源：")
+        for name, result in sources.items():
+            label = SOURCE_LABELS.get(name, name)
+            status = result.get("status")
+            if status == "hit":
+                for fact in (result.get("facts") or [])[:6]:
+                    url = fact.get("url") or ""
+                    tail = f"  {url}" if url else ""
+                    lines.append(f"    · [{label}] {fact.get('text', '')}{tail}")
+            elif status == "miss":
+                lines.append(f"    · [{label}] 未查到（{result.get('error') or '无结果'}）")
+            elif status == "skipped":
+                lines.append(f"    · [{label}] 跳过（{result.get('error') or ''}）")
+            else:
+                lines.append(f"    · [{label}] 失败：{result.get('error') or '未知错误'}")
 
     recs = report.get("recommendations") or []
     if recs:

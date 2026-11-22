@@ -26,6 +26,12 @@ from trade.osint.scoring import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_public_sources(monkeypatch):
+    """本文件只考 6 层与评分；公开来源走真实网络会拖慢且不稳定。"""
+    monkeypatch.setenv("TRADE_OSINT_SOURCES", "off")
+
+
 def _degraded_sanctions(total: int = 2) -> dict:
     """制裁层：名单从未成功下载（coverage.degraded = True）。"""
     return {

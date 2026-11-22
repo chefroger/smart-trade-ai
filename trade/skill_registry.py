@@ -133,13 +133,15 @@ Phase 3: 深度背调 (Deep Verification)
 
 6. **机器判定层（6 层）用一个命令跑** —— 不要凭搜索印象编造判定：
 
-       python -m trade.osint <邮箱|域名|公司名>
+       python -m trade.osint <邮箱|域名|公司名|人名>
        python -m trade.osint <目标> --json        # 需要结构化数据时
-       python -m trade.osint --target="Acme Corp" # 公司名含空格时用 --target=
+       python -m trade.osint --target="Acme Corp" # 含空格时用 --target=
+       python -m trade.osint --target='person:Matthew Busel'  # 显式按个人背调
 
-   覆盖：邮箱注册检测（holehe）/ WHOIS / 企业邮箱验证 / 技术栈 /
-   制裁名单（OFAC SDN/非 SDN、US CSL、UN、EU、UK）
-   / LinkedIn 核查指令 + 综合评分与建议。
+   覆盖：邮箱注册检测（holehe）/ WHOIS（RDAP 补位）/ 企业邮箱验证 / 技术栈 /
+   制裁名单（OFAC SDN/非 SDN、US CSL、UN、EU、UK）/ 公开来源（RDAP 注册信息、
+   证书透明度子域名、Wayback 首次快照、GitHub 公开资料）/ LinkedIn 核查指令
+   + 综合评分与建议。公开来源的每条事实都带 URL。
 
    **终端工具调用一律传 `timeout=600`**：各层并发执行，单层 holehe 最多 90 秒，
    终端默认超时会提前截断整条命令。

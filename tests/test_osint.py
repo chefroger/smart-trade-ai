@@ -89,6 +89,8 @@ def _osint_stays_offline(monkeypatch, tmp_path):
 
     monkeypatch.setattr(_whois, "_query_whois_server", lambda domain, server, port=43, timeout=10: _FAKE_WHOIS_COM)
     monkeypatch.setattr(_email, "_query_mx_records", lambda domain: (["mx1.example.com"], True, None))
+    # 公开来源（RDAP/CT/Wayback/GitHub）默认关闭：本文件只考 6 层
+    monkeypatch.setenv("TRADE_OSINT_SOURCES", "off")
     # 制裁名单只查本地库：指向一个不存在的路径 = 模拟「从未成功刷新」
     monkeypatch.setattr(_store, "db_path", lambda: tmp_path / "sanctions-not-downloaded.db")
     # Layer 1 邮箱注册检测走 holehe 子进程（真探测 120+ 站点，一个 orchestrator 用例 8~10s）

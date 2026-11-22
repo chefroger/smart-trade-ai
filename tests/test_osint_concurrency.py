@@ -24,6 +24,12 @@ import trade.osint.orchestrator as orch  # noqa: E402
 from trade.osint import cli  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_public_sources(monkeypatch):
+    """只测 6 层的并发/超时；公开来源另文件测，避免真实网络拖慢。"""
+    monkeypatch.setenv("TRADE_OSINT_SOURCES", "off")
+
+
 def _whois_ok(*_, **__):
     return {
         "domain": "acme.com",
