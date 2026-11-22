@@ -694,10 +694,14 @@ def build_query(
         # 首轮：完整基础块（基础三块 + 准确规则）
         from trade.prompt import TRADE_SYSTEM_PROMPT_FIRST_TURN
         code_fallback = TRADE_SYSTEM_PROMPT_FIRST_TURN
+    is_osint = matched_name in _OSINT_SKILL_NAMES
     system_prompt = _prompts.resolve_system_prompt(
         company_slug=company_slug,
         db_identity=db_identity,
         code_fallback=code_fallback,
+        # 背调外部对象：不加载本公司身份/业务范围（2026-11-22 反馈：
+        # "化妆品 OEM"被当成目标背景写进个人背调）
+        include_custom=not is_osint,
     )
 
     # 1.4 语言策略：用户选择英文时替换语言策略块
@@ -723,27 +727,39 @@ def build_query(
                 return s[:max_len]
             name = _sanitize_identity(co['name'])
             slug = _sanitize_identity(co.get('slug', ''))
-            system_prompt += (
-                f"\n\n## 当前工作公司\n"
-                f"- 公司名称：「{name}」\n"
-                f"- 公司 ID：{co['id']}\n"
-                f"- Slug：「{slug}」\n\n"
-                "**所有数据操作（记忆读取、客户查询、文档搜索）必须限定在上述公司范围内。**"
-                # 紧跟其后**强绑定**"带 company_id 参数的 trade 工具必须传这个数字"——
-                # 不然 LLM 看到 ID 也未必会联想到工具调用。文案来源：
-                # trade/prompts._build_trade_context_block，**共用同一段文案**避免漂移。
-                + _prompts._build_trade_context_block(co['id'])
-            )
+            if is_osint:
+                # 背调只需要"数据归属公司 ID"来隔离工具调用；
+                # 公司名/业务身份不注入，避免把本公司行业套到外部目标身上。
+                system_prompt += (
+                    f"\n\n## 当前会话归属\n"
+                    f"- 公司 ID：{co['id']}\n\n"
+                    "本会话是外部对象背调；不要把本公司的业务范围、产品线或客户关系"
+                    "当作背调对象的背景。"
+                    + _prompts._build_trade_context_block(co['id'])
+                )
+            else:
+                system_prompt += (
+                    f"\n\n## 当前工作公司\n"
+                    f"- 公司名称：「{name}」\n"
+                    f"- 公司 ID：{co['id']}\n"
+                    f"- Slug：「{slug}」\n\n"
+                    "**所有数据操作（记忆读取、客户查询、文档搜索）必须限定在上述公司范围内。**"
+                    # 紧跟其后**强绑定**"带 company_id 参数的 trade 工具必须传这个数字"——
+                    # 不然 LLM 看到 ID 也未必会联想到工具调用。文案来源：
+                    # trade/prompts._build_trade_context_block，**共用同一段文案**避免漂移。
+                    + _prompts._build_trade_context_block(co['id'])
+                )
 
-    # 1.6 品牌安全护栏 — 所有对外内容生成都需遵守
-    if company_slug:
+    # 1.6 品牌安全护栏 — 所有对外内容生成都需遵守（外部背调不生成对外内容，跳过）
+    if company_slug and not is_osint:
         brand_safety = _prompts.get_brand_safety(company_slug)
         if brand_safety:
             system_prompt += f"\n\n{brand_safety}"
 
     # 2. Customer context — AI 客户简报（身份 + 联系方式 + 历史 + 订单 + 数据完整度）
     customer_context = ""
-    if customer_id:
+    # 背调外部对象时不注入本公司客户简报/订单（与本公司的业务上下文无关）
+    if customer_id and not is_osint:
         briefing = _cust.build_briefing(customer_id, company_id=company_id)
         if briefing:
             customer_context = briefing
@@ -755,7 +771,7 @@ def build_query(
 
     # 3. Order context — 按 3 层优先级搜索订单并注入
     order_context = ""
-    if company_id:
+    if company_id and not is_osint:
         order_text = search_orders(company_id, query, customer_id=customer_id)
         if order_text:
             order_context = order_text
@@ -783,8 +799,9 @@ def build_query(
             f"4. 全部读取完成后，综合所有文件内容回答用户问题\n\n"
         )
 
-    if library_id:
+    if library_id and not is_osint:
         # 用户明确选择了文档库 → 强制完整读取，并保留用户指定路径的更高优先级指令
+        # （外部背调不加载本公司文档库）
         lib = _lib.get(library_id, company_id=company_id)
         if lib:
             doc_context += (
@@ -797,8 +814,9 @@ def build_query(
                 f"3. 每个文件必须读到末尾，如果被截断则用 offset 继续读取\n"
                 f"4. 全部读完后才能开始回答用户问题\n"
             )
-    elif company_id:
+    elif company_id and not is_osint:
         # 收集工作目录 + 所有文档库，告知 Agent 可用目录，Agent 自行判断是否需要读取
+        # （外部背调不加载公司目录，避免目录路径里带出公司名）
         dirs_to_scan: list[str] = []
         tc = _company.get_trade_company(company_id)
         if tc:

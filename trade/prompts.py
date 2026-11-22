@@ -264,6 +264,7 @@ def resolve_system_prompt(
     db_identity: str | None = None,
     *,
     code_fallback: str | None = None,
+    include_custom: bool = True,
 ) -> str:
     """组合出最终 system prompt：**基础规则块 + 用户自定义文本**。
 
@@ -286,8 +287,13 @@ def resolve_system_prompt(
                        OSINT 类 skill 传 TRADE_SYSTEM_PROMPT_OSINT，
                        非首轮传 TRADE_SYSTEM_PROMPT_MINIMAL，
                        文档类任务传 TRADE_SYSTEM_PROMPT_FULL。
+        include_custom: 是否追加用户自定义身份文本。外部对象背调（OSINT）传 False ——
+                       本公司的业务范围/产品线不是背调对象的背景，混进去会把
+                       "本公司做化妆品 OEM" 误套到目标身上。
     """
     base = code_fallback or _CODE_FALLBACK
+    if not include_custom:
+        return base
     custom = _resolve_custom_prompt(company_slug, db_identity)
     # 自定义文本追加在基础规则之后；没有自定义时就是纯基础规则块
     return f"{base}\n\n{custom}" if custom else base
