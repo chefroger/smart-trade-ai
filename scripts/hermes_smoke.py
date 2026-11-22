@@ -6,7 +6,9 @@ Hermes 的环境**里跑，验证：
 
   1. `trade.bootstrap.prepare_hermes_import_paths()` 能正常完成
   2. Hermes 版本可解析且不低于 `_MIN_HERMES_VERSION`
-  3. Trade 依赖的 7 个耦合点模块都能 import
+  3. Trade 依赖的 6 个核心耦合点模块都能 import（列表见下方 coupling_points，
+     与 CLAUDE.md 的 Coupling Points 清单手工同步；CLAUDE.md 在本机是 gitignore，
+     不进仓库，所以这里不再声称「一一对应」）
 
 **不构造 AIAgent**：那需要用户自己的 API key，CI 里没有。
 只验证「能不能加载」，不验证「能不能对话」。
@@ -60,7 +62,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         failures.append(f"版本检查异常：{exc}")
 
-    # 3) 逐个 import 耦合点（与 CLAUDE.md「Hermes Coupling Points」一一对应）
+    # 3) 逐个 import 耦合点（与 CLAUDE.md「Hermes Coupling Points」手工同步）
     coupling_points = [
         ("run_agent", "AIAgent"),
         ("hermes_cli.config", "load_config"),

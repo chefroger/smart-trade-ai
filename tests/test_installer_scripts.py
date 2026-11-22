@@ -1118,3 +1118,21 @@ def test_macos_creates_a_double_click_app():
     assert "curl -sf" in text and 'open "$URL"' in text, "启动器要先探测已有实例"
     # macOS 自带 bash 3.2：变量后紧接全角括号必须用花括号
     assert "${APP_DIR}（" in text, "变量名要用花括号兜住，否则 bash 3.2 解析错"
+
+
+class TestMacAppBundleMetadata:
+    """审计 O-22：Trade.app 的版本号与图标。
+
+    此前 CFBundleVersion / CFBundleShortVersionString 写死 1.0，用户机器上的
+    「关于」永远显示 1.0；static/icon.icns 也从未入库，图标永远缺失。
+    """
+
+    def test_version_is_written_from_pyproject(self):
+        assert "Set :CFBundleVersion ${APP_VERSION}" in SH
+        assert "Set :CFBundleShortVersionString ${APP_VERSION}" in SH
+        # 版本号来源必须是安装目录的 pyproject.toml，而不是另一处硬编码
+        assert "grep -m1 '^version' \"$TRADE_DIR/pyproject.toml\"" in SH
+
+    def test_icon_falls_back_to_bundled_png(self):
+        assert "static/trade-icon.png" in SH
+        assert "iconutil -c icns" in SH

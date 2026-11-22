@@ -12,6 +12,13 @@ on:
       - "static/**"
       - "tests_e2e/**"
       - ".github/workflows/e2e-smoke.yml"
+  # 审计 O-22：直推 main（本项目的主流程）同样要跑浏览器冒烟
+  push:
+    branches: [main]
+    paths:
+      - "static/**"
+      - "tests_e2e/**"
+      - ".github/workflows/e2e-smoke.yml"
   schedule:
     # 每天 19:00 UTC = 次日 03:00 CST
     - cron: "0 19 * * *"

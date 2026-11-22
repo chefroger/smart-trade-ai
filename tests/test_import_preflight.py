@@ -289,3 +289,138 @@ def test_import_without_decisions_keeps_silent_merge(desktop, tmp_path):
     assert len(rows) == 1
     # 历史行为：空 contact 被源值补齐
     assert _customer_by_name(target["id"], "Acme")["contact"] == "Bob"
+
+
+# ── 审计 O-5 / O-4：畸形包与字符串 id 的容错 ──────────────────────────────
+
+
+def _rewrite_zip_member(package: Path, member: str, transform) -> None:
+    """重写 zip 里某个成员的字节（构造畸形包用），并同步更新校验和。"""
+    import hashlib
+
+    with zipfile.ZipFile(package) as zf:
+        items = [(info, zf.read(info.filename)) for info in zf.infolist()]
+    rewritten = b""
+    for info, data in items:
+        if info.filename == member:
+            rewritten = transform(data)
+            break
+    # manifest.json 不参与校验；其余成员改了字节就必须改 checksums.sha256，
+    # 否则 import_company 会在校验阶段拒绝，测不到目标路径。
+    if member != "manifest.json":
+        new_hash = hashlib.sha256(rewritten).hexdigest()
+        updated = []
+        for info, data in items:
+            if info.filename == "checksums.sha256":
+                lines = data.decode("utf-8").splitlines()
+                lines = [
+                    f"{new_hash}  {member}" if line.endswith(f"  {member}") else line
+                    for line in lines
+                ]
+                data = ("\n".join(lines) + "\n").encode("utf-8")
+            updated.append((info, data))
+        items = updated
+    with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as zf:
+        for info, data in items:
+            zf.writestr(info, rewritten if info.filename == member else data)
+
+
+def test_preflight_malformed_company_field_does_not_crash(desktop, tmp_path):
+    """manifest.company 是字符串时预检不能抛 AttributeError（审计 O-5）。"""
+    source = crud.create(_unique("Malformed Company"))
+    _insert_customer(source["id"], "Only Buyer")
+    package = _export_and_forget(tmp_path, source)
+
+    def _to_string_company(raw: bytes) -> bytes:
+        manifest = json.loads(raw.decode("utf-8"))
+        manifest["company"] = "oops-not-a-dict"
+        return json.dumps(manifest).encode("utf-8")
+
+    _rewrite_zip_member(package, "manifest.json", _to_string_company)
+
+    result = analyze_package(package)
+
+    assert result["company"]["mode"] == "create"
+    assert result["company"]["source_name"] == ""
+    assert result["summary"]["customers_total"] == 1
+
+
+def test_preflight_normalizes_string_customer_ids(desktop, tmp_path):
+    """包内客户 id 是字符串时，冲突里的 source_id 归一化成 int（审计 O-5）。"""
+    name = _unique("String Ids")
+    source = crud.create(name)
+    source_customer_id = _insert_customer(source["id"], "Acme", contact="Bob")
+    package = _export_and_forget(tmp_path, source)
+
+    def _stringify_ids(raw: bytes) -> bytes:
+        rows = json.loads(raw.decode("utf-8"))
+        for row in rows:
+            row["id"] = str(row["id"])
+        return json.dumps(rows).encode("utf-8")
+
+    _rewrite_zip_member(package, "db/customers.json", _stringify_ids)
+    target = crud.create(name)
+    _insert_customer(target["id"], "Acme", contact="Alice")
+
+    conflict = analyze_package(package)["conflicts"][0]
+
+    assert conflict["source_id"] == source_customer_id
+    assert isinstance(conflict["source_id"], int)
+
+
+def test_import_decision_with_string_key_is_honored(desktop, tmp_path):
+    """决定用字符串 id 也要生效，不能被静默忽略退回 merge（审计 O-5）。"""
+    name = _unique("String Decision")
+    source = crud.create(name)
+    _insert_customer(source["id"], "Acme", contact="Bob")
+    package = _export_and_forget(tmp_path, source)
+    source_customer_id = _packaged_customers(package)[0]["id"]
+
+    target = crud.create(name)
+    _insert_customer(target["id"], "Acme", contact="Alice")
+
+    report = import_company(
+        package,
+        target_company_id=target["id"],
+        customer_decisions={str(source_customer_id): "create"},
+    )
+
+    assert report["tables"]["customers"] == {"inserted": 1, "skipped": 0}
+    assert len(_customer_rows(target["id"])) == 2
+
+
+def test_import_tolerates_non_numeric_inquiry_source_id(desktop, tmp_path):
+    """询盘的 source_id 损坏成非数字时导入照常完成（审计 O-4）。"""
+    from trade import inquiry
+
+    name = _unique("Bad Source Id")
+    source = crud.create(name)
+    source_customer_id = _insert_customer(source["id"], "Acme", contact="Bob")
+    inquiry.create(source_customer_id, company_id=source["id"], title="询盘 A")
+    package = _export_and_forget(tmp_path, source)
+
+    def _corrupt_source_id(raw: bytes) -> bytes:
+        rows = json.loads(raw.decode("utf-8"))
+        for row in rows:
+            row["source_id"] = "not-a-number"
+        return json.dumps(rows).encode("utf-8")
+
+    _rewrite_zip_member(package, "db/inquiries.json", _corrupt_source_id)
+    target = crud.create(name)
+    _insert_customer(target["id"], "Acme", contact="Alice")
+
+    report = import_company(
+        package,
+        target_company_id=target["id"],
+        customer_decisions={source_customer_id: "merge"},
+    )
+
+    assert report["tables"]["inquiries"]["inserted"] == 1
+    conn = database.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT source_id FROM inquiries WHERE company_id = ?", (target["id"],)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None and row[0] is None

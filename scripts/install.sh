@@ -402,6 +402,9 @@ chmod +x "$HOME/.local/bin/trade"
 if [[ "$(uname -s)" == "Darwin" ]]; then
     APP_DIR="$HOME/Applications/Trade.app"
     mkdir -p "$APP_DIR/Contents/MacOS"
+    # 版本号取 pyproject（审计 O-22）：写死 1.0 会让机器的「关于」永远是 1.0
+    APP_VERSION="$(grep -m1 '^version' "$TRADE_DIR/pyproject.toml" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/')"
+    APP_VERSION="${APP_VERSION:-1.0}"
     cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -418,6 +421,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 </dict>
 </plist>
 PLIST
+    # heredoc 里只能写占位，这里用 PlistBuddy 写入真实版本号
+    if [ -x /usr/libexec/PlistBuddy ]; then
+        /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleVersion ${APP_VERSION}" \
+            -c "Set :CFBundleShortVersionString ${APP_VERSION}" \
+            "$APP_DIR/Contents/Info.plist" >/dev/null 2>&1 || true
+    fi
     cat > "$APP_DIR/Contents/MacOS/Trade" << 'APPEXEC'
 #!/bin/bash
 # 双击启动 Trade：已在运行就只打开页面（不重复起服务）；否则后台起服务，
@@ -430,13 +440,31 @@ fi
 exec "$HOME/.local/bin/trade"
 APPEXEC
     chmod +x "$APP_DIR/Contents/MacOS/Trade"
-    # 图标：仓库里带了就复用；没有也不影响启动
+    # 图标：仓库里带了 .icns 就复用；否则用自带的 PNG 现场生成（审计 O-22：
+    # static/icon.icns 从未入库，此前图标永远缺失）。生成失败不影响启动。
     ICON_SRC="$TRADE_DIR/static/icon.icns"
+    ICON_PNG="$TRADE_DIR/static/trade-icon.png"
     if [ -f "$ICON_SRC" ]; then
         mkdir -p "$APP_DIR/Contents/Resources"
         cp "$ICON_SRC" "$APP_DIR/Contents/Resources/icon.icns"
         /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon.icns" \
             "$APP_DIR/Contents/Info.plist" >/dev/null 2>&1 || true
+    elif [ -f "$ICON_PNG" ] && command -v iconutil >/dev/null 2>&1; then
+        ICONSET_TMP="$(mktemp -d)"
+        ICONSET="$ICONSET_TMP/trade.iconset"
+        mkdir -p "$ICONSET"
+        for size in 16 32 128 256 512; do
+            sips -z "$size" "$size" "$ICON_PNG" \
+                --out "$ICONSET/icon_${size}x${size}.png" >/dev/null 2>&1 || true
+            sips -z $((size * 2)) $((size * 2)) "$ICON_PNG" \
+                --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null 2>&1 || true
+        done
+        mkdir -p "$APP_DIR/Contents/Resources"
+        if iconutil -c icns -o "$APP_DIR/Contents/Resources/icon.icns" "$ICONSET" 2>/dev/null; then
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon.icns" \
+                "$APP_DIR/Contents/Info.plist" >/dev/null 2>&1 || true
+        fi
+        rm -rf "$ICONSET_TMP"
     fi
     # 变量名必须加花括号：macOS 自带 bash 3.2 会把紧跟其后的全角括号误当变量名的一部分
     log_ok "已创建桌面应用：${APP_DIR}（双击即可打开，不需要终端）"

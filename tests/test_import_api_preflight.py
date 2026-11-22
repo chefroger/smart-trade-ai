@@ -331,3 +331,48 @@ class TestConfirmImport:
         job = _wait_job(first.json()["job_id"])
         assert job["status"] == "done", job
         assert len(_customer_rows(target["id"])) == 2
+
+    def test_string_customer_ids_can_be_confirmed(self, api_client, tmp_path):
+        """审计 O-5：包内客户 id 是字符串时，预检归一化、确认不再恒 400。"""
+        import hashlib
+        import json
+        import zipfile
+
+        client, token = api_client
+        package, target = _conflict_package(tmp_path)
+        # 把包内 customers.json 的 id 改成字符串（模拟手改/第三方导出）
+        with zipfile.ZipFile(package) as zf:
+            items = [(info, zf.read(info.filename)) for info in zf.infolist()]
+        rows = json.loads(
+            next(data for info, data in items if info.filename == "db/customers.json")
+        )
+        for row in rows:
+            row["id"] = str(row["id"])
+        new_data = json.dumps(rows).encode("utf-8")
+        new_hash = hashlib.sha256(new_data).hexdigest()
+        with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as zf:
+            for info, data in items:
+                if info.filename == "db/customers.json":
+                    data = new_data
+                elif info.filename == "checksums.sha256":
+                    lines = data.decode("utf-8").splitlines()
+                    data = ("\n".join(
+                        f"{new_hash}  db/customers.json"
+                        if line.endswith("  db/customers.json") else line
+                        for line in lines
+                    ) + "\n").encode("utf-8")
+                zf.writestr(info, data)
+
+        upload = _upload(client, token, package).json()
+        source_id = upload["conflicts"][0]["source_id"]
+        assert isinstance(source_id, int), "预检必须把字符串 id 归一化成 int"
+
+        resp = _confirm(
+            client, token, upload["upload_id"],
+            {"customer_decisions": [{"source_id": source_id, "action": "create"}]},
+        )
+
+        assert resp.status_code == 202, resp.text
+        job = _wait_job(resp.json()["job_id"])
+        assert job["status"] == "done", job
+        assert _customer_names(target["id"]) == ["Acme", "Acme (2)"]

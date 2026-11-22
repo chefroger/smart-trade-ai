@@ -33,6 +33,14 @@ def _read_json_member(zf: zipfile.ZipFile, name: str):
         return None
 
 
+def _as_int(value):
+    """包内 id 能转 int 就转，否则原样返回（畸形包不因此崩掉）。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
 def _proposed_name(base: str, taken: set[str]) -> str:
     """在已归一化的名字集合里找一个唯一的「名字 (n)」。"""
     n = 2
@@ -51,12 +59,18 @@ def analyze_package(zip_path: Path, *, target_company_id: int | None = None,
     with zipfile.ZipFile(zip_path) as zf:
         manifest = _read_json_member(zf, "manifest.json") or {}
         source_customers = _read_json_member(zf, "db/customers.json") or []
+    # 畸形包（审计 O-5）：manifest 不是 dict、company 是字符串等都不能崩成 500，
+    # 按「没有公司信息」继续预检，由后续同名匹配决定能否导入。
+    if not isinstance(manifest, dict):
+        manifest = {}
     # 包内 customers.json 不是列表：按空处理，与导入的容错一致
     if not isinstance(source_customers, list):
         source_customers = []
 
-    source_company = manifest.get("company") or {}
-    source_name = source_company.get("name") or ""
+    source_company = manifest.get("company")
+    if not isinstance(source_company, dict):
+        source_company = {}
+    source_name = str(source_company.get("name") or "")
 
     from trade.database import get_connection
 
@@ -145,7 +159,9 @@ def analyze_package(zip_path: Path, *, target_company_id: int | None = None,
         proposed = _proposed_name(source_cust_name, taken)
         taken.add(merge_mod.norm_name(proposed))
         item = {
-            "source_id": cust.get("id"),
+            # 包内 id 可能是 JSON 字符串（审计 O-5）：能转数字就转，前端回传的
+            # 决定是 int，不归一化会让 "7" 与 7 永远对不上、确认恒 400。
+            "source_id": _as_int(cust.get("id")),
             "source_name": source_cust_name,
             "target_id": holders[0]["id"],
             "target_name": holders[0]["name"],

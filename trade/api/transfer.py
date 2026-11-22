@@ -351,7 +351,9 @@ def confirm_import_package(upload_id: str, body: ConfirmImportBody,
     """
     _prune_pending()
     now = time.time()
-    decisions: dict[int, str] = {}
+    # 键统一成字符串：预检返回的 source_id 可能被 JSON 写成 "7"，而模型
+    # 解析出的决定是 int 7 —— 直接比对会让合法决定恒 400（审计 O-5）。
+    decisions: dict[str, str] = {}
     with _PENDING_LOCK:
         entry = _PENDING.get(upload_id)
         # 不存在（从未创建 / 已被确认清理）：让用户重新选文件
@@ -372,17 +374,17 @@ def confirm_import_package(upload_id: str, body: ConfirmImportBody,
             conflict.get("source_id") for conflict in conflicts
             if conflict.get("source_id") is not None
         ]
-        known = set(conflict_ids)
+        known = {str(cid) for cid in conflict_ids}
         for decision in body.customer_decisions:
             # 指向本次预检之外的客户：拒绝，且不消耗 upload_id
-            if decision.source_id not in known:
+            if str(decision.source_id) not in known:
                 raise HTTPException(status_code=400, detail="未知的客户选择")
-            decisions[decision.source_id] = decision.action
+            decisions[str(decision.source_id)] = decision.action
         # 有冲突未选择：能靠默认动作补齐就补，否则要求用户补选
-        missing = [cid for cid in conflict_ids if cid not in decisions]
+        missing = [cid for cid in conflict_ids if str(cid) not in decisions]
         if missing and body.default_action is not None:
             for cid in missing:
-                decisions[cid] = body.default_action
+                decisions[str(cid)] = body.default_action
             missing = []
         # 仍有缺失：返回 409 + missing，条目保持可用
         if missing:

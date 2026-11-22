@@ -307,11 +307,12 @@ def _merge_copy(src: Path, dst: Path, conflict_root: Path, rel: str,
 
 def import_company(zip_path: Path, *, target_company_id: int | None = None,
                    force_new: bool = False,
-                   customer_decisions: dict[int, str] | None = None) -> dict:
+                   customer_decisions: dict[int | str, str] | None = None) -> dict:
     """导入一个公司包，返回报告。异常时抛 TransferError / ValueError。
 
     customer_decisions：{源客户 id: "merge" | "create"}。None 时保持历史行为
     （同名客户静默合并）；调用方传入时必须覆盖所有冲突客户（API 层负责校验）。
+    id 可能来自 JSON（字符串）也可能来自 API 模型（int），查找时统一按字符串比。
     """
     from trade.company import crud as company_crud
     from trade.database import _get_db_path, get_connection
@@ -557,11 +558,13 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         customer_map: dict[int, int] = {}
         customer_names: dict[int, str] = {row["id"]: row.get("name") or "" for row in target_customers}
         customer_inserted = customer_skipped = 0
-        decisions = customer_decisions or {}
+        # 统一成字符串键（审计 O-5）：包内 id 可能是 "7"，API 决定是 7，
+        # 直接 dict.get 会让 create 决定被静默忽略、退回 merge。
+        decisions = {str(k): v for k, v in (customer_decisions or {}).items()}
         for row in source_tables["customers"]:
             key = merge_mod.norm_name(row.get("name"))
             existing = cust_by_name.get(key)
-            decision = decisions.get(row["id"])
+            decision = decisions.get(str(row["id"]))
 
             # 合并：用户选了 merge，或没提供决定（历史行为）
             if existing and decision != "create":
@@ -838,7 +841,12 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 # 重映射，否则置空 —— 不能把源库旧自增 id 带到目标库（C4）
                 old_src = row.get("source_id")
                 if old_src is not None:
-                    new_row["source_id"] = conversation_map.get(int(old_src))
+                    # 畸形包里的 source_id 可能是非数字字符串（审计 O-4）：
+                    # int() 失败不能连累整次导入，按「无来源」置空。
+                    try:
+                        new_row["source_id"] = conversation_map.get(int(old_src))
+                    except (TypeError, ValueError):
+                        new_row["source_id"] = None
                 sig = _inquiry_signature(new_row)
                 # 目标库里已有同一条：计 skipped，不重复插入
                 if sig in existing_inq:

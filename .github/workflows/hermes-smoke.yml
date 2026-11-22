@@ -8,6 +8,17 @@ name: Hermes smoke (nightly)
 # 每晚一次足以在用户遇到之前发现上游 breaking change。
 
 on:
+  # 审计 O-22：直推 main 的提交以前完全没跑过冒烟。只在碰到 Hermes 耦合面时
+  # 触发，避免每次 push 都花几分钟装 Hermes。
+  push:
+    branches: [main]
+    paths:
+      - "trade/bootstrap.py"
+      - "trade/helpers.py"
+      - "trade/hermes_compat.py"
+      - "trade/hermes_upgrade.py"
+      - "scripts/hermes_smoke.py"
+      - ".github/workflows/hermes-smoke.yml"
   schedule:
     # 每天 18:00 UTC = 次日 02:00 CST，避开国内工作时间
     - cron: "0 18 * * *"
