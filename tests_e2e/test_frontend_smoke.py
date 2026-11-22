@@ -370,3 +370,39 @@ def test_hermes_upgrade_uses_task_panel_and_filters_paths(live_server):
         assert "/Users/" not in text, "升级读数是日志原文，路径没有过滤"
         assert "a" * 40 not in text, "升级读数是日志原文，长 token 没有过滤"
         browser.close()
+
+
+def test_3d_context_loss_falls_back_and_only_one_instance(live_server):
+    """WebGL 上下文丢失 → 2D 兜底；同屏只允许 1 个 3D 实例。"""
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid)
+        page.wait_for_function("typeof TradeWait !== 'undefined'", timeout=15000)
+        page.evaluate("""() => {
+          const h=document.createElement('div'); h.id='t1';
+          h.style.cssText='width:900px;height:400px;position:fixed;left:0;top:0;z-index:99;background:#fff';
+          document.body.appendChild(h);
+          window.__w1=TradeWait.mount(h,{mode:'task'});
+          const h2=document.createElement('div'); h2.id='t2';
+          h2.style.cssText='width:900px;height:400px;position:fixed;left:0;top:420px;z-index:99;background:#fff';
+          document.body.appendChild(h2);
+          window.__w2=TradeWait.mount(h2,{mode:'task'});
+        }""")
+        page.wait_for_timeout(800)
+        renders = page.evaluate(
+            "Array.from(document.querySelectorAll('.sw-task')).map(e=>[e.getAttribute('data-render'), e.getAttribute('data-3d-drop')])")
+        if renders and renders[0][0] == "three":
+            assert renders[1][0] == "2d", "第二个 task 面板不得再建 WebGL 实例"
+            assert renders[1][1] == "busy"
+            page.evaluate(
+                "() => { const gl=_fxRenderer.getContext();"
+                " gl.getExtension('WEBGL_lose_context').loseContext(); }")
+            page.wait_for_timeout(800)
+            assert page.get_attribute("#t1 .sw-task", "data-render") == "2d"
+            assert page.get_attribute("#t1 .sw-task", "data-3d-drop") == "contextlost"
+        # 取消按钮始终可点
+        page.evaluate("window.__w1.cancelBtn.click()")
+        assert page.evaluate("window.__w1.phaseKey") == "aborted"
+        browser.close()
