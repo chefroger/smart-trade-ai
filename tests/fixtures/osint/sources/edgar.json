@@ -1,0 +1,98 @@
+{
+ "took": 180,
+ "timed_out": false,
+ "hits": {
+  "total": {
+   "value": 10000,
+   "relation": "gte"
+  },
+  "hits": [
+   {
+    "_index": "edgar_file",
+    "_id": "0001185185-15-000457:ex21-1.htm",
+    "_score": 8.388413,
+    "_source": {
+     "ciks": [
+      "0001418121"
+     ],
+     "period_ending": "2014-12-31",
+     "file_num": [
+      "000-53603"
+     ],
+     "display_names": [
+      "Apple Hospitality REIT, Inc.  (APLE)  (CIK 0001418121)"
+     ],
+     "xsl": null,
+     "sequence": 3,
+     "root_forms": [
+      "10-K"
+     ],
+     "file_date": "2015-03-06",
+     "biz_states": [
+      "VA"
+     ],
+     "sics": [
+      "6798"
+     ],
+     "form": "10-K",
+     "adsh": "0001185185-15-000457",
+     "film_num": [
+      "15682227"
+     ],
+     "biz_locations": [
+      "Richmond, VA"
+     ],
+     "file_type": "EX-21.1",
+     "file_description": "EX-21.1",
+     "inc_states": [
+      "VA"
+     ],
+     "items": []
+    }
+   },
+   {
+    "_index": "edgar_file",
+    "_id": "0001213900-11-001691:f10k2010ex10ii_snap.htm",
+    "_score": 8.374799,
+    "_source": {
+     "ciks": [
+      "0001355839"
+     ],
+     "period_ending": "2010-12-31",
+     "file_num": [
+      "000-52176"
+     ],
+     "display_names": [
+      "Snap Interactive, Inc  (PALT)  (CIK 0001355839)"
+     ],
+     "xsl": null,
+     "sequence": 3,
+     "root_forms": [
+      "10-K"
+     ],
+     "file_date": "2011-03-31",
+     "biz_states": [
+      "NY"
+     ],
+     "sics": [
+      "7389"
+     ],
+     "form": "10-K",
+     "adsh": "0001213900-11-001691",
+     "film_num": [
+      "11726144"
+     ],
+     "biz_locations": [
+      "New York, NY"
+     ],
+     "file_type": "EX-10.2",
+     "file_description": "REGISTERED APPLE DEVELOPER AGREEMENT, BY AND BETWEEN SNAP INTERACTIVE, INC. AND APPLE INC.",
+     "inc_states": [
+      "DE"
+     ],
+     "items": []
+    }
+   }
+  ]
+ }
+}

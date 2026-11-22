@@ -15,10 +15,21 @@ from __future__ import annotations
 
 import os
 
-from trade.osint.sources import ct, github, rdap, wayback
+from trade.osint.sources import (
+    ct,
+    edgar,
+    gdelt,
+    github,
+    gleif,
+    pdns,
+    rdap,
+    us_states,
+    vies,
+    wayback,
+)
 from trade.osint.sources.base import Fetcher, SourceResult, TargetContext
 
-SOURCES = (rdap, ct, wayback, github)
+SOURCES = (rdap, ct, wayback, pdns, github, gleif, vies, us_states, edgar, gdelt)
 SOURCE_LABELS = {module.NAME: module.LABEL for module in SOURCES}
 
 
@@ -29,11 +40,30 @@ def sources_enabled() -> bool:
     )
 
 
+def source_applies(name: str, ctx: TargetContext) -> bool:
+    """该来源是否适用于本次目标（避免报告里出现无意义的 skipped）。"""
+    if name in {"rdap", "ct", "wayback", "pdns"}:
+        return bool(ctx.domain)
+    if name in {"gleif", "us_states", "edgar"}:
+        # 法人登记类来源：个人目标不适用
+        return ctx.target_type != "person" and bool(ctx.company_name or ctx.domain)
+    if name == "vies":
+        return vies._extract_vat(ctx.target) is not None
+    if name == "github":
+        return bool(
+            ctx.github_username or ctx.person_name or ctx.company_name or ctx.domain
+        )
+    if name == "gdelt":
+        return bool(ctx.person_name or ctx.company_name or ctx.domain)
+    return True
+
+
 __all__ = [
     "Fetcher",
     "SourceResult",
     "TargetContext",
     "SOURCES",
     "SOURCE_LABELS",
+    "source_applies",
     "sources_enabled",
 ]

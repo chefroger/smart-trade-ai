@@ -139,9 +139,10 @@ Phase 3: 深度背调 (Deep Verification)
        python -m trade.osint --target='person:Matthew Busel'  # 显式按个人背调
 
    覆盖：邮箱注册检测（holehe）/ WHOIS（RDAP 补位）/ 企业邮箱验证 / 技术栈 /
-   制裁名单（OFAC SDN/非 SDN、US CSL、UN、EU、UK）/ 公开来源（RDAP 注册信息、
-   证书透明度子域名、Wayback 首次快照、GitHub 公开资料）/ LinkedIn 核查指令
-   + 综合评分与建议。公开来源的每条事实都带 URL。
+   制裁名单（OFAC SDN/非 SDN、US CSL、UN、EU、UK）/ 公开来源（RDAP、CT 子域名、
+   被动 DNS、Wayback、GitHub、GLEIF、EU VIES、纽约/科罗拉多州登记、SEC EDGAR、
+   GDELT 新闻）/ LinkedIn 核查指令 + 综合评分与建议。
+   公开来源的每条事实都带 URL；未查到/限流的来源如实列出，不当成"没有问题"。
 
    **终端工具调用一律传 `timeout=600`**：各层并发执行，单层 holehe 最多 90 秒，
    终端默认超时会提前截断整条命令。

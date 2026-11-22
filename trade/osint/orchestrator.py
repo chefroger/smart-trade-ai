@@ -34,6 +34,7 @@ from trade.osint.scoring import (
 from trade.osint.sources import (
     SOURCE_LABELS,
     TargetContext,
+    source_applies,
     sources_enabled,
 )
 from trade.osint.sources import (
@@ -52,11 +53,17 @@ _LAYER_TIMEOUTS: dict[str, float] = {
     "tech_stack": 20.0,
     "sanctions": 60.0,
     "linkedin": 10.0,
-    # 公开来源（P2-2）：单源 15 秒
+    # 公开来源（P2-2）：单源 15 秒（GDELT 偏慢，给 20 秒）
     "rdap": 15.0,
     "ct": 15.0,
     "wayback": 15.0,
+    "pdns": 15.0,
     "github": 15.0,
+    "gleif": 15.0,
+    "vies": 15.0,
+    "us_states": 15.0,
+    "edgar": 15.0,
+    "gdelt": 20.0,
 }
 
 # 进度事件用的完整标签表（6 层 + 公开来源）
@@ -181,7 +188,7 @@ async def osint_full_check(
             company_name=target if target_type == "company" else None,
         )
         for module in PUBLIC_SOURCES:
-            if module.NAME in ("rdap", "ct", "wayback") and not lookup_domain:
+            if not source_applies(module.NAME, ctx):
                 continue
             public_planned[module.NAME] = functools.partial(
                 _run_public_source, module, ctx, source_fetcher,

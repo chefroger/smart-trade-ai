@@ -22,12 +22,19 @@ from trade.osint.orchestrator import (  # noqa: E402
     _split_type_prefix,
     osint_full_check,
 )
-from trade.osint.sources import (  # noqa: E402  # noqa: E402
+from trade.osint.sources import (  # noqa: E402
     TargetContext,
     ct,
+    edgar,
+    gdelt,
     github,
+    gleif,
+    pdns,
     rdap,
+    source_applies,
     sources_enabled,
+    us_states,
+    vies,
     wayback,
 )
 
@@ -53,6 +60,22 @@ def fake_fetch(url: str, timeout: int = 15, **_kw):
         if login == "Mattbusel":
             return _read("github_user.json")
         return json.dumps({"login": login})
+    if "api.hackertarget.com" in url:
+        return _read("pdns_hackertarget.txt") if "cloudflare.com" in url else ""
+    if "api.gleif.org" in url:
+        return _read("gleif_search.json") if "Apple" in url else json.dumps({"data": []})
+    if "data.ny.gov" in url:
+        return _read("us_ny.json") if "TENSORUST" in url.upper() else "[]"
+    if "data.colorado.gov" in url:
+        return _read("us_co.json") if "GOOGLE" in url.upper() else "[]"
+    if "efts.sec.gov" in url:
+        if "Apple" in url:
+            return _read("edgar.json")
+        return json.dumps({"hits": {"hits": [], "total": {"value": 0}}})
+    if "gdeltproject.org" in url:
+        return _read("gdelt_artlist.json") if "tensorust" in url.lower() else json.dumps({"articles": []})
+    if "vies/rest-api" in url:
+        return _read("vies.json")
     return None
 
 
@@ -207,10 +230,156 @@ class TestGithub:
         assert result.status == "error"
 
 
+class TestPdns:
+    def test_success(self):
+        result = pdns.run(ctx(domain="cloudflare.com"), fetch=fake_fetch)
+        assert result.status == "hit"
+        assert any("abuse.cloudflare.com" in name for name in result.data["subdomains"])
+
+    def test_quota_error_text_is_not_a_hit(self):
+        result = pdns.run(
+            ctx(domain="cloudflare.com"),
+            fetch=lambda *a, **k: "API count exceeded - Increase Quota with Membership",
+        )
+        assert result.status == "miss"
+
+    def test_no_domain_is_skipped(self):
+        assert pdns.run(ctx(domain=None), fetch=fake_fetch).status == "skipped"
+
+
+class TestGleif:
+    def test_success(self):
+        result = gleif.run(
+            ctx(company_name="Apple", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        assert result.data["lei"]
+        assert "APPLE TREE" in result.facts[0]["text"]
+
+    def test_non_matching_result_is_not_used(self):
+        result = gleif.run(
+            ctx(company_name="Tensorust", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "miss"
+
+    def test_person_is_skipped(self):
+        result = gleif.run(
+            ctx(company_name=None, domain=None, person_name="John Smith", target_type="person"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "skipped"
+
+
+class TestVies:
+    def test_valid_vat(self):
+        result = vies.run(
+            ctx(target="IE6388047V", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        assert result.data["valid"] is True
+        assert "GOOGLE IRELAND" in result.facts[0]["text"]
+
+    def test_invalid_vat_is_still_a_finding(self):
+        result = vies.run(
+            ctx(target="IE6388047V", domain=None, target_type="company"),
+            fetch=lambda *a, **k: json.dumps({"isValid": False, "userError": "INVALID"}),
+        )
+        assert result.status == "hit"
+        assert result.data["valid"] is False
+        assert "无效" in result.facts[0]["text"]
+
+    def test_no_vat_is_skipped(self):
+        assert vies.run(ctx(), fetch=fake_fetch).status == "skipped"
+        assert source_applies("vies", ctx()) is False
+        assert source_applies("vies", ctx(target="IE6388047V")) is True
+
+
+class TestUsStates:
+    def test_ny_registration_and_address_type(self):
+        result = us_states.run(
+            ctx(company_name="TENSORUST LLC", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        joined = " ".join(fact["text"] for fact in result.facts)
+        assert "DOS ID 8120331" in joined
+        assert "Westchester" in joined
+        assert "非经营地证明" in joined
+
+    def test_co_registration(self):
+        result = us_states.run(
+            ctx(company_name="Google", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        joined = " ".join(fact["text"] for fact in result.facts)
+        assert "科罗拉多州登记" in joined and "20198008646" in joined
+
+    def test_person_is_skipped(self):
+        result = us_states.run(
+            ctx(company_name=None, domain=None, person_name="John Smith", target_type="person"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "skipped"
+
+
+class TestEdgar:
+    def test_success(self):
+        result = edgar.run(
+            ctx(company_name="Apple", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        assert "10-K" in result.facts[0]["text"]
+
+    def test_empty(self):
+        result = edgar.run(
+            ctx(company_name="Tensorust", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "miss"
+
+    def test_person_is_skipped(self):
+        result = edgar.run(
+            ctx(company_name=None, domain=None, person_name="John Smith", target_type="person"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "skipped"
+
+
+class TestGdelt:
+    def test_success(self):
+        result = gdelt.run(ctx(), fetch=fake_fetch)
+        assert result.status == "hit"
+        assert "Tensorust" in result.facts[0]["text"]
+        assert result.facts[0]["url"].startswith("https://")
+
+    def test_error_is_reported(self):
+        def _boom(*_a, **_k):
+            raise OSError("HTTP Error 429: Too Many Requests")
+
+        result = gdelt.run(ctx(), fetch=_boom)
+        assert result.status == "error"
+        assert "429" in result.error
+
+    def test_empty(self):
+        result = gdelt.run(ctx(), fetch=lambda *a, **k: json.dumps({"articles": []}))
+        assert result.status == "miss"
+
+
 class TestSwitch:
     def test_sources_can_be_disabled(self, monkeypatch):
         monkeypatch.setenv("TRADE_OSINT_SOURCES", "off")
         assert sources_enabled() is False
+
+    def test_applicability(self):
+        assert source_applies("rdap", ctx(domain=None)) is False
+        assert source_applies("rdap", ctx()) is True
+        assert source_applies("gleif", ctx(target_type="person")) is False
+        assert source_applies("github", ctx(target_type="person")) is True
 
 
 # ── 编排与 CLI 渲染 ─────────────────────────────────────────────────────────
@@ -253,6 +422,10 @@ async def test_orchestrator_collects_sources_and_rdap_fills_whois(monkeypatch):
     assert "shop" in sources["ct"]["data"]["subdomains"]
     assert any("Matthew Charles Vladislav Busel" in f["text"]
                for f in sources["github"]["facts"])
+    # 第二批：州登记与新闻
+    assert sources["us_states"]["status"] == "hit"
+    assert "DOS ID 8120331" in " ".join(f["text"] for f in sources["us_states"]["facts"])
+    assert sources["gdelt"]["status"] == "hit"
 
     started = {e["source"] for e in events if e["event"] == "source_start"}
     done = {e["source"] for e in events if e["event"] == "source_done"}
