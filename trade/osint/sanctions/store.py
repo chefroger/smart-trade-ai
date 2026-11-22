@@ -121,8 +121,12 @@ def save_list(conn: sqlite3.Connection, source, parsed, *, fetched_at: str | Non
 
     同一事务内先删后插：查询端（WAL）看到的是刷新前的完整快照，
     不会出现「删完了还没插」的半空状态。
+
+    **空结果拒绝写入**（2026-11-22 审计 P1-1）：官方格式变更/空文件/截断下载
+    都可能让解析器“成功返回 0 行”。先删后插会把整份名单清空，随后 coverage
+    仍标健康、评分给满分干净——合规假阴性。这里在 DELETE 之前拒绝空 payload，
+    本次刷新按失败处理（loader 会 mark_failure，旧数据保留）。
     """
-    conn.execute("DELETE FROM entities WHERE list = ?", (source.name,))
     payload = []
     for name, country, kind in parsed.rows:
         norm = normalize_name(name)
@@ -132,6 +136,11 @@ def save_list(conn: sqlite3.Connection, source, parsed, *, fetched_at: str | Non
         payload.append(
             (source.name, name, norm, token_key(toks), country or "", kind or "entity")
         )
+    if not payload or int(parsed.primary or 0) <= 0:
+        raise ValueError(
+            f"解析结果为空，拒绝覆盖旧名单（主名 {parsed.primary}，源行 {parsed.rows_total}）"
+        )
+    conn.execute("DELETE FROM entities WHERE list = ?", (source.name,))
     conn.executemany(
         "INSERT INTO entities(list, name, norm, tkey, country, kind) VALUES (?,?,?,?,?,?)",
         payload,
@@ -242,6 +251,12 @@ def get_coverage() -> dict:
         if row["last_error"]:
             # 本次刷新失败但沿用了旧数据：如实标注，但不是 degraded
             entry["note"] = f"本次刷新失败，沿用 {age_hours:.0f} 小时前的数据：{row['last_error']}"
+        if entry["entries"] <= 0:
+            # “下载成功但 0 条”绝不是健康名单（2026-11-22 审计 P1-1）：
+            # 可能来自格式变更/空文件/解析回归。必须降级，评分才会 fail-closed。
+            entry["degraded"] = True
+            entry["note"] = "名单解析结果为 0 条，按降级处理"
+            degraded = True
         lists[source.name] = entry
 
     return {

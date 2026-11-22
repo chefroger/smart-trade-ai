@@ -61,6 +61,14 @@ def refresh_all(
         for source in sources:
             try:
                 parsed: ParsedList = fetch(source)
+                # 空解析按失败处理，旧数据原样保留（2026-11-22 审计 P1-1）。
+                # 触发条件：官方格式变更、空文件、截断下载后解析器返回 0 行而不抛异常。
+                if not parsed.rows or int(parsed.primary or 0) <= 0:
+                    raise ValueError(
+                        "解析结果为空"
+                        f"（主名 {parsed.primary}，源行 {parsed.rows_total}），"
+                        "保留上次成功数据"
+                    )
                 save_list(conn, source, parsed)
                 # 立即重建 FTS：外部内容索引没有触发器，不重建的话查询端
                 # 会按旧 rowid 匹配到新行（漏命中）。

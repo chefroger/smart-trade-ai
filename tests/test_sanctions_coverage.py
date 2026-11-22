@@ -168,3 +168,77 @@ class TestScoringRespectsCoverage:
     def test_missing_coverage_is_treated_as_degraded(self):
         recs = self._recs({"hits": [], "is_sanctioned": False, "risk_level": "none"})
         assert "✅ 未在任何制裁名单中发现匹配项" not in "\n".join(recs)
+
+
+class TestEmptyParseDoesNotWipeLists:
+    """2026-11-22 审计 P1-1：解析“成功返回 0 行”不得清空名单、更不得判干净。"""
+
+    def _empty(self, source):
+        from trade.osint.sanctions.sources import ParsedList
+
+        return ParsedList(
+            label=source.label, source_url=source.urls[0],
+            primary=0, aliases=0, rows_total=0, rows=[],
+        )
+
+    def test_empty_after_success_keeps_old_data(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.loader import refresh_all
+        from trade.osint.sanctions.sources import SOURCES
+
+        refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+        results = refresh_all(fetch=self._empty)
+        assert all(item["ok"] is False for item in results.values())
+
+        result = check_sanctions("ACME CORP")
+        assert result["is_sanctioned"] is True, "空解析把旧名单清掉了"
+        coverage = result["coverage"]
+        assert coverage["degraded"] is False, "旧数据仍在，应沿用而不是降级"
+        assert coverage["total_entries"] == len(SOURCES)
+        assert "解析结果为空" in coverage["lists"][SOURCES[0].name]["note"]
+
+    def test_first_empty_parse_is_degraded_and_never_clean(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.loader import refresh_all
+
+        results = refresh_all(fetch=self._empty)
+        assert all(item["ok"] is False for item in results.values())
+
+        result = check_sanctions("ACME CORP")
+        assert result["coverage"]["degraded"] is True
+        assert result["coverage"]["total_entries"] == 0
+        assert "未在任何制裁名单中发现匹配项" not in result["suggestion"]
+
+    def test_save_list_rejects_empty_payload_without_deleting(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions, store
+        from trade.osint.sanctions.loader import refresh_all
+        from trade.osint.sanctions.sources import SOURCES
+
+        refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+        conn = store._connect(write=True)
+        try:
+            with pytest.raises(ValueError):
+                store.save_list(conn, SOURCES[0], self._empty(SOURCES[0]))
+        finally:
+            conn.close()
+        assert check_sanctions("ACME CORP")["is_sanctioned"] is True
+
+    def test_zero_entries_row_is_degraded(self, sanctions_db):
+        """历史库若已有 fetched_at 但 entries=0，也必须判降级（不只是刷新路径）。"""
+        from trade.osint.sanctions import store
+        from trade.osint.sanctions.loader import refresh_all
+        from trade.osint.sanctions.sources import SOURCES
+
+        refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+        conn = store._connect(write=True)
+        try:
+            conn.execute(
+                "UPDATE lists SET entries = 0 WHERE name = ?", (SOURCES[0].name,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        coverage = store.get_coverage()
+        assert coverage["degraded"] is True
+        assert coverage["lists"][SOURCES[0].name]["degraded"] is True
+        assert "0 条" in coverage["lists"][SOURCES[0].name]["note"]
