@@ -19,7 +19,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
-    fetch_text,
+    fetch_page,
     quote,
     skipped,
 )
@@ -90,14 +90,31 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
         url = uri.replace("{account}", quote(username))
         pretty = str(site.get("uri_pretty") or uri).replace("{account}", quote(username))
         try:
-            text = fetch_text(
+            page = fetch_page(
                 url,
                 timeout=_PER_SITE_TIMEOUT,
                 fetch=fetch,
                 headers=site.get("headers") if isinstance(site.get("headers"), dict) else None,
             )
-        except Exception:  # noqa: BLE001 —— 单站失败/404 都按未命中
+        except Exception:  # noqa: BLE001 —— 单站失败按未命中
             return None
+        if page is None:
+            return None
+        code, text = page
+        # WhatsMyName 的 e_code：账号存在时该站返回的状态码（多数 200，也有
+        # 301/400/403）。此前只看 e_string，非 2xx 的站点被 HTTPError 吞掉、
+        # 永远不可能命中（2026-11-22 审计 P2-10）。
+        expected = site.get("e_code")
+        if expected is not None:
+            try:
+                expected = int(expected)
+            except (TypeError, ValueError):
+                expected = None
+        if expected is not None and code != expected:
+            # 301/302 会被 opener 自动跟随到最终 200：期望重定向时接受最终 2xx
+            redirect_followed = expected in (301, 302, 303, 307, 308) and 200 <= code < 300
+            if not redirect_followed:
+                return None
         if not text:
             return None
         marker = str(site.get("e_string") or "")

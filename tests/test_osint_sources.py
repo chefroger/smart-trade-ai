@@ -504,6 +504,39 @@ class TestUsernames:
         assert source_applies("usernames", ctx()) is False
         assert source_applies("usernames", ctx(username="matt")) is True
 
+    def test_e_code_mismatch_is_not_a_hit(self, monkeypatch):
+        """审计 P2-10：状态码与 e_code 不符时，即使正文含关键词也不算命中。"""
+        monkeypatch.setattr(usernames, "_load_sites", lambda: [
+            {"name": "GitHub", "uri_check": "https://github.com/{account}",
+             "e_string": "profile", "e_code": 404},
+        ])
+        result = usernames.run(ctx(username="matt"), fetch=lambda *a, **k: (200, "profile"))
+        assert result.status == "miss"
+
+    def test_non_200_expected_code_can_hit(self, monkeypatch):
+        """审计 P2-10：e_code=403 的站点（此前被 HTTPError 吞掉）现在能命中。"""
+        monkeypatch.setattr(usernames, "_load_sites", lambda: [
+            {"name": "SomeSite", "uri_check": "https://some.example/{account}",
+             "e_string": "profile", "e_code": 403},
+        ])
+        result = usernames.run(ctx(username="matt"), fetch=lambda *a, **k: (403, "profile page"))
+        assert result.status == "hit"
+
+    def test_redirect_expected_code_accepts_followed_200(self, monkeypatch):
+        """e_code=301 的站点会被 opener 跟到最终 200，不能因此判成未命中。"""
+        monkeypatch.setattr(usernames, "_load_sites", lambda: [
+            {"name": "Retry", "uri_check": "https://retry.example/{account}",
+             "e_string": "profile", "e_code": 301},
+        ])
+        result = usernames.run(ctx(username="matt"), fetch=lambda *a, **k: (200, "profile page"))
+        assert result.status == "hit"
+
+    def test_fetch_page_wraps_plain_fetcher_as_200(self):
+        from trade.osint.sources.base import fetch_page
+
+        assert fetch_page("https://x.example/", fetch=lambda *a, **k: "body") == (200, "body")
+        assert fetch_page("https://x.example/", fetch=lambda *a, **k: None) is None
+
 
 class TestUsernameExtraction:
     def test_from_profile_url(self):

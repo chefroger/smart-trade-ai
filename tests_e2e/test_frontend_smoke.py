@@ -503,3 +503,41 @@ def test_task_text_follows_progress_until_reply(live_server):
         page.wait_for_timeout(300)
         assert page.evaluate("_osintTaskPanels[999].wait.final") is True
         browser.close()
+
+
+def test_late_verdict_keeps_rating_from_job_detail(live_server):
+    """审计 O-19：轮询只拿到「完成」时，收尾前补详情取评级，不能丢评级。"""
+    import json
+
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    detail = json.dumps({
+        "id": 998, "company_id": cid, "target": "acme.com", "status": "done",
+        "report": {"overall_rating": "中风险", "unverified": []},
+    })
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid)
+        page.route("**/api/trade/osint/jobs?limit=*", lambda r: r.fulfill(
+            status=200, content_type="application/json", body='{"jobs": []}'))
+        page.route("**/api/trade/osint/jobs/998", lambda r: r.fulfill(
+            status=200, content_type="application/json", body=detail))
+        page.evaluate(f"currentCompanyId = {cid}; navToView('chat','daily','今日简报');")
+        page.wait_for_selector("#chat-messages", timeout=15000)
+        page.wait_for_timeout(600)
+        page.evaluate("""() => {
+          _chatStreamActive = 1;
+          _attachOsintTaskPanel(null, {job_id: 998, target: 'acme.com', status: 'running'});
+          _handleOsintJobSse(998, 'id: 1\\nevent: source_start\\ndata: {"source":"rdap","label":"RDAP"}');
+          // 模拟轮询：状态已完成、但列表接口只有 status，没有评级
+          _osintTaskPanels[998].pendingVerdict = {rating: ''};
+          _osintTaskPanels[998].status = 'done';
+          _osintTaskPanels[998].wait.phase('composing', '采集完成，正在生成回复…');
+        }""")
+        page.evaluate("_chatStreamActive = 0; _flushPendingDockVerdicts();")
+        page.wait_for_function(
+            "document.querySelector('#wait-dock').textContent.includes('评级 中风险')",
+            timeout=10000,
+        )
+        assert page.evaluate("_osintTaskPanels[998].wait.final") is True
+        browser.close()

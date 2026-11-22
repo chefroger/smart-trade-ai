@@ -1679,9 +1679,29 @@ function _flushPendingDockVerdicts() {
         p.pendingVerdict = null;
         if (verdict && verdict.rating) {
             p.wait.push(Object.assign({}, verdict, {type: 'verdict'}));
-        } else {
-            p.wait.finish({phase: 'acquired', zh: '采集完成'});
+            return;
         }
+        // 轮询只知道「已完成」、列表接口不带评级：补一次详情再收尾。
+        // 直接 finish 会让评级永久丢失 —— SSE 的 verdict 稍后到达时 wait
+        // 已 final，push 被吞（2026-11-22 审计 O-19）。
+        api('GET', '/api/trade/osint/jobs/' + id, null, undefined, {silent: true})
+            .then(function (job) {
+                const report = (job && job.report) || {};
+                if (p.wait && !p.wait.final) {
+                    if (report.overall_rating) {
+                        p.wait.push({
+                            type: 'verdict',
+                            rating: report.overall_rating,
+                            unverified: report.unverified || [],
+                        });
+                    } else {
+                        p.wait.finish({phase: 'acquired', zh: '采集完成'});
+                    }
+                }
+            })
+            .catch(function () {
+                if (p.wait && !p.wait.final) p.wait.finish({phase: 'acquired', zh: '采集完成'});
+            });
     });
 }
 

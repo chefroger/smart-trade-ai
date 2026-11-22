@@ -35,6 +35,25 @@ test('守卫提示不再弹 toast（2026-10-29：默认关闭，警告无用）'
   assert.ok(!SRC.includes('聊天已暂停'), '不得再声称聊天已暂停');
 });
 
+// 审计 O-18（2026-11-22）：S-01 线条/遮罩的墨色统一为 rgb(12,13,14)，
+// 旧墨色 rgb(20,20,20) 在 CSS 里残留会让网格、hover、阴影偏暖。
+test('CSS 不再残留旧墨色 rgba(20,20,20)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.css'), 'utf8');
+  assert.ok(!/rgba\(\s*20\s*,\s*20\s*,\s*20/.test(css), '旧墨色 rgba(20,20,20) 必须全部换成 12,13,14');
+  assert.match(css, /--grid-line:\s*rgba\(12,\s*13,\s*14/);
+});
+
+// 审计 O-19：轮询只拿到「已完成」时不能直接结束动画，否则迟到的评级被吞。
+test('待结论收尾会补详情取评级', () => {
+  const start = SRC.indexOf('function _flushPendingDockVerdicts');
+  assert.ok(start > 0, '找不到 _flushPendingDockVerdicts');
+  const body = SRC.slice(start, start + 1600);
+  assert.match(body, /'\/api\/trade\/osint\/jobs\/' \+ id/);
+  assert.match(body, /overall_rating/);
+});
+
 test('api() 支持额外 header', () => {
   assert.match(SRC, /async function api\(method, path, body, extraHeaders(?:, options)?\)/);
   assert.match(SRC, /Object\.assign\(opts\.headers, extraHeaders\)/);

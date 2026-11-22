@@ -6,7 +6,7 @@
     --line: #E3E3E0; --line-strong: #141414;
     --chip: #F1F1EF; --radius: 2px;
     /* mockup 格子底：主区纯白场底 + 32px 格；待办横幅用更深实底盖住格子 */
-    --grid-line: rgba(20, 20, 20, 0.045);
+    --grid-line: rgba(12, 13, 14, 0.045);
     --bg-field: #FFFFFF;
     --todo-bar-bg: #EBEBE9;
     --font-ui: "Archivo", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -14,12 +14,12 @@
     --ease-s01: cubic-bezier(.22,.9,.3,1);
 
     /* 兼容旧类名变量 → 映射到 S-01 */
-    --sidebar-bg: var(--panel2); --sidebar-hover: rgba(20,20,20,0.04);
-    --sidebar-active: rgba(20,20,20,0.06);
+    --sidebar-bg: var(--panel2); --sidebar-hover: rgba(12,13,14,0.04);
+    --sidebar-active: rgba(12,13,14,0.06);
     --sidebar-text: var(--muted); --sidebar-text-active: var(--ink);
     --sidebar-section: var(--muted);
     --primary: var(--ink); --primary-dark: #000000; --primary-light: #333333;
-    --primary-subtle: var(--chip); --primary-glow: rgba(20,20,20,0.08);
+    --primary-subtle: var(--chip); --primary-glow: rgba(12,13,14,0.08);
     --accent-green: #1B7F4A; --accent-green-bg: #ECFDF5;
     --accent-red: var(--accent); --accent-red-bg: #FEF2F2;
     --bg-main: var(--bg); --bg-chat: var(--bg); --bg-card: var(--panel);
@@ -28,9 +28,9 @@
     --border: var(--line); --border-light: var(--line);
     --chat-max-w: 768px;
     --shadow-xs: none; --shadow-sm: none; --shadow: none;
-    --shadow-md: 0 8px 24px rgba(20,20,20,0.08);
-    --shadow-lg: 0 16px 40px rgba(20,20,20,0.10);
-    --shadow-xl: 0 24px 60px rgba(20,20,20,0.14);
+    --shadow-md: 0 8px 24px rgba(12,13,14,0.08);
+    --shadow-lg: 0 16px 40px rgba(12,13,14,0.10);
+    --shadow-xl: 0 24px 60px rgba(12,13,14,0.14);
     --radius-sm: 2px; --radius-lg: 2px; --radius-xl: 2px;
     --ease: cubic-bezier(0.4,0,0.2,1); --ease-out: cubic-bezier(0,0,0.2,1);
     --ease-bounce: cubic-bezier(0.34,1.56,0.64,1);
@@ -871,7 +871,7 @@ body > #toast-container { position: relative; z-index: 400; }
 .nav-item {
     color: var(--muted) !important; border-radius: 0 !important; margin-bottom: 0;
 }
-.nav-item:hover { background: rgba(20,20,20,.04) !important; color: var(--ink) !important; }
+.nav-item:hover { background: rgba(12,13,14,.04) !important; color: var(--ink) !important; }
 .nav-item.active {
     background: var(--panel) !important; color: var(--ink) !important; font-weight: 600;
     box-shadow: inset 3px 0 0 var(--accent) !important;
@@ -1037,7 +1037,7 @@ body > #toast-container { position: relative; z-index: 400; }
 }
 .data-table { box-shadow: none !important; border: 1.5px dashed rgba(12,13,14,.45); border-radius: 2px !important; }
 .data-table tr { animation: s01rise .5s var(--ease-s01) both; }
-.data-table tr:hover td { background: rgba(20,20,20,.03) !important; }
+.data-table tr:hover td { background: rgba(12,13,14,.03) !important; }
 .data-table tr.cust-overdue td { color: var(--accent); }
 .data-table tr.cust-overdue .cust-follow { color: var(--accent); font-weight: 700; }
 .cust-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -1811,7 +1811,7 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .mention-item.on { background: var(--ink); color: #fff; }
 .mention-group {
     font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
-    color: var(--muted); padding: 6px 10px 2px; background: rgba(20, 20, 20, .03);
+    color: var(--muted); padding: 6px 10px 2px; background: rgba(12, 13, 14, .03);
     position: sticky; top: 0;
 }
 .mention-item .sub { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2072,7 +2072,7 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .sidebar-nav::-webkit-scrollbar { width: 6px; }
 .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(12,13,14,.25); border-radius: 3px; }
 .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
-.sidebar-bottom { background: #FBFCFC !important; backdrop-filter: none !important; border-top: 1px dashed rgba(20, 20, 20, .18); }
+.sidebar-bottom { background: #FBFCFC !important; backdrop-filter: none !important; border-top: 1px dashed rgba(12, 13, 14, .18); }
 
 /* 短窗：底栏让高度给功能栏，避免压住最后一项 */
 .sidebar-bottom { padding-top: 8px; }
