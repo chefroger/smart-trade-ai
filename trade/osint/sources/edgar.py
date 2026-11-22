@@ -1,7 +1,8 @@
 """SEC EDGAR 全文检索（工单 P2-2）：美国上市/申报主体的申报记录。
 
-统一检索接口要求 UA 带联系邮箱；邮箱取自 `TRADE_CONTACT_EMAIL`，
-未配置时用占位地址（SEC 可能拒绝，如实返回错误）。
+统一检索接口要求 UA 带联系邮箱；邮箱取自 `TRADE_CONTACT_EMAIL`（写在
+`~/.hermes/.env`），未配置时用项目维护者的真实邮箱兜底 —— 不能用
+`.example` 保留域占位（SEC 会拒绝，且审计 P2-9 指出它不可配置）。
 """
 
 from __future__ import annotations
@@ -20,10 +21,12 @@ from trade.osint.sources.base import (
 NAME = "edgar"
 LABEL = "SEC EDGAR 申报"
 SEARCH = "https://efts.sec.gov/LATEST/search-index?q=%22{hint}%22"
+# SEC 要求 UA 带可联系的真实邮箱；保留域 .example 会被拒（审计 P2-9）
+DEFAULT_CONTACT_EMAIL = "chefrogerlau@126.com"
 
 
 def _headers() -> dict[str, str]:
-    email = os.environ.get("TRADE_CONTACT_EMAIL", "").strip() or "support@smart-trade-ai.example"
+    email = os.environ.get("TRADE_CONTACT_EMAIL", "").strip() or DEFAULT_CONTACT_EMAIL
     return {
         "User-Agent": f"Trade-AI/1.0 ({email})",
         "Accept": "application/json",

@@ -80,6 +80,12 @@ fi
 [ -n "$NOTE" ] && LOG="- $NOTE
 $LOG"
 
+# 审计 O-21：非发版提交必须带「包外改动」披露行。只在发版时提醒，不阻断
+# （历史提交无法补写，卡住发布没有意义）。
+if [ -n "$LAST_TAG" ]; then
+    python3 scripts/check_commit_disclosure.py "$LAST_TAG..HEAD" --warn-only || true
+fi
+
 python3 - "$VERSION" "$LOG" <<'PY'
 import sys
 v, log = sys.argv[1], sys.argv[2]

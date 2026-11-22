@@ -82,6 +82,10 @@ Tavily 是联网搜索引擎，让 AI 能搜索实时信息。
 
 > Tavily 每月有 1000 次免费搜索额度，个人使用足够了。不注册不影响对话功能，但搜索和客户背调质量会受明显影响。
 
+**可选：背调数据源凭证。** 三个公开数据源支持额外凭证，不配也能用，只是更容易被限流：
+`TRADE_CONTACT_EMAIL`（SEC EDGAR 联系邮箱）、`GITHUB_TOKEN`（GitHub 查询配额）、
+`CERTSPOTTER_TOKEN`（证书透明度配额）。写进 `~/.hermes/.env`（每行 `KEY=value`），重启 Trade 生效。
+
 ### 第四步：检查 Python 架构（M 芯片 Mac 必须看）
 
 如果你是 M1/M2/M3/M4 芯片的 Mac，先确认 Python 是原生 arm64 版本：

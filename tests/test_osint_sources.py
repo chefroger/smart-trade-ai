@@ -218,6 +218,12 @@ class TestCt:
         result = ct.run(ctx(), fetch=_boom)
         assert result.status == "error"
 
+    def test_token_is_optional_and_configured_via_env(self, monkeypatch):
+        monkeypatch.delenv("CERTSPOTTER_TOKEN", raising=False)
+        assert ct._certspotter_headers() == {}
+        monkeypatch.setenv("CERTSPOTTER_TOKEN", "cs_example")
+        assert ct._certspotter_headers()["Authorization"] == "Bearer cs_example"
+
 
 class TestWayback:
     def test_success_first_snapshot(self):
@@ -276,6 +282,13 @@ class TestGithub:
 
         result = github.run(ctx(), fetch=_boom)
         assert result.status == "error"
+
+    def test_token_is_optional_and_configured_via_env(self, monkeypatch):
+        """审计 P2-9：凭证从环境变量读取（写 ~/.hermes/.env），无 token 时不带头。"""
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        assert "Authorization" not in github._headers()
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_example")
+        assert github._headers()["Authorization"] == "Bearer ghp_example"
 
 
 class TestPdns:
@@ -396,6 +409,17 @@ class TestEdgar:
             fetch=fake_fetch,
         )
         assert result.status == "skipped"
+
+    def test_contact_email_default_is_real(self, monkeypatch):
+        """审计 P2-9：默认联系邮箱不能是 .example 保留域（SEC 会拒绝）。"""
+        monkeypatch.delenv("TRADE_CONTACT_EMAIL", raising=False)
+        ua = edgar._headers()["User-Agent"]
+        assert "example" not in ua
+        assert edgar.DEFAULT_CONTACT_EMAIL in ua
+
+    def test_contact_email_configured_via_env(self, monkeypatch):
+        monkeypatch.setenv("TRADE_CONTACT_EMAIL", "ops@acme.test")
+        assert "ops@acme.test" in edgar._headers()["User-Agent"]
 
 
 class TestGdelt:
