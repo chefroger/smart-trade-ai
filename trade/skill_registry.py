@@ -156,9 +156,12 @@ Phase 3: 深度背调 (Deep Verification)
       每个单独跑 `python -m trade.osint <邮箱>`（同样传 `timeout=600`），
       核验真实性与社交档案；
    c) LinkedIn 层只生成浏览器操作指令，需用浏览器工具实际执行后再下结论；
-   d) **长时间背调优先后台任务**：Trade 内有 `osint_job_start(target)` /
-      `osint_job_result(job_id)` 工具（独立 Hermes 不注册）；长任务先启动后台任务，
-      再读进度，不要在一次 terminal 调用里阻塞数分钟；
+   d) **背调一律走后台任务，禁止用 terminal 跑长背调**：Trade 内注册了 `osint_job_start(target)` /
+      `osint_job_result(job_id)`。它们可能被 Hermes 的 tool_search 渐进披露隐藏 ——
+      **看不到不等于不存在**：先 `tool_search(queries=["osint_job_start"])`，命中后用
+      `tool_call` 执行、`osint_job_result(job_id)` 轮询。terminal 属于当前聊天流，
+      切公司/刷新页面会中断整条流（exit 130），任务作废；只有 tool_search 确认
+      工具真的不存在（独立 Hermes）才退回 terminal；
    e) **制裁比对必须写进报告**：无论命中与否，报告里要有一行制裁结论
       （命中：名单+实体；未命中：比对过的名单与条数；未完成核验：原因），
       「已查渠道」必须包含制裁名单；没跑机器判定层就写「未执行」，不能省略；

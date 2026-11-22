@@ -1383,7 +1383,11 @@ async function sendMsg() {
                     try { data = JSON.parse(dataStr); } catch(e) { eventType='';dataStr='';continue; }
                     switch(eventType) {
                     case 'tool_start': addToolItem(data.tool_call_id,data.name,'running',data.args?Object.entries(data.args).map(([k,v])=>`${k}=${fmtArg(v)}`).join(', '):''); break;
-                    case 'tool_complete': updateTool(data.tool_call_id,'done',data.result_preview||'完成'); break;
+                    case 'tool_complete':
+                        updateTool(data.tool_call_id,'done',data.result_preview||'完成');
+                        // 后台背调刚启动：立刻刷新右栏任务面板，不必等切视图
+                        if (data.name === 'osint_job_start' && typeof loadOsintJobs === 'function') loadOsintJobs(true);
+                        break;
                     case 'thinking':
                         if (!progDiv.querySelector('.thinking-msg')) { const t=document.createElement('div'); t.className='thinking-msg'; t.style.cssText='font-size:12px;color:var(--text-muted);padding:4px 0;'; t.textContent='💭 '+(data.message||'思考中...'); progDiv.appendChild(t); }
                         break;

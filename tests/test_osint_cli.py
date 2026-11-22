@@ -230,6 +230,21 @@ class TestPromptsPointAtTheCommand:
         for name, text in self._osint_prompts():
             assert "代理注册地址" in text, f"{name} 没有要求标注地址类型"
 
+    def test_prompts_route_long_checks_through_background_job(self):
+        """2026-11-22 事故：切公司中断了正在跑的 terminal 背调（exit 130）。
+
+        插件工具会被 Hermes 的 tool_search 渐进披露隐藏，模型看不见就退回 terminal。
+        提示词必须：指向 osint_job_start + 教它先 tool_search + 禁止 terminal 长跑。
+        """
+        for name, text in self._osint_prompts():
+            assert "osint_job_start" in text, f"{name} 没有指向后台背调任务"
+            assert "tool_search" in text, (
+                f"{name} 没教模型用 tool_search 找到被延迟的插件工具"
+            )
+            assert "禁止用 terminal" in text, (
+                f"{name} 没有禁止用 terminal 跑长背调（切公司会中断）"
+            )
+
     def test_prompts_use_the_cli_command(self):
         for name, text in self._prompts():
             assert "python -m trade.osint" in text, f"{name} 没有指向可执行的背调命令"

@@ -118,10 +118,15 @@ injection_prompt: |
   终端默认超时会提前掐断整条命令。
   **结论照抄命令输出**：它标注降级的（如制裁源不可用）如实转述，不要替它补全、
   更不要写出它没给出的判定；评级为「未完成核验」时**不得改写成低风险**。详细步骤见正文 Phase 3。
-  **长时间背调优先后台任务**：Trade 提供 `osint_job_start(target)` /
-  `osint_job_result(job_id)` 两个工具（只在 Trade 进程内注册）。长任务先启动后台任务，
-  再用 `osint_job_result` 读进度；不要在一次 terminal 调用里阻塞几分钟。
-  没有这两个工具时（独立 Hermes），退回 `python -m trade.osint`。
+  **背调一律走后台任务，不用 terminal**：Trade 进程内注册了 `osint_job_start(target)` /
+  `osint_job_result(job_id)` 工具。它们可能被 Hermes 的渐进式工具披露（tool_search）
+  延迟，**不在你的工具列表里不等于不存在**：先调用
+  `tool_search(queries=["osint_job_start"])`，命中后按 schema 用
+  `tool_call` 执行（参数 `{"target": "<目标>"}`），再用 `osint_job_result(job_id)`
+  轮询；status=done 时 report 就是完整报告。
+  **禁止用 terminal 跑 `python -m trade.osint` 做长时间背调**：terminal 属于当前
+  聊天流，用户切公司/刷新页面会整条流中断（exit 130），任务作废。只有
+  `tool_search` 确认这两个工具确实不存在（独立 Hermes 环境）才退回 terminal。
   **制裁结论不许省略**：无论是否命中，第 4 节「风险在哪」必须写一行制裁比对结果
   （命中：名单+实体；未命中：写比对过的名单与条数；未完成核验：写原因）。报告结尾的
   「已查渠道」必须包含制裁名单；没跑机器判定层就写「未执行」，不能整段消失。
@@ -241,6 +246,12 @@ injection_prompt: |
   ════════════════════════════════════════
   Phase 3: 深度背调 (Deep Verification)
   ════════════════════════════════════════
+  **执行方式：先找后台任务工具，再考虑 terminal。** 插件工具会被 tool_search 延迟：
+  先 `tool_search(queries=["osint_job_start"])`，命中后用 `tool_call` 启动、
+  `osint_job_result` 轮询。**不要用 terminal 跑长背调** —— 它绑在聊天流上，
+  用户切公司/刷新页面就中断（exit 130）；只有 tool_search 确认没有这两个工具
+  （独立 Hermes）才退回下面的 terminal 命令。
+
   **机器判定层（6 层）用一个命令跑** —— 不要在脑子里估算，也不要凭搜索印象编造判定：
 
       python -m trade.osint <邮箱|域名|公司名|人名>
