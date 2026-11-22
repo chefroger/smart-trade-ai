@@ -180,6 +180,17 @@
     this.cv.width = Math.round(w * dpr); this.cv.height = Math.round(h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.W = w; this.H = h;
+    // 让面板网格与页面 32px 网格对齐：按面板在视口中的位置取模做偏移
+    var G = 32;
+    if (this.root && this.root.getBoundingClientRect) {
+      var rect = this.root.getBoundingClientRect();
+      this._gx = ((rect.left % G) + G) % G;
+      this._gy = ((rect.top % G) + G) % G;
+      this._cx = ((rect.left % (G * 2)) + G * 2) % (G * 2);
+      this._cy = ((rect.top % (G * 2)) + G * 2) % (G * 2);
+    } else {
+      this._gx = this._gy = this._cx = this._cy = 0;
+    }
     // 抽象节点：固定种子；聊天模式避开中间文字区
     var R = rng(this.mode === 'task' ? 4111 : 977); this.nodes = [];
     var n = this.mode === 'task' ? 26 : 22;
@@ -214,12 +225,14 @@
     c.fillStyle = '#FBFCFC'; c.fillRect(0, 0, w, h);
     // 网格 + 十字点（撒马利亚人画面里的 “+” 阵列）
     var g = 32; c.lineWidth = 1;
+    var gx = this._gx || g, gy = this._gy || g;
     c.strokeStyle = 'rgba(' + INK + ',.045)'; c.beginPath();
-    for (var x = g; x < w; x += g) { c.moveTo(x + .5, 0); c.lineTo(x + .5, h); }
-    for (var y = g; y < h; y += g) { c.moveTo(0, y + .5); c.lineTo(w, y + .5); }
+    for (var x = gx; x < w; x += g) { c.moveTo(x + .5, 0); c.lineTo(x + .5, h); }
+    for (var y = gy; y < h; y += g) { c.moveTo(0, y + .5); c.lineTo(w, y + .5); }
     c.stroke();
+    var cx0 = this._cx || g * 2, cy0 = this._cy || g * 2;
     c.strokeStyle = 'rgba(' + INK + ',.22)'; c.beginPath();
-    for (x = g * 2; x < w; x += g * 2) for (y = g * 2; y < h; y += g * 2) { c.moveTo(x - 3, y + .5); c.lineTo(x + 3, y + .5); c.moveTo(x + .5, y - 3); c.lineTo(x + .5, y + 3); }
+    for (x = cx0; x < w; x += g * 2) for (y = cy0; y < h; y += g * 2) { c.moveTo(x - 3, y + .5); c.lineTo(x + 3, y + .5); c.moveTo(x + .5, y - 3); c.lineTo(x + .5, y + 3); }
     c.stroke();
     // 枕形畸变边框：两侧竖线向内弯（撒马利亚人 = pincushion，The Machine = barrel）
     c.strokeStyle = 'rgba(' + INK + ',.55)'; c.beginPath();
