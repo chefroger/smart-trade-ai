@@ -64,6 +64,9 @@ _LAYER_TIMEOUTS: dict[str, float] = {
     "us_states": 15.0,
     "edgar": 15.0,
     "gdelt": 20.0,
+    "gravatar": 15.0,
+    "usernames": 25.0,
+    "registries_misc": 15.0,
 }
 
 # 进度事件用的完整标签表（6 层 + 公开来源）
@@ -126,7 +129,9 @@ async def osint_full_check(
         }
     """
     target, forced_type = _split_type_prefix(target)
+    target, forced_username = _split_username_prefix(target)
     target_type = forced_type or _detect_target_type(target)
+    username_hint = forced_username or _extract_username(target, target_type)
 
     report: dict = {
         "target": target,
@@ -186,6 +191,7 @@ async def osint_full_check(
             email=target if target_type == "email" else None,
             person_name=target if target_type == "person" else None,
             company_name=target if target_type == "company" else None,
+            username=username_hint,
         )
         for module in PUBLIC_SOURCES:
             if not source_applies(module.NAME, ctx):
@@ -496,6 +502,50 @@ def _split_type_prefix(target: str) -> tuple[str, str | None]:
         if lowered.startswith(prefix):
             return text.split(":", 1)[1].strip(), kind
     return text, None
+
+
+def _split_username_prefix(target: str) -> tuple[str, str | None]:
+    """剥离显式用户名前缀：`username:foo`。"""
+    text = str(target or "").strip()
+    if text.casefold().startswith("username:"):
+        return text.split(":", 1)[1].strip(), text.split(":", 1)[1].strip()
+    return text, None
+
+
+# 可以从 URL 提取用户名的公开主页站点
+_SOCIAL_HOSTS = frozenset({
+    "github.com", "x.com", "twitter.com", "linkedin.com",
+    "instagram.com", "tiktok.com", "youtube.com",
+})
+
+
+def _extract_username(target: str, target_type: str) -> str | None:
+    """邮箱取本地部分；社交主页 URL 取路径里的 handle。"""
+    if target_type == "email" and "@" in target:
+        local = target.split("@", 1)[0].strip()
+        # 公共邮箱前缀（info@/sales@…）不是个人用户名，查 50 个站点只会制造噪音
+        if local.casefold() in {
+            "info", "sales", "support", "contact", "admin", "hello",
+            "office", "service", "help", "marketing",
+        }:
+            return None
+        if len(local) >= 3 and re.fullmatch(r"[A-Za-z0-9._-]+", local):
+            return local
+        return None
+    if target_type == "url":
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(target)
+        host = (parsed.hostname or "").lower().removeprefix("www.")
+        if host not in _SOCIAL_HOSTS:
+            return None
+        parts = [part for part in parsed.path.split("/") if part]
+        if not parts:
+            return None
+        if host == "linkedin.com" and len(parts) >= 2 and parts[0] == "in":
+            return parts[1].lstrip("@")
+        return parts[0].lstrip("@")
+    return None
 
 
 # 出现这些词基本可判定为公司（用于人名启发式，避免把 "ACME Trading" 判成人）

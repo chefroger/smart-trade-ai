@@ -21,15 +21,21 @@ from trade.osint.sources import (
     gdelt,
     github,
     gleif,
+    gravatar,
     pdns,
     rdap,
+    registries_misc,
     us_states,
+    usernames,
     vies,
     wayback,
 )
 from trade.osint.sources.base import Fetcher, SourceResult, TargetContext
 
-SOURCES = (rdap, ct, wayback, pdns, github, gleif, vies, us_states, edgar, gdelt)
+SOURCES = (
+    rdap, ct, wayback, pdns, github, gleif, vies, us_states, edgar, gdelt,
+    gravatar, usernames, registries_misc,
+)
 SOURCE_LABELS = {module.NAME: module.LABEL for module in SOURCES}
 
 
@@ -55,6 +61,12 @@ def source_applies(name: str, ctx: TargetContext) -> bool:
         )
     if name == "gdelt":
         return bool(ctx.person_name or ctx.company_name or ctx.domain)
+    if name == "gravatar":
+        return bool(ctx.email)
+    if name == "usernames":
+        return bool(ctx.username)
+    if name == "registries_misc":
+        return registries_misc._applicable(ctx)
     return True
 
 

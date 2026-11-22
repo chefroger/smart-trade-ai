@@ -36,6 +36,7 @@ class TargetContext:
     person_name: str | None = None
     company_name: str | None = None
     github_username: str | None = None
+    username: str | None = None
 
 
 @dataclass

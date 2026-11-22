@@ -37,27 +37,32 @@ def linkedin_company_verify(domain: str, company_name: str) -> dict:
     domain_clean = domain_clean.rstrip("/").split("/")[0]
 
     # 构建公司名搜索词（URL 编码）
-    import urllib.parse
-    company_encoded = urllib.parse.quote(company_name)
-
+    # 登录墙的搜索页无法直接读（2026-11-21 审计 §1.7：不绕登录），
+    # 改为站点限定 dork，由 agent 的 web_search 执行；公司页本身公开，
+    # 保留一次直接访问尝试。
     return {
         "method": "browser_navigate",
         "domain": domain_clean,
         "company_name": company_name,
         "steps": [
             {
-                "action": "navigate",
-                "url": f"https://www.linkedin.com/search/results/companies/?keywords={company_encoded}",
-                "purpose": f"搜索 LinkedIn 上的公司页，验证 '{company_name}' 是否存在",
+                "action": "web_search",
+                "query": f'site:linkedin.com/company "{company_name}"',
+                "purpose": "用搜索引擎定位 LinkedIn 公司页（不登录、不触发反爬）",
+            },
+            {
+                "action": "web_search",
+                "query": f'site:linkedin.com/in "{company_name}"',
+                "purpose": "核对是否有同名个人主页/员工档案，辅助判断决策链",
             },
             {
                 "action": "navigate",
                 "url": f"https://www.linkedin.com/company/{domain_clean.split('.')[0]}",
-                "purpose": f"尝试直接访问 {domain_clean} 对应的 LinkedIn 公司页",
+                "purpose": f"尝试直接访问 {domain_clean} 对应的 LinkedIn 公司页（公开页）",
             },
         ],
         "summary_instruction": (
-            "请使用 browser_navigate 工具访问 LinkedIn 搜索公司页，验证以下信息：\n"
+            "请先用 web_search 执行上面的 site:linkedin.com dork，再尝试打开公司页，验证：\n"
             f"1. 公司 '{company_name}'（域名 {domain_clean}）是否有 LinkedIn 公司主页\n"
             "2. 如果有，公司规模（员工数）、所属行业、成立年份\n"
             f"3. 公司主页域名是否与 {domain_clean} 一致\n"

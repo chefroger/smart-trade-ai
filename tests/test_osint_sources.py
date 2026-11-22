@@ -29,11 +29,14 @@ from trade.osint.sources import (  # noqa: E402
     gdelt,
     github,
     gleif,
+    gravatar,
     pdns,
     rdap,
+    registries_misc,
     source_applies,
     sources_enabled,
     us_states,
+    usernames,
     vies,
     wayback,
 )
@@ -76,6 +79,14 @@ def fake_fetch(url: str, timeout: int = 15, **_kw):
         return _read("gdelt_artlist.json") if "tensorust" in url.lower() else json.dumps({"articles": []})
     if "vies/rest-api" in url:
         return _read("vies.json")
+    if "api.gravatar.com" in url:
+        return _read("gravatar_profile.json")
+    if "recherche-entreprises.api.gouv.fr" in url:
+        return _read("fr_search.json")
+    if "data.brreg.no" in url:
+        return _read("no_search.json")
+    if "brasilapi.com.br" in url:
+        return _read("br_cnpj.json")
     return None
 
 
@@ -368,6 +379,103 @@ class TestGdelt:
     def test_empty(self):
         result = gdelt.run(ctx(), fetch=lambda *a, **k: json.dumps({"articles": []}))
         assert result.status == "miss"
+
+
+class TestGravatar:
+    def test_success(self):
+        result = gravatar.run(
+            ctx(email="matt@tensorust.com", domain=None, target_type="email"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        assert "Matt Example" in result.facts[0]["text"]
+        assert result.facts[0]["url"].startswith("https://gravatar.com/")
+
+    def test_no_profile_is_miss(self):
+        def _404(*_a, **_k):
+            raise OSError("HTTP Error 404: Not Found")
+
+        assert gravatar.run(
+            ctx(email="nobody@example.com", domain=None, target_type="email"),
+            fetch=_404,
+        ).status == "miss"
+
+    def test_no_email_is_skipped(self):
+        assert gravatar.run(ctx(), fetch=fake_fetch).status == "skipped"
+
+
+class TestRegistriesMisc:
+    def test_fr_registration(self):
+        result = registries_misc.run(
+            ctx(company_name="Airbus", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        joined = " ".join(fact["text"] for fact in result.facts)
+        assert "法国登记" in joined and "383474814" in joined
+
+    def test_no_registration(self):
+        result = registries_misc.run(
+            ctx(company_name="Equinor", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        joined = " ".join(fact["text"] for fact in result.facts)
+        assert "挪威登记" in joined and "923609016" in joined
+
+    def test_br_cnpj(self):
+        result = registries_misc.run(
+            ctx(target="33.000.167/0001-01", company_name=None, domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "hit"
+        joined = " ".join(fact["text"] for fact in result.facts)
+        assert "巴西登记" in joined and "PETROBRAS" in joined
+
+    def test_person_is_skipped(self):
+        result = registries_misc.run(
+            ctx(company_name=None, domain=None, person_name="John Smith", target_type="person"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "skipped"
+
+
+class TestUsernames:
+    def test_found_public_profiles(self, monkeypatch):
+        monkeypatch.setattr(usernames, "_load_sites", lambda: [
+            {"name": "GitHub", "uri_check": "https://github.com/{account}", "e_string": "profile"},
+            {"name": "Reddit", "uri_check": "https://reddit.com/user/{account}", "e_string": "u/"},
+        ])
+
+        def _fetch(url, timeout=4, **_k):
+            return "profile u/Mattbusel" if "github.com" in url else None
+
+        result = usernames.run(ctx(username="Mattbusel"), fetch=_fetch)
+        assert result.status == "hit"
+        assert "GitHub" in result.facts[0]["text"]
+        assert result.data["checked"] == 2
+
+    def test_miss_when_no_profiles(self, monkeypatch):
+        monkeypatch.setattr(usernames, "_load_sites", lambda: [
+            {"name": "GitHub", "uri_check": "https://github.com/{account}", "e_string": "profile"},
+        ])
+        result = usernames.run(ctx(username="nobody"), fetch=lambda *a, **k: None)
+        assert result.status == "miss"
+
+    def test_no_username_is_skipped(self):
+        assert usernames.run(ctx(), fetch=fake_fetch).status == "skipped"
+        assert source_applies("usernames", ctx()) is False
+        assert source_applies("usernames", ctx(username="matt")) is True
+
+
+class TestUsernameExtraction:
+    def test_from_profile_url(self):
+        from trade.osint.orchestrator import _extract_username, _split_username_prefix
+
+        assert _extract_username("https://github.com/Mattbusel", "url") == "Mattbusel"
+        assert _extract_username("https://www.linkedin.com/in/matthewbusel/", "url") == "matthewbusel"
+        assert _extract_username("matt@tensorust.com", "email") == "matt"
+        assert _split_username_prefix("username:Mattbusel") == ("Mattbusel", "Mattbusel")
 
 
 class TestSwitch:

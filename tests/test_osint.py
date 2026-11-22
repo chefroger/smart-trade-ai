@@ -340,15 +340,16 @@ class TestTechStack:
 class TestLinkedInVerify:
     """测试 LinkedIn 公司页验证（browser_navigate 指令生成）。"""
 
-    def test_returns_browser_navigate_steps(self):
-        """不发起 HTTP 请求，只生成 browser_navigate 指令。"""
+    def test_returns_search_dorks_before_login_wall(self):
+        """先给 site:linkedin.com dork，不再把登录墙搜索页当入口。"""
         result = linkedin_company_verify("acme.com", "ACME Corp")
         assert result["method"] == "browser_navigate"
         assert result["domain"] == "acme.com"
         assert result["company_name"] == "ACME Corp"
         assert len(result["steps"]) >= 2
-        assert result["steps"][0]["action"] == "navigate"
-        assert "linkedin.com" in result["steps"][0]["url"]
+        assert result["steps"][0]["action"] == "web_search"
+        assert "site:linkedin.com/company" in result["steps"][0]["query"]
+        assert "linkedin.com/search/results" not in str(result["steps"])
         assert "summary_instruction" in result
 
     def test_domain_cleanup(self):

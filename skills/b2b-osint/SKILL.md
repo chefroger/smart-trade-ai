@@ -21,7 +21,7 @@ triggers:
   - 查公司
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.3.0
+version: 1.3.1
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-osint 技能 — Strategic Intelligence Architect（战略情报架构师）。
@@ -111,7 +111,8 @@ injection_prompt: |
   公司名含空格用 `--target="Acme Corp"`）
   —— 覆盖 邮箱注册(holehe)/WHOIS/企业邮箱/技术栈/制裁名单(OFAC SDN/非 SDN、US CSL、UN、EU、UK)/
   公开来源（RDAP、证书透明度、被动 DNS、Wayback、GitHub、GLEIF、EU VIES、
-  美国纽约/科罗拉多州登记、SEC EDGAR、GDELT 新闻）/LinkedIn 指令，并给出综合评分与红旗。
+  美国纽约/科罗拉多州登记、SEC EDGAR、GDELT 新闻、Gravatar、用户名跨站检索、
+  法国/挪威/巴西登记）/LinkedIn dork 指令，并给出综合评分与红旗。
   人名目标可用 `person:` 前缀（如 `person:"Matthew Busel"`），公司名可用 `company:` 强制指定。
   **调用终端工具时必须传 `timeout=600`**：各层并发执行、默认总预算 150 秒，但 holehe 单层可达 90 秒，
   终端默认超时会提前掐断整条命令。
@@ -243,6 +244,7 @@ injection_prompt: |
       python -m trade.osint --target="Acme Corp" # 含空格时用 --target=
       python -m trade.osint --target='person:Matthew Busel'   # 显式按个人背调
       python -m trade.osint --target='company:ACME Trading'   # 强制按公司
+      python -m trade.osint --target='username:Mattbusel'     # 用户名跨站检索
 
   **终端工具调用一律传 `timeout=600`**：各层并发执行，单层 holehe 最多 90 秒，
   终端默认超时会提前截断整条命令（报告只出来一半）。
@@ -250,9 +252,10 @@ injection_prompt: |
   它会并发执行：① 邮箱注册检测（holehe，122 平台）② WHOIS 域名情报（RDAP 补位）
   ③ 企业邮箱验证（MX / 个人邮箱判别）④ 技术栈检测 ⑤ 制裁名单筛查
   （OFAC SDN/非 SDN、US CSL、UN、EU、UK；查询本地库，不联网下载）
-  ⑥ LinkedIn 核查指令 ⑦ 公开来源（RDAP 注册信息、CT 子域名、被动 DNS、
-  Wayback 首次快照、GitHub 公开资料、GLEIF、EU VIES、纽约/科罗拉多州登记、
-  SEC EDGAR、GDELT 新闻），并给出综合评分、风险旗标与建议。
+  ⑥ LinkedIn 核查指令（site:linkedin.com dork，不再依赖登录墙搜索页）
+  ⑦ 公开来源（RDAP 注册信息、CT 子域名、被动 DNS、Wayback 首次快照、
+  GitHub、GLEIF、EU VIES、纽约/科罗拉多州登记、SEC EDGAR、GDELT 新闻、
+  Gravatar、用户名跨站检索、法国/挪威/巴西登记），并给出综合评分、风险旗标与建议。
   ⑦ 的每条事实都带 URL，报告里可直接点开核实；**未查到/限流的来源也会如实列出**，
   不要当成"没有问题"。
 

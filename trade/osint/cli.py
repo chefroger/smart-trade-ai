@@ -35,7 +35,7 @@ _USAGE = (
     "  --target=  显式指定目标（含空格时可直接写，不必加引号）\n"
     "  --budget=  全局时间预算（秒，默认 150）\n"
     "  --progress 向 stderr 逐层输出 JSONL 进度事件\n"
-    "  目标可加类型前缀：person:\"Matthew Busel\" / company:\"ACME Trading\""
+    "  目标可加前缀：person:\"Matthew Busel\" / company:\"ACME Trading\" / username:Mattbusel"
 )
 
 
@@ -176,9 +176,9 @@ def format_report(report: dict[str, Any]) -> str:
     if li is None:
         lines.append("\n⑥ LinkedIn 核查：未执行")
     else:
-        lines.append("\n⑥ LinkedIn 核查：已生成浏览器操作指令（**需人工/浏览器实际执行后才能下结论**）：")
+        lines.append("\n⑥ LinkedIn 核查：已生成操作指令（**需人工/浏览器实际执行后才能下结论**）：")
         for s in li.get("steps") or []:
-            lines.append(f"    · {s.get('url')}")
+            lines.append(f"    · {s.get('query') or s.get('url')}")
 
     # ⑦ 公开来源（P2-2）：RDAP / CT / Wayback / GitHub —— 每条事实都带 URL
     sources = report.get("sources") or {}

@@ -141,7 +141,8 @@ Phase 3: 深度背调 (Deep Verification)
    覆盖：邮箱注册检测（holehe）/ WHOIS（RDAP 补位）/ 企业邮箱验证 / 技术栈 /
    制裁名单（OFAC SDN/非 SDN、US CSL、UN、EU、UK）/ 公开来源（RDAP、CT 子域名、
    被动 DNS、Wayback、GitHub、GLEIF、EU VIES、纽约/科罗拉多州登记、SEC EDGAR、
-   GDELT 新闻）/ LinkedIn 核查指令 + 综合评分与建议。
+   GDELT 新闻、Gravatar、用户名跨站检索、法国/挪威/巴西登记）/
+   LinkedIn dork 指令 + 综合评分与建议。
    公开来源的每条事实都带 URL；未查到/限流的来源如实列出，不当成"没有问题"。
 
    **终端工具调用一律传 `timeout=600`**：各层并发执行，单层 holehe 最多 90 秒，
