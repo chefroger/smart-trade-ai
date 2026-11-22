@@ -198,6 +198,108 @@ def handle_chat_memory_list(args: dict[str, Any], **_kw) -> str:
     })
 
 
+OSINT_JOB_START_SCHEMA = _schema(
+    "osint_job_start",
+    "启动一个**后台**背调任务（6 层 + 公开来源），立即返回 job_id，不阻塞聊天。"
+    "目标可以是公司名/域名/邮箱/人名；人名用 person: 前缀，用户名用 username: 前缀。"
+    "10 分钟内同公司同目标会复用已有任务。启动后用 osint_job_result 读取进度与结果。",
+    {
+        "target": _str("背调目标，例如 acme.com / person:\"Matthew Busel\" / username:Mattbusel"),
+    },
+    ["target"],
+)
+
+OSINT_JOB_RESULT_SCHEMA = _schema(
+    "osint_job_result",
+    "读取后台背调任务的当前状态与结果（不阻塞）。status 为 done 时 report 是完整结构化报告；"
+    "running 时 events 是到目前为止的逐来源进度；cancelled/partial/failed 表示任务未完成。",
+    {
+        "job_id": {"type": "integer", "description": "osint_job_start 返回的 job_id"},
+        "after_seq": {
+            "type": "integer",
+            "description": "只看 seq 之后的增量事件（默认 0 = 最近 50 条）",
+        },
+    },
+    ["job_id"],
+)
+
+
+def _bound_company():
+    """当前 agent 调用绑定的公司 id（未绑定返回 None）。"""
+    try:
+        from trade.agent_context import current_company_id
+
+        return current_company_id()
+    except ImportError:
+        return None
+
+
+def handle_osint_job_start(args: dict[str, Any], **_kw) -> str:
+    """创建并启动后台背调任务。"""
+    target = str(args.get("target") or "").strip()
+    if not target:
+        return _err("target is required")
+    company_id = _bound_company()
+    if company_id is None:
+        return _err("没有公司上下文，拒绝创建背调任务")
+
+    try:
+        from trade import osint_jobs
+
+        job, created = osint_jobs.create_job(company_id, target)
+        if created:
+            osint_jobs.start_job(job["id"], target)
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"创建背调任务失败：{exc}")
+
+    return _json({
+        "job_id": job["id"],
+        "status": job["status"],
+        "reused": not created,
+        "target": target,
+    })
+
+
+def handle_osint_job_result(args: dict[str, Any], **_kw) -> str:
+    """读取后台背调任务状态与（增量）事件。"""
+    try:
+        job_id = int(args.get("job_id"))
+    except (TypeError, ValueError):
+        return _err("job_id must be an integer")
+    after_seq = args.get("after_seq", 0)
+    try:
+        after_seq = max(0, int(after_seq or 0))
+    except (TypeError, ValueError):
+        after_seq = 0
+
+    company_id = _bound_company()
+    if company_id is None:
+        return _err("没有公司上下文，拒绝读取背调任务")
+
+    try:
+        from trade import osint_jobs
+
+        job = osint_jobs.get_job(company_id, job_id)
+        if job is None:
+            return _err("job not found")
+        events = osint_jobs.list_events(job_id, after_seq=after_seq, limit=50)
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"读取背调任务失败：{exc}")
+
+    return _json({
+        "job": {
+            "id": job["id"],
+            "target": job["target"],
+            "status": job["status"],
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+            "report": job.get("report"),
+        },
+        "events": events,
+        "next_after_seq": events[-1]["seq"] if events else after_seq,
+    })
+
+
 def _json(obj: Any) -> str:
     import json
 

@@ -21,7 +21,7 @@ triggers:
   - 查公司
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.3.1
+version: 1.3.2
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-osint 技能 — Strategic Intelligence Architect（战略情报架构师）。
@@ -118,6 +118,10 @@ injection_prompt: |
   终端默认超时会提前掐断整条命令。
   **结论照抄命令输出**：它标注降级的（如制裁源不可用）如实转述，不要替它补全、
   更不要写出它没给出的判定；评级为「未完成核验」时**不得改写成低风险**。详细步骤见正文 Phase 3。
+  **长时间背调优先后台任务**：Trade 提供 `osint_job_start(target)` /
+  `osint_job_result(job_id)` 两个工具（只在 Trade 进程内注册）。长任务先启动后台任务，
+  再用 `osint_job_result` 读进度；不要在一次 terminal 调用里阻塞几分钟。
+  没有这两个工具时（独立 Hermes），退回 `python -m trade.osint`。
   **制裁结论不许省略**：无论是否命中，第 4 节「风险在哪」必须写一行制裁比对结果
   （命中：名单+实体；未命中：写比对过的名单与条数；未完成核验：写原因）。报告结尾的
   「已查渠道」必须包含制裁名单；没跑机器判定层就写「未执行」，不能整段消失。

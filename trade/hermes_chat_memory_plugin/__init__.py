@@ -15,11 +15,20 @@ import logging
 # 用绝对路径而非相对导入 —— 相对导入 `from .tools` 在 importlib.util 直接加载时
 # 会报 `No module named 'chat_memory_plugin'`，因为单文件 spec 没有父包。
 # 绝对路径要求 trade 是 installed package（pip install -e . 满足）。
+import os
+
 from trade.cron_binding import on_post_tool_call as on_cron_post_tool_call
 from trade.cron_binding import on_pre_tool_call as on_cron_pre_tool_call
 from trade.hermes_chat_memory_plugin.doc_skip import on_pre_tool_call as on_doc_skip_pre_tool_call
 from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call, report_hook_support
-from trade.hermes_chat_memory_plugin.tools import CHAT_MEMORY_LIST_SCHEMA, handle_chat_memory_list
+from trade.hermes_chat_memory_plugin.tools import (
+    CHAT_MEMORY_LIST_SCHEMA,
+    OSINT_JOB_RESULT_SCHEMA,
+    OSINT_JOB_START_SCHEMA,
+    handle_chat_memory_list,
+    handle_osint_job_result,
+    handle_osint_job_start,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +36,14 @@ logger = logging.getLogger(__name__)
 _TOOLS = (
     ("chat_memory_list", CHAT_MEMORY_LIST_SCHEMA, handle_chat_memory_list, "🕰️"),
 )
+
+# 背调后台任务工具只在 Trade 进程内注册（CLAUDE.md：不得影响用户单独使用 Hermes）。
+# 独立 Hermes 不会看到这两个工具，也就不会尝试写 trade 的 SQLite。
+if os.environ.get("TRADE_HOST") == "1":
+    _TOOLS += (
+        ("osint_job_start", OSINT_JOB_START_SCHEMA, handle_osint_job_start, "🔎"),
+        ("osint_job_result", OSINT_JOB_RESULT_SCHEMA, handle_osint_job_result, "📊"),
+    )
 
 
 def register(ctx) -> None:

@@ -312,6 +312,8 @@ async function loadTodos(isPoll = false) {
     if (!data) return;
     _todosData = data;
     _renderRailTodos();
+    // 后台背调任务与待办同源刷新；轮询时跳过（避免反复重连 SSE）
+    if (!isPoll) loadOsintJobs(false).catch(function () {});
 }
 
 function _todoItemHtml(item, done) {
@@ -1442,3 +1444,134 @@ async function sendMsg() {
     sendBtn.disabled = false;
 }
 
+
+
+// ── 后台背调任务（P1-1）────────────────────────────────────────────
+// 任务在后端独立执行：切公司/刷新只停止本页渲染，不取消任务；
+// 重新进入公司时按 seq 从头回放（不丢事件），运行中的任务继续追进度。
+
+let _osintJobReaders = {};
+
+function _abortOsintJobReaders() {
+    Object.keys(_osintJobReaders).forEach(function (key) {
+        try { _osintJobReaders[key].abort(); } catch (e) {}
+    });
+    _osintJobReaders = {};
+}
+
+function _osintStatusText(status) {
+    const map = {
+        queued: '排队中', running: '进行中', done: '已完成',
+        partial: '未完成', failed: '失败', cancelled: '已取消',
+    };
+    return map[status] || String(status || '');
+}
+
+async function loadOsintJobs(isPoll) {
+    if (!currentCompanyId) return;
+    const data = await api('GET', '/api/trade/osint/jobs?limit=10', null, undefined, {silent: !!isPoll});
+    if (!data) return;
+    // 切公司 → 旧连接先断（只影响渲染，后端任务继续跑）
+    _abortOsintJobReaders();
+    const jobs = data.jobs || [];
+    _renderRailOsintJobs(jobs);
+    jobs.forEach(function (job) {
+        if (job.status === 'queued' || job.status === 'running') _watchOsintJob(job.id);
+    });
+}
+
+function _renderRailOsintJobs(jobs) {
+    const el = document.getElementById('rail-osint-jobs');
+    if (!el) return;
+    if (!jobs.length) { el.innerHTML = ''; el.onclick = null; return; }
+
+    let html = '<div class="rail-bh"><span class="t">' +
+        (typeof iconHtml === 'function' ? iconHtml('search', 16) : '') +
+        esc('后台背调') + '</span><span class="lbl">OSINT · ' +
+        esc(String(jobs.length)) + '</span></div>';
+
+    jobs.slice(0, 5).forEach(function (job) {
+        const running = job.status === 'queued' || job.status === 'running';
+        html += '<div class="rail-osint-item" data-job-id="' + esc(String(job.id)) + '">' +
+            '<div class="osint-top"><span class="mono">' + esc(job.target) + '</span>' +
+            '<span class="osint-status st-' + esc(job.status) + '">' +
+            esc(_osintStatusText(job.status)) + '</span>' +
+            (running ? '<button type="button" class="todo-del" data-role="cancel" aria-label="取消">×</button>' : '') +
+            '</div>' +
+            '<div class="rail-line" id="osint-prog-' + esc(String(job.id)) + '"></div>' +
+            '</div>';
+    });
+    el.innerHTML = html;
+    el.onclick = function (event) {
+        const btn = event.target.closest('[data-role="cancel"]');
+        if (!btn) return;
+        const item = btn.closest('[data-job-id]');
+        if (item) _cancelOsintJob(Number(item.getAttribute('data-job-id')));
+    };
+}
+
+function _osintEventText(type, payload) {
+    if (type === 'job_start') return '已启动（预算 ' + (payload.budget || '?') + ' 秒）';
+    if (type === 'source_start') return '查询 ' + (payload.label || payload.source || '') + '…';
+    if (type === 'source_done') return (payload.source || '来源') + '：' + (payload.status || '完成');
+    if (type === 'verdict') return '评级 ' + (payload.rating || '未知');
+    if (type === 'error') return '错误：' + (payload.message || '');
+    if (type === 'cancelled') return '已取消';
+    return type;
+}
+
+function _handleOsintJobSse(jobId, block) {
+    const lines = String(block || '').split('\n');
+    let type = '';
+    let dataText = '';
+    lines.forEach(function (line) {
+        if (line.indexOf('event: ') === 0) type = line.slice(7).trim();
+        else if (line.indexOf('data: ') === 0) dataText = line.slice(6).trim();
+    });
+    if (!type || type === 'done') return;
+    let payload = {};
+    try { payload = JSON.parse(dataText || '{}'); } catch (e) { payload = {}; }
+    const prog = document.getElementById('osint-prog-' + jobId);
+    if (prog) prog.textContent = _osintEventText(type, payload);
+}
+
+function _watchOsintJob(jobId) {
+    if (_osintJobReaders[jobId]) return;
+    const controller = new AbortController();
+    _osintJobReaders[jobId] = controller;
+    const companyId = currentCompanyId;
+
+    (async function () {
+        try {
+            const resp = await fetch('/api/trade/osint/jobs/' + jobId + '/events?after=0', {
+                headers: {'X-Hermes-Session-Token': TOKEN, 'X-Company-ID': String(companyId)},
+                signal: controller.signal,
+            });
+            if (!resp.ok || !resp.body) return;
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while (true) {
+                const chunk = await reader.read();
+                if (chunk.done) break;
+                buffer += decoder.decode(chunk.value, {stream: true});
+                let idx;
+                while ((idx = buffer.indexOf('\n\n')) >= 0) {
+                    const block = buffer.slice(0, idx);
+                    buffer = buffer.slice(idx + 2);
+                    _handleOsintJobSse(jobId, block);
+                }
+            }
+        } catch (e) {
+            // abort（切公司/刷新）与网络错误都静默；任务在后端继续
+        } finally {
+            delete _osintJobReaders[jobId];
+            if (currentCompanyId === companyId) loadOsintJobs(true).catch(function () {});
+        }
+    })();
+}
+
+async function _cancelOsintJob(jobId) {
+    const r = await api('POST', '/api/trade/osint/jobs/' + jobId + '/cancel');
+    if (r) await loadOsintJobs(true);
+}

@@ -1106,6 +1106,18 @@ def create_app() -> FastAPI:
     _db_path = _init_db()
     print(f"  Database: {_db_path}")
 
+    # 背调后台任务（P1-1）：上次进程遗留的 running/queued 标 partial
+    try:
+        from trade.osint_jobs import recover_stale_jobs
+
+        recovered = recover_stale_jobs()
+        if recovered:
+            print(f"  OSINT jobs recovered: {recovered} marked partial")
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning("OSINT 任务恢复失败", exc_info=True)
+
     # 制裁名单后台刷新（2026-11-21 工单 P0-1）：启动 60 秒后首次、之后每 24 小时。
     # 查询路径不下载；失败只记日志，绝不影响服务启动。
     try:

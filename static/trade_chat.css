@@ -2114,3 +2114,13 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 }
 .todo-del:hover { color: var(--accent-red); }
 .rail-todo-item .tx { flex: 1 1 auto; min-width: 0; }
+
+
+/* 后台背调任务（P1-1）：右栏简版进度 */
+.rail-osint-item { padding: 6px 0; border-top: 1px solid rgba(127,127,127,.18); }
+.rail-osint-item:first-of-type { border-top: 0; }
+.osint-top { display: flex; align-items: center; gap: 6px; }
+.osint-top .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osint-status { font-size: 11px; opacity: .75; }
+.osint-status.st-done { color: #2e7d32; }
+.osint-status.st-failed, .osint-status.st-cancelled { color: #c62828; }

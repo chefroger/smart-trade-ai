@@ -475,6 +475,28 @@ CREATE TABLE IF NOT EXISTS todos (
 );
 CREATE INDEX IF NOT EXISTS idx_todos_company ON todos(company_id, done, due_date);
 
+-- 背调后台任务（P1-1）：任务与事件持久化，SSE 可续传
+CREATE TABLE IF NOT EXISTS osint_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    target       TEXT    NOT NULL,
+    target_type  TEXT    NOT NULL DEFAULT '',
+    status       TEXT    NOT NULL DEFAULT 'queued',  -- queued|running|partial|done|failed|cancelled
+    report_json  TEXT    NOT NULL DEFAULT '',
+    created_at   TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at   TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_osint_jobs_company ON osint_jobs(company_id, created_at);
+
+CREATE TABLE IF NOT EXISTS osint_job_events (
+    job_id       INTEGER NOT NULL REFERENCES osint_jobs(id) ON DELETE CASCADE,
+    seq          INTEGER NOT NULL,
+    ts           TEXT    DEFAULT (datetime('now', 'localtime')),
+    type         TEXT    NOT NULL,
+    payload_json TEXT    NOT NULL DEFAULT '{}',
+    PRIMARY KEY (job_id, seq)
+);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
