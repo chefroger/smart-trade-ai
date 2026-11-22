@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.8 — 2026-11-22
+
+- 背调：人名类型 + RDAP/CT/Wayback/GitHub 公开来源
+- `f1dd812` feat(osint): 人名类型 + RDAP/CT/Wayback/GitHub 公开来源（P2-1 / P2-2 第一批）
+
 ## v0.9.7 — 2026-11-22
 
 - 背调报告照抄制裁抓取时间，不再由模型推断
