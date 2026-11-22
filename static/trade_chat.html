@@ -16,6 +16,7 @@
 <script>marked.setOptions({ breaks: true, gfm: true });</script>
 <link rel="stylesheet" href="/static/fonts/fonts.css">
 <link rel="stylesheet" href="/static/trade_chat.css">
+<link rel="stylesheet" href="/static/wait.css">
 <body>
 <canvas id="bg3d" aria-hidden="true"></canvas>
 
@@ -352,6 +353,8 @@
         <div class="hermes-upgrade-icon" id="hermes-upgrade-icon">⬆️</div>
         <h2 id="hermes-upgrade-title">正在升级 Hermes</h2>
         <p class="hermes-upgrade-message" id="hermes-upgrade-message"></p>
+        <!-- 统一等待界面（task 模式）：读数行 = 升级日志，文字先过滤路径/token -->
+        <div class="hermes-upgrade-wait" id="hermes-upgrade-wait"></div>
         <div class="hermes-upgrade-steps" id="hermes-upgrade-steps"></div>
         <div class="hermes-upgrade-actions" id="hermes-upgrade-actions"></div>
         <details class="hermes-upgrade-details">
@@ -375,5 +378,8 @@
 <script src="/static/js/mailboxes.js"></script>
 <script src="/static/js/views.js"></script>
 <script src="/static/js/fx.js"></script>
+<!-- #region wait：统一等待界面（Canvas2D 兜底 + task 模式 3D 推镜） -->
+<script src="/static/js/wait.js"></script>
+<script src="/static/js/wait3d.js"></script>
 <script src="/static/js/init.js"></script>
 </html>

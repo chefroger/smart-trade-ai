@@ -1,0 +1,112 @@
+/* ═══════════════════════════════════════════════════════════════
+   Samaritan 等待界面（SW）· trade 统一等待组件 · 设计稿 v1（2026-11-22）
+   风格：沿用 trade mockup shell v2 token（灰底纸面 / 虚线 / Share Tech Mono / 红 #D2281E）
+   规则：画布只画抽象图形；所有文字读数来自真实事件（DOM 渲染，可读、可复制、可被读屏）
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  --bg: #F3F5F6; --paper: #FBFCFC;
+  --ink: #0C0D0E; --ink-2: #3A3E42;
+  --muted: #7A8086; --faint: #B7BCC0;
+  --grid: rgba(12, 13, 14, .045);
+  --red: #D2281E; --red-soft: rgba(210, 40, 30, .05);
+  --sans: "Archivo", "Noto Sans SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --mono: "Share Tech Mono", "Noto Sans Mono CJK SC", ui-monospace, monospace;
+  --sw-track: .22em;            /* 等宽大写标签字距（mockup 的 ANALYZING INQUIRY 同款） */
+}
+
+.sw { position: relative; font-family: var(--sans); color: var(--ink); }
+.sw * { box-sizing: border-box; }
+.sw canvas.sw-cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+.sw .mono { font-family: var(--mono); }
+.sw .lbl { font-family: var(--mono); font-size: 10px; letter-spacing: var(--sw-track); text-transform: uppercase; color: var(--muted); }
+.sw .tri { display: inline-block; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid var(--red); vertical-align: 1px; }
+.sw-btn {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  background: var(--paper); color: var(--ink); border: 1px solid var(--ink); border-radius: 0;
+  padding: 5px 10px; cursor: pointer; position: relative; z-index: 2;
+}
+.sw-btn:hover { background: var(--ink); color: var(--paper); }
+.sw-btn:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+/* ── 撒马利亚人式短语：逐词出现 + 下划线 + 红色倒三角 ───────────── */
+.sw-phrase { display: inline-flex; flex-direction: column; align-items: center; gap: 5px; }
+.sw-phrase .w { font-family: var(--mono); font-size: 17px; letter-spacing: .34em; padding-left: .34em; text-transform: uppercase; white-space: nowrap; }
+.sw-phrase .w::after { content: "_"; animation: swBlink 1s steps(1) infinite; color: var(--ink); }
+.sw-phrase .ul { height: 2px; background: var(--ink); width: 30px; transition: width .2s ease; }
+.sw-phrase .tri { border-top-width: 9px; animation: swTri 1s alternate infinite linear; }
+.sw-phrase .zh { font-size: 12px; color: var(--ink-2); letter-spacing: .04em; }
+@keyframes swBlink { 50% { opacity: 0; } }
+@keyframes swTri { from { opacity: .25; } to { opacity: 1; } }
+
+/* ── 模式一：普通问答（嵌入聊天气泡，轻量）──────────────────────── */
+.sw-chat { height: 132px; background: var(--paper); border: 1px dashed var(--ink); overflow: hidden; max-width: 720px; }
+.sw-chat .sw-top { position: absolute; left: 12px; right: 12px; top: 9px; display: flex; justify-content: space-between; align-items: center; z-index: 1; }
+.sw-chat .sw-center { position: absolute; left: 0; right: 0; top: 34px; display: flex; justify-content: center; z-index: 1; }
+.sw-chat .sw-tools { position: absolute; left: 12px; bottom: 9px; z-index: 1; font-family: var(--mono); font-size: 11px; color: var(--ink-2); display: flex; gap: 14px; max-width: 70%; overflow: hidden; white-space: nowrap; }
+.sw-chat .sw-tools .t.run::before { content: "◌ "; color: var(--red); }
+.sw-chat .sw-tools .t.ok::before { content: "✓ "; }
+.sw-chat .sw-tools .t.err::before { content: "✗ "; color: var(--red); }
+.sw-chat .sw-actions { position: absolute; right: 10px; bottom: 8px; display: flex; gap: 10px; align-items: center; z-index: 2; }
+.sw-elapsed { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; color: var(--ink); }
+
+/* ── 模式二：长任务（背调 / 导入 / 升级），左监视画面 + 右竖向时间轴读数 ── */
+.sw-task { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: 360px; background: var(--paper); border: 1px solid var(--ink); max-width: 980px; }
+.sw-task .sw-stage { position: relative; overflow: hidden; border-right: 1px dashed var(--ink); }
+.sw-task .sw-stage .sw-hud { position: absolute; left: 12px; top: 10px; right: 12px; display: flex; justify-content: space-between; z-index: 1; }
+.sw-task .sw-stage .sw-center { position: absolute; left: 0; right: 0; bottom: 16px; display: flex; justify-content: center; z-index: 1; }
+/* 纸色垫层：遮住从读数背后穿过的轨道线，保证文字可读 */
+.sw-task .sw-center .sw-phrase { background: var(--paper); padding: 6px 14px; }
+.sw-task .sw-side { display: flex; flex-direction: column; min-height: 0; }
+.sw-bar { background: var(--ink); color: var(--paper); font-family: var(--mono); font-size: 11px; letter-spacing: .12em; white-space: nowrap; text-transform: uppercase; padding: 6px 10px; display: flex; justify-content: space-between; align-items: center; }
+.sw-bar .tri { border-top-color: var(--red); margin-right: 8px; }
+.sw-kv { display: grid; grid-template-columns: 74px 1fr; gap: 4px 8px; padding: 9px 10px 8px; border-bottom: 1px solid var(--faint); font-size: 12px; }
+.sw-kv .k { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--muted); text-transform: uppercase; padding-top: 2px; }
+.sw-kv .v { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-prog { height: 6px; border: 1px solid var(--ink); margin-top: 4px; position: relative; }
+.sw-prog > i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--red); width: 0; transition: width .3s ease; }
+.sw-log { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0 6px 0; position: relative; font-family: var(--mono); font-size: 11px; line-height: 1.5; }
+/* 竖向时间轴：撒马利亚人的时间轴是竖的（The Machine 是横的） */
+.sw-log::before { content: ""; position: absolute; left: 61px; top: 0; bottom: 0; border-left: 1px dashed var(--faint); }
+.sw-log .row { display: grid; grid-template-columns: 46px 12px 1fr; gap: 0 4px; padding: 1px 10px 1px 6px; animation: swRowIn .25s ease-out both; }
+.sw-log .row .ts { color: var(--muted); text-align: right; }
+.sw-log .row .dot { position: relative; }
+.sw-log .row .dot::before { content: ""; position: absolute; left: 3px; top: 6px; width: 5px; height: 5px; border: 1px solid var(--ink); background: var(--paper); }
+.sw-log .row.hit .dot::before { background: var(--ink); }
+.sw-log .row.bad .dot::before { border-color: var(--red); background: var(--red); }
+.sw-log .row.hit .tx b { color: var(--ink); }
+.sw-log .row.bad .tx { color: var(--red); }
+.sw-log .row .tx { color: var(--ink-2); overflow-wrap: anywhere; }
+@keyframes swRowIn { from { opacity: 0; transform: translateY(4px); } }
+.sw-foot { border-top: 1px solid var(--ink); padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sw-verdict { display: none; font-family: var(--mono); font-size: 11px; letter-spacing: .16em; }
+.sw-verdict .tag { background: var(--red); color: #fff; padding: 2px 8px; margin-left: 6px; }
+.sw-verdict .tag.neutral { background: var(--ink); }
+.sw.is-final .sw-verdict { display: inline-block; }
+.sw.is-final .sw-phrase .w::after { content: ""; }
+
+/* ── 模式三：内联（按钮 / 状态行：导入中、测试连接中、拉取中…）── */
+.sw-inline { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink); }
+.sw-inline .tri { animation: swTri .8s alternate infinite linear; }
+.sw-inline .zh { letter-spacing: .04em; text-transform: none; font-family: var(--sans); color: var(--ink-2); }
+.sw-inline .w::after { content: "_"; animation: swBlink 1s steps(1) infinite; }
+
+/* ── 与 trade 消息流的整合 ─────────────────────────────────── */
+.message.waiting .msg-body,
+.message.wait-task-msg .msg-body { max-width: 100% !important; width: 100%; }
+.message.waiting .sw-chat { max-width: 100%; }
+.wait-task-msg .sw-task { max-width: 980px; width: 100%; }
+.onboarding-progress .wait-body .sw-chat { max-width: 100%; }
+.onboarding-progress .sw-chat { max-width: 100%; }
+.sw-task .sw-log .row .tx b { font-weight: 600; }
+.hermes-upgrade-wait:empty { display: none; }
+.hermes-upgrade-wait { margin: 10px 0; }
+.hermes-upgrade-wait .sw-task { max-width: 100%; height: 300px; }
+.wait-import-host { margin: 10px 0; }
+.wait-import-host .sw-task { max-width: 100%; height: 300px; }
+
+/* ── 降级：reduced-motion / 特效总开关关闭 / 低端 GPU → 静态帧 ─── */
+.sw.is-static .sw-phrase .w::after, .sw.is-static .sw-phrase .tri,
+.sw-inline.is-static .tri, .sw-inline.is-static .w::after { animation: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .sw .sw-phrase .w::after, .sw .sw-phrase .tri, .sw-inline .tri, .sw-inline .w::after, .sw-log .row { animation: none !important; }
+}

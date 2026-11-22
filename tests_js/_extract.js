@@ -25,6 +25,8 @@ const JS_ORDER = [
     'mailboxes.js',
     'views.js',
     'fx.js',
+    'wait.js',
+    'wait3d.js',
     'init.js',
 ];
 

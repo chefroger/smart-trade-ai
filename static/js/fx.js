@@ -63,12 +63,26 @@ function _fxBuildGrid() {
     return group;
 }
 
+// [提案] 供等待界面注册渲染 pass；返回注销函数。fx 关闭或无 renderer 时返回 null。
+const _fxPasses = [];
+function fxRegisterPass(fn) {
+    if (!_fxOn || !_fxRenderer) return null;
+    _fxPasses.push(fn);
+    if (!_fxRaf) _fxRaf = requestAnimationFrame(_fxLoop);
+    return function () { const i = _fxPasses.indexOf(fn); if (i >= 0) _fxPasses.splice(i, 1); };
+}
+function fxRendererReady() { return !!(_fxOn && _fxRenderer); }
+
 function _fxLoop(ts) {
     if (!_fxOn || !_fxRenderer) { _fxRaf = null; return; }
     _fxRaf = requestAnimationFrame(_fxLoop);
     if (ts - _fxLast < 33) return;
     _fxLast = ts;
     if (_fxGrid) _fxGrid.position.y = Math.sin(ts * 0.0001) * 0.15;
+    // [提案] 等待界面 3D 推镜：同一 renderer / 同一 WebGL 上下文，先画各 pass 再画背景
+    for (let i = 0; i < _fxPasses.length; i++) {
+        try { _fxPasses[i](ts, _fxRenderer); } catch (e) { console.warn('fx pass 出错，已移除', e); _fxPasses.splice(i--, 1); }
+    }
     _fxRenderer.render(_fxScene, _fxCamera);
 }
 
@@ -80,14 +94,18 @@ function _fxApplyUi() {
     if (canvas) canvas.style.display = _fxOn ? 'block' : 'none';
     // 粒子层跟随总开关：关闭后整层隐藏，不只是停止移动
     if (dust) dust.style.display = _fxOn ? 'block' : 'none';
-    try { localStorage.setItem('trade_fx', _fxOn ? '1' : '0'); } catch (_) {}
+    // 不在这里写 localStorage：reduced-motion 只是当次降级，不该把用户偏好永久关掉
+    // （2026-11-22 工单 §6：只有用户手动拨开关才落盘）。
     if (_fxOn && _dustStart) _dustStart();
     if (_fxOn && _fxRenderer && !_fxRaf) _fxRaf = requestAnimationFrame(_fxLoop);
 }
 
 function setFxEnabled(on) {
     _fxOn = !!on;
+    try { localStorage.setItem('trade_fx', _fxOn ? '1' : '0'); } catch (_) {}
     _fxApplyUi();
+    // 等待界面的 3D 推镜跟着总开关走：关闭时立即退回 Canvas2D，打开时恢复 2D 动画
+    if (typeof TradeWait !== 'undefined' && TradeWait.refreshMotion) TradeWait.refreshMotion();
 }
 
 function toggleFx() {
@@ -208,6 +226,8 @@ function initFxBackground() {
     setInterval(tickClock, 1000);
     setInterval(function () {
         statusIdx = (statusIdx + 1) % STATUS.length;
+        // [提案] 有任务在等待时，顶栏显示真实任务状态，轮播让路
+        if (typeof TradeWaitStatus !== 'undefined' && TradeWaitStatus.active()) return;
         const text = STATUS[statusIdx];
         const el = document.getElementById('sys-status');
         if (el) el.textContent = text;
