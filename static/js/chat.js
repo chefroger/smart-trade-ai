@@ -1707,10 +1707,16 @@ function _dockParts() {
 }
 
 function _positionOsintDock(root) {
-    /** 与聊天输入区左右对齐（不贴右栏），底边停在输入框上方 12px。 */
-    const ref = document.querySelector('.chat-input-area');
+    /** 与**当前可见**的聊天输入区左右对齐（缓存视图里的隐藏输入区宽高为 0）。 */
+    let ref = null;
+    document.querySelectorAll('.chat-input-area').forEach(function (el) {
+        if (ref) return;
+        const r = el.getBoundingClientRect();
+        // 隐藏的缓存视图 rect 为 0；选第一个真正有布局的
+        if (r.width > 100 && r.height > 0) ref = el;
+    });
     if (!ref) {
-        // 非聊天视图（极少见）：退回右下角
+        // 非聊天视图：退回 CSS 的右下角兜底，绝不能把宽度设成 0
         root.style.left = '';
         root.style.right = '';
         root.style.width = '';

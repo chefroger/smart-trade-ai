@@ -435,6 +435,9 @@ def test_task_dock_aggregates_jobs_and_does_not_block(live_server):
         page.route("**/api/trade/osint/jobs/*/events*", _events)
         page.evaluate(f"currentCompanyId = {cid}; navToView('chat','daily','今日简报');")
         page.wait_for_selector("#chat-messages", timeout=15000)
+        # 模拟缓存视图：DOM 里先放一个隐藏的 .chat-input-area，浮层不能被它带成 0 宽
+        page.evaluate("() => { const f=document.createElement('div'); f.className='chat-input-area';"
+                      " f.style.cssText='display:none'; document.body.insertBefore(f, document.body.firstChild); }")
         page.evaluate("async () => { await loadOsintJobs(false); }")
         page.wait_for_selector("#wait-dock:not(.hidden)", timeout=15000)
         page.wait_for_function(
@@ -444,11 +447,14 @@ def test_task_dock_aggregates_jobs_and_does_not_block(live_server):
         assert "采集中" in page.inner_text("#wait-dock .wd-sub")
         # 浮层左右与聊天输入区对齐（不是贴在右栏）
         align = page.evaluate("""() => {
-          const box = s => document.querySelector(s).getBoundingClientRect();
-          const input = box('.chat-input-area'), dock = box('#wait-dock');
-          return [Math.round(dock.left - input.left), Math.round(dock.width - input.width)];
+          const visible = e => e.getBoundingClientRect().width > 100;
+          const inputEl = Array.from(document.querySelectorAll('.chat-input-area')).find(visible);
+          const input = inputEl.getBoundingClientRect();
+          const dock = document.querySelector('#wait-dock').getBoundingClientRect();
+          return [Math.round(dock.left - input.left), Math.round(dock.width - input.width),
+                  Math.round(dock.width)];
         }""")
-        assert abs(align[0]) <= 1 and abs(align[1]) <= 1, f"浮层未与聊天区对齐：{align}"
+        assert abs(align[0]) <= 1 and abs(align[1]) <= 1 and align[2] > 100, f"浮层未与聊天区对齐：{align}"
         assert page.evaluate("!document.querySelector('#msg-input').disabled")
         assert page.evaluate("!!document.querySelector('[data-view=customers]')")
         browser.close()
