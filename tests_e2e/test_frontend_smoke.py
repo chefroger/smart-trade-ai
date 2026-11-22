@@ -204,7 +204,8 @@ def test_main_pages_have_no_4xx_or_page_errors(live_server):
     assert not console_errors, "控制台 error 日志：\n" + "\n".join(console_errors)
 
 
-def _open_ui(p, base: str, cid: int, *, reduced_motion: str = "no-preference"):
+def _open_ui(p, base: str, cid: int, *, reduced_motion: str = "no-preference",
+             compat_body: str = '{"usable": true}', extra_routes=()):
     """开页面并桩掉 Hermes 兼容检查 / 许可证（与上面的冒烟一致）。"""
     browser = p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader"])
     context = browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion=reduced_motion)
@@ -214,7 +215,7 @@ def _open_ui(p, base: str, cid: int, *, reduced_motion: str = "no-preference"):
     )
     context.route(
         "**/api/trade/system/hermes-compat",
-        lambda route: route.fulfill(status=200, content_type="application/json", body='{"usable": true}'),
+        lambda route: route.fulfill(status=200, content_type="application/json", body=compat_body),
     )
     context.route(
         "**/api/trade/license/status",
@@ -223,8 +224,11 @@ def _open_ui(p, base: str, cid: int, *, reduced_motion: str = "no-preference"):
             body='{"status": "active", "days_remaining": 365, "activated": true}',
         ),
     )
+    for pattern, handler in extra_routes:
+        context.route(pattern, handler)
     page = context.new_page()
-    page.goto(base + "/trade", wait_until="networkidle")
+    # load 而不是 networkidle：升级流的 SSE 会一直挂着，networkidle 永远等不到
+    page.goto(base + "/trade", wait_until="load")
     return browser, page
 
 
@@ -333,4 +337,36 @@ def test_task_panel_recovers_after_history_rerender(live_server):
         page.evaluate("async () => { await loadOsintJobs(true); }")
         page.wait_for_selector(".wait-task-msg .sw-task", timeout=10000)
         assert "RDAP 域名注册" in page.inner_text(".wait-task-msg .sw-log")
+        browser.close()
+
+
+def test_hermes_upgrade_uses_task_panel_and_filters_paths(live_server):
+    """W10：Hermes 升级用 task 面板；读数行来自日志且过滤绝对路径/长 token。"""
+    import json
+
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    compat = json.dumps({
+        "usable": False, "fix": "upgrade_hermes", "steps": [],
+        "upgrade": {"status": "upgrading", "message": "", "running": True},
+    })
+    stream = "\n\n".join([
+        "data: " + json.dumps({"type": "log", "line": "cloning /Users/someone/.hermes/hermes-agent"}),
+        "data: " + json.dumps({"type": "log", "line": "token " + "a" * 40}),
+        "data: " + json.dumps({"type": "state", "status": "upgrading",
+                               "message": "", "running": True, "cursor": 3}),
+    ]) + "\n\n"
+
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid, compat_body=compat, extra_routes=[
+            ("**/api/trade/system/hermes-upgrade/stream*", lambda r: r.fulfill(
+                status=200, content_type="text/event-stream", body=stream)),
+        ])
+        page.wait_for_selector("#hermes-upgrade-wait .sw-task", timeout=15000)
+        page.wait_for_timeout(1200)
+        text = page.inner_text("#hermes-upgrade-wait")
+        assert "UPGRADE" in text
+        assert "/Users/" not in text, "升级读数是日志原文，路径没有过滤"
+        assert "a" * 40 not in text, "升级读数是日志原文，长 token 没有过滤"
         browser.close()
