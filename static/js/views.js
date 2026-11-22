@@ -1502,14 +1502,25 @@ function _mountHermesWait() {
     return _hermesWait;
 }
 
+/**
+ * 升级日志脱敏（审计 O-20）：读数面板和折叠的原始日志共用同一套规则。
+ * 覆盖绝对路径（Windows/POSIX/UNC）、JWT、以及 24 位以上的密钥/哈希。
+ * 顺序：先整段 JWT，再泛化长串，避免 JWT 被 24 位规则切碎后仍留残留。
+ */
+function _redactHermesLine(line) {
+    return String(line || '')
+        .replace(/\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/g, '[token]')
+        .replace(/\b[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}\b/g, '[token]')
+        .replace(/[A-Za-z]:\\[^\s"']+/g, '[路径]')
+        .replace(/\\\\[^\s"']+/g, '[路径]')
+        .replace(/(?:\/[\w.\-]+){2,}/g, '[路径]')
+        .replace(/\b[A-Za-z0-9_\-]{24,}\b/g, '[token]');
+}
+
 function _hermesWaitLine(line) {
     if (!_hermesWait) return;
     // 隐私/噪声过滤：绝对路径与超长标识不进读数
-    const safe = String(line || '')
-        .replace(/[A-Za-z]:\\[^\s"']+/g, '[路径]')
-        .replace(/(?:\/[\w.\-]+){2,}/g, '[路径]')
-        .replace(/\b[A-Za-z0-9_\-]{32,}\b/g, '[token]')
-        .slice(0, 120);
+    const safe = _redactHermesLine(line).slice(0, 120);
     if (safe) _hermesWait.note(safe);
 }
 
@@ -1734,11 +1745,12 @@ async function startHermesUpgradeStream(offset) {
     } catch(_) {}
 }
 
-/** 追加一行升级日志（自动滚到底部，让用户看到「有在动」）。 */
+/** 追加一行升级日志（自动滚到底部，让用户看到「有在动」）。
+ *  原始日志同样要脱敏 —— 它只是默认折叠，点开就能看到全文（审计 O-20）。 */
 function appendHermesUpgradeLog(line) {
     const box = $('hermes-upgrade-log');
     if (!box) return;
-    box.textContent += line + '\n';
+    box.textContent += _redactHermesLine(line) + '\n';
     box.scrollTop = box.scrollHeight;
 }
 

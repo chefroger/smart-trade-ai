@@ -47,7 +47,7 @@ function loadPanel(fetchStub) {
     const fetch_ = fetchStub || ((url) => { calls.push(String(url)); return Promise.reject(new Error('测试里不发请求')); });
     const api = loadRegion(
         'hermes-upgrade',
-        '{ HERMES_UPGRADE_TEXT: HERMES_UPGRADE_TEXT, applyHermesUpgradeState: applyHermesUpgradeState, renderHermesUpgradeSteps: renderHermesUpgradeSteps, showHermesUpgradePanel: showHermesUpgradePanel }',
+        '{ HERMES_UPGRADE_TEXT: HERMES_UPGRADE_TEXT, applyHermesUpgradeState: applyHermesUpgradeState, renderHermesUpgradeSteps: renderHermesUpgradeSteps, showHermesUpgradePanel: showHermesUpgradePanel, _redactHermesLine: _redactHermesLine, appendHermesUpgradeLog: appendHermesUpgradeLog }',
         { document: dom.document, $: dom.$, TOKEN: 'tok', toast: () => {}, fetch: fetch_, _waitForRestartAndReload: () => {} },
     );
     return { api, nodes: dom.nodes, calls };
@@ -313,4 +313,39 @@ test('服务在响应回来之前就被停掉（fetch 抛错）不算失败，�
 
     assert.ok(calls.length > 0, '应该已经尝试过发请求');
     assert.ok(api._waitedSeconds >= 600, '连接被掐断后没有进入等待 —— 会被误报成失败');
+});
+
+// ── 审计 O-20：升级日志脱敏 ────────────────────────────────────────────────
+
+test('升级日志脱敏：24 位密钥、JWT、UNC 路径', () => {
+    const { api } = loadPanel();
+
+    const key = '0123456789abcdef01234567'; // 24 位 hex
+    assert.ok(!api._redactHermesLine('api_key=' + key).includes(key), '24 位密钥原文漏出');
+
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+    assert.strictEqual(api._redactHermesLine('Authorization: Bearer ' + jwt).includes(jwt), false);
+    assert.match(api._redactHermesLine(jwt), /\[token\]/);
+
+    const unc = String.raw`copy \\fileserver\share\private\config.json`;
+    const out = api._redactHermesLine(unc);
+    assert.ok(!out.includes('fileserver'), 'UNC 路径漏出');
+    assert.match(out, /\[路径\]/);
+});
+
+test('升级日志脱敏：原有 Windows/POSIX 路径仍然生效', () => {
+    const { api } = loadPanel();
+    assert.ok(!api._redactHermesLine('open C:\\Users\\bob\\secret.txt').includes('bob'));
+    assert.ok(!api._redactHermesLine('read /home/bob/.ssh/id_ed25519').includes('bob'));
+});
+
+test('折叠的原始日志框也写脱敏后的文本', () => {
+    const { api, nodes } = loadPanel();
+    const key = '0123456789abcdef01234567';
+
+    api.appendHermesUpgradeLog('downloading token=' + key);
+
+    const box = nodes['hermes-upgrade-log'];
+    assert.ok(box.textContent.includes('[token]'));
+    assert.ok(!box.textContent.includes(key), '原始日志框里仍能看到密钥原文');
 });
