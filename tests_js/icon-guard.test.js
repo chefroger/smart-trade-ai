@@ -52,6 +52,28 @@ test('新增图标保留 lucide-static 许可证头', () => {
     assert.match(head, /ISC/);
 });
 
+test('所有图标文件不得有杂散属性块', () => {
+    // 2026-11-22：曾有 15 个文件在根 <svg> 结束后又粘了一整块属性
+    // （xmlns/width/height/... 再跟一个 `>`），结构非法但浏览器可能容忍；
+    // 只查 viewBox/currentColor 的旧断言抓不到。
+    const files = fs.readdirSync(ICON_DIR).filter(f => /^lucide-.*\.svg$/.test(f));
+    assert.ok(files.length > 0, 'static/icons 下没有图标文件');
+    for (const f of files) {
+        const src = fs.readFileSync(path.join(ICON_DIR, f), 'utf8');
+        assert.strictEqual((src.match(/<svg\b/g) || []).length, 1, `${f} 根元素数量不为 1`);
+        assert.strictEqual((src.match(/<\/svg>/g) || []).length, 1, `${f} 结束标签数量不为 1`);
+        assert.strictEqual((src.match(/xmlns=/g) || []).length, 1, `${f} 出现重复的 xmlns 属性块`);
+
+        // 根元素闭合后、第一个子元素之前只能是空白；出现 name="value" 就是杂散属性
+        const open = src.search(/<svg\b[^>]*>/);
+        assert.ok(open >= 0, `${f} 没有 <svg>`);
+        const after = src.slice(src.indexOf('>', open) + 1);
+        const child = after.search(/<[a-zA-Z]/);
+        const between = child === -1 ? after : after.slice(0, child);
+        assert.ok(!/[\w:.-]+\s*=/.test(between), `${f} 根元素后存在杂散属性块`);
+    }
+});
+
 test('视觉收尾 16 个图标全部存在且格式一致', () => {
     const names = [
         'arrow-down-wide-narrow', 'arrow-left', 'book-open', 'briefcase-business',
