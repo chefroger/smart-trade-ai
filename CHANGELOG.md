@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.10 — 2026-11-22
+
+- P2-2 收尾：Gravatar/用户名跨站/FR-NO-BR 登记 + LinkedIn dork
+- `2d7f305` feat(osint): 收尾 P2-2——Gravatar/用户名跨站/FR-NO-BR 登记 + LinkedIn dork
+
 ## v0.9.9 — 2026-11-22
 
 - 背调第二批公开来源：PDNS/GLEIF/VIES/州登记/EDGAR/GDELT
