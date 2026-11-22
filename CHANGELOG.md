@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.9.14 — 2026-11-22
+
+- 统一等待界面（撒马利亚人）：chat/task/inline 三模式 + three.js 推镜 + 顶栏真实任务状态；全部等待点接入；聊天流新增 job_attached
+- `1fcd5d7` feat(ui): 全部等待点接入统一等待界面 + job_attached
+- `8cb55b0` feat(wait): 撒马利亚人统一等待组件（Canvas2D + three.js 推镜）
+
 ## v0.9.13 — 2026-11-22
 
 - 长背调改走后台任务：提示词教模型用 tool_search 发现 osint_job_start，禁止 terminal 长跑（切公司会中断）
