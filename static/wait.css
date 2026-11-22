@@ -91,10 +91,48 @@
 .sw-inline .w::after { content: "_"; animation: swBlink 1s steps(1) infinite; }
 
 /* ── 与 trade 消息流的整合 ─────────────────────────────────── */
-.message.waiting .msg-body,
-.message.wait-task-msg .msg-body { max-width: 100% !important; width: 100%; }
+.message.waiting .msg-body { max-width: 100% !important; width: 100%; }
 .message.waiting .sw-chat { max-width: 100%; }
-.wait-task-msg .sw-task { max-width: 980px; width: 100%; }
+
+/* ── 后台任务浮层（非阻塞）：固定右下，不覆盖交互区；点浮层外面照常操作 ── */
+.wait-dock {
+  position: fixed; right: 16px; bottom: 128px; z-index: 60;
+  width: min(980px, calc(100vw - 300px)); max-height: calc(100vh - 200px);
+  background: var(--paper); border: 1px solid var(--ink);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.wait-dock.hidden { display: none; }
+.wait-dock.is-collapsed .wd-tabs,
+.wait-dock.is-collapsed .wd-body { display: none; }
+.wd-head {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--ink); color: var(--paper);
+  font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+  padding: 6px 10px; text-transform: uppercase; flex: 0 0 auto;
+}
+.wd-head .wd-title { display: inline-flex; align-items: center; gap: 8px; }
+.wd-head .wd-title::before { content: ""; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid var(--red); }
+.wd-head .wd-sub { flex: 1; color: var(--faint); font-size: 10px; letter-spacing: .08em; }
+.wd-toggle {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  background: transparent; color: var(--paper); border: 1px solid var(--paper);
+  padding: 2px 8px; cursor: pointer;
+}
+.wd-toggle:hover { background: var(--paper); color: var(--ink); }
+.wd-tabs { display: flex; gap: 6px; padding: 6px 8px; border-bottom: 1px dashed var(--faint); overflow-x: auto; flex: 0 0 auto; }
+.wd-tab {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+  background: var(--paper); color: var(--ink-2); border: 1px solid var(--faint);
+  padding: 3px 8px; cursor: pointer; white-space: nowrap;
+}
+.wd-tab.is-active { border-color: var(--ink); color: var(--ink); background: var(--bg); }
+.wd-tab .st { margin-left: 6px; color: var(--muted); }
+.wd-tab.is-done .st { color: var(--ink); }
+.wd-tab.is-bad .st { color: var(--red); }
+.wd-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.wd-body > .wd-task { display: none; }
+.wd-body > .wd-task.is-active { display: block; }
+.wd-body .sw-task { max-width: 100%; width: 100%; height: 360px; border: 0; }
 .onboarding-progress .wait-body .sw-chat { max-width: 100%; }
 .onboarding-progress .sw-chat { max-width: 100%; }
 .sw-task .sw-log .row .tx b { font-weight: 600; }

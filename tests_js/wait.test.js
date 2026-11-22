@@ -210,6 +210,18 @@ test('画像页打开时等待状态不覆盖顶栏统计，关闭后恢复接�
   wait.destroy();
 });
 
+test('多个后台任务在顶栏汇总真实来源计数', () => {
+  const env = loadComponent();
+  const a = mountTask(env).wait;
+  const b = mountTask(env).wait;
+  a.push({type: 'source_start', source: 'a1', label: 'A1'});
+  a.push({type: 'source_done', source: 'a1', status: 'hit', ms: 1});
+  b.push({type: 'source_start', source: 'b1', label: 'B1'});
+  const text = env.win.TradeWaitStatus.text();
+  assert.strictEqual(text, '后台任务 1/2');
+  a.destroy(); b.destroy();
+});
+
 test('顶栏同时接管两个状态元素，画像页优先', () => {
   const env = loadComponent();
   const { wait } = mountTask(env);

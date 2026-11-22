@@ -273,14 +273,14 @@ def test_chat_task_panel_and_privacy(live_server):
         page.evaluate(
             "const i=document.querySelector('#msg-input'); i.value='查一下 acme.com'; sendMsg();"
         )
-        page.wait_for_selector(".wait-task-msg .sw-task", timeout=15000)
+        page.wait_for_selector("#wait-dock .sw-task", timeout=15000)
         page.wait_for_timeout(800)
         html = page.content()
         assert "SENSITIVE_ARGS" not in html, "工具参数 args 进入了界面"
         assert "secret-result" not in html, "工具结果预览进入了界面"
         assert "RDAP 域名注册" in html, "task 面板没有真实来源节点"
         assert "低风险" in html, "task 面板没有结论标签"
-        assert page.get_attribute(".wait-task-msg .sw-task", "data-render") in ("2d", "three")
+        assert page.get_attribute("#wait-dock .sw-task", "data-render") in ("2d", "three")
         browser.close()
 
 
@@ -331,12 +331,12 @@ def test_task_panel_recovers_after_history_rerender(live_server):
         page.wait_for_selector("#chat-messages", timeout=15000)
         page.wait_for_timeout(1200)   # 等历史渲染完成
         page.evaluate("async () => { await loadOsintJobs(false); }")
-        page.wait_for_selector(".wait-task-msg .sw-task", timeout=15000)
+        page.wait_for_selector("#wait-dock .sw-task", timeout=15000)
         # 模拟聊天历史异步渲染：消息区被清空
         page.evaluate("document.querySelector('#chat-messages').innerHTML = '';")
         page.evaluate("async () => { await loadOsintJobs(true); }")
-        page.wait_for_selector(".wait-task-msg .sw-task", timeout=10000)
-        assert "RDAP 域名注册" in page.inner_text(".wait-task-msg .sw-log")
+        page.wait_for_selector("#wait-dock .sw-task", timeout=10000)
+        assert "RDAP 域名注册" in page.inner_text("#wait-dock .sw-log")
         browser.close()
 
 
@@ -405,4 +405,43 @@ def test_3d_context_loss_falls_back_and_only_one_instance(live_server):
         # 取消按钮始终可点
         page.evaluate("window.__w1.cancelBtn.click()")
         assert page.evaluate("window.__w1.phaseKey") == "aborted"
+        browser.close()
+
+
+def test_task_dock_aggregates_jobs_and_does_not_block(live_server):
+    """一轮里的多个背调只在右下一个浮层聚合；输入框与导航不被锁。"""
+    import json
+
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    jobs = json.dumps({"jobs": [{
+        "id": 91 + i, "company_id": cid, "target": t, "target_type": "",
+        "status": "running", "created_at": "", "updated_at": "",
+    } for i, t in enumerate(["天津赛得", "spiderimpex.com", "chinadentalsupplies.com"])]})
+
+    def _events(route):
+        jid = route.request.url.split("/osint/jobs/")[1].split("/")[0]
+        body = "\n\n".join([
+            "id: 1\nevent: job_start\ndata: " + json.dumps({"target": "t", "budget": 30}),
+            "id: 2\nevent: source_start\ndata: " + json.dumps({"source": "rdap" + jid, "label": "RDAP " + jid}),
+        ]) + "\n\n"
+        route.fulfill(status=200, content_type="text/event-stream", body=body)
+
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid)
+        page.route("**/api/trade/osint/jobs?limit=*", lambda r: r.fulfill(
+            status=200, content_type="application/json", body=jobs))
+        page.route("**/api/trade/osint/jobs/*/events*", _events)
+        page.evaluate(f"currentCompanyId = {cid}; navToView('chat','daily','今日简报');")
+        page.wait_for_selector("#chat-messages", timeout=15000)
+        page.evaluate("async () => { await loadOsintJobs(false); }")
+        page.wait_for_selector("#wait-dock:not(.hidden)", timeout=15000)
+        page.wait_for_function(
+            "document.querySelectorAll('#wait-dock .wd-tab').length === 3", timeout=10000)
+        assert page.evaluate("document.querySelectorAll('#wait-dock .wd-task.is-active').length") == 1
+        assert "3 项" in page.inner_text("#wait-dock .wd-head")
+        assert "采集中" in page.inner_text("#wait-dock .wd-sub")
+        assert page.evaluate("!document.querySelector('#msg-input').disabled")
+        assert page.evaluate("!!document.querySelector('[data-view=customers]')")
         browser.close()

@@ -1278,6 +1278,7 @@ async function sendMsg() {
     // 归属记账：让切换公司时能统一作废这条流（否则旧流会写进新公司的窗口）
     const ownerCid = currentCompanyId;
     const streamCtl = _beginChatStream(ownerCid);
+    _chatStreamActive++;   // 浮层据此区分“采集完成”与“正在生成回复”
     // 切公司后旧流的输出必须丢弃：addMsg 写的是全局 currentChatContainer
     function deliver(role, text, save, convId, blocks) {
         if (!_chatStreamBelongsTo(ownerCid)) return;
@@ -1507,6 +1508,8 @@ async function sendMsg() {
         if (wait && !wait.final) { try { wait.destroy(); } catch (e) {} }
         _currentConvId = null;
         _endChatStream(streamCtl);
+        _chatStreamActive = Math.max(0, _chatStreamActive - 1);
+        _updateDock();
         if (stopBtn) { stopBtn.classList.add('hidden'); stopBtn.onclick = null; }
         // 每轮对话结束后刷新用量（后端在 agent 返回时已记账）
         loadUsageToday();
@@ -1556,15 +1559,23 @@ async function loadOsintJobs(isPoll) {
     jobs.forEach(function (job) {
         if (job.status === 'queued' || job.status === 'running') _watchOsintJob(job.id);
     });
-    // 刷新/重新进入公司：把仍在跑的任务面板恢复到当前聊天流；事件按 seq 从 0 回放
-    const chatBox = document.getElementById('chat-messages');
-    if (chatBox) {
-        jobs.forEach(function (job) {
-            const running = job.status === 'queued' || job.status === 'running';
-            // 已挂且仍在 DOM 里时 _attach 会直接返回；被历史重渲染清掉时会重建
-            if (running) _attachOsintTaskPanel(chatBox, {job_id: job.id, target: job.target});
-        });
-    }
+    // 刷新/重新进入公司：把仍在跑的任务恢复到浮层（事件按 seq 回放）
+    jobs.forEach(function (job) {
+        const running = job.status === 'queued' || job.status === 'running';
+        if (running) {
+            _attachOsintTaskPanel(null, {job_id: job.id, target: job.target, status: job.status});
+            return;
+        }
+        const p = _osintTaskPanels[job.id];
+        if (!p) return;
+        p.status = job.status;
+        if (p.wait && !p.wait.final) {
+            const phase = job.status === 'cancelled' ? 'aborted' : (job.status === 'failed' ? 'failed' : 'acquired');
+            const zh = job.status === 'partial' ? '未完成 · 已保存部分结果' : (phase === 'acquired' ? '采集完成' : undefined);
+            p.wait.finish({phase: phase, zh: zh});
+        }
+    });
+    _updateDock();
 }
 
 function _renderRailOsintJobs(jobs) {
@@ -1625,64 +1636,184 @@ function _handleOsintJobSse(jobId, block) {
     try { payload = JSON.parse(dataText || '{}'); } catch (e) { payload = {}; }
     const prog = document.getElementById('osint-prog-' + jobId);
     if (prog) prog.textContent = _osintEventText(type, payload);
-    // 气泡里的 task 面板跟着同一条 SSE 驱动（节点/耗时/进度都来自真实事件）
+    // 浮层里的 task 面板跟着同一条 SSE 驱动（节点/耗时/进度都来自真实事件）
     const panel = _osintTaskPanels[jobId];
     if (panel && panel.wait && !panel.wait.final) {
         const ev = Object.assign({}, payload, {type: type});
         panel.wait.push(ev);
     }
+    if (panel) {
+        if (type === 'verdict') panel.status = 'done';
+        else if (type === 'error') panel.status = 'failed';
+        else if (type === 'cancelled') panel.status = 'cancelled';
+        _updateDock();
+    }
 }
 
-// 后台背调 task 面板：jobId -> {wait, host}（切公司时销毁，正常结束保留最后一帧）
+// 后台任务浮层：jobId -> {wait, tab, wrap, target, status}
+// 非阻塞：浮层只占右下角，输入框、公司切换、栏目导航照常可用。
 let _osintTaskPanels = {};
 let _osintPanelsCompanyId = null;
+let _osintActiveJobId = null;
+let _osintDockHideTimer = null;
+let _chatStreamActive = 0;
+
+function _dockParts() {
+    const root = document.getElementById('wait-dock');
+    if (!root) return null;
+    return {
+        root: root,
+        title: root.querySelector('.wd-title'),
+        sub: root.querySelector('.wd-sub'),
+        tabs: root.querySelector('.wd-tabs'),
+        body: root.querySelector('.wd-body'),
+        toggle: root.querySelector('.wd-toggle'),
+    };
+}
+
+function _ensureDock() {
+    const parts = _dockParts();
+    if (!parts) return null;
+    parts.root.classList.remove('hidden');
+    if (!parts.root.dataset.bound) {
+        parts.root.dataset.bound = '1';
+        parts.toggle.addEventListener('click', function () {
+            parts.root.classList.toggle('is-collapsed');
+            parts.toggle.textContent = parts.root.classList.contains('is-collapsed') ? '展开' : '收起';
+        });
+    }
+    return parts;
+}
+
+function _jobShortName(target) {
+    return String(target || '').replace(/^(?:domain:|company:|公司:|person:|username:)/, '');
+}
+
+function _osintStatusZh(status) {
+    const map = {queued: '排队中', running: '进行中', done: '已完成', failed: '失败', cancelled: '已取消', partial: '未完成'};
+    return map[status] || '进行中';
+}
+
+function _updateDock() {
+    const parts = _dockParts();
+    if (!parts) return;
+    const items = Object.keys(_osintTaskPanels).map(function (id) { return _osintTaskPanels[id]; });
+    if (!items.length) { parts.root.classList.add('hidden'); return; }
+    _ensureDock();
+
+    const running = items.filter(function (p) { return p.status === 'queued' || p.status === 'running'; });
+    let done = 0, total = 0;
+    items.forEach(function (p) {
+        const srcs = (p.wait && p.wait.sources) || [];
+        total += srcs.length;
+        done += srcs.filter(function (s) { return s.status !== 'running'; }).length;
+    });
+    parts.title.textContent = '后台任务 · ' + items.length + ' 项';
+    if (running.length) {
+        // 只用真实 source_start / source_done 计数
+        parts.sub.textContent = '采集中 ' + done + ' / ' + total + ' · ' + running.length + ' 项进行中';
+    } else if (_chatStreamActive > 0) {
+        // 采集完了但答复还在生成：明确说出来，避免“动画结束=背调结束”的误判
+        parts.sub.textContent = '采集完成，正在生成回复…';
+    } else {
+        parts.sub.textContent = '全部完成';
+    }
+
+    items.forEach(function (p) {
+        p.tab.classList.toggle('is-done', p.status === 'done');
+        p.tab.classList.toggle('is-bad', p.status === 'failed' || p.status === 'cancelled');
+        p.tab.classList.toggle('is-active', String(_osintActiveJobId) === String(p.jobId));
+        const st = p.tab.querySelector('.st');
+        if (st) st.textContent = _osintStatusZh(p.status);
+    });
+
+    // 全部结束后：没有聊天在生成就自动收起（先保留 3 秒让用户看到结论）
+    clearTimeout(_osintDockHideTimer);
+    if (!running.length && _chatStreamActive <= 0) {
+        _osintDockHideTimer = setTimeout(function () {
+            if (Object.keys(_osintTaskPanels).some(function (id) {
+                const p = _osintTaskPanels[id];
+                return p.status === 'running' || p.status === 'queued';
+            })) return;
+            if (_chatStreamActive > 0) return;
+            _detachOsintTaskPanels();
+        }, 3000);
+    }
+}
+
+function _selectOsintJob(jobId) {
+    if (!_osintTaskPanels[jobId]) return;
+    _osintActiveJobId = jobId;
+    Object.keys(_osintTaskPanels).forEach(function (id) {
+        const p = _osintTaskPanels[id];
+        if (p.wrap) p.wrap.classList.toggle('is-active', String(id) === String(jobId));
+    });
+    _updateDock();
+}
 
 function _detachOsintTaskPanels() {
     Object.keys(_osintTaskPanels).forEach(function (id) {
         const p = _osintTaskPanels[id];
         try { if (p && p.wait) p.wait.destroy(); } catch (e) {}
-        if (p && p.host && p.host.parentNode) p.host.parentNode.removeChild(p.host);
+        if (p && p.wrap && p.wrap.parentNode) p.wrap.parentNode.removeChild(p.wrap);
+        if (p && p.tab && p.tab.parentNode) p.tab.parentNode.removeChild(p.tab);
     });
     _osintTaskPanels = {};
+    _osintActiveJobId = null;
+    clearTimeout(_osintDockHideTimer);
+    const parts = _dockParts();
+    if (parts) parts.root.classList.add('hidden');
 }
 
-function _attachOsintTaskPanel(container, job) {
-    /** 在聊天流里挂一条 task 消息（独立气泡，回答到达后不会被移除）。 */
-    if (!container || !job || !job.job_id) return;
+function _attachOsintTaskPanel(_container, job) {
+    /** 把后台任务挂到右下角浮层；多个任务用标签切换，不往聊天流里插面板。 */
+    if (!job || !job.job_id) return;
     if (typeof TradeWait === 'undefined') return;
-    // 复用的已完成任务：右栏显示完成态即可，不挂 task 面板
+    // 复用的已完成任务：右栏显示完成态即可，不挂浮层
     if (job.status && job.status !== 'queued' && job.status !== 'running') return;
-    const old = _osintTaskPanels[job.job_id];
-    if (old) {
-        // 聊天历史异步渲染会清空消息区：旧面板已不在 DOM 时重建，否则保留
-        if (old.host && document.contains(old.host)) return;
-        try { if (old.wait) old.wait.destroy(); } catch (e) {}
-        delete _osintTaskPanels[job.job_id];
-        // 新面板要从头回放：旧读取器已在别的面板上消费过事件，先断开再重连
-        const rd = _osintJobReaders[job.job_id];
-        if (rd) { try { rd.abort(); } catch (e) {} delete _osintJobReaders[job.job_id]; }
-        _osintJobCursors[job.job_id] = 0;
-    }
-    const msg = document.createElement('div');
-    msg.className = 'message assistant wait-task-msg';
-    msg.innerHTML = '<div class="msg-avatar">🤖</div><div class="msg-body"></div>';
-    const mount = msg.querySelector('.msg-body');
-    container.appendChild(msg);
-    container.scrollTop = container.scrollHeight;
+    if (_osintTaskPanels[job.job_id]) return;
+    const parts = _ensureDock();
+    if (!parts) return;
+    const jobId = job.job_id;
+    const target = _jobShortName(job.target);
+
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'wd-tab';
+    tab.textContent = target || ('任务 ' + jobId);
+    const st = document.createElement('span');
+    st.className = 'st';
+    st.textContent = '进行中';
+    tab.appendChild(st);
+    tab.addEventListener('click', function () { _selectOsintJob(jobId); });
+    parts.tabs.appendChild(tab);
+
+    const wrap = document.createElement('div');
+    // 先标 active 再 mount：隐藏容器宽高为 0，组件会画不出（并可能抛半径错误）
+    wrap.className = 'wd-task is-active';
+    parts.body.appendChild(wrap);
+
     let wait = null;
     try {
-        wait = TradeWait.mount(mount, {
+        wait = TradeWait.mount(wrap, {
             mode: 'task',
             title: '背调 · BACKGROUND CHECK',
             statusLabel: '背调进行中',
-            onCancel: function () { _cancelOsintJob(job.job_id); },
+            onCancel: function () { _cancelOsintJob(jobId); },
         });
     } catch (e) {
         console.warn('背调 task 面板挂载失败', e);
+        wrap.remove(); tab.remove();
         return;
     }
-    _osintTaskPanels[job.job_id] = {wait: wait, host: msg};
-    _watchOsintJob(job.job_id);
+    _osintTaskPanels[jobId] = {
+        jobId: jobId, target: target, wait: wait, tab: tab, wrap: wrap,
+        status: job.status === 'queued' ? 'queued' : 'running',
+    };
+    if (_osintActiveJobId == null) _osintActiveJobId = jobId;
+    else _selectOsintJob(_osintActiveJobId);
+    _updateDock();
+    _watchOsintJob(jobId);
 }
 
 function _watchOsintJob(jobId) {

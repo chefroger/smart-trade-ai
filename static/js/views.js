@@ -711,6 +711,7 @@ async function onboardingStartOSINT() {
     resultsArea.innerHTML = '';
     var prompt = '请对 ' + query + ' 做全面的客户背景调查（OSINT），然后基于我的公司产品生成一封专业的 B2B 开发信。';
     _onboardingStreamCtl = new AbortController();
+    _chatStreamActive++;
     var progDiv = document.createElement('div');
     progDiv.className = 'onboarding-progress';
     progDiv.innerHTML = '<div class="wait-body"></div>';
@@ -861,6 +862,8 @@ async function onboardingStartOSINT() {
         }
     } finally {
         if (wait && !wait.final) { try { wait.destroy(); } catch (_) {} }
+        _chatStreamActive = Math.max(0, _chatStreamActive - 1);
+        _updateDock();
         resetInputs();
     }
 }

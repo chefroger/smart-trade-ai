@@ -285,7 +285,9 @@
 
   Wait.prototype._drawTask = function (c, w, h, t, still) {
     var full = this.quality === 2 && !still;
-    var avail = h - 30 - 84, cx = w / 2, cy = 30 + avail / 2, orb = Math.min(w * 0.3, avail / 2 - 22);
+    // 隐藏容器（display:none）挂载时尺寸为 0：半径钳到正数，避免 arc 抛 IndexSizeError
+    var avail = Math.max(0, h - 30 - 84), cx = w / 2, cy = 30 + avail / 2,
+        orb = Math.max(6, Math.min(w * 0.3, avail / 2 - 22));
     // 外圈 / 轨道（圆形 = 撒马利亚人的“全景监狱”母题）
     c.strokeStyle = 'rgba(' + INK + ',.12)'; c.beginPath(); c.arc(cx, cy, orb + 26, 0, 6.2832); c.stroke();
     c.setLineDash([3, 5]); c.strokeStyle = 'rgba(' + INK + ',.35)'; c.beginPath(); c.arc(cx, cy, orb, 0, 6.2832); c.stroke(); c.setLineDash([]);
@@ -504,10 +506,17 @@
     remove: function (w) { var i = this.list.indexOf(w); if (i >= 0) this.list.splice(i, 1); this.update(); },
     active: function () { return this.list.length > 0; },
     text: function () {
-      var task = this.list.filter(function (w) { return w.mode === 'task'; })[0];
-      if (task) {
-        var n = task.sources.length, d = task.sources.filter(function (s) { return s.status !== 'running'; }).length;
-        return (task.opts.statusLabel || '背调进行中') + (n ? ' ' + d + '/' + n : '') + (this.list.length > 1 ? ' · 另有 ' + (this.list.length - 1) + ' 项等待' : '');
+      var tasks = this.list.filter(function (w) { return w.mode === 'task'; });
+      if (tasks.length) {
+        // 多个后台任务时汇总真实来源计数，单任务沿用它的标题
+        var n = 0, d = 0;
+        tasks.forEach(function (w) {
+          n += w.sources.length;
+          d += w.sources.filter(function (s) { return s.status !== 'running'; }).length;
+        });
+        var label = tasks.length === 1 ? (tasks[0].opts.statusLabel || '后台任务') : '后台任务';
+        var extra = this.list.length - tasks.length;
+        return label + (n ? ' ' + d + '/' + n : '') + (extra > 0 ? ' · 另有 ' + extra + ' 项等待' : '');
       }
       var c = this.list[0];
       return '对话处理中' + (c.curTool ? ' · 正在调用：' + c.curTool : '');
