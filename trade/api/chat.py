@@ -39,7 +39,7 @@ from trade.document_task import (
     format_incomplete_report,
     should_enforce_document_gate,
 )
-from trade.helpers import build_query, create_agent
+from trade.helpers import build_query, configured_run_budget_seconds, create_agent
 from trade.hermes_chat_memory_plugin.doc_skip import register as register_doc_skip
 from trade.hermes_chat_memory_plugin.doc_skip import release as release_doc_skip
 from trade.hermes_compat import release_read_coverage, snapshot_read_coverage
@@ -62,6 +62,22 @@ _STREAM_DEADLINE_SECONDS = 1800.0
 
 # 同步聊天的 Agent 兜底超时（秒）。提为模块常量以便测试缩短。
 _SYNC_TIMEOUT_SECONDS = 600.0
+# 给「总结/收尾」留出的余量：预算必须小于外层超时，否则 Hermes 按 1500s
+# 计划收尾，外层 600s 先到 → 用户只拿到超时中止（审计 P2-5）。
+_SYNC_BUDGET_MARGIN_SECONDS = 60
+
+
+def _sync_run_budget() -> int | None:
+    """同步端点的单轮预算 = min(配置值, 外层超时 - 余量)。
+
+    用户显式调低预算时尊重更小的值；关闭预算（0/负数）时返回 None 不传。
+    下限 30s：测试会把超时缩到亚秒级，不能算出 0/负数。
+    """
+    budget = configured_run_budget_seconds()
+    if budget is None:
+        return None
+    cap = int(_SYNC_TIMEOUT_SECONDS - _SYNC_BUDGET_MARGIN_SECONDS)
+    return max(30, min(budget, cap))
 
 
 def _external_paths_hint(paths: list[str]) -> str:
@@ -535,12 +551,17 @@ async def trade_chat(
 
         enabled_toolsets=[] 禁用工具 —— 总结不应该再执行任何工具（否则就是
         换一种方式重跑）。总结失败时退回本地生成的未完成报告，绝不丢证据。
+
+        总结成功也标 **partial**（审计 P2-3）：本轮 Agent 并没有产出最终回答，
+        这只是凭部分工具结果整理的半成品 —— 必须跳过长期记忆，否则以后会把
+        它当成正式结论注入后续对话。
         """
         try:
             agent = create_agent(
                 ephemeral_system_prompt=skill_hint,
                 skill_name=current_skill,
                 enabled_toolsets=[],
+                run_budget_seconds=_sync_run_budget(),
             )
             agent_holder.clear()
             agent_holder.append(agent)
@@ -551,7 +572,7 @@ async def trade_chat(
                 agent, company_id=cid, skill=current_skill or "",
             )
             if text and not cancelled.is_set():
-                return text, "ok"
+                return text, "partial"
         except Exception:
             _log.exception("总结调用失败（已有工具结果）")
         return build_partial_report(reason, tools, evidence), "partial"
@@ -573,6 +594,7 @@ async def trade_chat(
                     skill_name=current_skill,
                     tool_start_callback=_sync_tool_start,
                     tool_complete_callback=_sync_tool_complete,
+                    run_budget_seconds=_sync_run_budget(),
                 )
                 agent_holder.clear()
                 agent_holder.append(agent)
@@ -710,7 +732,9 @@ async def trade_chat(
     # 它们不是对用户的回答，存档后会被后续轮次当作上下文注入（审计 P1-21）。
     # W10：剥除 trade-json 围栏后再入库/回传，避免气泡里露出原始 JSON。
     response_blocks = None
-    if agent_ok and response:
+    if response and (agent_ok or partial):
+        # 总结成功也走 partial：它的文本同样可能带 trade-json 围栏，
+        # 不入库剥离就会在气泡/历史里露出原始 JSON。
         response, response_blocks = parse_trade_json_blocks(response)
     conv = None
     if agent_ok or partial:
@@ -959,16 +983,24 @@ async def trade_chat_stream(
         return None
 
     def _finish_after_tools(reason: str) -> str | None:
-        """工具已跑过时的收尾：先试一次总结，不行就落未完成报告。"""
+        """工具已跑过时的收尾：先试一次总结，不行就落未完成报告。
+
+        总结成功也按 partial 落库/下发（审计 P2-3）：它是凭部分工具结果整理的
+        半成品，不是本轮 Agent 的最终回答，不能进长期记忆。
+        """
         summary = _summarize_after_tools(reason)
         if summary:
-            return _finalize(summary, 0.0)
+            return _finalize(summary, 0.0, partial=True)
         text, conv_id = _save_partial(reason)
         _emit_partial_response(text, conv_id)
         return None
 
-    def _finalize(result: str, elapsed: float) -> str | None:
-        """正常收尾：门禁判定 → 保存历史 → 下发 response 事件。"""
+    def _finalize(result: str, elapsed: float, *, partial: bool = False) -> str | None:
+        """收尾：门禁判定 → 保存历史 → 下发 response 事件。
+
+        partial=True 表示 result 是「凭已完成的工具结果整理的半成品」，
+        保存时标 partial 并跳过长期记忆，下发时带 partial 标记（审计 P2-3）。
+        """
         gate_result = None
         if document_task and request_task_id:
             try:
@@ -1037,6 +1069,8 @@ async def trade_chat_stream(
                 context=payload.context or "",
                 skill=current_skill or "",
                 blocks=reply_blocks,
+                partial=partial,
+                retain_to_memory=not partial,
             )
             if conv:
                 conv_id = conv.get("id")
@@ -1056,6 +1090,8 @@ async def trade_chat_stream(
         }
         if reply_blocks:
             resp_payload["blocks"] = reply_blocks
+        if partial:
+            resp_payload["partial"] = True
         _emit_threadsafe("response", resp_payload)
         delivered["ok"] = True
         return result

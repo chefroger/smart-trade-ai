@@ -148,6 +148,13 @@ class TestSmokeChatModule:
             monkeypatch.setenv("TRADE_RUN_BUDGET_SECONDS", "600")
             create_agent()
             assert budget_seen["value"] == 600
+            # 调用方可显式覆盖（同步端点必须传小于自身超时的预算，审计 P2-5）
+            create_agent(run_budget_seconds=540)
+            assert budget_seen["value"] == 540
+            # 显式 None = 关闭预算，不传给 AIAgent
+            budget_seen.clear()
+            create_agent(run_budget_seconds=None)
+            assert budget_seen["value"] is None
 
             # create_agent should NOT set HERMES_YOLO_MODE (moved to server.py startup)
             assert os.environ.get("HERMES_YOLO_MODE", "") != "true"

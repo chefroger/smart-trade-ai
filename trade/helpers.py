@@ -268,6 +268,10 @@ def resolve_enabled_toolsets() -> list[str]:
     return list(DEFAULT_ENABLED_TOOLSETS)
 
 
+# 「调用方没传预算」与「显式传 None = 关闭预算」必须区分开
+_BUDGET_UNSET = object()
+
+
 def create_agent(
     tool_start_callback=None,
     tool_complete_callback=None,
@@ -278,6 +282,7 @@ def create_agent(
     connection_callback=None,
     side_agent: bool | None = None,
     enabled_toolsets: list[str] | None = None,
+    run_budget_seconds=_BUDGET_UNSET,
 ):
     """创建 Hermes AIAgent 实例的统一入口。
 
@@ -294,6 +299,8 @@ def create_agent(
         cwd: 可选的服务端工作目录，仅显式传入时使用。
         connection_callback: 可选的 Hermes 连接状态回调。
         side_agent: 可选的 Hermes side-agent 标志。
+        run_budget_seconds: 单轮运行预算（秒）。不传读 TRADE_RUN_BUDGET_SECONDS
+                            （默认 1500）；显式传 None 表示关闭预算。
 
     Returns:
         AIAgent 实例，已配置好 quiet_mode / max_iterations / provider 等参数。
@@ -342,8 +349,13 @@ def create_agent(
         agent_kwargs["side_agent"] = side_agent
     # 一轮任务的运行预算（秒）：Hermes 会按剩余预算提醒 Agent 收尾，避免
     # 跑到外层 10/30 分钟兜底超时才被动中止（工单 P0-5）。
+    # 调用方可显式覆盖（同步端点必须传小于自身超时的值，审计 P2-5）；
+    # 不传则读 TRADE_RUN_BUDGET_SECONDS。
     # 旧版 AIAgent 没有这个参数 —— 按签名探测，不支持就不传（绝不硬塞）。
-    budget = _run_budget_seconds()
+    if run_budget_seconds is _BUDGET_UNSET:
+        budget = configured_run_budget_seconds()
+    else:
+        budget = run_budget_seconds
     if budget is not None:
         try:
             supports_budget = "run_budget_seconds" in inspect.signature(AIAgent).parameters
@@ -354,7 +366,7 @@ def create_agent(
     return AIAgent(**agent_kwargs)
 
 
-def _run_budget_seconds() -> int | None:
+def configured_run_budget_seconds() -> int | None:
     """读取一轮任务的运行预算（TRADE_RUN_BUDGET_SECONDS，默认 1500 秒）。
 
     非法值退回默认值；显式设为 0/负数视为「关闭」并返回 None。

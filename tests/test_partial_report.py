@@ -226,11 +226,79 @@ async def test_empty_result_retry_does_not_rerun_tools(company):
         result = await chat.trade_chat(ChatRequest(query="查一下 acme"), company["id"])
 
     assert result["response"] == "基于已有结果的总结"
-    assert result.get("partial") is None
+    # 审计 P2-3：总结成功也是「凭部分结果整理的半成品」，必须标 partial
+    assert result["partial"] is True
     assert len(counter) == 1, "工具被重复执行了"
     assert full_agent.enabled_toolsets != []
     assert summary_agent.enabled_toolsets == []
-    assert len(saved) == 1 and not saved[0]["partial"]
+    assert len(saved) == 1
+    assert saved[0]["partial"] is True
+    assert saved[0]["retain_to_memory"] is False, "半成品总结不得进长期记忆"
+
+
+@pytest.mark.asyncio
+async def test_stream_summary_is_marked_partial(company):
+    """流式：空响应后总结成功，response 事件带 partial 且落库 partial=True。"""
+    import trade.api.chat as chat
+    from trade.api.models import ChatRequest
+
+    counter: list[int] = []
+    summary_agent = _CountingAgent(counter)
+    full_agent = _CountingAgent(counter)
+
+    def _factory(**kw):
+        return _attach_callbacks(
+            summary_agent if kw.get("enabled_toolsets") == [] else full_agent, kw,
+        )
+
+    saved: list[dict] = []
+    with patch.object(chat, "create_agent", side_effect=_factory), \
+         patch.object(chat, "build_query", return_value=("Q", "H")), \
+         patch.object(chat.chat_memory, "save_with_context",
+                      side_effect=lambda **kw: saved.append(kw) or {"id": 9}), \
+         patch("trade.license.check_license", return_value=(True, "")):
+        resp = await chat.trade_chat_stream(
+            ChatRequest(query="查一下 acme"), company["id"]
+        )
+        chunks = []
+        async for chunk in resp.body_iterator:
+            chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", "replace"))
+    body = "".join(chunks)
+
+    assert "基于已有结果的总结" in body
+    assert '"partial": true' in body
+    assert len(counter) == 1, "工具被重复执行了"
+    assert len(saved) == 1
+    assert saved[0]["partial"] is True
+    assert saved[0]["retain_to_memory"] is False
+
+
+class TestSyncRunBudget:
+    """审计 P2-5：同步端点的预算必须小于外层 600s 超时。"""
+
+    def test_default_is_capped_below_timeout(self):
+        import trade.api.chat as chat
+
+        assert chat._SYNC_TIMEOUT_SECONDS == 600.0
+        assert chat._sync_run_budget() == 540
+
+    def test_respects_lower_configured_budget(self, monkeypatch):
+        import trade.api.chat as chat
+
+        monkeypatch.setenv("TRADE_RUN_BUDGET_SECONDS", "300")
+        assert chat._sync_run_budget() == 300
+
+    def test_disabled_budget_stays_disabled(self, monkeypatch):
+        import trade.api.chat as chat
+
+        monkeypatch.setenv("TRADE_RUN_BUDGET_SECONDS", "0")
+        assert chat._sync_run_budget() is None
+
+    def test_short_timeout_keeps_positive_floor(self, monkeypatch):
+        import trade.api.chat as chat
+
+        monkeypatch.setattr(chat, "_SYNC_TIMEOUT_SECONDS", 120.0)
+        assert chat._sync_run_budget() == 60
 
 
 async def _collect_stream(company) -> tuple[str, list[dict]]:
