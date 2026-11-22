@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.9 — 2026-11-22
+
+- 背调第二批公开来源：PDNS/GLEIF/VIES/州登记/EDGAR/GDELT
+- `ce03562` feat(osint): 第二批公开来源——PDNS/GLEIF/VIES/州登记/EDGAR/GDELT（P2-2）
+
 ## v0.9.8 — 2026-11-22
 
 - 背调：人名类型 + RDAP/CT/Wayback/GitHub 公开来源
