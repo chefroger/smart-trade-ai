@@ -89,11 +89,11 @@ class TestJobAttached:
         from trade.api.chat import _parse_osint_job_attachment
 
         assert _parse_osint_job_attachment('{"job_id": 3, "target": "x"}') == {
-            "job_id": 3, "target": "x",
+            "job_id": 3, "target": "x", "status": "",
         }
         assert _parse_osint_job_attachment('{"job_id": 0}') is None
         assert _parse_osint_job_attachment('{"job_id": true}') is None
         assert _parse_osint_job_attachment("not json") is None
-        assert _parse_osint_job_attachment({"job_id": 5, "target": "y"}) == {
-            "job_id": 5, "target": "y",
+        assert _parse_osint_job_attachment({"job_id": 5, "target": "y", "status": "running"}) == {
+            "job_id": 5, "target": "y", "status": "running",
         }

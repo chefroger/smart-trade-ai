@@ -262,7 +262,12 @@ def _parse_osint_job_attachment(result) -> dict | None:
     job_id = data.get("job_id")
     if not isinstance(job_id, int) or isinstance(job_id, bool) or job_id <= 0:
         return None
-    return {"job_id": job_id, "target": str(data.get("target") or "")[:200]}
+    return {
+        "job_id": job_id,
+        "target": str(data.get("target") or "")[:200],
+        # 复用 10 分钟内的已完成任务时，前端不该挂一个永远不动的 task 面板
+        "status": str(data.get("status") or "")[:20],
+    }
 
 
 def _document_gate(

@@ -299,3 +299,38 @@ def test_reduced_motion_uses_static_frame(live_server):
         assert page.evaluate("document.querySelector('#t .sw-chat').classList.contains('is-static')")
         assert "ANALYZING" in page.inner_text("#t .sw-phrase")
         browser.close()
+
+
+def test_task_panel_recovers_after_history_rerender(live_server):
+    """刷新/历史重渲染清空消息区后，运行中的背调面板要能按 seq 重建。"""
+    import json
+
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    jobs = json.dumps({"jobs": [{
+        "id": 77, "company_id": cid, "target": "recover.com", "target_type": "",
+        "status": "running", "created_at": "", "updated_at": "",
+    }]})
+    events = "\n\n".join([
+        "id: 1\nevent: job_start\ndata: " + json.dumps({"target": "recover.com", "budget": 30}),
+        "id: 2\nevent: source_start\ndata: " + json.dumps({"source": "rdap", "label": "RDAP 域名注册"}),
+    ]) + "\n\n"
+
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid)
+        page.route("**/api/trade/osint/jobs?limit=*", lambda r: r.fulfill(
+            status=200, content_type="application/json", body=jobs))
+        page.route("**/api/trade/osint/jobs/77/events*", lambda r: r.fulfill(
+            status=200, content_type="text/event-stream", body=events))
+        page.evaluate(f"currentCompanyId = {cid}; navToView('chat','daily','今日简报');")
+        page.wait_for_selector("#chat-messages", timeout=15000)
+        page.wait_for_timeout(1200)   # 等历史渲染完成
+        page.evaluate("async () => { await loadOsintJobs(false); }")
+        page.wait_for_selector(".wait-task-msg .sw-task", timeout=15000)
+        # 模拟聊天历史异步渲染：消息区被清空
+        page.evaluate("document.querySelector('#chat-messages').innerHTML = '';")
+        page.evaluate("async () => { await loadOsintJobs(true); }")
+        page.wait_for_selector(".wait-task-msg .sw-task", timeout=10000)
+        assert "RDAP 域名注册" in page.inner_text(".wait-task-msg .sw-log")
+        browser.close()

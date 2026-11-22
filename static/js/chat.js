@@ -1521,12 +1521,14 @@ async function sendMsg() {
 // 重新进入公司时按 seq 从头回放（不丢事件），运行中的任务继续追进度。
 
 let _osintJobReaders = {};
+let _osintJobCursors = {};   // jobId -> 已处理的最后 seq（断线重连只拉增量）
 
 function _abortOsintJobReaders() {
     Object.keys(_osintJobReaders).forEach(function (key) {
         try { _osintJobReaders[key].abort(); } catch (e) {}
     });
     _osintJobReaders = {};
+    _osintJobCursors = {};
 }
 
 function _osintStatusText(status) {
@@ -1554,6 +1556,15 @@ async function loadOsintJobs(isPoll) {
     jobs.forEach(function (job) {
         if (job.status === 'queued' || job.status === 'running') _watchOsintJob(job.id);
     });
+    // 刷新/重新进入公司：把仍在跑的任务面板恢复到当前聊天流；事件按 seq 从 0 回放
+    const chatBox = document.getElementById('chat-messages');
+    if (chatBox) {
+        jobs.forEach(function (job) {
+            const running = job.status === 'queued' || job.status === 'running';
+            // 已挂且仍在 DOM 里时 _attach 会直接返回；被历史重渲染清掉时会重建
+            if (running) _attachOsintTaskPanel(chatBox, {job_id: job.id, target: job.target});
+        });
+    }
 }
 
 function _renderRailOsintJobs(jobs) {
@@ -1600,11 +1611,16 @@ function _handleOsintJobSse(jobId, block) {
     const lines = String(block || '').split('\n');
     let type = '';
     let dataText = '';
+    let seq = 0;
     lines.forEach(function (line) {
-        if (line.indexOf('event: ') === 0) type = line.slice(7).trim();
+        if (line.indexOf('id: ') === 0) seq = parseInt(line.slice(4).trim(), 10) || 0;
+        else if (line.indexOf('event: ') === 0) type = line.slice(7).trim();
         else if (line.indexOf('data: ') === 0) dataText = line.slice(6).trim();
     });
     if (!type || type === 'done') return;
+    // 重连后只处理未见过的事件，避免日志重复、计数翻倍
+    if (seq && seq <= (_osintJobCursors[jobId] || 0)) return;
+    if (seq) _osintJobCursors[jobId] = seq;
     let payload = {};
     try { payload = JSON.parse(dataText || '{}'); } catch (e) { payload = {}; }
     const prog = document.getElementById('osint-prog-' + jobId);
@@ -1634,7 +1650,19 @@ function _attachOsintTaskPanel(container, job) {
     /** 在聊天流里挂一条 task 消息（独立气泡，回答到达后不会被移除）。 */
     if (!container || !job || !job.job_id) return;
     if (typeof TradeWait === 'undefined') return;
-    if (_osintTaskPanels[job.job_id]) return;
+    // 复用的已完成任务：右栏显示完成态即可，不挂 task 面板
+    if (job.status && job.status !== 'queued' && job.status !== 'running') return;
+    const old = _osintTaskPanels[job.job_id];
+    if (old) {
+        // 聊天历史异步渲染会清空消息区：旧面板已不在 DOM 时重建，否则保留
+        if (old.host && document.contains(old.host)) return;
+        try { if (old.wait) old.wait.destroy(); } catch (e) {}
+        delete _osintTaskPanels[job.job_id];
+        // 新面板要从头回放：旧读取器已在别的面板上消费过事件，先断开再重连
+        const rd = _osintJobReaders[job.job_id];
+        if (rd) { try { rd.abort(); } catch (e) {} delete _osintJobReaders[job.job_id]; }
+        _osintJobCursors[job.job_id] = 0;
+    }
     const msg = document.createElement('div');
     msg.className = 'message assistant wait-task-msg';
     msg.innerHTML = '<div class="msg-avatar">🤖</div><div class="msg-body"></div>';
@@ -1665,7 +1693,8 @@ function _watchOsintJob(jobId) {
 
     (async function () {
         try {
-            const resp = await fetch('/api/trade/osint/jobs/' + jobId + '/events?after=0', {
+            const resp = await fetch('/api/trade/osint/jobs/' + jobId + '/events?after=' +
+                (_osintJobCursors[jobId] || 0), {
                 headers: {'X-Hermes-Session-Token': TOKEN, 'X-Company-ID': String(companyId)},
                 signal: controller.signal,
             });
