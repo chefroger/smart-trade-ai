@@ -442,6 +442,46 @@ def test_task_dock_aggregates_jobs_and_does_not_block(live_server):
         assert page.evaluate("document.querySelectorAll('#wait-dock .wd-task.is-active').length") == 1
         assert "3 项" in page.inner_text("#wait-dock .wd-head")
         assert "采集中" in page.inner_text("#wait-dock .wd-sub")
+        # 浮层左右与聊天输入区对齐（不是贴在右栏）
+        align = page.evaluate("""() => {
+          const box = s => document.querySelector(s).getBoundingClientRect();
+          const input = box('.chat-input-area'), dock = box('#wait-dock');
+          return [Math.round(dock.left - input.left), Math.round(dock.width - input.width)];
+        }""")
+        assert abs(align[0]) <= 1 and abs(align[1]) <= 1, f"浮层未与聊天区对齐：{align}"
         assert page.evaluate("!document.querySelector('#msg-input').disabled")
         assert page.evaluate("!!document.querySelector('[data-view=customers]')")
+        browser.close()
+
+
+def test_task_text_follows_progress_until_reply(live_server):
+    """采集完成后、回复生成期间：大动画不结束，文字持续提示。"""
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid)
+        page.route("**/api/trade/osint/jobs?limit=*", lambda r: r.fulfill(
+            status=200, content_type="application/json", body='{"jobs": []}'))
+        page.evaluate(f"currentCompanyId = {cid}; navToView('chat','daily','今日简报');")
+        page.wait_for_selector("#chat-messages", timeout=15000)
+        page.wait_for_timeout(800)
+        page.evaluate("""() => {
+          _chatStreamActive = 1;
+          _attachOsintTaskPanel(null, {job_id: 999, target: 'acme.com', status: 'running'});
+          _handleOsintJobSse(999, 'id: 1\\nevent: source_start\\ndata: {"source":"rdap","label":"RDAP 域名注册"}');
+          _handleOsintJobSse(999, 'id: 2\\nevent: source_done\\ndata: {"source":"rdap","status":"hit","ms":1200}');
+          _handleOsintJobSse(999, 'id: 3\\nevent: verdict\\ndata: {"rating":"低风险","unverified":[]}');
+        }""")
+        page.wait_for_timeout(300)
+        state = page.evaluate(
+            "({phase:_osintTaskPanels[999].wait.phaseKey,"
+            " final:_osintTaskPanels[999].wait.final,"
+            " zh:document.querySelector('#wait-dock .sw-phrase .zh').textContent})")
+        assert state["final"] is False, "采集完成就结束了动画，回复却还没生成"
+        assert state["phase"] == "composing"
+        assert "正在生成回复" in state["zh"]
+        page.evaluate("_chatStreamActive = 0; _flushPendingDockVerdicts(); _updateDock();")
+        page.wait_for_timeout(300)
+        assert page.evaluate("_osintTaskPanels[999].wait.final") is True
         browser.close()

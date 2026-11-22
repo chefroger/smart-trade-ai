@@ -410,20 +410,29 @@
       }
       this._renderTools();
     } else {
-      if (type === 'job_start') { this.targetEl.textContent = redact(ev.target || '—'); this._log('预算 ' + (ev.budget || '?') + ' 秒', '', '任务已启动'); this.phase('searching'); }
+      if (type === 'job_start') {
+        var tgt = redact(ev.target || '—');
+        this.targetEl.textContent = tgt;
+        this._log('预算 ' + (ev.budget || '?') + ' 秒', '', '任务已启动');
+        this.phase('searching', '目标：' + tgt);
+      }
       else if (type === 'source_start') {
         var key = String(ev.source || ''), s = this._src(key);
         if (!s) { s = { key: key, label: redact(ev.label || key), status: 'running' }; this.sources.push(s); }
         s.status = 'running';
         this._log('查询中…', '', s.label);
+        // 大动画文案跟随当前真实来源，而不是只显示阶段名
+        this.phase('correlating', '正在查询：' + s.label);
       } else if (type === 'source_done') {
         var s2 = this._src(String(ev.source || ''));
         if (s2) {
           s2.status = ev.status || 'done';
           var bad = s2.status === 'error' || s2.status === 'timeout';
-          this._log((SRC_STATUS[s2.status] || s2.status) + (ev.ms != null ? ' · ' + (ev.ms / 1000).toFixed(1) + 's' : ''), s2.status === 'hit' ? 'hit' : (bad ? 'bad' : ''), s2.label);
+          var st = SRC_STATUS[s2.status] || s2.status;
+          this._log(st + (ev.ms != null ? ' · ' + (ev.ms / 1000).toFixed(1) + 's' : ''), s2.status === 'hit' ? 'hit' : (bad ? 'bad' : ''), s2.label);
           var running = this.sources.some(function (x) { return x.status === 'running'; });
-          this.phase(running ? 'correlating' : 'composing', running ? null : '汇总评分中');
+          // 完成一个来源后，文案停在刚返回的来源与结果上；全部返回才进入整理阶段
+          this.phase(running ? 'correlating' : 'composing', st + '：' + s2.label);
         }
       } else if (type === 'verdict') {
         var un = (ev.unverified || []).length;

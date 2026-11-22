@@ -863,6 +863,7 @@ async function onboardingStartOSINT() {
     } finally {
         if (wait && !wait.final) { try { wait.destroy(); } catch (_) {} }
         _chatStreamActive = Math.max(0, _chatStreamActive - 1);
+        _flushPendingDockVerdicts();
         _updateDock();
         resetInputs();
     }

@@ -145,10 +145,14 @@ test('source_start / source_done 产生真实节点计数', () => {
   wait.push({ type: 'source_start', source: 'rdap', label: 'RDAP 域名注册' });
   wait.push({ type: 'source_start', source: 'ct', label: '证书透明度（CT）' });
   assert.strictEqual(wait.sources.length, 2);
+  // 大动画文案跟随当前真实来源（不是只显示阶段名）
+  assert.strictEqual(wait.zhEl.textContent, '正在查询：证书透明度（CT）');
+  assert.strictEqual(wait.phaseKey, 'correlating');
   wait.push({ type: 'source_done', source: 'rdap', status: 'hit', ms: 1900 });
   assert.strictEqual(wait.countEl.textContent, '1 / 2 SOURCES');
   assert.strictEqual(wait.progTxt.textContent, '1 / 2');
   assert.strictEqual(wait.sources[0].status, 'hit');
+  assert.strictEqual(wait.zhEl.textContent, '命中：RDAP 域名注册');
   wait.destroy();
 });
 

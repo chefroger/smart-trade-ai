@@ -1509,6 +1509,7 @@ async function sendMsg() {
         _currentConvId = null;
         _endChatStream(streamCtl);
         _chatStreamActive = Math.max(0, _chatStreamActive - 1);
+        _flushPendingDockVerdicts();
         _updateDock();
         if (stopBtn) { stopBtn.classList.add('hidden'); stopBtn.onclick = null; }
         // 每轮对话结束后刷新用量（后端在 agent 返回时已记账）
@@ -1569,6 +1570,13 @@ async function loadOsintJobs(isPoll) {
         const p = _osintTaskPanels[job.id];
         if (!p) return;
         p.status = job.status;
+        // 聊天还在生成回复：采集完成也先别结束动画，等 _flushPendingDockVerdicts
+        if (job.status === 'done' && _chatStreamActive > 0 && p.wait && !p.wait.final) {
+            p.pendingVerdict = p.pendingVerdict || {rating: ''};
+            p.wait.phase('composing', '采集完成，正在生成回复…');
+            p.wait.cancelBtn.disabled = true;
+            return;
+        }
         if (p.wait && !p.wait.final) {
             const phase = job.status === 'cancelled' ? 'aborted' : (job.status === 'failed' ? 'failed' : 'acquired');
             const zh = job.status === 'partial' ? '未完成 · 已保存部分结果' : (phase === 'acquired' ? '采集完成' : undefined);
@@ -1638,16 +1646,43 @@ function _handleOsintJobSse(jobId, block) {
     if (prog) prog.textContent = _osintEventText(type, payload);
     // 浮层里的 task 面板跟着同一条 SSE 驱动（节点/耗时/进度都来自真实事件）
     const panel = _osintTaskPanels[jobId];
-    if (panel && panel.wait && !panel.wait.final) {
-        const ev = Object.assign({}, payload, {type: type});
-        panel.wait.push(ev);
-    }
     if (panel) {
+        // 采集完成但答复还在生成：不要结束动画 —— 否则「动画结束」会被误读成
+        // 「背调结束」。记下结论，等聊天流收尾时再 finish（文字继续提示生成中）。
+        if (type === 'verdict' && _chatStreamActive > 0 && panel.wait && !panel.wait.final) {
+            panel.pendingVerdict = payload;
+            panel.status = 'done';
+            panel.wait.phase('composing', '采集完成，正在生成回复…');
+            panel.wait.cancelBtn.disabled = true;
+            _updateDock();
+            return;
+        }
+        if (type === 'error' || type === 'cancelled') panel.pendingVerdict = null;
+        if (panel.wait && !panel.wait.final) {
+            const ev = Object.assign({}, payload, {type: type});
+            panel.wait.push(ev);
+        }
         if (type === 'verdict') panel.status = 'done';
         else if (type === 'error') panel.status = 'failed';
         else if (type === 'cancelled') panel.status = 'cancelled';
         _updateDock();
     }
+}
+
+/** 聊天流收尾：把「采集完成、等回复」的面板补上结论并结束动画。 */
+function _flushPendingDockVerdicts() {
+    if (_chatStreamActive > 0) return;
+    Object.keys(_osintTaskPanels).forEach(function (id) {
+        const p = _osintTaskPanels[id];
+        if (!p || !p.pendingVerdict || !p.wait || p.wait.final) return;
+        const verdict = p.pendingVerdict;
+        p.pendingVerdict = null;
+        if (verdict && verdict.rating) {
+            p.wait.push(Object.assign({}, verdict, {type: 'verdict'}));
+        } else {
+            p.wait.finish({phase: 'acquired', zh: '采集完成'});
+        }
+    });
 }
 
 // 后台任务浮层：jobId -> {wait, tab, wrap, target, status}
@@ -1671,6 +1706,24 @@ function _dockParts() {
     };
 }
 
+function _positionOsintDock(root) {
+    /** 与聊天输入区左右对齐（不贴右栏），底边停在输入框上方 12px。 */
+    const ref = document.querySelector('.chat-input-area');
+    if (!ref) {
+        // 非聊天视图（极少见）：退回右下角
+        root.style.left = '';
+        root.style.right = '';
+        root.style.width = '';
+        root.style.bottom = '';
+        return;
+    }
+    const r = ref.getBoundingClientRect();
+    root.style.right = 'auto';
+    root.style.left = Math.round(r.left) + 'px';
+    root.style.width = Math.round(r.width) + 'px';
+    root.style.bottom = Math.max(12, Math.round(window.innerHeight - r.top + 12)) + 'px';
+}
+
 function _ensureDock() {
     const parts = _dockParts();
     if (!parts) return null;
@@ -1681,7 +1734,11 @@ function _ensureDock() {
             parts.root.classList.toggle('is-collapsed');
             parts.toggle.textContent = parts.root.classList.contains('is-collapsed') ? '展开' : '收起';
         });
+        window.addEventListener('resize', function () {
+            if (!parts.root.classList.contains('hidden')) _positionOsintDock(parts.root);
+        });
     }
+    _positionOsintDock(parts.root);
     return parts;
 }
 
@@ -1700,6 +1757,7 @@ function _updateDock() {
     const items = Object.keys(_osintTaskPanels).map(function (id) { return _osintTaskPanels[id]; });
     if (!items.length) { parts.root.classList.add('hidden'); return; }
     _ensureDock();
+    _positionOsintDock(parts.root);
 
     const running = items.filter(function (p) { return p.status === 'queued' || p.status === 'running'; });
     let done = 0, total = 0;
