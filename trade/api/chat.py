@@ -245,6 +245,26 @@ def _validate_scope(payload, cid: int) -> None:
             )
 
 
+def _parse_osint_job_attachment(result) -> dict | None:
+    """从 osint_job_start 的返回值里取出 {job_id,target}（只认插件自己的 JSON 结构）。
+
+    工具返回值经 SSE 的 result_preview 截断到 300 字符，前端解析不可靠，
+    所以由后端在 tool_complete 之后补发一条 job_attached。
+    """
+    data = result
+    if isinstance(data, str):
+        try:
+            data = _json.loads(data)
+        except ValueError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    job_id = data.get("job_id")
+    if not isinstance(job_id, int) or isinstance(job_id, bool) or job_id <= 0:
+        return None
+    return {"job_id": job_id, "target": str(data.get("target") or "")[:200]}
+
+
 def _document_gate(
     document_task,
     request_task_id: str,
@@ -859,6 +879,12 @@ async def trade_chat_stream(
         _emit_threadsafe("tool_complete", {
             "tool_call_id": tc_id, "name": name, "result_preview": preview,
         })
+        # 后台背调刚启动：补一条 job_attached，前端据此把 task 面板挂进当前气泡，
+        # 不必解析被截断的 result_preview（工单 §4-B1）。
+        if name == "osint_job_start":
+            attached = _parse_osint_job_attachment(result)
+            if attached:
+                _emit_threadsafe("job_attached", attached)
 
     _MAX_AGENT_RETRIES = 2
     cancel_event = threading.Event()  # 客户端断连时置位，阻止重试继续浪费 token

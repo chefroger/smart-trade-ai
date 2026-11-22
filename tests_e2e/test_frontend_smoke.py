@@ -202,3 +202,100 @@ def test_main_pages_have_no_4xx_or_page_errors(live_server):
     assert not page_errors, "页面脚本异常：\n" + "\n".join(page_errors)
     assert not bad_responses, "出现 4xx/5xx 响应：\n" + "\n".join(bad_responses)
     assert not console_errors, "控制台 error 日志：\n" + "\n".join(console_errors)
+
+
+def _open_ui(p, base: str, cid: int, *, reduced_motion: str = "no-preference"):
+    """开页面并桩掉 Hermes 兼容检查 / 许可证（与上面的冒烟一致）。"""
+    browser = p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader"])
+    context = browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion=reduced_motion)
+    context.add_init_script(
+        "try { localStorage.setItem('_onboarding_completed', '1');"
+        f" sessionStorage.setItem('trade_cid', '{cid}'); }} catch (e) {{}}"
+    )
+    context.route(
+        "**/api/trade/system/hermes-compat",
+        lambda route: route.fulfill(status=200, content_type="application/json", body='{"usable": true}'),
+    )
+    context.route(
+        "**/api/trade/license/status",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json",
+            body='{"status": "active", "days_remaining": 365, "activated": true}',
+        ),
+    )
+    page = context.new_page()
+    page.goto(base + "/trade", wait_until="networkidle")
+    return browser, page
+
+
+def test_chat_task_panel_and_privacy(live_server):
+    """W1/W3：聊天等待用统一组件；task 面板来自真实 job 事件；args 不进界面。"""
+    import json
+
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    chat = "\n\n".join([
+        "event: thinking\ndata: " + json.dumps({"message": "正在分析问题..."}),
+        "event: tool_start\ndata: " + json.dumps({
+            "tool_call_id": "t1", "name": "file_extract",
+            "args": {"secret": "SENSITIVE_ARGS"}}),
+        "event: tool_complete\ndata: " + json.dumps({
+            "tool_call_id": "t1", "name": "osint_job_start",
+            "result_preview": "secret-result"}),
+        "event: job_attached\ndata: " + json.dumps({"job_id": 99, "target": "acme.com"}),
+        "event: response\ndata: " + json.dumps({"text": "**完成**：已启动背调。", "conversation_id": 1}),
+        "event: done\ndata: {}",
+    ]) + "\n\n"
+    job = "\n\n".join([
+        "event: job_start\ndata: " + json.dumps({"target": "acme.com", "budget": 30}),
+        "event: source_start\ndata: " + json.dumps({"source": "rdap", "label": "RDAP 域名注册"}),
+        "event: source_done\ndata: " + json.dumps({"source": "rdap", "status": "hit", "ms": 1200}),
+        "event: verdict\ndata: " + json.dumps({"rating": "低风险", "unverified": []}),
+    ]) + "\n\n"
+
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid)
+        page.route("**/api/trade/chat/stream*", lambda r: r.fulfill(
+            status=200, content_type="text/event-stream", body=chat))
+        page.route("**/api/trade/osint/jobs/99/events*", lambda r: r.fulfill(
+            status=200, content_type="text/event-stream", body=job))
+        page.route("**/api/trade/osint/jobs?limit=*", lambda r: r.fulfill(
+            status=200, content_type="application/json", body='{"jobs": []}'))
+
+        page.evaluate(f"currentCompanyId = {cid}; navToView('chat','daily','今日简报');")
+        # 等聊天历史加载完成：历史渲染会清空 #chat-messages，太早发送会把面板冲掉
+        page.wait_for_timeout(1500)
+        page.evaluate(
+            "const i=document.querySelector('#msg-input'); i.value='查一下 acme.com'; sendMsg();"
+        )
+        page.wait_for_selector(".wait-task-msg .sw-task", timeout=15000)
+        page.wait_for_timeout(800)
+        html = page.content()
+        assert "SENSITIVE_ARGS" not in html, "工具参数 args 进入了界面"
+        assert "secret-result" not in html, "工具结果预览进入了界面"
+        assert "RDAP 域名注册" in html, "task 面板没有真实来源节点"
+        assert "低风险" in html, "task 面板没有结论标签"
+        assert page.get_attribute(".wait-task-msg .sw-task", "data-render") in ("2d", "three")
+        browser.close()
+
+
+def test_reduced_motion_uses_static_frame(live_server):
+    """reduced-motion 下只显示静态帧，文字照常更新。"""
+    from playwright.sync_api import sync_playwright
+
+    base, _token, cid, _customer = live_server
+    with sync_playwright() as p:
+        browser, page = _open_ui(p, base, cid, reduced_motion="reduce")
+        page.wait_for_function("typeof TradeWait !== 'undefined'", timeout=15000)
+        page.evaluate(
+            "() => { const h=document.createElement('div'); h.id='t';"
+            " h.style.cssText='width:700px'; document.body.appendChild(h);"
+            " window.__w = TradeWait.mount(h, {mode:'chat'});"
+            " window.__w.push({type:'thinking', message:'正在分析问题...'}); }"
+        )
+        page.wait_for_timeout(300)
+        assert page.evaluate("window.__w.animating") is False
+        assert page.evaluate("document.querySelector('#t .sw-chat').classList.contains('is-static')")
+        assert "ANALYZING" in page.inner_text("#t .sw-phrase")
+        browser.close()

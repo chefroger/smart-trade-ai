@@ -257,11 +257,18 @@ async function testMailboxConnection() {
     const btn = $('mb-test-btn');
     const status = $('mb-test-status');
     if (btn) btn.disabled = true;
-    if (status) status.textContent = t('mailbox.testing');
+    var restore = (status && typeof TradeWait !== 'undefined')
+        ? TradeWait.inline(status, {en: 'TESTING', zh: '测试连接中'}) : null;
+    if (!restore && status) status.textContent = t('mailbox.testing');
     _mailboxTestPassed = false;
     if ($('mb-bind-btn')) $('mb-bind-btn').disabled = true;
-    const res = await api('POST', '/api/trade/mailboxes/test', payload);
-    if (btn) btn.disabled = false;
+    let res = null;
+    try {
+        res = await api('POST', '/api/trade/mailboxes/test', payload);
+    } finally {
+        if (restore) restore();
+        if (btn) btn.disabled = false;
+    }
     if (res && res.ok) {
         _mailboxTestPassed = true;
         if ($('mb-bind-btn')) $('mb-bind-btn').disabled = false;
@@ -279,7 +286,15 @@ async function bindMailbox() {
         return;
     }
     const payload = _mailboxFormPayload();
-    const res = await api('POST', '/api/trade/mailboxes', payload);
+    const bindBtn = $('mb-bind-btn');
+    var restore = (bindBtn && typeof TradeWait !== 'undefined')
+        ? TradeWait.inline(bindBtn, {en: 'BINDING', zh: '绑定中'}) : null;
+    let res = null;
+    try {
+        res = await api('POST', '/api/trade/mailboxes', payload);
+    } finally {
+        if (restore) restore();
+    }
     if (!res) return;
     toast(t('mailbox.bind_ok'));
     $('mb-secret').value = '';
@@ -339,7 +354,18 @@ function _renderMailboxRow(m) {
 async function pullMailbox(id) {
     _mailboxPullingId = id;
     await loadMailboxesList();
-    const res = await api('POST', '/api/trade/mailboxes/' + id + '/pull');
+    let pullingBtn = null;
+    document.querySelectorAll('#mailbox-list-wrap button').forEach(function (b) {
+        if (b.getAttribute('onclick') === 'pullMailbox(' + id + ')') pullingBtn = b;
+    });
+    var restore = (pullingBtn && typeof TradeWait !== 'undefined')
+        ? TradeWait.inline(pullingBtn, {en: 'PULLING', zh: '拉取中'}) : null;
+    let res = null;
+    try {
+        res = await api('POST', '/api/trade/mailboxes/' + id + '/pull');
+    } finally {
+        if (restore) restore();
+    }
     _mailboxPullingId = null;
     if (res) {
         toast(t('mailbox.pull_done', { n: res.pulled != null ? res.pulled : 0 }));

@@ -85,7 +85,7 @@ function showSkillsHelp() {
 async function updateSkills(e) {
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#skills-update-btn');
     if (!btn) return;
-    _setBtnBusy(btn, true);
+    const restoreBtn = _setBtnWait(btn, 'UPDATING', '更新中');
     try {
         const resp = await api('POST', '/api/trade/skills/update');
         if (resp?.ok) {
@@ -96,7 +96,7 @@ async function updateSkills(e) {
     } catch(e) {
         toast(t('sys.skills_error') + e.message);
     } finally {
-        _setBtnBusy(btn, false);
+        restoreBtn();
     }
 }
 

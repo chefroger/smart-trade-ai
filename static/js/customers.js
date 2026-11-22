@@ -1124,8 +1124,14 @@ async function openCustomerWall(cid) {
         const btn = $('wall-email-refresh');
         if (!btn || btn.disabled) return;
         btn.disabled = true;
-        btn.textContent = currentLang === 'en' ? 'Pulling…' : '拉取中…';
-        await api('POST', '/api/trade/mailboxes/pull-all');
+        var restore = (typeof TradeWait !== 'undefined') ? TradeWait.inline(btn, {en: 'PULLING', zh: '拉取中'}) : null;
+        try {
+            if (!restore) btn.textContent = currentLang === 'en' ? 'Pulling…' : '拉取中…';
+            await api('POST', '/api/trade/mailboxes/pull-all');
+        } finally {
+            if (restore) restore();
+            btn.disabled = false;
+        }
         openCustomerWall(cid);
     });
 
@@ -1771,9 +1777,11 @@ async function bulkImportCustomers() {
     const formData = new FormData();
     formData.append('file', file);
     const btn = fileInput.nextElementSibling;
-    btn.disabled = true; btn.textContent = '导入中...';
-
+    btn.disabled = true;
+    let restoreBtn = null;
     try {
+        if (typeof TradeWait !== 'undefined') restoreBtn = TradeWait.inline(btn, {en: 'IMPORTING', zh: '导入中'});
+        else btn.textContent = '导入中...';
         // 走 api() 统一封装：拿到 120s 超时与 401 自愈（原先裸 fetch 无超时）
         const result = await api('POST', '/api/trade/customers/bulk', formData);
         // result 为 null 时 api() 已经 toast 过失败原因，这里不重复提示
@@ -1785,6 +1793,7 @@ async function bulkImportCustomers() {
     } catch (e) {
         toast('导入失败: ' + e.message);
     }
+    if (restoreBtn) restoreBtn();
     btn.disabled = false; btn.innerHTML = btnIcon('upload') + ' 上传导入';
     fileInput.value = '';
 }
@@ -2406,8 +2415,14 @@ function _bindProfileCardActions(cid, root, mailboxBound, refreshFn, people) {
     root.querySelectorAll('.profile-extract-chat').forEach(function (btn) {
         btn.addEventListener('click', async function () {
             btn.disabled = true;
-            const r = await api('POST', `/api/trade/customers/${cid}/facts/extract`, { source: 'chat', limit: 20 });
-            btn.disabled = false;
+            var restore = (typeof TradeWait !== 'undefined') ? TradeWait.inline(btn, {en: 'EXTRACTING', zh: 'AI 提取中'}) : null;
+            let r = null;
+            try {
+                r = await api('POST', `/api/trade/customers/${cid}/facts/extract`, { source: 'chat', limit: 20 });
+            } finally {
+                if (restore) restore();
+                btn.disabled = false;
+            }
             if (!r) return;
             toast(t('profile.extract_done', {
                 f: r.added_facts || 0, g: r.added_gifts || 0, d: r.dropped_invalid || 0,
@@ -2418,8 +2433,14 @@ function _bindProfileCardActions(cid, root, mailboxBound, refreshFn, people) {
     root.querySelectorAll('.profile-extract-email').forEach(function (btn) {
         btn.addEventListener('click', async function () {
             btn.disabled = true;
-            const r = await api('POST', `/api/trade/customers/${cid}/facts/extract`, { source: 'email', limit: 20 });
-            btn.disabled = false;
+            var restore = (typeof TradeWait !== 'undefined') ? TradeWait.inline(btn, {en: 'EXTRACTING', zh: 'AI 提取中'}) : null;
+            let r = null;
+            try {
+                r = await api('POST', `/api/trade/customers/${cid}/facts/extract`, { source: 'email', limit: 20 });
+            } finally {
+                if (restore) restore();
+                btn.disabled = false;
+            }
             if (!r) return;
             toast(t('profile.extract_done', {
                 f: r.added_facts || 0, g: r.added_gifts || 0, d: r.dropped_invalid || 0,
@@ -2599,6 +2620,8 @@ function closeCustomerProfile() {
     panel.setAttribute('inert', '');
     panel.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('profile-open');
+    // 画像页关闭：等待状态重新接管顶栏（画像页 > 等待 > 轮播）
+    if (typeof TradeWaitStatus !== 'undefined') TradeWaitStatus.refresh();
     // 恢复打开前的顶栏标题
     const tt = document.getElementById('app-top-title');
     const tl = document.getElementById('app-top-lbl');
@@ -2718,6 +2741,7 @@ async function openCustomerProfile(cid) {
     document.body.classList.add('profile-open');
     // 顶栏状态改为画像统计（fx.js 的状态轮播在 profile-open 时会跳过）
     _setProfileStatus(factsPayload, giftsPayload);
+    if (typeof TradeWaitStatus !== 'undefined') TradeWaitStatus.refresh();
     const _pt = document.getElementById('app-top-title');
     const _pl = document.getElementById('app-top-lbl');
     if (_pt && _pl) {

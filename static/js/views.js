@@ -713,8 +713,24 @@ async function onboardingStartOSINT() {
     _onboardingStreamCtl = new AbortController();
     var progDiv = document.createElement('div');
     progDiv.className = 'onboarding-progress';
-    progDiv.innerHTML = '<div class="thinking-msg">💭 '+t('misc.thinking')+'</div>';
+    progDiv.innerHTML = '<div class="wait-body"></div>';
     resultsArea.appendChild(progDiv);
+    var wait = null;
+    try {
+        if (typeof TradeWait !== 'undefined') {
+            wait = TradeWait.mount(progDiv.querySelector('.wait-body'), {
+                mode: 'chat',
+                title: 'TRADE · ONBOARDING  ///  等待回复',
+                onCancel: function () { onboardingStopOSINT(); }
+            });
+        }
+    } catch (e) {
+        console.warn('引导页等待界面挂载失败，使用旧样式', e);
+        wait = null;
+    }
+    if (!wait) progDiv.innerHTML = '<div class="thinking-msg">💭 '+t('misc.thinking')+'</div>';
+    var onbStopBtn = $('onboarding-stop-btn');
+    if (onbStopBtn) { if (wait) onbStopBtn.classList.add('hidden'); else onbStopBtn.classList.remove('hidden'); }
     var toolEls = {};
     var progressDiv = null;
     var responseText = '';
@@ -722,7 +738,7 @@ async function onboardingStartOSINT() {
         if (!progressDiv) { progressDiv = document.createElement('div'); progressDiv.className = 'tool-progress'; progDiv.appendChild(progressDiv); }
         return progressDiv;
     }
-    function addToolItem(tcId, name, status, detail) {
+    function addToolItem(tcId, name, status) {
         var div = ensureProgress();
         var el = document.createElement('div');
         el.className = 'tool-item ' + status;
@@ -736,22 +752,18 @@ async function onboardingStartOSINT() {
         var nameEl = document.createElement('div');
         nameEl.className = 'tool-name';
         nameEl.textContent = fmtTool(name);
-        var detailEl = document.createElement('div');
-        detailEl.className = 'tool-detail';
-        detailEl.textContent = detail || '';
+        // 工具参数（args）可能含客户资料，不显示
         body.appendChild(nameEl);
-        body.appendChild(detailEl);
         el.appendChild(icon);
         el.appendChild(body);
         div.appendChild(el);
         resultsArea.scrollTop = resultsArea.scrollHeight;
         toolEls[tcId] = el;
     }
-    function updateTool(tcId, status, detail) {
+    function updateTool(tcId, status) {
         var el = toolEls[tcId]; if (!el) return;
         el.className = 'tool-item ' + status;
         var icon = el.querySelector('.tool-icon'); if (icon) icon.textContent = status==='running'?'◌':status==='done'?'✓':'✗';
-        if (detail) { var d = el.querySelector('.tool-detail'); if (d) d.textContent = detail; }
         resultsArea.scrollTop = resultsArea.scrollHeight;
     }
     function resetInputs() {
@@ -797,15 +809,26 @@ async function onboardingStartOSINT() {
                     try { data = JSON.parse(dataStr); } catch(e) { eventType=''; dataStr=''; continue; }
                     switch (eventType) {
                         case 'tool_start':
-                            addToolItem(data.tool_call_id, data.name, 'running', data.args ? Object.entries(data.args).map(function(kv) { return kv[0] + '=' + (typeof kv[1]==='string'?(kv[1].length>60?kv[1].slice(0,60)+'...':kv[1]):String(kv[1])); }).join(', ') : '');
+                            if (wait) wait.push({type:'tool_start', id:data.tool_call_id, label:fmtTool(data.name)});
+                            else addToolItem(data.tool_call_id, data.name, 'running');
                             break;
                         case 'tool_complete':
-                            updateTool(data.tool_call_id, 'done', data.result_preview || '完成');
+                            if (wait) wait.push({type:'tool_complete', id:data.tool_call_id});
+                            else updateTool(data.tool_call_id, 'done');
+                            break;
+                        case 'thinking':
+                            if (wait) wait.push({type:'thinking', message:data.message});
+                            break;
+                        case 'job_attached':
+                            // 引导页背调同样挂 task 面板（后端 B1）
+                            _attachOsintTaskPanel(resultsArea, data);
                             break;
                         case 'response':
                             responseText = data.text || '';
+                            if (wait) { wait.destroy(); wait = null; }
                             break;
                         case 'error':
+                            if (wait) { wait.finish({phase:'failed'}); wait = null; }
                             progDiv.innerHTML = '<div class="onb-error">' + esc(data.message) + '</div>';
                             resetInputs();
                             return;
@@ -827,10 +850,19 @@ async function onboardingStartOSINT() {
             resultsArea.innerHTML = '<div class="onb-error">AI 未返回有效回复，请重试。</div>';
         }
     } catch(e) {
-        progDiv.remove();
-        if (e.name === 'AbortError') resultsArea.innerHTML = '<div class="onb-info">已停止生成。</div>';
-        else resultsArea.innerHTML = '<div class="onb-error">网络错误：' + esc(e.message) + '</div>';
-    } finally { resetInputs(); }
+        if (e.name === 'AbortError') {
+            // 有等待面板时留在原地显示 ABORTED
+            if (wait) { wait.finish({phase:'aborted'}); wait = null; }
+            else { progDiv.remove(); resultsArea.innerHTML = '<div class="onb-info">已停止生成。</div>'; }
+        } else {
+            if (wait) { wait.finish({phase:'failed'}); wait = null; }
+            progDiv.remove();
+            resultsArea.innerHTML = '<div class="onb-error">网络错误：' + esc(e.message) + '</div>';
+        }
+    } finally {
+        if (wait && !wait.final) { try { wait.destroy(); } catch (_) {} }
+        resetInputs();
+    }
 }
 
 function onboardingStopOSINT() {
@@ -938,6 +970,9 @@ function _downloadBlob(blob, filename) {
 
 async function exportCompany(cid) {
     if (!confirm('导出包包含客户资料、对话、记忆和 Agent 身份，不包含桌面资料库文件（需自行拷贝），且未加密。请妥善保管。继续导出？')) return;
+    const expBtn = document.querySelector('button[onclick="exportCompany(' + cid + ')"]');
+    const restoreExp = (expBtn && typeof TradeWait !== 'undefined')
+        ? TradeWait.inline(expBtn, {en: 'EXPORTING', zh: '打包中'}) : null;
     try {
         const resp = await fetch(`/api/trade/companies/${cid}/export`, {
             headers: {
@@ -978,6 +1013,8 @@ async function exportCompany(cid) {
         else toast('导出完成，请妥善保管数据包');
     } catch (err) {
         toast('导出失败：' + (err && err.message ? err.message : err));
+    } finally {
+        if (restoreExp) restoreExp();
     }
 }
 
@@ -1187,6 +1224,23 @@ async function _confirmImport(decisions) {
 
 async function pollImportJob(jobId) {
     const status = document.getElementById('imp-status');
+    // task 模式面板：阶段只跟着真实的 status/phase 走，不估算、不显示百分比
+    let wait = null;
+    if (status && status.parentNode && typeof TradeWait !== 'undefined') {
+        const host = document.createElement('div');
+        host.className = 'wait-import-host';
+        status.parentNode.insertBefore(host, status);
+        try {
+            wait = TradeWait.mount(host, {
+                mode: 'task',
+                title: '导入公司数据包',
+                statusLabel: '导入公司数据包',
+                cancelText: '关闭',
+                onCancel: function () {}
+            });
+            wait.phase('working', '排队中');
+        } catch (e) { console.warn('导入等待面板挂载失败', e); wait = null; }
+    }
     for (let i = 0; i < 1800; i++) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         let data = null;
@@ -1197,6 +1251,7 @@ async function pollImportJob(jobId) {
             data = await resp.json();
             if (!resp.ok) {
                 // 任务只存在进程内存里：服务重启后 404，再轮询 30 分钟也没用
+                if (wait) wait.finish({phase: 'failed'});
                 if (status) {
                     status.textContent = resp.status === 404
                         ? '导入任务已失效（服务可能重启过），请刷新页面后检查公司列表。'
@@ -1210,6 +1265,7 @@ async function pollImportJob(jobId) {
         if (!data) continue;
         if (data.status === 'done') {
             const report = data.report || {};
+            if (wait) wait.finish({phase: 'acquired', zh: '导入完成'});
             if (status) {
                 status.textContent = '导入完成：' + (report.mode === 'created' ? '已新建公司' : '已合并到已有公司')
                     + '（' + ((report.target && report.target.name) || '') + '）\n'
@@ -1234,6 +1290,7 @@ async function pollImportJob(jobId) {
             return;
         }
         if (data.status === 'error') {
+            if (wait) wait.finish({phase: 'failed'});
             if (data.code === 'ambiguous_company') {
                 // prompt() 是纯文本，不能走 esc()（HTML 转义会把 A&B 显示成 A&amp;B），
                 // 也不用模板插值，免得 XSS 守卫把它当成 innerHTML 渲染点
@@ -1252,8 +1309,10 @@ async function pollImportJob(jobId) {
             if (status) status.textContent = '导入失败：' + (data.error || '未知错误');
             return;
         }
+        if (wait) wait.phase('working', data.phase === 'queued' ? '排队中' : '正在导入');
         if (status) status.textContent = '导入中…（' + (data.phase || data.status) + '）';
     }
+    if (wait) wait.finish({phase: 'failed', zh: '导入超时'});
     if (status) status.textContent = '导入超时，请查看日志或重试。';
 }
 
@@ -1400,6 +1459,43 @@ const HERMES_UPGRADE_TEXT = {
 };
 
 let _hermesUpgradeAbort = null;
+let _hermesWait = null;
+
+/** 升级等待面板：task 模式；读数行来自真实日志，先过滤路径与长 token。 */
+function _mountHermesWait() {
+    if (_hermesWait && _hermesWait.final) {
+        try { _hermesWait.destroy(); } catch (e) {}
+        _hermesWait = null;
+    }
+    if (_hermesWait) return _hermesWait;
+    const host = $('hermes-upgrade-wait');
+    if (!host || typeof TradeWait === 'undefined') return null;
+    try {
+        _hermesWait = TradeWait.mount(host, {
+            mode: 'task',
+            title: 'Hermes 升级 · UPGRADE',
+            statusLabel: 'Hermes 升级中',
+            cancelText: '收起',
+            onCancel: function () {}
+        });
+        _hermesWait.phase('working', '升级中');
+    } catch (e) {
+        console.warn('升级等待面板挂载失败', e);
+        _hermesWait = null;
+    }
+    return _hermesWait;
+}
+
+function _hermesWaitLine(line) {
+    if (!_hermesWait) return;
+    // 隐私/噪声过滤：绝对路径与超长标识不进读数
+    const safe = String(line || '')
+        .replace(/[A-Za-z]:\\[^\s"']+/g, '[路径]')
+        .replace(/(?:\/[\w.\-]+){2,}/g, '[路径]')
+        .replace(/\b[A-Za-z0-9_\-]{32,}\b/g, '[token]')
+        .slice(0, 120);
+    if (safe) _hermesWait.note(safe);
+}
 
 /**
  * 启动时检查 Hermes 是否过旧；需要升级则显示面板并返回 true。
@@ -1444,6 +1540,7 @@ function showHermesUpgradePanel(compat) {
         applyHermesUpgradeState({status:'rebuild_needed', message: compat.reason});
     } else {
         applyHermesUpgradeState(upgrade);
+        _mountHermesWait();
         startHermesUpgradeStream(0);
     }
 }
@@ -1516,6 +1613,13 @@ function applyHermesUpgradeState(upgrade) {
     // rebuilding 也要隐藏：那时服务已经停了，屏上的「步骤」只会让人以为还要自己动手。
     const stepsBox = $('hermes-upgrade-steps');
     if (stepsBox) stepsBox.style.display = (status === 'upgrading' || status === 'checking_network' || status === 'done' || status === 'rebuilding') ? 'none' : 'block';
+    // 统一等待面板跟着真实状态走
+    if (_hermesWait) {
+        if (status === 'done') _hermesWait.finish({phase: 'acquired', zh: '升级完成'});
+        else if (status === 'failed' || status === 'offline') _hermesWait.finish({phase: 'failed'});
+        else if (status === 'upgrading') _hermesWait.phase('working', '升级中');
+        else if (status === 'checking_network') _hermesWait.phase('working', '检查网络');
+    }
 }
 
 /** 手动重试：让后端重新走一遍「探网络 → hermes update」。 */
@@ -1577,6 +1681,7 @@ async function startVenvRebuild(btn) {
  * 所以这里吞掉异常，不弹错误。
  */
 async function startHermesUpgradeStream(offset) {
+    _mountHermesWait();
     if (_hermesUpgradeAbort) _hermesUpgradeAbort.abort();
     _hermesUpgradeAbort = new AbortController();
     try {
@@ -1599,7 +1704,7 @@ async function startHermesUpgradeStream(offset) {
                 if (!line.startsWith('data: ')) continue;
                 let data;
                 try { data = JSON.parse(line.slice(6)); } catch(_) { continue; }
-                if (data.type === 'log') appendHermesUpgradeLog(data.line);
+                if (data.type === 'log') { appendHermesUpgradeLog(data.line); _hermesWaitLine(data.line); }
                 else if (data.type === 'state') {
                     applyHermesUpgradeState(data);
                     // 升级成功不再自动重启：提示用户点重启（与系统更新一致）

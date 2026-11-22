@@ -166,8 +166,10 @@ test('两个更新入口用同一套按钮忙态机制', () => {
     const start = SRC.indexOf(fn);
     assert.ok(start > 0, `找不到 ${fn}`);
     const body = SRC.slice(start, SRC.indexOf('\n}', start));
-    assert.match(body, /_setBtnBusy\(btn, true\)/, `${fn} 必须用 _setBtnBusy 进入忙态`);
-    assert.match(body, /_setBtnBusy\(btn, false\)/, `${fn} 必须用 _setBtnBusy 还原按钮`);
+    // 2026-11-22：长等待改用统一内联样式 _setBtnWait（返回 restore），
+    // 短刷新仍用 _setBtnBusy；两者都必须是同一套“存原样、恢复原样”的机制。
+    assert.match(body, /_setBtnBusy\(btn, true\)|_setBtnWait\(btn,/, `${fn} 必须用统一忙态机制进入等待`);
+    assert.match(body, /_setBtnBusy\(btn, false\)|restoreBtn\(\)/, `${fn} 必须用统一机制还原按钮`);
     assert.ok(!/btn\.textContent\s*=/.test(body), `${fn} 不得手写 btn.textContent（会抹掉图标）`);
     assert.ok(!/btn\.innerHTML\s*=/.test(body), `${fn} 不得手写 btn.innerHTML（还原须走 dataset）`);
   }

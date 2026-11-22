@@ -447,6 +447,21 @@ function _setBtnBusy(btn, busy) {
     }
 }
 
+/** 长等待的内联样式（只用于系统更新/重启/Skills 更新这三处，不替换 _setBtnBusy）。 */
+function _setBtnWait(btn, en, zh) {
+    if (!btn) return function () {};
+    if (typeof TradeWait !== 'undefined') {
+        try { return TradeWait.inline(btn, { en: en, zh: zh }); } catch (e) { /* 回落 */ }
+    }
+    const prev = btn.innerHTML;
+    const wasDisabled = btn.disabled;
+    btn.disabled = true;
+    btn.innerHTML = (typeof iconHtml === 'function')
+        ? '<span class="i i-20 spin" style="--i:url(\'/static/icons/lucide-refresh-cw.svg\')"></span>'
+        : '…';
+    return function () { btn.disabled = wasDisabled; btn.innerHTML = prev; };
+}
+
 // ── 今日 token 用量（只提示，不拦截）──
 /**
  * 刷新侧栏底部的「今日已用 X / 上限」。
@@ -583,7 +598,7 @@ async function doTradeUpdate(e) {
     const btn = (e && (e.currentTarget || e.target)) || document.querySelector('#system-update-btn');
     if (!btn) return;
     if (!(await _confirmTradeUpdate())) return;
-    _setBtnBusy(btn, true);
+    const restoreBtn = _setBtnWait(btn, 'UPDATING', '更新中');
     _setUpdateInFlight(true);
     toast(t('sys.updating_now'));
     var updateFailed = false;
@@ -623,13 +638,13 @@ async function doTradeUpdate(e) {
         updateFailed = true;
     }
     if (updateFailed) {
-        _setBtnBusy(btn, false);
+        restoreBtn();
         _setUpdateInFlight(false);
         return;
     }
     if (!restartScheduled) {
         // 后端只更新不重启（audit P1-10）：露出重启按钮，让用户自己点
-        _setBtnBusy(btn, false);
+        restoreBtn();
         _setUpdateInFlight(false);
         _showRestartPrompt();
         return;
@@ -638,7 +653,7 @@ async function doTradeUpdate(e) {
     try { sessionStorage.setItem('_trade_upgrade_done', '1'); } catch(_) {}
     _setUpdateInFlight(false);
     _waitForRestartAndReload(() => {
-        _setBtnBusy(btn, false);
+        restoreBtn();
     });
 }
 
@@ -651,7 +666,7 @@ async function doRestartTrade(e) {
         toast(t('sys.restart_busy_update'));
         return;
     }
-    _setBtnBusy(btn, true);
+    const restoreBtn = _setBtnWait(btn, 'RESTARTING', '重启中');
     toast(t('sys.restart_toast'));
     let triggered = true;
     try {
@@ -671,11 +686,11 @@ async function doRestartTrade(e) {
         toast(t('sys.restart_wait'));
     }
     if (!triggered) {
-        _setBtnBusy(btn, false);
+        restoreBtn();
         return;
     }
     _waitForRestartAndReload(() => {
-        _setBtnBusy(btn, false);
+        restoreBtn();
     });
 }
 

@@ -666,8 +666,11 @@ function _showDropModal(files) {
     backdrop.querySelector('#drop-confirm-btn').onclick = async function() {
         const subdir = backdrop.querySelector('#drop-subdir-select').value;
         const btn = backdrop.querySelector('#drop-confirm-btn');
-        btn.disabled = true; btn.textContent = t('import.importing');
+        btn.disabled = true;
+        let restoreBtn = null;
         try {
+            if (typeof TradeWait !== 'undefined') restoreBtn = TradeWait.inline(btn, {en: 'IMPORTING', zh: '导入中'});
+            else btn.textContent = t('import.importing');
             const result = await _uploadToWorkDir(_pendingDropFiles, subdir);
             toast(t('toast.imported', {n: result.uploaded, dir: subdir}));
             const input = document.getElementById('msg-input');
@@ -1245,7 +1248,6 @@ const TOOL_NAMES = {
     delegate_task:'🤖 委派',vision:'👁️ 图像',skill_load:'📦 技能',
 };
 function fmtTool(name) { return TOOL_NAMES[name] || `🔧 ${name.replace(/_/g,' ')}`; }
-function fmtArg(v) { return typeof v==='string' ? (v.length>80?v.slice(0,77)+'...':v) : JSON.stringify(v).slice(0,80); }
 
 async function sendMsg() {
     if (!currentCompanyId) { toast('请先选择公司'); return; }
@@ -1281,28 +1283,66 @@ async function sendMsg() {
         if (!_chatStreamBelongsTo(ownerCid)) return;
         addMsg(role, text, null, save, convId, blocks);
     }
-    const stopBtn = ct.querySelector('#stop-btn');
-    if (stopBtn) {
-        stopBtn.classList.remove('hidden');
-        stopBtn.onclick = () => streamCtl.abort();
-    }
-    // 计时器：显示已用时，让用户知道仍在工作
-    const elapsedTimer = setInterval(() => {
-        const sec = Math.floor((Date.now() - startMs) / 1000);
-        const m = Math.floor(sec / 60), s = sec % 60;
-        const tEl = progDiv.querySelector('.elapsed');
-        if (tEl) tEl.textContent = `⏱ ${m}:${s.toString().padStart(2,'0')}`;
-    }, 1000);
-    const startMs = Date.now();
-
     const container = ct.querySelector('#chat-messages');
     const progDiv = document.createElement('div');
-    progDiv.className = 'message assistant';
-    const pid = 'prog-' + Date.now();
-    progDiv.id = pid;
-    progDiv.innerHTML = '<div class="msg-avatar">🤖</div><div class="msg-body"><div class="thinking-msg">💭 '+t('misc.thinking')+'</div><div class="elapsed" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div></div>';
+    progDiv.className = 'message assistant waiting';
+    progDiv.id = 'prog-' + Date.now();
+    progDiv.innerHTML = '<div class="msg-avatar">🤖</div><div class="msg-body"></div>';
+    const progBody = progDiv.querySelector('.msg-body');
     container.appendChild(progDiv);
     container.scrollTop = container.scrollHeight;
+
+    // 统一等待界面：挂载失败时回落到旧的文字气泡（可用性优先，绝不阻断聊天）
+    let wait = null;
+    try {
+        if (typeof TradeWait !== 'undefined') {
+            wait = TradeWait.mount(progBody, {
+                mode: 'chat',
+                title: 'TRADE · ASSISTANT  ///  等待回复',
+                onCancel: function () { streamCtl.abort(); },
+            });
+        }
+    } catch (e) {
+        console.warn('等待界面挂载失败，使用旧样式', e);
+        wait = null;
+    }
+    if (!wait) {
+        progBody.innerHTML = '<div class="thinking-msg">💭 ' + t('misc.thinking') +
+            '</div><div class="elapsed" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>';
+    }
+
+    const stopBtn = ct.querySelector('#stop-btn');
+    if (stopBtn) {
+        if (wait) {
+            // 停止按钮由等待组件提供，旧按钮隐藏，避免两个停止入口
+            stopBtn.classList.add('hidden');
+            stopBtn.onclick = null;
+        } else {
+            stopBtn.classList.remove('hidden');
+            stopBtn.onclick = () => streamCtl.abort();
+        }
+    }
+    // 计时器只服务回落样式；统一组件自带 T+ 计时
+    const startMs = Date.now();
+    let elapsedTimer = null;
+    if (!wait) {
+        elapsedTimer = setInterval(() => {
+            const sec = Math.floor((Date.now() - startMs) / 1000);
+            const m = Math.floor(sec / 60), s = sec % 60;
+            const tEl = progDiv.querySelector('.elapsed');
+            if (tEl) tEl.textContent = `⏱ ${m}:${s.toString().padStart(2,'0')}`;
+        }, 1000);
+    }
+    // 超过 45 秒没有任何字节：切到“连接等待中”（真实状态，不假装有进展）
+    let silenceTimer = null;
+    function armSilence() {
+        if (!wait) return;
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(function () {
+            if (wait && !wait.final) wait.phase('working', '连接等待中');
+        }, 45000);
+    }
+    armSilence();
 
     const toolEls = {};
     let progressDiv = null;
@@ -1316,7 +1356,7 @@ async function sendMsg() {
         if (!progressDiv) { progressDiv = document.createElement('div'); progressDiv.className = 'tool-progress'; progDiv.appendChild(progressDiv); }
         return progressDiv;
     }
-    function addToolItem(tcId, name, status, detail) {
+    function addToolItem(tcId, name, status) {
         const div = ensureProgress();
         const el = document.createElement('div');
         el.className = `tool-item ${status}`; el.id = `tool-${tcId}`;
@@ -1329,21 +1369,17 @@ async function sendMsg() {
         const nameEl = document.createElement('div');
         nameEl.className = 'tool-name';
         nameEl.textContent = fmtTool(name);
-        const detailEl = document.createElement('div');
-        detailEl.className = 'tool-detail';
-        detailEl.textContent = detail || '';
+        // 工具参数（args）可能含客户资料，任何等待样式都不显示
         body.appendChild(nameEl);
-        body.appendChild(detailEl);
         el.appendChild(icon);
         el.appendChild(body);
         div.appendChild(el); container.scrollTop = container.scrollHeight;
         toolEls[tcId] = el;
     }
-    function updateTool(tcId, status, detail) {
+    function updateTool(tcId, status) {
         const el = toolEls[tcId]; if (!el) return;
         el.className = `tool-item ${status}`;
         el.querySelector('.tool-icon').textContent = status==='running'?'◌':status==='done'?'✓':'✗';
-        if (detail) el.querySelector('.tool-detail').textContent = detail;
         container.scrollTop = container.scrollHeight;
     }
 
@@ -1382,47 +1418,69 @@ async function sendMsg() {
                     let data;
                     try { data = JSON.parse(dataStr); } catch(e) { eventType='';dataStr='';continue; }
                     switch(eventType) {
-                    case 'tool_start': addToolItem(data.tool_call_id,data.name,'running',data.args?Object.entries(data.args).map(([k,v])=>`${k}=${fmtArg(v)}`).join(', '):''); break;
+                    case 'tool_start':
+                        if (wait) wait.push({type:'tool_start', id:data.tool_call_id, label:fmtTool(data.name)});
+                        else addToolItem(data.tool_call_id,data.name,'running');
+                        armSilence();
+                        break;
                     case 'tool_complete':
-                        updateTool(data.tool_call_id,'done',data.result_preview||'完成');
+                        if (wait) wait.push({type:'tool_complete', id:data.tool_call_id});
+                        else updateTool(data.tool_call_id,'done');
                         // 后台背调刚启动：立刻刷新右栏任务面板，不必等切视图
                         if (data.name === 'osint_job_start' && typeof loadOsintJobs === 'function') loadOsintJobs(true);
                         break;
+                    case 'job_attached':
+                        // 后端确认了后台任务：在聊天流里挂 task 面板（工单 §4-B1）
+                        _attachOsintTaskPanel(container, data);
+                        break;
                     case 'thinking':
-                        if (!progDiv.querySelector('.thinking-msg')) { const t=document.createElement('div'); t.className='thinking-msg'; t.style.cssText='font-size:12px;color:var(--text-muted);padding:4px 0;'; t.textContent='💭 '+(data.message||'思考中...'); progDiv.appendChild(t); }
+                        if (wait) wait.push({type:'thinking', message:data.message});
+                        else if (!progDiv.querySelector('.thinking-msg')) { const t=document.createElement('div'); t.className='thinking-msg'; t.style.cssText='font-size:12px;color:var(--text-muted);padding:4px 0;'; t.textContent='💭 '+(data.message||'思考中...'); progDiv.appendChild(t); }
+                        armSilence();
                         break;
-                    case 'analysis_gate': {
-                        // 不通过时正文会给出完整原因，这里只做一行进度提示。
-                        const files = (data.files||[]).length;
-                        const skipped = (data.skipped||[]);
-                        const note = document.createElement('div'); note.className='thinking-msg';
-                        const ok = data.status === 'complete';
-                        note.style.cssText = 'font-size:12px;color:'+(ok?'var(--text-muted)':'var(--accent-red)')+';padding:4px 0;';
-                        note.textContent = (ok ? '✓ 已完整读取 ' : '⚠ 完整读取未通过，已完整读取 ') + files + ' 个文件'
-                            + (skipped.length ? '；未纳入：' + skipped.map(function(s){return s.file;}).join(', ') : '');
-                        // 能力边界如实披露：本机无法逐 Sheet/逐页核验时必须说出来
-                        if (data.coverage_note) {
-                            const cap = document.createElement('div');
-                            cap.className = 'thinking-msg';
-                            cap.style.cssText = 'font-size:12px;color:var(--text-muted);padding:2px 0 4px;';
-                            cap.textContent = 'ℹ️ ' + data.coverage_note;
+                    case 'analysis_gate':
+                        if (wait) {
+                            wait.push({type:'analysis_gate',
+                                ok: data.status === 'complete',
+                                files: (data.files||[]).length,
+                                note: data.coverage_note || ''});
+                        } else {
+                            // 不通过时正文会给出完整原因，这里只做一行进度提示。
+                            const files = (data.files||[]).length;
+                            const skipped = (data.skipped||[]);
+                            const note = document.createElement('div'); note.className='thinking-msg';
+                            const ok = data.status === 'complete';
+                            note.style.cssText = 'font-size:12px;color:'+(ok?'var(--text-muted)':'var(--accent-red)')+';padding:4px 0;';
+                            note.textContent = (ok ? '✓ 已完整读取 ' : '⚠ 完整读取未通过，已完整读取 ') + files + ' 个文件'
+                                + (skipped.length ? '；未纳入：' + skipped.map(function(s){return s.file;}).join(', ') : '');
+                            if (data.coverage_note) {
+                                const cap = document.createElement('div');
+                                cap.className = 'thinking-msg';
+                                cap.style.cssText = 'font-size:12px;color:var(--text-muted);padding:2px 0 4px;';
+                                cap.textContent = 'ℹ️ ' + data.coverage_note;
+                                progDiv.appendChild(note);
+                                progDiv.appendChild(cap);
+                                break;
+                            }
                             progDiv.appendChild(note);
-                            progDiv.appendChild(cap);
-                            break;
                         }
-                        progDiv.appendChild(note);
                         break;
-                    }
                     case 'response':
                         responseText = data.text||'';
                         responseConvId = data.conversation_id || null;
                         _currentConvId = data.conversation_id || null;
                         responseBlocks = data.blocks || null;
+                        // 回答到达：等待组件让位（task 面板独立存在，不受影响）
+                        if (wait) { wait.destroy(); wait = null; }
                         break;
                     case 'warning': if (data.message) toast('⚠️ ' + data.message); break;
                     case 'done': sawDone = true; break;  // 服务端正常收尾的标记（用于区分「服务端没内容」与「连接断了」）
-                    case 'error': progDiv.innerHTML=`<div class="msg-avatar" style="background:var(--accent-red);color:#fff;">⚠</div><div class="msg-body" style="color:var(--accent-red);">${esc(data.message)}</div>`; sendBtn.disabled = false; return;
+                    case 'error':
+                        if (wait) { wait.finish({phase:'failed'}); wait = null; }
+                        progDiv.innerHTML=`<div class="msg-avatar" style="background:var(--accent-red);color:#fff;">⚠</div><div class="msg-body" style="color:var(--accent-red);">${esc(data.message)}</div>`;
+                        sendBtn.disabled = false; return;
                     }
+                    armSilence();
                     eventType='';dataStr='';
                 }
             }
@@ -1432,13 +1490,21 @@ async function sendMsg() {
         if (outcome.kind === 'response') deliver('assistant', responseText, true, responseConvId, responseBlocks);
         else deliver('assistant', outcome.message, true, null);
     } catch(e) {
-        progDiv.remove();
         _currentConvId = null;
         // AbortError 分两种：用户主动停止（应提示）与切公司导致的作废（不该再往页面写）
-        if (e.name==='AbortError') deliver('assistant','🛑 已停止生成。');
-        else deliver('assistant',`网络错误：${e.message}`);
+        if (e.name==='AbortError') {
+            // 有等待面板时留在原地显示 ABORTED（组件按钮已是“已停止”）；回落样式照旧提示
+            if (wait) { wait.finish({phase:'aborted'}); wait = null; }
+            else { progDiv.remove(); deliver('assistant','🛑 已停止生成。'); }
+        } else {
+            if (wait) { wait.finish({phase:'failed'}); wait = null; }
+            progDiv.remove();
+            deliver('assistant',`网络错误：${e.message}`);
+        }
     } finally {
         clearInterval(elapsedTimer);
+        clearTimeout(silenceTimer);
+        if (wait && !wait.final) { try { wait.destroy(); } catch (e) {} }
         _currentConvId = null;
         _endChatStream(streamCtl);
         if (stopBtn) { stopBtn.classList.add('hidden'); stopBtn.onclick = null; }
@@ -1473,10 +1539,16 @@ function _osintStatusText(status) {
 
 async function loadOsintJobs(isPoll) {
     if (!currentCompanyId) return;
+    // 切公司（不是轮询）：气泡里的 task 面板属于旧公司，销毁；后端任务仍在跑。
+    // 轮询刷新**不能**再 abort 读取器：job_attached 刚挂上面板时，一次并发的
+    // loadOsintJobs 会把新连接掐掉，面板永远收不到 source 事件。
+    if (_osintPanelsCompanyId !== null && _osintPanelsCompanyId !== currentCompanyId) {
+        _detachOsintTaskPanels();
+        _abortOsintJobReaders();
+    }
+    _osintPanelsCompanyId = currentCompanyId;
     const data = await api('GET', '/api/trade/osint/jobs?limit=10', null, undefined, {silent: !!isPoll});
     if (!data) return;
-    // 切公司 → 旧连接先断（只影响渲染，后端任务继续跑）
-    _abortOsintJobReaders();
     const jobs = data.jobs || [];
     _renderRailOsintJobs(jobs);
     jobs.forEach(function (job) {
@@ -1537,6 +1609,52 @@ function _handleOsintJobSse(jobId, block) {
     try { payload = JSON.parse(dataText || '{}'); } catch (e) { payload = {}; }
     const prog = document.getElementById('osint-prog-' + jobId);
     if (prog) prog.textContent = _osintEventText(type, payload);
+    // 气泡里的 task 面板跟着同一条 SSE 驱动（节点/耗时/进度都来自真实事件）
+    const panel = _osintTaskPanels[jobId];
+    if (panel && panel.wait && !panel.wait.final) {
+        const ev = Object.assign({}, payload, {type: type});
+        panel.wait.push(ev);
+    }
+}
+
+// 后台背调 task 面板：jobId -> {wait, host}（切公司时销毁，正常结束保留最后一帧）
+let _osintTaskPanels = {};
+let _osintPanelsCompanyId = null;
+
+function _detachOsintTaskPanels() {
+    Object.keys(_osintTaskPanels).forEach(function (id) {
+        const p = _osintTaskPanels[id];
+        try { if (p && p.wait) p.wait.destroy(); } catch (e) {}
+        if (p && p.host && p.host.parentNode) p.host.parentNode.removeChild(p.host);
+    });
+    _osintTaskPanels = {};
+}
+
+function _attachOsintTaskPanel(container, job) {
+    /** 在聊天流里挂一条 task 消息（独立气泡，回答到达后不会被移除）。 */
+    if (!container || !job || !job.job_id) return;
+    if (typeof TradeWait === 'undefined') return;
+    if (_osintTaskPanels[job.job_id]) return;
+    const msg = document.createElement('div');
+    msg.className = 'message assistant wait-task-msg';
+    msg.innerHTML = '<div class="msg-avatar">🤖</div><div class="msg-body"></div>';
+    const mount = msg.querySelector('.msg-body');
+    container.appendChild(msg);
+    container.scrollTop = container.scrollHeight;
+    let wait = null;
+    try {
+        wait = TradeWait.mount(mount, {
+            mode: 'task',
+            title: '背调 · BACKGROUND CHECK',
+            statusLabel: '背调进行中',
+            onCancel: function () { _cancelOsintJob(job.job_id); },
+        });
+    } catch (e) {
+        console.warn('背调 task 面板挂载失败', e);
+        return;
+    }
+    _osintTaskPanels[job.job_id] = {wait: wait, host: msg};
+    _watchOsintJob(job.job_id);
 }
 
 function _watchOsintJob(jobId) {
