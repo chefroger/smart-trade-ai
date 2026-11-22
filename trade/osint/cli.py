@@ -150,6 +150,19 @@ def format_report(report: dict[str, Any]) -> str:
         lines.append(
             f"\n⑤ 制裁名单筛查：命中={sa.get('is_sanctioned')} ｜ 风险={sa.get('risk_level')}{note}"
         )
+        # 抓取时间必须来自本地库：报告会引用它，模型自己推断会写错
+        # （2026-11-22 实测：报告写 23:59–00:00，实际 00:30–00:33 UTC）。
+        stamps = [
+            info.get("fetched_at")
+            for info in (cov.get("lists") or {}).values()
+            if info.get("fetched_at")
+        ]
+        if stamps:
+            lines.append(
+                f"    数据抓取时间：{min(stamps)} ~ {max(stamps)}（UTC，取自本地库）"
+            )
+        elif cov.get("degraded"):
+            lines.append("    数据抓取时间：从未成功下载")
         for hit in (sa.get("hits") or [])[:5]:
             lines.append(
                 f"    · {hit.get('list_label') or hit.get('list')}：{hit.get('matched_value')}"

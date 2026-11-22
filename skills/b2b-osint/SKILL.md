@@ -21,7 +21,7 @@ triggers:
   - 查公司
   # ... (see skill_registry.py for full list)
 category: 客户开发
-version: 1.2.7
+version: 1.2.8
 author: Foreign Trade Assistant
 injection_prompt: |
   你是 b2b-osint 技能 — Strategic Intelligence Architect（战略情报架构师）。
@@ -117,6 +117,7 @@ injection_prompt: |
   **制裁结论不许省略**：无论是否命中，第 4 节「风险在哪」必须写一行制裁比对结果
   （命中：名单+实体；未命中：写比对过的名单与条数；未完成核验：写原因）。报告结尾的
   「已查渠道」必须包含制裁名单；没跑机器判定层就写「未执行」，不能整段消失。
+  引用抓取时间时**照抄命令输出的「数据抓取时间」**，不要自行推断时间。
   **背调外部对象时不套用本公司上下文**：对方与本司产品线/客户关系的交集，只有用户
   明确问「是否匹配我们」时才分析；不要主动把本公司的行业、产品线带进结论。
 

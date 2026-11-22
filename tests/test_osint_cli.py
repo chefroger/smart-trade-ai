@@ -69,6 +69,23 @@ class TestFormatReport:
         text = cli.format_report(_sample_report())
         assert "降级" in text and "本地 2 条" in text
 
+    def test_sanctions_fetch_time_comes_from_local_db(self):
+        """抓取时间必须来自 coverage —— 模型会照抄，不能让它自己推断。"""
+        report = _sample_report()
+        report["layers"]["sanctions"]["coverage"] = {
+            "degraded": False,
+            "total_entries": 90265,
+            "lists": {
+                "OFAC": {"fetched_at": "2026-11-22T00:30:37+00:00"},
+                "UK": {"fetched_at": "2026-11-22T00:33:03+00:00"},
+            },
+        }
+        text = cli.format_report(report)
+        assert (
+            "数据抓取时间：2026-11-22T00:30:37+00:00 ~ "
+            "2026-11-22T00:33:03+00:00（UTC，取自本地库）"
+        ) in text
+
     def test_unexecuted_layers_say_so(self):
         """没跑的层要写"未执行"，不能被静默省略成"看起来查过了"。"""
         text = cli.format_report(_sample_report())
@@ -195,6 +212,10 @@ class TestPromptsPointAtTheCommand:
         for name, text in self._osint_prompts():
             assert "无论" in text and "制裁" in text, (
                 f"{name} 没有强制要求报告写入制裁比对结论"
+            )
+            # 抓取时间必须照抄命令输出，不许模型推断（实测写错过半小时）
+            assert "数据抓取时间" in text, (
+                f"{name} 没有要求照抄制裁数据的抓取时间"
             )
 
     def test_prompts_forbid_borrowing_company_context(self):
