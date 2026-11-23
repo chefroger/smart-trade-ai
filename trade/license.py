@@ -69,11 +69,31 @@ def _load_private_key():
         return serialization.load_pem_private_key(priv_pem.encode(), password=None)
     return None
 
-# 试用期天数：默认 30 天，可通过环境变量 TRADE_TRIAL_DAYS 覆盖
-try:
-    _TRIAL_DAYS = int(os.environ.get("TRADE_TRIAL_DAYS", "30"))
-except (ValueError, TypeError):
-    _TRIAL_DAYS = 30
+def _configured_trial_days(in_pytest: bool | None = None) -> int:
+    """试用期天数：默认 30。
+
+    TRADE_TRIAL_DAYS 只在测试进程里生效（2026-11-23 审计 P1-10）：
+    生产进程设 `TRADE_TRIAL_DAYS=100000` 不得延长试用。
+    """
+    raw = os.environ.get("TRADE_TRIAL_DAYS", "").strip()
+    if not raw:
+        return 30
+    if in_pytest is None:
+        import sys
+
+        in_pytest = "pytest" in sys.modules
+    if not in_pytest:
+        _log.warning("忽略 TRADE_TRIAL_DAYS：只在测试进程（pytest）里生效")
+        return 30
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 30
+    return value if value > 0 else 30
+
+
+# 试用期天数：默认 30 天；环境变量仅测试进程可覆盖
+_TRIAL_DAYS = _configured_trial_days()
 
 
 # 硬件机器码的**进程内**缓存：付费验签每个请求都会调用 license_state，
@@ -248,18 +268,76 @@ def _license_file_path() -> Path:
     return _LICENSE_FILE
 
 
+def _trial_anchor_path() -> Path:
+    """试用起点的第二个存储位置（审计 P1-10）。
+
+    license.json 删掉就能重新拿 30 天；把起点同时写进 Hermes 目录下的隐藏
+    文件，读取时取两者最早值，删一份不会重置。
+    """
+    return _resolve_hermes_home() / ".trade_trial_start"
+
+
+def _read_trial_anchor() -> str | None:
+    """读取试用锚点；损坏/缺失返回 None（可用性优先）。"""
+    try:
+        value = _trial_anchor_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not value:
+        return None
+    try:
+        datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return value
+
+
+def _write_trial_anchor(stamp: str) -> None:
+    """写入试用锚点（best-effort，失败只记日志，绝不挡聊天）。"""
+    path = _trial_anchor_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(stamp, encoding="utf-8")
+    if os.name != "nt":
+        path.chmod(0o600)
+
+
+def _earliest_stamp(*values: str | None) -> str | None:
+    """返回能解析的最早时间戳；全部无法解析时返回 None。"""
+    best: str | None = None
+    best_dt: datetime | None = None
+    for value in values:
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            continue
+        if best_dt is None or parsed < best_dt:
+            best, best_dt = str(value), parsed
+    return best
+
+
 def _get_license_data(company_id: int | None = None) -> dict:
     """读取全局 license 数据（一台电脑一份，所有公司共享）。
 
     company_id 参数保留向后兼容，实际被忽略。
+    试用起点取 license.json 与 Hermes 锚点的**最早值**（审计 P1-10）。
     """
     path = _license_file_path()
+    data: dict = {}
     try:
         if path.is_file():
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        pass
-    return {}
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    anchor = _read_trial_anchor()
+    if anchor:
+        earliest = _earliest_stamp(data.get("first_launch_at"), anchor)
+        if earliest:
+            data["first_launch_at"] = earliest
+    return data
 
 
 def _save_license_data(data: dict, company_id: int | None = None) -> None:
@@ -442,6 +520,10 @@ def check_license(company_id: int | None = None) -> tuple[bool, str]:
                 return False, _SOFT_EXPIRED_TRIAL
             data["first_launch_at"] = stamp
             try:
+                _write_trial_anchor(stamp)
+            except Exception as exc:
+                _log.warning("试用锚点写入失败（不影响试用）: %s", exc)
+            try:
                 _save_license_data(data, company_id)
                 _PROCESS_FIRST_LAUNCH = None
                 _LICENSE_WRITE_ERROR = ""
@@ -459,6 +541,11 @@ def check_license(company_id: int | None = None) -> tuple[bool, str]:
         if _stamp_expired(stamp, now):
             return False, _SOFT_EXPIRED_TRIAL
         data["first_launch_at"] = stamp
+        # 双写（审计 P1-10）：锚点先写，license.json 删掉也不会重置试用
+        try:
+            _write_trial_anchor(stamp)
+        except Exception as exc:
+            _log.warning("试用锚点写入失败（不影响试用）: %s", exc)
         try:
             _save_license_data(data, company_id)
             _PROCESS_FIRST_LAUNCH = None

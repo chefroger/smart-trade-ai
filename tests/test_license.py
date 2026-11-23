@@ -814,3 +814,63 @@ class TestCryptographyDependencyDeclared:
             if ln.strip().startswith("cryptography")
         ]
         assert lines, "requirements.txt 必须声明 cryptography"
+
+
+class TestTrialHardening:
+    """审计 P1-10：环境变量只在测试进程生效；起点双写，删一份不重置。"""
+
+    def _isolate(self, monkeypatch, tmp_path):
+        import trade.license as lic
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path / "trade"))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+        monkeypatch.setattr(lic, "_LICENSE_FILE", None)
+        monkeypatch.setattr(lic, "_PROCESS_FIRST_LAUNCH", None)
+        monkeypatch.setattr(lic, "_LICENSE_WRITE_ERROR", "")
+        return lic
+
+    def test_env_only_effective_inside_pytest(self, monkeypatch):
+        from trade.license import _configured_trial_days
+
+        monkeypatch.setenv("TRADE_TRIAL_DAYS", "100000")
+        assert _configured_trial_days(in_pytest=False) == 30
+        assert _configured_trial_days(in_pytest=True) == 100000
+
+    def test_first_launch_writes_license_and_anchor(self, monkeypatch, tmp_path):
+        lic = self._isolate(monkeypatch, tmp_path)
+
+        ok, _ = lic.check_license()
+        assert ok
+        assert lic._license_file_path().is_file()
+        assert lic._trial_anchor_path().is_file()
+
+    def test_deleting_license_json_does_not_reset_trial(self, monkeypatch, tmp_path):
+        lic = self._isolate(monkeypatch, tmp_path)
+        old = (
+            datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=40)
+        ).isoformat()
+        lic._write_trial_anchor(old)
+        # 模拟用户删掉 license.json
+        assert not lic._license_file_path().exists()
+
+        ok, msg = lic.check_license()
+
+        assert not ok, "删掉 license.json 后试用被重置了"
+        assert "到期" in msg
+
+    def test_earliest_of_two_stamps_wins(self, monkeypatch, tmp_path):
+        lic = self._isolate(monkeypatch, tmp_path)
+        old = (
+            datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=40)
+        ).isoformat()
+        recent = datetime.datetime.now(datetime.UTC).isoformat()
+        lic._write_trial_anchor(old)
+        path = lic._license_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            __import__("json").dumps({"first_launch_at": recent}), encoding="utf-8",
+        )
+
+        ok, _ = lic.check_license()
+
+        assert not ok, "较早的锚点没有被采用，试用被 license.json 重置"
