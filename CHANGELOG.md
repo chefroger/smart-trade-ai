@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.44 — 2026-11-23
+
+- Release：Intel/Apple Silicon 双架构 Mac 包
+- `7c0a920` ci(release): Mac 包分 Intel / Apple Silicon 两种架构构建
+
 ## v0.9.43 — 2026-11-23
 
 - Mac 包改为运行时使用用户自己的 Hermes（不内嵌）
