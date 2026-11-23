@@ -208,7 +208,14 @@ def _open_ui(p, base: str, cid: int, *, reduced_motion: str = "no-preference",
              compat_body: str = '{"usable": true}', extra_routes=()):
     """开页面并桩掉 Hermes 兼容检查 / 许可证（与上面的冒烟一致）。"""
     browser = p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader"])
-    context = browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion=reduced_motion)
+    context = browser.new_context(
+        viewport={"width": 1440, "height": 900},
+        reduced_motion=reduced_motion,
+        # /trade 现在有严格 CSP（审计 P1-E）；Playwright 的 wait_for_function
+        # 用 eval 跑谓词，会被 script-src 拦下。只对该测试上下文放行，
+        # 生产 CSP 不变。
+        bypass_csp=True,
+    )
     context.add_init_script(
         "try { localStorage.setItem('_onboarding_completed', '1');"
         f" sessionStorage.setItem('trade_cid', '{cid}'); }} catch (e) {{}}"
@@ -541,3 +548,17 @@ def test_late_verdict_keeps_rating_from_job_detail(live_server):
         )
         assert page.evaluate("_osintTaskPanels[998].wait.final") is True
         browser.close()
+
+
+def test_trade_page_sets_csp(live_server):
+    """审计 P1-E：/trade 必须带 CSP，远程图片/连接默认被拦。"""
+    import urllib.request
+
+    base, _token, _cid, _customer = live_server
+    with urllib.request.urlopen(base + "/trade", timeout=10) as resp:
+        csp = resp.headers.get("Content-Security-Policy", "")
+
+    assert "default-src 'self'" in csp
+    assert "img-src 'self' data: blob:" in csp
+    assert "connect-src 'self'" in csp
+    assert "object-src 'none'" in csp

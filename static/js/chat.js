@@ -806,8 +806,11 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
     body.innerHTML = DOMPurify.sanitize(raw, {
         ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6',
             'blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'],
-        ALLOWED_ATTR: ['href','target','class','id','style','src','alt','width','height'],
+        // 不放行 style/id：模型输出不该带自定义样式与可覆盖的 DOM id（审计 P1-E）
+        ALLOWED_ATTR: ['href','target','class','src','alt','width','height'],
     });
+    // 跨源图片改为点击加载，防提示注入零点击外带数据
+    if (typeof neutralizeRemoteImages === 'function') neutralizeRemoteImages(body);
     // 附件 chip：气泡下方单独一行（mockup .att），不再塞进消息正文
     let attachEl = null;
     if (files && files.length) {

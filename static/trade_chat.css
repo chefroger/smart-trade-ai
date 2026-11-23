@@ -35,6 +35,14 @@
     --ease: cubic-bezier(0.4,0,0.2,1); --ease-out: cubic-bezier(0,0,0.2,1);
     --ease-bounce: cubic-bezier(0.34,1.56,0.64,1);
 }
+/* 远程图片占位（审计 P1-E）：模型回答不再自动请求跨源图片 */
+.remote-img-hold {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px; border: 1px dashed rgba(12,13,14,.35); border-radius: 2px;
+    background: rgba(12,13,14,.03); color: var(--muted);
+    font: inherit; font-size: 13px; cursor: pointer;
+}
+.remote-img-hold:hover { background: rgba(12,13,14,.06); color: var(--ink); }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
     font-family: var(--font-ui);

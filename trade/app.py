@@ -1284,7 +1284,20 @@ def serve_trade_chat(app: FastAPI) -> None:
             )
         html = _TRADE_CHAT_HTML.read_text(encoding="utf-8")
         html = html.replace("__TRADE_SESSION_TOKEN__", _SESSION_TOKEN)
-        return HTMLResponse(content=html)
+        # CSP（审计 P1-E）：默认只信本机；图片只允许 self/data/blob，
+        # 远程图片由前端换成「点击加载」占位，避免提示注入零点击外带数据。
+        # 仍保留 script/style 的 unsafe-inline：页面有内联 token 引导脚本与
+        # 大量内联样式，改成 nonce 需要动模板初始化链路，单独一步再做。
+        csp = (
+            "default-src 'self'; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self' data:; "
+            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        )
+        return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

