@@ -389,17 +389,22 @@ async def test_stream_summary_race_never_writes_two_histories(company):
         summary_agent = _CountingAgent(counter)
         full_agent = _CountingAgent(counter)
 
-        def _factory(**kw):
+        # 默认参数把循环变量绑定进函数（ruff B023：闭包捕获循环变量会拿到最后一轮）
+        def _factory(_summary=summary_agent, _full=full_agent, **kw):
             return _attach_callbacks(
-                summary_agent if kw.get("enabled_toolsets") == [] else full_agent, kw,
+                _summary if kw.get("enabled_toolsets") == [] else _full, kw,
             )
 
         saved: list[dict] = []
+
+        def _save(_saved=saved, _id=i, **kw):
+            _saved.append(kw)
+            return {"id": _id}
+
         with patch.object(chat, "create_agent", side_effect=_factory), \
              patch.object(chat, "build_query", return_value=("Q", "H")), \
              patch.object(chat, "_check_chat_rate_limit", return_value=True), \
-             patch.object(chat.chat_memory, "save_with_context",
-                          side_effect=lambda **kw: saved.append(kw) or {"id": i}), \
+             patch.object(chat.chat_memory, "save_with_context", side_effect=_save), \
              patch("trade.license.check_license", return_value=(True, "")):
             resp = await chat.trade_chat_stream(
                 ChatRequest(query="查一下 acme"), company["id"]
