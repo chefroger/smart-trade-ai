@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.45 — 2026-11-23
+
+- Release：arm64 构建改用 macos-latest
+- `57025f9` ci(release): arm64 构建改用 macos-latest（macos-14 在公开仓库被取消）
+
 ## v0.9.44 — 2026-11-23
 
 - Release：Intel/Apple Silicon 双架构 Mac 包
