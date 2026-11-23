@@ -220,3 +220,24 @@ async def test_stream_route_appends_sanctions_section(company, monkeypatch):
 
     assert "【制裁名单筛查】" in body and "未命中（哨兵）" in body
     assert saved and "未命中（哨兵）" in saved[0]["response"]
+
+
+def test_question_sentences_are_not_used_as_target(monkeypatch):
+    """W2：疑问/指代句不能被整句当成筛查目标。"""
+    for query in ("这个买家是不是骗子", "帮我查下这个客户靠谱吗"):
+        assert chat._osint_target_from_query(query) is None
+        text = chat._sanctions_fallback_text(query)
+        assert "未执行" in text and "无法从问题中确定筛查对象" in text
+
+
+def test_bare_targets_still_screened(monkeypatch):
+    monkeypatch.setattr(
+        "trade.osint.sanctions.check_sanctions",
+        lambda name, country=None: {
+            "hits": [], "is_sanctioned": False,
+            "coverage": {"degraded": False, "total_entries": 10, "lists": {"OFAC": {}}},
+        },
+    )
+    for query in ("天津赛得", "Huawei"):
+        assert chat._osint_target_from_query(query) == query
+        assert "未命中" in chat._sanctions_fallback_text(query)

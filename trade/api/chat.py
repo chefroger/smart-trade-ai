@@ -100,6 +100,10 @@ _OSINT_SKILL = "b2b-osint"
 _OSINT_TOOL_NAMES = frozenset({"osint_job_start", "osint_job_result"})
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 _DOMAIN_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
+# 疑问/指代词：出现时不允许把整句当筛查目标
+_QUESTION_MARKERS_RE = re.compile(
+    r"这个|这家|该|是不是|吗|靠谱|怎么样|如何|谁|哪|什么|请问|帮我查|客户|买家|卖家",
+)
 
 
 def _osint_target_from_query(query: str) -> str | None:
@@ -129,8 +133,10 @@ def _osint_target_from_query(query: str) -> str | None:
         match = _DOMAIN_RE.search(text)
         if match:
             return match.group(0)
-        # 很短的问题本身就是目标（如「天津赛得」）
-        if len(text) <= 30:
+        # 短句兜底只接受「没有疑问/指代词」的裸目标（如「天津赛得」「Huawei」）。
+        # 含「这个/这家/是不是/吗/靠谱」等一律不猜 —— 拿整句比对名单会把
+        # 「这个买家是不是骗子」筛成绿色「未命中」（W2）。
+        if len(text) <= 30 and not _QUESTION_MARKERS_RE.search(text):
             return text
     except Exception:
         _log.exception("提取 OSINT 目标失败")
