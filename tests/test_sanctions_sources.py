@@ -253,3 +253,111 @@ class TestDownloadGuard:
         from trade.osint.sanctions import loader
 
         assert loader.start_background_refresh(delay=0, interval=0) is False
+
+
+class TestMatchQuality:
+    """工单 P1-G（11-22 P1-A）：停用词、confirmed/possible、短品牌名、中文后缀。"""
+
+    def _seed(self, names: list[tuple[str, str]]):
+        from trade.osint.sanctions.loader import refresh_all
+
+        src = _source("OFAC", "ofac_sdn", ("ofac_sdn.csv",))
+        parsed = ParsedList(
+            label="quality", source_url=src.urls[0],
+            primary=len(names), aliases=0, rows_total=len(names),
+            rows=[(name, "", kind) for name, kind in names],
+        )
+        refresh_all(fetch=lambda source: parsed, sources=(src,))
+
+    def test_legal_suffixes_do_not_create_hits(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("SHENZHEN ABC TECHNOLOGY CO LTD", "entity")])
+        result = check_sanctions("Shenzhen Technology Co Ltd")
+
+        assert result["hits"] == [], "co/ltd/technology 这些泛词不应凑出疑似命中"
+        assert result["risk_level"] == "none"
+
+    def test_short_brand_hits_core_tokens(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("HUAWEI TECHNOLOGIES CO LTD", "entity")])
+        result = check_sanctions("HUAWEI")
+
+        assert result["is_sanctioned"] is True
+        assert result["hits"][0]["confirmation"] == "confirmed"
+        assert result["risk_level"] == "high"
+
+    def test_short_brand_does_not_match_different_token(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("ABC HOLDINGS LTD", "entity")])
+        assert check_sanctions("ABCDE")["hits"] == []
+
+    def test_alias_exact_is_confirmed(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("BOUT, Viktor Anatoljevitch", "entity"), ("Viktor Bout", "alias")])
+        result = check_sanctions("Viktor Bout")
+
+        assert result["is_sanctioned"] is True
+        assert any(h["matched_value"] == "Viktor Bout" for h in result["hits"])
+
+    def test_same_name_person_is_confirmed_but_distinct_level(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("WANG WEI", "entity")])
+        result = check_sanctions("Wang Wei")
+
+        assert result["is_sanctioned"] is True
+        assert result["hits"][0]["confirmation"] == "confirmed"
+
+    def test_chinese_company_suffix_stripped(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("华为技术有限公司", "entity")])
+        result = check_sanctions("华为")
+
+        assert result["is_sanctioned"] is True
+        assert result["hits"][0]["confirmation"] == "confirmed"
+
+
+class TestRefreshBackoff:
+    """工单 P1-G（11-22 P1-B）：5/15/60 分钟退避 + 20h 新鲜跳过。"""
+
+    def test_next_delay_backoff_sequence(self):
+        from trade.osint.sanctions.loader import _next_delay
+
+        assert _next_delay(False, 3, 86400) == 86400
+        assert _next_delay(True, 0, 86400) == 300
+        assert _next_delay(True, 1, 86400) == 900
+        assert _next_delay(True, 5, 86400) == 3600
+
+    def test_skip_fresh_does_not_fetch(self, sanctions_db):
+        from trade.osint.sanctions.loader import refresh_all
+
+        src = _source("CSL", "csl", ("csl.csv",))
+        refresh_all(fetch=lambda source: _parse(src), sources=(src,))
+        calls: list[str] = []
+
+        def _should_not_run(source):
+            calls.append(source.name)
+            raise AssertionError("20h 内已刷新过，不应再下载")
+
+        results = refresh_all(fetch=_should_not_run, sources=(src,), skip_fresh=True)
+        assert calls == []
+        assert results["CSL"]["skipped"] is True
+
+    def test_failed_source_is_retried_despite_skip_fresh(self, sanctions_db):
+        from trade.osint.sanctions.loader import refresh_all
+
+        src = _source("CSL", "csl", ("csl.csv",))
+
+        def _boom(source):
+            raise RuntimeError("network down")
+
+        refresh_all(fetch=_boom, sources=(src,))
+        results = refresh_all(
+            fetch=lambda source: _parse(src), sources=(src,), skip_fresh=True)
+        assert results["CSL"]["ok"] is True
+        assert not results["CSL"].get("skipped")

@@ -11,6 +11,7 @@ partial=true，让后续轮次知道这不是最终结论。
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,26 @@ TOOL_LABELS = {
 
 # 参数里最有辨识度的键（按优先级）
 _DETAIL_KEYS = ("path", "query", "q", "url", "command", "cmd", "code")
+
+# 结果预览的隐私过滤（P1-F 规则）：客户索要与家庭成员信息不进未完成报告
+_SENSITIVE_CJK = (
+    "客户索要", "索要", "礼物", "太太", "妻子", "老婆", "丈夫", "老公",
+    "儿子", "女儿", "孩子", "父母",
+)
+# 英文必须按词边界：裸 "son" 会命中 person/reason，把正常结果全隐藏
+_SENSITIVE_EN_RE = re.compile(
+    r"\b(?:wife|husband|son|daughter|kids|children)\b", re.IGNORECASE
+)
+
+
+def _safe_preview(text: str) -> str:
+    """结果预览：命中隐私标记整条隐藏；否则截到 240 字（单行）。"""
+    value = " ".join(str(text or "").split())[:240]
+    if any(marker in value for marker in _SENSITIVE_CJK):
+        return "[已按隐私规则隐藏]"
+    if _SENSITIVE_EN_RE.search(value):
+        return "[已按隐私规则隐藏]"
+    return value
 
 
 def _one_line(text: Any, limit: int) -> str:
@@ -154,6 +175,12 @@ def build_partial_report(
         details = "；".join(i["detail"] for i in group if i["detail"])
         detail_text = f"：{details[:200]}" if details else ""
         lines.append(f"- {label} ×{len(group)}{detail_text}")
+        # 每个工具最多 2 行结果预览（工单 P1-G）：总结调用失败时用户手里
+        # 至少还有查到的东西，而不是只有一份「搜过哪些词」的清单。
+        for item in group[:2]:
+            preview = _safe_preview(item.get("preview") or "")
+            if preview:
+                lines.append(f"  · 结果：{preview}")
 
     # 文件读取失败单独列出：它们是「查过但没查成」，与「没查」不同
     if evidence is not None:

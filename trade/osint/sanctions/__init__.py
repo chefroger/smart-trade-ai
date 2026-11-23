@@ -73,13 +73,17 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
         }
     """
     hits = _search(name, country=country, limit=20)
-    exact_match_found = any(hit["matched_field"] == "exact_name" for hit in hits)
+    # confirmed = 完整 token 或核心 token 一致；possible = 子集/拼写差异
+    exact_match_found = any(
+        hit.get("confirmation") == "confirmed" for hit in hits
+    )
+    possible_count = sum(1 for hit in hits if hit.get("confirmation") == "possible")
 
     # ── 风险判定 ──────────────────────────────────────────────────────────
     if exact_match_found:
         risk_level = "high"
-    elif len(hits) >= 3:
-        risk_level = "medium"  # 多个模糊匹配，需人工核查
+    elif possible_count >= 3:
+        risk_level = "medium"  # 多个疑似/同名匹配，需人工核查
     elif hits:
         risk_level = "low"  # 极少数弱匹配
     else:

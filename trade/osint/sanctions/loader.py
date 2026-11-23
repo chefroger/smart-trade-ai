@@ -35,6 +35,48 @@ logger = logging.getLogger(__name__)
 _INITIAL_DELAY_SECONDS = 60.0
 # 之后每 24 小时刷新一次
 _REFRESH_INTERVAL_SECONDS = 24 * 3600.0
+# 失败退避（2026-11-23 工单 P1-G / 11-22 P1-B）：5 → 15 → 60 分钟
+_BACKOFF_SECONDS = (5 * 60.0, 15 * 60.0, 60 * 60.0)
+# 20 小时内成功刷新过的名单跳过（启动高峰/频繁重启不要重复下 100 MB）
+_FRESH_SKIP_SECONDS = 20 * 3600.0
+
+
+def _next_delay(failed: bool, fail_streak: int, interval: float) -> float:
+    """下一轮刷新间隔：成功回 24h；连续失败按 5/15/60 分钟退避。"""
+    if not failed:
+        return interval
+    return _BACKOFF_SECONDS[min(fail_streak, len(_BACKOFF_SECONDS) - 1)]
+
+
+def _fresh_names(sources: tuple[Source, ...], now: float) -> set[str]:
+    """fetched_at 在 20h 内的名单名（解析失败按不新鲜处理）。"""
+    from datetime import UTC, datetime
+
+    conn = _connect()
+    fresh: set[str] = set()
+    if conn is None:
+        return fresh
+    try:
+        rows = {
+            r["name"]: r["fetched_at"]
+            for r in conn.execute("SELECT name, fetched_at FROM lists")
+        }
+    except Exception:  # noqa: BLE001 —— 表未建/损坏：按全部需要刷新处理
+        rows = {}
+    finally:
+        conn.close()
+    cutoff = datetime.fromtimestamp(now, UTC)
+    for source in sources:
+        raw = rows.get(source.name)
+        if not raw:
+            continue
+        try:
+            fetched = datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            continue
+        if (cutoff - fetched).total_seconds() < _FRESH_SKIP_SECONDS:
+            fresh.add(source.name)
+    return fresh
 
 _refresh_lock = threading.Lock()
 _refresh_thread: threading.Thread | None = None
@@ -44,21 +86,30 @@ def refresh_all(
     *,
     fetch=fetch_source,
     sources: tuple[Source, ...] = SOURCES,
+    skip_fresh: bool = False,
 ) -> dict:
     """下载并逐份刷新名单（每份名单单独一个事务，互不影响）。
 
     Args:
         fetch: 可注入的抓取函数（测试用），签名 (Source) -> ParsedList。
         sources: 要刷新的名单（测试可传子集）。
+        skip_fresh: 20h 内成功刷新过的名单跳过（后台循环用；显式调用默认不跳过）。
 
     Returns:
         {名单名: {"ok": bool, "entries": int, "aliases": int, "rows": int} | {"ok": False, "error": str}}
     """
+    fresh = _fresh_names(sources, time.time()) if skip_fresh else set()
     conn = _connect(write=True)
     results: dict[str, dict] = {}
     try:
         ensure_writable_db(conn)
         for source in sources:
+            if source.name in fresh:
+                results[source.name] = {
+                    "ok": True, "skipped": True,
+                    "reason": f"{_FRESH_SKIP_SECONDS / 3600:.0f} 小时内已成功刷新",
+                }
+                continue
             try:
                 parsed: ParsedList = fetch(source)
                 # 空解析按失败处理，旧数据原样保留（2026-11-22 审计 P1-1）。
@@ -116,12 +167,22 @@ def start_background_refresh(
 
         def _loop() -> None:
             time.sleep(max(0.0, delay))
+            fail_streak = 0
             while True:
+                failed = True
                 try:
-                    refresh_all()
+                    results = refresh_all(skip_fresh=True)
+                    # skipped（20h 内已新鲜）不算失败
+                    failed = any(
+                        not item.get("ok") for item in results.values()
+                    )
                 except Exception:
                     logger.exception("制裁名单后台刷新异常")
-                time.sleep(interval)
+                next_delay = _next_delay(failed, fail_streak, interval)
+                fail_streak = fail_streak + 1 if failed else 0
+                if failed:
+                    logger.info("制裁名单刷新失败，%.0f 秒后重试", next_delay)
+                time.sleep(next_delay)
 
         _refresh_thread = threading.Thread(
             target=_loop, daemon=True, name="sanctions-refresh",

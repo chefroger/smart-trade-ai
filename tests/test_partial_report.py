@@ -415,3 +415,33 @@ async def test_stream_summary_race_never_writes_two_histories(company):
         assert len(saved) == 1, (
             f"第 {i} 次写出了 {len(saved)} 条：{[s['response'][:24] for s in saved]}"
         )
+
+
+class TestPartialReportEvidence:
+    """工单 P1-G：未完成报告要带每个工具 1–2 行结果预览（隐私过滤）。"""
+
+    def test_preview_included_for_each_tool(self):
+        tracker = _tracker_with(
+            ("web_search", {"query": "acme"}, "找到 3 条：Acme 官网、LinkedIn、年报"),
+        )
+        text = build_partial_report("客户端断开", tracker)
+        assert "结果：找到 3 条" in text
+
+    def test_preview_is_capped(self):
+        tracker = _tracker_with(("web_fetch", {"url": "https://a"}, "长" * 1000))
+        text = build_partial_report("超时", tracker)
+        for line in text.splitlines():
+            if line.strip().startswith("· 结果："):
+                assert len(line) < 260, "单行预览超过 240 字"
+
+    def test_family_and_gift_previews_are_hidden(self):
+        tracker = _tracker_with(
+            ("read_file", {"path": "/a.md"}, "重要日期：太太 Maria 生日"),
+            ("web_fetch", {"url": "https://b"}, "客户索要：两瓶茅台"),
+            ("web_search", {"query": "acme"}, "正常结果"),
+        )
+        text = build_partial_report("断开", tracker)
+        assert "太太 Maria" not in text
+        assert "茅台" not in text
+        assert "[已按隐私规则隐藏]" in text
+        assert "结果：正常结果" in text

@@ -20,6 +20,7 @@ from trade.osint.sanctions.normalize import (
     FUZZY_THRESHOLD,
     HIT_THRESHOLD,
     SHORT_NAME_CHARS,
+    core_tokens,
     normalize_name,
     token_key,
     tokens_of,
@@ -327,17 +328,20 @@ def _candidates(conn: sqlite3.Connection, q_tokens: frozenset[str]) -> list[sqli
 def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]:
     """在本地库中匹配名称，返回按置信度降序的命中列表。
 
-    规则（与旧实现同口径，证据强度从高到低）：
-      1. token 集合完全一致（含 LAST, First ↔ First Last） → 1.0
-      2. 一方是另一方的 token 子集 → 长度比 × 1.2（上限 0.95）
-      3. Jaccard ≥ 0.8（拼写差异）→ Jaccard × 0.9
-      短名（归一化后 < 8 字符）只接受精确匹配。
+    2026-11-23 工单 P1-G（11-22 P1-A）：
+      - 法定后缀/泛词（co/ltd/technology/group…）不参与匹配，避免凑出大量
+        疑似命中；中文「有限公司/科技/贸易」等归一化时直接剥掉。
+      - 完整 token 或**核心 token** 集合一致 → confirmed（score 1.0）；
+        子集/拼写差异 → possible（≤0.95）。
+      - 短名（<8 字符）只接受完整/核心 token 精确匹配（如 HUAWEI → 名单里的
+        HUAWEI TECHNOLOGIES CO LTD 的核心集都是 {huawei}）。
     """
     q_norm = normalize_name(name)
     if not q_norm:
         return []
     q_tokens_tuple = tokens_of(q_norm)
     q_tokens = frozenset(q_tokens_tuple)
+    q_core = core_tokens(q_tokens_tuple)
     is_short = len(q_norm) < SHORT_NAME_CHARS
     q_key = token_key(q_tokens_tuple)
 
@@ -350,13 +354,14 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
             "WHERE tkey = ? LIMIT 500",
             (q_key,),
         ).fetchall()
-        candidates = [] if is_short else _candidates(conn, q_tokens)
+        # 短名也要拿候选：核心 token 精确匹配同样适用于品牌短名
+        candidates = _candidates(conn, q_tokens) if q_tokens else []
     finally:
         conn.close()
 
     best: dict[int, dict] = {}
 
-    def consider(row: sqlite3.Row, score: float, field: str) -> None:
+    def consider(row: sqlite3.Row, score: float, field: str, confirmation: str) -> None:
         if score < (1.0 if is_short else HIT_THRESHOLD):
             return
         current = best.get(row["id"])
@@ -367,44 +372,44 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
                 "matched_field": field,
                 "matched_value": row["name"],
                 "score": round(score, 3),
+                "confirmation": confirmation,
                 "country": row["country"] or "",
             }
 
     for row in exact_rows:
-        consider(row, 1.0, "exact_name")
+        consider(row, 1.0, "exact_name", "confirmed")
 
-    if not is_short:
-        q_count = len(q_tokens)
+    if q_core:
         for row in candidates:
             tkey = row["tkey"] or ""
             if not tkey:
                 continue
-            n = tkey.count(" ") + 1
             entry_tokens = tkey.split()
-            # 不用 frozenset：候选可能有上万行，逐行建集合是主要耗时。
-            # 直接用 list + q_tokens 的 O(1) 成员测试数交集。
-            shared = 0
-            for token in entry_tokens:
-                if token in q_tokens:
-                    shared += 1
-            if shared == q_count and n == q_count:
-                continue  # 精确命中已在上面处理
-            if shared == q_count:
-                # 查询是名单实体的 token 子集
-                consider(row, min(q_count / n * 1.2, 0.95), "name_contains")
-            elif shared == n:
-                # 名单实体是查询的 token 子集
-                consider(
-                    row,
-                    min(n / max(q_count, 1) * 1.2, 0.95),
-                    "name_contained_in_query",
-                )
+            entry_core = core_tokens(entry_tokens)
+            if not entry_core:
+                continue
+            if entry_core == q_core:
+                # 泛词剥掉后核心一致。单 token 核心只有在短名/品牌查询里才算
+                # confirmed —— 否则「Shenzhen Technology Co Ltd」会把所有
+                # Shenzhen 开头的实体都判成精确命中。
+                if len(q_core) >= 2 or is_short:
+                    consider(row, 1.0, "core_exact", "confirmed")
+                    continue
+                consider(row, 0.9, "core_exact_weak", "possible")
+                continue
+            if is_short:
+                continue  # 短名只认精确/核心精确
+            if q_core <= entry_core or entry_core <= q_core:
+                smaller = len(q_core) if q_core <= entry_core else len(entry_core)
+                larger = len(entry_core) if q_core <= entry_core else len(q_core)
+                field = "name_contains" if q_core <= entry_core else "name_contained_in_query"
+                consider(row, min(smaller / larger * 1.2, 0.95), field, "possible")
             else:
-                union = n + q_count - shared
+                union = len(q_core | entry_core)
                 if union:
-                    similarity = shared / union
+                    similarity = len(q_core & entry_core) / union
                     if similarity >= FUZZY_THRESHOLD:
-                        consider(row, min(similarity * 0.9, 0.9), "name_similar")
+                        consider(row, min(similarity * 0.9, 0.9), "name_similar", "possible")
 
     hits = list(best.values())
 
