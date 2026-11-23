@@ -29,3 +29,13 @@ class TestReleaseDoesNotBundleHermes:
         assert 'python-version: "3.14"' in RELEASE, (
             "用户 Hermes 托管环境是 cp314；打包解释器必须是 3.14 才能加载其依赖"
         )
+
+
+class TestReleaseBuildsBothMacArchitectures:
+    def test_intel_and_arm64_runners_are_both_present(self):
+        # 用户机器可能是 Intel：只出 arm64 包等于没验证
+        assert "macos-15-intel" in RELEASE
+        assert "macos-14" in RELEASE
+        assert "macos-latest" not in RELEASE
+        assert "-macOS-x64.zip" in RELEASE
+        assert "-macOS-arm64.zip" in RELEASE

@@ -18,16 +18,29 @@ jobs:
       matrix:
         include:
           # ── macOS (pywebview → .app.zip) ──
-          - os: macos-latest
+          # 两种架构分别出包：Intel（macos-15-intel）与 Apple Silicon（macos-14）。
+          # 用户的 Mac 可能是 Intel；arm64 包在 Intel 上根本无法启动。
+          - os: macos-15-intel
+            arch: x64
             setup-cmd: |
               pip install -e ".[desktop]"
-              pip install pyinstaller>=6.0
+              pip install "pyinstaller>=6.0"
             spec-path: tradewin-mac.spec
             artifact-glob: dist/TradeWin-*.zip
-            asset-suffix: "-macOS.zip"
             post-build: |
               cd dist
-              zip -r "TradeWin-${VER}-macOS.zip" "TradeWin.app"
+              zip -r "TradeWin-${VER}-macOS-x64.zip" "TradeWin.app"
+              rm -rf "TradeWin.app"
+          - os: macos-14
+            arch: arm64
+            setup-cmd: |
+              pip install -e ".[desktop]"
+              pip install "pyinstaller>=6.0"
+            spec-path: tradewin-mac.spec
+            artifact-glob: dist/TradeWin-*.zip
+            post-build: |
+              cd dist
+              zip -r "TradeWin-${VER}-macOS-arm64.zip" "TradeWin.app"
               rm -rf "TradeWin.app"
 
 
