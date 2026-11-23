@@ -23,6 +23,7 @@ from trade.osint.sanctions.sources import (  # noqa: E402
     ParsedList,
     Source,
     parse_source,
+    redirect_allowed,
 )
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "osint" / "sanctions"
@@ -126,6 +127,56 @@ class TestParsers:
         assert kinds["SMITH JOHN"] == "person"
         assert kinds["JOHNNY SMITH"] == "person"
         assert kinds["HAJI KHAIRULLAH MONEY EXCHANGE"] == "entity"
+
+
+# ── 重定向白名单（W4）─────────────────────────────────────────────────────
+
+
+class TestRedirectAllowlist:
+    OFAC_ENTRY = "sanctionslistservice.ofac.treas.gov"
+    OFAC_BUCKET = (
+        "https://wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com"
+        "/Published/SDN.CSV"
+    )
+    UN_HOST = "unsolprodfiles.blob.core.windows.net"
+
+    def test_official_ofac_bucket_allowed(self):
+        assert redirect_allowed(self.OFAC_ENTRY, self.OFAC_BUCKET) is True
+
+    def test_same_suffix_attacker_bucket_rejected(self):
+        """只校验后缀会被 attacker-bucket 绕过：必须精确主机。"""
+        assert redirect_allowed(
+            self.OFAC_ENTRY,
+            "https://attacker-bucket.s3.us-gov-west-1.amazonaws.com/Published/evil.csv",
+        ) is False
+
+    def test_ofac_bucket_requires_published_prefix(self):
+        assert redirect_allowed(
+            self.OFAC_ENTRY,
+            "https://wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com/evil.csv",
+        ) is False
+
+    def test_un_blob_allowed(self):
+        assert redirect_allowed(
+            "scsanctions.un.org", f"https://{self.UN_HOST}/resources/xml/en/consolidated.xml"
+        ) is True
+
+    def test_cross_pairing_rejected(self):
+        # OFAC 入口不允许跳到 UN 的 CDN，反向同样拒绝
+        assert redirect_allowed(
+            self.OFAC_ENTRY, f"https://{self.UN_HOST}/x.xml"
+        ) is False
+        assert redirect_allowed("scsanctions.un.org", self.OFAC_BUCKET) is False
+
+    def test_http_and_same_host(self):
+        assert redirect_allowed(
+            self.OFAC_ENTRY,
+            "http://wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com/Published/SDN.CSV",
+        ) is False
+        assert redirect_allowed(
+            self.OFAC_ENTRY,
+            "https://sanctionslistservice.ofac.treas.gov/api/x.csv",
+        ) is True
 
 
 # ── 归一化与匹配规则 ────────────────────────────────────────────────────────

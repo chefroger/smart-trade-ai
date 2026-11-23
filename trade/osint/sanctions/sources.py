@@ -48,13 +48,16 @@ ALLOWED_HOSTS = frozenset({
     "sanctionslist.fcdo.gov.uk",
 })
 
-# 官方站点的已知跨主机跳转：入口主机 → ((目标主机后缀, 路径前缀), ...)。
+# 官方站点的已知跨主机跳转：入口主机 → ((目标**确切主机**, 路径前缀), ...)。
 # 2026-11-23 审计 P0-A：只认入口主机会把 OFAC/UN 的官方 CDN 跳转当成攻击，
 # 新装用户的这三份名单永远下载不下来。跳转必须成对出现：入口 A 不允许跳到
 # 入口 B 的 CDN；https 仍然强制。
+# W4：目标主机必须**完全相等**，不能只校验后缀 —— 否则攻击者只要建一个
+# `attacker-bucket.s3.us-gov-west-1.amazonaws.com/Published/...` 就能通过。
+# 实测官方桶：wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com。
 ALLOWED_REDIRECT_HOSTS: dict[str, tuple[tuple[str, str], ...]] = {
     "sanctionslistservice.ofac.treas.gov": (
-        ("s3.us-gov-west-1.amazonaws.com", "/Published/"),
+        ("wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com", "/Published/"),
     ),
     "scsanctions.un.org": (
         ("unsolprodfiles.blob.core.windows.net", ""),
@@ -135,11 +138,13 @@ def _check_entry(url: str) -> str:
 
 
 def redirect_allowed(entry_host: str, final_url: str) -> bool:
-    """重定向终点是否允许：同主机放行；跨主机只认成对配置的目标。
+    """重定向终点是否允许：同主机放行；跨主机只认成对配置的**确切**主机。
 
-    成对规则（审计 P0-A）：OFAC 入口只能跳 `*.s3.us-gov-west-1.amazonaws.com`
-    且路径以 `/Published/` 开头；UN 入口只能跳 Azure blob 主机。反向、
-    交叉（OFAC 跳到 UN 的 CDN）以及 http 一律拒绝。
+    成对规则（审计 P0-A / W4）：OFAC 入口只能跳官方桶
+    `wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com`
+    且路径以 `/Published/` 开头；UN 入口只能跳 Azure blob 主机。
+    不做后缀匹配（攻击者自建同后缀桶即可绕过）；反向、交叉（OFAC 跳到
+    UN 的 CDN）以及 http 一律拒绝。
     """
     parsed = urlparse(final_url)
     if parsed.scheme != "https":
@@ -150,9 +155,10 @@ def redirect_allowed(entry_host: str, final_url: str) -> bool:
     # 同主机跳转（同站 301/302）仍属官方源
     if host == entry_host:
         return True
-    for suffix, path_prefix in ALLOWED_REDIRECT_HOSTS.get(entry_host, ()):
-        if host == suffix or host.endswith("." + suffix):
-            return (not path_prefix) or (parsed.path or "").startswith(path_prefix)
+    for allowed_host, path_prefix in ALLOWED_REDIRECT_HOSTS.get(entry_host, ()):
+        if host != allowed_host:
+            continue
+        return (not path_prefix) or (parsed.path or "").startswith(path_prefix)
     return False
 
 
