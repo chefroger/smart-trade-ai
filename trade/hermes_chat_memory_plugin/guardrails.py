@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 from datetime import datetime
 from pathlib import Path
@@ -324,12 +325,17 @@ def _mentions_main_db(args: dict | None) -> bool:
 
     P1-F 窄规则：只挡主库，不挡用户的桌面文件；不改 10-29「守卫默认关闭」。
     """
-    text = json.dumps(args or {}, ensure_ascii=False, default=str).replace("\\", "/").casefold()
+    # JSON 在 Windows 上把 \ 转义成 \\：先折叠任意斜杠串，再统一小写比较
+    text = re.sub(r"[/\\]+", "/", json.dumps(
+        args or {}, ensure_ascii=False, default=str,
+    )).casefold()
     if "trade.db" in text:
         return True
     base = os.environ.get("TRADE_HOME", "").strip()
     if base:
-        data_dir = (Path(base) / "data").as_posix().casefold()
+        # 与 args 同样规范化：Windows 的 TRADE_HOME 是反斜杠
+        normalized_base = re.sub(r"[/\\]+", "/", base).rstrip("/")
+        data_dir = (normalized_base + "/data").casefold()
         if data_dir and data_dir in text:
             return True
     return False

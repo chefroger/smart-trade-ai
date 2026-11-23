@@ -577,3 +577,13 @@ class TestMainDbNarrowRule:
         assert g.check_tool_call(
             "terminal", {"command": "sqlite3 ~/.trade/data/trade.db '.tables'"},
         ) is None
+
+    def test_windows_backslash_paths_are_normalized(self, monkeypatch):
+        """Windows 的 TRADE_HOME 与 JSON 参数都是反斜杠（CI windows 红灯回归）。"""
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.setenv("TRADE_HOME", "C:\\TradeHome")
+        blocked = g.check_tool_call(
+            "read_file", {"path": "C:\\TradeHome\\data\\customers.json"},
+        )
+        assert blocked and blocked["action"] == "block"
