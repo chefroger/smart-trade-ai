@@ -109,7 +109,23 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
             "或通过官方渠道（OFAC/UN/EU/UK 官网）人工复核后再决策。"
         )
     else:
-        suggestion = "未在任何制裁名单中发现匹配项。"
+        # 过期披露（审计 P0-A）：>72h 的最后一次成功刷新不能当「刚查过」，
+        # 但也不至于判未完成 —— 在建议里点名哪几份名单过期了多少小时。
+        stale = [
+            (info.get("label") or code, float(info.get("stale_hours") or 0))
+            for code, info in coverage["lists"].items()
+            if info.get("stale")
+        ]
+        if stale:
+            detail = "、".join(
+                f"{label}（{hours:.0f} 小时未更新）" for label, hours in stale[:6]
+            )
+            suggestion = (
+                f"本次未发现匹配；但名单已过期：{detail}。"
+                "结论以最新官方数据为准，建议稍后重试。"
+            )
+        else:
+            suggestion = "未在任何制裁名单中发现匹配项。"
 
     return {
         "query": name,

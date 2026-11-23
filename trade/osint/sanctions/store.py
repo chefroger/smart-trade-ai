@@ -27,8 +27,11 @@ from trade.osint.sanctions.normalize import (
 from trade.osint.sanctions.sources import SOURCE_LABELS, SOURCES
 
 DB_FILENAME = "sanctions.db"
-# 超过这个时长仍可用（degraded=False），但会在 coverage 里标注「过期 N 小时」
-STALE_AFTER_HOURS = 24
+# 过期上限（2026-11-23 审计 P0-A）：
+#   >72h 未成功刷新 → coverage 标 stale，报告写「名单已过期 N 小时」，仍可用；
+#   >7d  → 按 degraded 处理（不发「未发现匹配」的绿色结论）。
+STALE_WARN_HOURS = 72
+STALE_DEGRADED_HOURS = 24 * 7
 
 
 def _resolve_cache_dir() -> Path:
@@ -197,10 +200,11 @@ def ensure_writable_db(conn: sqlite3.Connection) -> bool:
 def get_coverage() -> dict:
     """返回每份名单的覆盖情况（fetched_at / entries / degraded / 过期小时）。
 
-    degraded 的口径（工单 P0-1）：
-      - 只有「从来没成功下载过」才算 degraded；
+    degraded 的口径（工单 P0-1 + 2026-11-23 审计 P0-A）：
+      - 从来没成功下载过 → degraded；
       - 有历史数据但本次下载失败 → 沿用旧数据，degraded=False，附 last_error；
-      - 数据超过 24 小时 → 附 stale_hours（仍可用）。
+      - 数据超过 72 小时 → stale=True + stale_hours，报告写「名单已过期 N 小时」；
+      - 数据超过 7 天 → degraded（不发绿色结论）。
     """
     conn = _connect()
     rows: dict[str, sqlite3.Row] = {}
@@ -213,6 +217,7 @@ def get_coverage() -> dict:
     now = datetime.now(UTC)
     lists: dict[str, dict] = {}
     degraded = False
+    any_stale = False
     total_entries = 0
 
     for source in SOURCES:
@@ -247,11 +252,25 @@ def get_coverage() -> dict:
         except (ValueError, TypeError):
             # 无时区/损坏的 fetched_at 不能让整个制裁层瘫痪（审计 P2-7）
             age_hours = 0.0
-        if age_hours > STALE_AFTER_HOURS:
+        stale = age_hours > STALE_WARN_HOURS
+        if stale:
+            any_stale = True
+            entry["stale"] = True
             entry["stale_hours"] = round(age_hours, 1)
+            entry["note"] = f"名单已过期 {age_hours:.0f} 小时（超过 {STALE_WARN_HOURS} 小时）"
         if row["last_error"]:
             # 本次刷新失败但沿用了旧数据：如实标注，但不是 degraded
-            entry["note"] = f"本次刷新失败，沿用 {age_hours:.0f} 小时前的数据：{row['last_error']}"
+            refresh_note = f"本次刷新失败，沿用 {age_hours:.0f} 小时前的数据：{row['last_error']}"
+            entry["note"] = f"{entry['note']}；{refresh_note}" if stale else refresh_note
+        if age_hours > STALE_DEGRADED_HOURS:
+            # 过期一周以上：旧数据不再当「可用结论」
+            entry["degraded"] = True
+            degraded = True
+            too_old = (
+                f"名单已过期 {age_hours:.0f} 小时（超过 "
+                f"{STALE_DEGRADED_HOURS // 24} 天），按降级处理"
+            )
+            entry["note"] = f"{entry['note']}；{too_old}" if entry.get("note") else too_old
         if entry["entries"] <= 0:
             # “下载成功但 0 条”绝不是健康名单（2026-11-22 审计 P1-1）：
             # 可能来自格式变更/空文件/解析回归。必须降级，评分才会 fail-closed。
@@ -262,6 +281,7 @@ def get_coverage() -> dict:
 
     return {
         "degraded": degraded,
+        "stale": any_stale,
         "total_entries": total_entries,
         "lists": lists,
     }

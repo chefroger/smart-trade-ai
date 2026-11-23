@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import io
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -29,6 +30,22 @@ ALLOWED_HOSTS = frozenset({
     "webgate.ec.europa.eu",
     "sanctionslist.fcdo.gov.uk",
 })
+
+# 官方站点的已知跨主机跳转：入口主机 → ((目标主机后缀, 路径前缀), ...)。
+# 2026-11-23 审计 P0-A：只认入口主机会把 OFAC/UN 的官方 CDN 跳转当成攻击，
+# 新装用户的这三份名单永远下载不下来。跳转必须成对出现：入口 A 不允许跳到
+# 入口 B 的 CDN；https 仍然强制。
+ALLOWED_REDIRECT_HOSTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "sanctionslistservice.ofac.treas.gov": (
+        ("s3.us-gov-west-1.amazonaws.com", "/Published/"),
+    ),
+    "scsanctions.un.org": (
+        ("unsolprodfiles.blob.core.windows.net", ""),
+    ),
+}
+
+# 冒烟探测只读前 1 MB：足够走完重定向链并校验最终主机
+PROBE_BYTES = 1 << 20
 
 # 单个文件上限。工单写 50 MB，但 UK 官方文件 2026-11 实测已达 50.5 MB
 # （十进制），按 50*1024*1024=52.4 MB 仍会误杀 —— 取 64 MiB 留余量。
@@ -91,36 +108,118 @@ SOURCE_LABELS = {source.name: source.label for source in SOURCES}
 # ── 下载 ────────────────────────────────────────────────────────────────────
 
 
-def download_official(url: str, *, timeout: int = _DOWNLOAD_TIMEOUT) -> bytes:
-    """流式下载官方名单（只允许白名单主机，单文件上限 64 MiB）。
-
-    显式绕过通用 http_get 的 2 MB 上限 —— 但目标主机写死白名单，
-    而不是把「任意 URL 可下载 50 MB」的能力开放出去。
-    """
+def _check_entry(url: str) -> str:
+    """校验入口 URL，返回入口主机（官方白名单内、https）。"""
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or host not in ALLOWED_HOSTS:
         raise ValueError(f"非官方名单主机，拒绝下载: {url}")
+    return host
 
+
+def redirect_allowed(entry_host: str, final_url: str) -> bool:
+    """重定向终点是否允许：同主机放行；跨主机只认成对配置的目标。
+
+    成对规则（审计 P0-A）：OFAC 入口只能跳 `*.s3.us-gov-west-1.amazonaws.com`
+    且路径以 `/Published/` 开头；UN 入口只能跳 Azure blob 主机。反向、
+    交叉（OFAC 跳到 UN 的 CDN）以及 http 一律拒绝。
+    """
+    parsed = urlparse(final_url)
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    # 同主机跳转（同站 301/302）仍属官方源
+    if host == entry_host:
+        return True
+    for suffix, path_prefix in ALLOWED_REDIRECT_HOSTS.get(entry_host, ()):
+        if host == suffix or host.endswith("." + suffix):
+            return (not path_prefix) or (parsed.path or "").startswith(path_prefix)
+    return False
+
+
+@contextmanager
+def _open_checked(url: str, timeout: int, *, on_final=None):
+    """打开官方源并校验重定向终点；yield (response, entry_host, final_url)。
+
+    on_final(final_url) 在**校验之前**调用：冒烟需要在校验失败时也能报告
+    最终跳到了哪个主机。
+    """
+    entry_host = _check_entry(url)
     opener = _current_opener()  # 复用 SSRF 复查 + 系统代理配置
-    request = _make_request(url)
+    with opener.open(_make_request(url), timeout=timeout) as response:
+        final_url = response.geturl()
+        if on_final is not None:
+            on_final(final_url)
+        if not redirect_allowed(entry_host, final_url):
+            raise ValueError(f"重定向到非允许的名单主机，拒绝下载: {final_url}")
+        yield response, entry_host, final_url
+
+
+def download_official(
+    url: str, *, timeout: int = _DOWNLOAD_TIMEOUT, max_bytes: int | None = None,
+) -> bytes:
+    """流式下载官方名单（只允许白名单主机，单文件上限 64 MiB）。
+
+    max_bytes 仅供冒烟探测使用：读到该长度就断开，返回已读部分，
+    不因文件本身更大而报错。
+    """
     buffer = bytearray()
-    with opener.open(request, timeout=timeout) as response:
-        # 跟随重定向后复查最终主机：通用 opener 只拦内网，不认名单白名单（审计 P2-8）
-        final = urlparse(response.geturl())
-        if final.scheme != "https" or final.hostname not in ALLOWED_HOSTS:
-            raise ValueError(f"重定向到非官方名单主机，拒绝下载: {response.geturl()}")
+    with _open_checked(url, timeout) as (response, _entry, _final):
         declared = response.headers.get("Content-Length")
-        if declared and declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
+        if max_bytes is None and declared and declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
             raise ValueError(f"文件过大（{declared} 字节）: {url}")
         while True:
             chunk = response.read(_CHUNK)
             if not chunk:
                 break
             buffer.extend(chunk)
-            if len(buffer) > MAX_DOWNLOAD_BYTES:
+            if max_bytes is not None:
+                if len(buffer) >= max_bytes:
+                    del buffer[max_bytes:]
+                    break
+            elif len(buffer) > MAX_DOWNLOAD_BYTES:
                 raise ValueError(f"下载超过 {MAX_DOWNLOAD_BYTES} 字节上限: {url}")
     return bytes(buffer)
+
+
+def probe_official(
+    url: str, *, timeout: int = _DOWNLOAD_TIMEOUT, max_bytes: int = PROBE_BYTES,
+) -> dict:
+    """真实下载冒烟：只读前 max_bytes，返回入口/最终主机与是否通过校验。
+
+    返回的 ok=False 不抛异常，由调用方（CI 冒烟）汇总失败。
+    """
+    result = {
+        "url": url,
+        "entry_host": "",
+        "final_host": "",
+        "final_url": "",
+        "bytes_read": 0,
+        "ok": False,
+        "error": "",
+    }
+    try:
+        entry_host = _check_entry(url)
+        result["entry_host"] = entry_host
+        buffer = bytearray()
+
+        def _record(final_url: str) -> None:
+            result["final_url"] = final_url
+            result["final_host"] = (urlparse(final_url).hostname or "").lower()
+
+        with _open_checked(url, timeout, on_final=_record) as (response, _entry, _final):
+            while len(buffer) < max_bytes:
+                chunk = response.read(_CHUNK)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+        result["bytes_read"] = min(len(buffer), max_bytes)
+        result["ok"] = True
+    except Exception as exc:  # noqa: BLE001 —— 冒烟要把原因完整带回
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
 
 
 def _make_request(url: str):

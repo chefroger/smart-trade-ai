@@ -1,0 +1,34 @@
+name: Sanctions download smoke
+
+# 2026-11-23 审计 P0-A：官方名单站点会 302 到 CDN，mock 测试测不到。
+# 每晚真实下载 OFAC SDN 与 UN 的前 1 MB，校验最终主机仍在两层白名单内。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "trade/osint/sanctions/**"
+      - "scripts/sanctions_smoke.py"
+      - ".github/workflows/sanctions-smoke.yml"
+  schedule:
+    # 每天 18:30 UTC = 次日 03:30 CST，排在 Hermes 冒烟之后
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # 只用到标准库 + 仓库内代码，不装任何第三方依赖
+      - name: Download OFAC / UN headers and verify redirect hosts
+        run: python scripts/sanctions_smoke.py

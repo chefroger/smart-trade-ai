@@ -262,3 +262,75 @@ class TestEmptyParseDoesNotWipeLists:
 
         coverage = store.get_coverage()   # 不应抛 TypeError
         assert coverage["lists"][SOURCES[0].name]["entries"] == 1
+
+
+class TestStaleUpperBounds:
+    """审计 P0-A：72 小时标 stale，超过 7 天按 degraded 处理。"""
+
+    def _set_age_hours(self, hours: float) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from trade.osint.sanctions import store
+        from trade.osint.sanctions.sources import SOURCES
+
+        fetched = (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="seconds")
+        conn = store._connect(write=True)
+        try:
+            conn.execute(
+                "UPDATE lists SET fetched_at = ? WHERE name = ?",
+                (fetched, SOURCES[0].name),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _refresh(self) -> None:
+        from trade.osint.sanctions.loader import refresh_all
+
+        refresh_all(fetch=lambda source: _parsed(source, ["ACME CORP"]))
+
+    def test_72h_is_stale_but_still_usable(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.sources import SOURCES
+
+        self._refresh()
+        self._set_age_hours(73)
+
+        result = check_sanctions("Random Name Ltd")
+        info = result["coverage"]["lists"][SOURCES[0].name]
+
+        assert info["stale"] is True
+        assert info["stale_hours"] >= 72
+        assert info["degraded"] is False, "72h 只标过期，不判未完成"
+        assert result["coverage"]["stale"] is True
+        assert "过期" in result["suggestion"], "建议里必须写明名单已过期"
+        assert "小时未更新" in result["suggestion"]
+
+    def test_over_7_days_is_degraded(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.sources import SOURCES
+        from trade.osint.sanctions.store import get_coverage
+
+        self._refresh()
+        self._set_age_hours(24 * 8)
+
+        coverage = get_coverage()
+        info = coverage["lists"][SOURCES[0].name]
+
+        assert info["degraded"] is True
+        assert info["stale"] is True
+        assert coverage["degraded"] is True, "过期一周以上必须整体降级"
+        assert "超过 7 天" in info["note"]
+        assert "未在任何制裁名单中发现匹配项" not in check_sanctions("Random Ltd")["suggestion"]
+
+    def test_under_72h_is_not_stale(self, sanctions_db):
+        from trade.osint.sanctions.sources import SOURCES
+        from trade.osint.sanctions.store import get_coverage
+
+        self._refresh()
+        self._set_age_hours(24)
+
+        info = get_coverage()["lists"][SOURCES[0].name]
+
+        assert "stale" not in info
+        assert "stale_hours" not in info
