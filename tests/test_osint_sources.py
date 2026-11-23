@@ -273,8 +273,10 @@ class TestGithub:
             return json.dumps({"login": "random", "name": "Random Person"})
 
         result = github.run(ctx(domain="acme.com", company_name="ACME"), fetch=_fetch)
-        assert result.status == "miss"
-        assert "未采用" in result.error
+        # 仅同名：保留为候选，不能当命中（审计 P1-D）
+        assert result.status == "candidate"
+        assert "同名候选" in result.facts[0]["text"]
+        assert "未核实" in result.error
 
     def test_error(self):
         def _boom(*_a, **_k):
@@ -448,7 +450,8 @@ class TestGravatar:
             ctx(email="matt@tensorust.com", domain=None, target_type="email"),
             fetch=fake_fetch,
         )
-        assert result.status == "hit"
+        assert result.status == "candidate"
+        assert "同名候选" in result.facts[0]["text"]
         assert "Matt Example" in result.facts[0]["text"]
         assert result.facts[0]["url"].startswith("https://gravatar.com/")
 
@@ -512,7 +515,9 @@ class TestUsernames:
             return "profile u/Mattbusel" if "github.com" in url else None
 
         result = usernames.run(ctx(username="Mattbusel"), fetch=_fetch)
-        assert result.status == "hit"
+        # 用户名相同不等于同一人：只作候选（审计 P1-D）
+        assert result.status == "candidate"
+        assert "同名候选" in result.facts[0]["text"]
         assert "GitHub" in result.facts[0]["text"]
         assert result.data["checked"] == 2
 
@@ -544,7 +549,7 @@ class TestUsernames:
              "e_string": "profile", "e_code": 403},
         ])
         result = usernames.run(ctx(username="matt"), fetch=lambda *a, **k: (403, "profile page"))
-        assert result.status == "hit"
+        assert result.status == "candidate"
 
     def test_redirect_expected_code_accepts_followed_200(self, monkeypatch):
         """e_code=301 的站点会被 opener 跟到最终 200，不能因此判成未命中。"""
@@ -553,7 +558,7 @@ class TestUsernames:
              "e_string": "profile", "e_code": 301},
         ])
         result = usernames.run(ctx(username="matt"), fetch=lambda *a, **k: (200, "profile page"))
-        assert result.status == "hit"
+        assert result.status == "candidate"
 
     def test_fetch_page_wraps_plain_fetcher_as_200(self):
         from trade.osint.sources.base import fetch_page
