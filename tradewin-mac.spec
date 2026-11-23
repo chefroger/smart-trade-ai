@@ -31,9 +31,8 @@ a = Analysis(
         'trade.osint.email_verify', 'trade.osint.sanctions', 'trade.osint.sanctions.loader',
         'trade.osint.tech_stack', 'trade.osint.linkedin_verify',
         'trade.osint.scoring', 'trade.osint.constants',
-        'hermes_cli', 'hermes_cli.config', 'hermes_cli.auth',
-        'hermes_cli.env_loader', 'hermes_cli.models',
-        'hermes_constants', 'run_agent',
+        # 不打包 Hermes：PyPI 只有 0.15.2（< 0.21.6）；打包版在运行时加载
+        # 用户自己的 ~/.hermes/hermes-agent（bootstrap frozen 分支）。
         'openai', 'anthropic',  # LLM Provider SDKs — required, not optional
         'pymupdf', 'anydoc', 'pypdfium2',  # 文档解析 / 图纸渲染（扫描件走 vision）
         'psutil', 'dnspython',  # Process management / DNS lookups

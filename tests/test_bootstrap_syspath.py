@@ -243,3 +243,22 @@ class TestHermesActivationRestore:
         assert "无法解析 Trade 自身的 site-packages" in out, (
             "静默降级路径必须留下可追踪的输出，否则现场无从排查"
         )
+
+
+class TestFrozenRuntimeDiscovery:
+    """打包版不内嵌 Hermes：frozen 时必须能找到用户自己的 checkout。"""
+
+    def test_frozen_app_adds_user_hermes_checkout(self, tmp_path, monkeypatch):
+        _make_checkout(tmp_path / "hermes-agent")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.delenv("HERMES_DISABLE_LAZY_INSTALLS", raising=False)
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        checkout = str((tmp_path / "hermes-agent").resolve())
+        assert checkout not in sys.path
+
+        try:
+            bootstrap._adjust_sys_path()
+            assert checkout in sys.path, "打包版没有把用户 Hermes 加进 sys.path"
+        finally:
+            if checkout in sys.path:
+                sys.path.remove(checkout)

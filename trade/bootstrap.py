@@ -71,8 +71,17 @@ def _resolve_hermes_checkout() -> str:
 
 
 def _adjust_sys_path():
-    # PyInstaller 打包后 sys.frozen=True，不需要 sys.path 调整
+    # PyInstaller 打包后 sys.frozen=True：Trade 代码已在包内，但 **Hermes 不再
+    # 内嵌**（PyPI 的 hermes-agent 只有 0.15.2，官方最新装不进来）。打包版必须
+    # 在运行时找到用户自己那份 `~/.hermes/hermes-agent` 并加进 sys.path；
+    # 后续 prepare_hermes_import_paths() 会 import hermes_bootstrap 触发 pm
+    # 激活，把托管环境的依赖带进来（2026-11-23 决定）。
     if getattr(sys, "frozen", False):
+        _hermes_checkout = _resolve_hermes_checkout()
+        if _hermes_checkout and _hermes_checkout not in sys.path:
+            sys.path.insert(0, _hermes_checkout)
+        if not os.environ.get("HERMES_HOME") and _hermes_checkout:
+            os.environ["HERMES_HOME"] = str(Path(_hermes_checkout).parent)
         return
     _trade_root = str(Path(__file__).resolve().parent.parent)
     if _trade_root not in sys.path:
@@ -491,7 +500,8 @@ def _activate_hermes_env_and_restore_trade_paths() -> None:
     # 全部跳过 —— 进程表面还能跑，实际只剩 Hermes 的依赖（Trade 的被激活剥掉了）。
     # 2026-10-14 那次事故的现场就是这样：界面只显示「AI Agent 模块未加载」、
     # 完全指不到真因。所以这里必须响亮报出来，不能一声不响地继续。
-    if not trade_site:
+    if not trade_site and not getattr(sys, "frozen", False):
+        # 打包版没有自己的 site-packages（依赖都在 _MEIPASS），这不是错误
         print(
             "  ✗ 无法解析 Trade 自身的 site-packages —— Hermes 激活后可能已剥离 "
             "Trade 的依赖。请把这一行发给技术支持。"
