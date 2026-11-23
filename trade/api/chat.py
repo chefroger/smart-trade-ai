@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from trade import chat_memory, doc_cache
 from trade import library as library_module
 from trade import usage as usage_module
-from trade.agent_context import bind_company, extract_user_paths
+from trade.agent_context import bind_company, bind_tool_evidence, extract_user_paths
 from trade.api.deps import require_company
 from trade.api.models import ChatRequest
 from trade.chat_blocks import parse_trade_json_blocks
@@ -727,6 +727,13 @@ async def trade_chat(
                     with bind_company(
                         cid, payload.customer_id,
                         user_paths=user_paths,
+                    ), bind_tool_evidence(
+                        # 动态供应：osint_fact_save 在 agent 运行中调用，要看到
+                        # 此刻已完成工具的参数/结果（P1-D 来源核验）
+                        lambda: [
+                            f"{item.get('detail', '')} {item.get('preview', '')}"
+                            for item in tools.snapshot()
+                        ],
                     ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
@@ -1265,6 +1272,13 @@ async def trade_chat_stream(
                     with bind_company(
                         cid, payload.customer_id,
                         user_paths=user_paths,
+                    ), bind_tool_evidence(
+                        # 动态供应：osint_fact_save 在 agent 运行中调用，要看到
+                        # 此刻已完成工具的参数/结果（P1-D 来源核验）
+                        lambda: [
+                            f"{item.get('detail', '')} {item.get('preview', '')}"
+                            for item in tools.snapshot()
+                        ],
                     ):
                         if document_task and request_task_id:
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]

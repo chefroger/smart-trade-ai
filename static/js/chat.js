@@ -1622,7 +1622,13 @@ function _renderRailOsintJobs(jobs) {
 function _osintEventText(type, payload) {
     if (type === 'job_start') return '已启动（预算 ' + (payload.budget || '?') + ' 秒）';
     if (type === 'source_start') return '查询 ' + (payload.label || payload.source || '') + '…';
-    if (type === 'source_done') return (payload.source || '来源') + '：' + (payload.status || '完成');
+    if (type === 'source_done') {
+        const st = {
+            hit: '命中', candidate: '同名候选', miss: '未命中',
+            error: '出错', timeout: '超时', skipped: '跳过', done: '完成',
+        }[payload.status] || payload.status || '完成';
+        return (payload.source || '来源') + '：' + st;
+    }
     if (type === 'verdict') {
         const zh = {
             low: '低风险', medium: '中风险', high: '高风险',

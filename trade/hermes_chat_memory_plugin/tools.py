@@ -264,6 +264,22 @@ def _bound_company():
         return None
 
 
+def _source_url_verified(source_url: str) -> bool:
+    """来源 URL 是否出现在本轮已完成工具的证据里（P1-D）。
+
+    没有证据（Hermes 独立运行、或模型自己编的 URL）一律不算核实。
+    """
+    url = str(source_url or "").strip().lower()
+    if not url:
+        return False
+    try:
+        from trade.agent_context import current_tool_evidence
+
+        return any(url in text.lower() for text in current_tool_evidence())
+    except Exception:
+        return False
+
+
 def handle_osint_job_start(args: dict[str, Any], **_kw) -> str:
     """创建并启动后台背调任务。"""
     target = str(args.get("target") or "").strip()
@@ -284,10 +300,12 @@ def handle_osint_job_start(args: dict[str, Any], **_kw) -> str:
 
     # 同目标此前核实过的事实：让模型先看它，别重复查（也不必再赌一次反爬）
     known: dict = {}
+    unverified: dict = {}
     try:
         from trade import osint_facts
 
         known = osint_facts.known_facts(company_id, target)
+        unverified = osint_facts.unverified_facts(company_id, target)
     except Exception:  # noqa: BLE001 —— 事实库是增强项，读不到不影响背调
         known = {}
 
@@ -297,6 +315,8 @@ def handle_osint_job_start(args: dict[str, Any], **_kw) -> str:
         "reused": not created,
         "target": target,
         "known_facts": known,
+        # 上次未能核实的事实：可以重新查，但不能当结论直接引用
+        "unverified_facts": unverified,
     })
 
 
@@ -314,10 +334,13 @@ def handle_osint_fact_save(args: dict[str, Any], **_kw) -> str:
     try:
         from trade import osint_facts
 
+        source_url = str(args.get("source_url") or "")
         row = osint_facts.save_fact(
             company_id, target, field, value,
-            source_url=str(args.get("source_url") or ""),
+            source_url=source_url,
             source_name=str(args.get("source_name") or ""),
+            # 来源必须在本轮已完成工具结果里出现过才算核实（P1-D）
+            verified=_source_url_verified(source_url),
         )
     except Exception as exc:  # noqa: BLE001
         return _err(f"登记事实失败：{exc}")
@@ -337,11 +360,14 @@ def handle_osint_fact_list(args: dict[str, Any], **_kw) -> str:
         from trade import osint_facts
 
         known = osint_facts.known_facts(company_id, target)
+        unverified = osint_facts.unverified_facts(company_id, target)
         rows = osint_facts.list_facts(company_id, target)
     except Exception as exc:  # noqa: BLE001
         return _err(f"读取事实库失败：{exc}")
     return _json({
         "known_facts": known,
+        # 未核实：可以重新查，但不能当结论直接引用
+        "unverified_facts": unverified,
         "conflicts": [f for f, b in known.items() if b.get("conflict")],
         "facts": rows,
     })
@@ -373,12 +399,14 @@ def handle_osint_job_result(args: dict[str, Any], **_kw) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(f"读取背调任务失败：{exc}")
 
-    # 已核实过的事实：报告写作时用（复用 + 冲突并列）
+    # 已核实过的事实：报告写作时用（复用 + 冲突并列）；未核实单独列出
     known: dict = {}
+    unverified: dict = {}
     try:
         from trade import osint_facts
 
         known = osint_facts.known_facts(company_id, job.get("target"))
+        unverified = osint_facts.unverified_facts(company_id, job.get("target"))
     except Exception:  # noqa: BLE001
         known = {}
 
@@ -393,6 +421,7 @@ def handle_osint_job_result(args: dict[str, Any], **_kw) -> str:
         },
         "events": events,
         "known_facts": known,
+        "unverified_facts": unverified,
         "conflicts": [f for f, b in known.items() if b.get("conflict")],
         "next_after_seq": events[-1]["seq"] if events else after_seq,
     })

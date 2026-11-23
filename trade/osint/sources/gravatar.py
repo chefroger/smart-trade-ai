@@ -54,12 +54,15 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     if not parts:
         return SourceResult(NAME, "miss", error="Gravatar 资料为空")
 
+    # 审计 P1-D：邮箱哈希只能说明「该邮箱注册过 Gravatar」，不能证明
+    # 画像属于背调对象本人 —— 保留内容但标为候选，不当作命中。
     return SourceResult(
         NAME,
-        "hit",
+        "candidate",
         facts=[{
-            "text": "Gravatar 公开资料：" + "，".join(parts),
+            "text": "同名候选，未核实（Gravatar 邮箱画像）：" + "，".join(parts),
             "url": profile_url or "https://gravatar.com/",
         }],
         data={"display_name": display, "location": location, "about": about},
+        error="Gravatar 画像未与目标独立核实",
     )

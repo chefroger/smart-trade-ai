@@ -510,6 +510,8 @@ CREATE TABLE IF NOT EXISTS osint_facts (
     source_url  TEXT    NOT NULL DEFAULT '',
     source_name TEXT    NOT NULL DEFAULT '',
     note        TEXT    NOT NULL DEFAULT '',
+    -- 1 = 来源 URL 在本轮已完成工具证据里出现过；0 = 模型自报未核实（P1-D）
+    verified    INTEGER NOT NULL DEFAULT 1,
     observed_at TEXT    DEFAULT (datetime('now', 'localtime')),
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     UNIQUE (company_id, subject, field, value, source_url)
@@ -949,6 +951,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
         # v3：清洗验厂计划 payload 里的自动客户档案提醒块（含家庭等敏感原文），
         # 并把历史「家庭」事实的 AI 可见性归零。SQL 占位；实际走下方幂等逻辑。
         (3, "scrub_visit_plan_profile_reminders", ""),
+        # v4：事实库 verified 列（P1-D）。SQL 占位；实际走幂等逻辑。
+        (4, "osint_facts_verified", ""),
     ]
 
     # 获取已应用的版本
@@ -964,6 +968,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
             _migrate_order_logistics_v2(conn)
         elif version == 3:
             _migrate_scrub_visit_plan_payload_v3(conn)
+        elif version == 4:
+            _migrate_osint_facts_verified_v4(conn)
         else:
             conn.executescript(sql)
         conn.execute(
@@ -1054,6 +1060,21 @@ def _migrate_scrub_visit_plan_payload_v3(conn: sqlite3.Connection) -> None:
     except sqlite3.Error:
         # 老库还没有 customer_facts 表：跳过
         pass
+
+
+def _migrate_osint_facts_verified_v4(conn: sqlite3.Connection) -> None:
+    """迁移 4：事实库补 verified 列（P1-D）。
+
+    历史事实默认 1（此前口径就是「已核实」）；新写入由本轮工具证据决定。
+    """
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(osint_facts)")}
+    except sqlite3.Error:
+        return  # 表还没建：新库 SCHEMA_SQL 已含 verified
+    if cols and "verified" not in cols:
+        conn.execute(
+            "ALTER TABLE osint_facts ADD COLUMN verified INTEGER NOT NULL DEFAULT 1"
+        )
 
 
 def init_db() -> Path:

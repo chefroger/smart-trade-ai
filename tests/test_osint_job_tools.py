@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from trade import osint_jobs  # noqa: E402
-from trade.agent_context import bind_company  # noqa: E402
+from trade.agent_context import bind_company, bind_tool_evidence  # noqa: E402
 from trade.hermes_chat_memory_plugin import tools  # noqa: E402
 
 
@@ -119,7 +119,9 @@ class TestFactTools:
     """事实库工具：查到就登记，下次同目标复用；不同值标冲突。"""
 
     def test_save_and_read_back(self, companies):
-        with bind_company(companies["first"]):
+        with bind_company(companies["first"]), bind_tool_evidence(
+            lambda: ("fetch https://example.com/x",),
+        ):
             saved = json.loads(tools.handle_osint_fact_save({
                 "target": "天津赛得进出口有限公司",
                 "field": "注册资本",
@@ -135,14 +137,18 @@ class TestFactTools:
         assert listed["conflicts"] == []
 
     def test_conflicting_values_are_flagged(self, companies):
-        with bind_company(companies["first"]):
+        with bind_company(companies["first"]), bind_tool_evidence(
+            lambda: ("https://a.example/company", "https://b.example/company"),
+        ):
             tools.handle_osint_fact_save({
                 "target": "acme.com", "field": "员工人数",
-                "value": "8", "source_name": "平台A",
+                "value": "8", "source_url": "https://a.example/company",
+                "source_name": "平台A",
             })
             tools.handle_osint_fact_save({
                 "target": "acme.com", "field": "员工人数",
-                "value": "25", "source_name": "平台B",
+                "value": "25", "source_url": "https://b.example/company",
+                "source_name": "平台B",
             })
             listed = json.loads(tools.handle_osint_fact_list({"target": "acme.com"}))
         assert listed["known_facts"]["员工人数"]["conflict"] is True
@@ -151,12 +157,28 @@ class TestFactTools:
 
     def test_known_facts_returned_by_job_start(self, companies, fake_orchestrator):
         """同目标第二次背调：osint_job_start 直接带回已知事实。"""
-        with bind_company(companies["first"]):
+        with bind_company(companies["first"]), bind_tool_evidence(lambda: ()):
+            # 无来源 URL：即使直接登记也属于「未核实」
             tools.handle_osint_fact_save({
                 "target": "acme.com", "field": "法定代表人", "value": "张三",
             })
             started = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
-        assert started["known_facts"]["法定代表人"]["values"] == ["张三"]
+        assert started["known_facts"] == {}
+        assert started["unverified_facts"]["法定代表人"]["values"] == ["张三"]
+        assert started["unverified_facts"]["法定代表人"]["note"] == "上次未能核实"
+
+    def test_verified_fact_is_reused(self, companies, fake_orchestrator):
+        """来源 URL 在本轮工具证据里出现 → verified，下次直接复用。"""
+        with bind_company(companies["first"]), bind_tool_evidence(
+            lambda: ("fetch https://cr.example/acme",),
+        ):
+            tools.handle_osint_fact_save({
+                "target": "acme.com", "field": "注册资本", "value": "100万",
+                "source_url": "https://cr.example/acme",
+            })
+        with bind_company(companies["first"]), bind_tool_evidence(lambda: ()):
+            started = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
+        assert started["known_facts"]["注册资本"]["values"] == ["100万"]
 
         deadline = time.time() + 5
         while time.time() < deadline:

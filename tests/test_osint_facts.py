@@ -62,7 +62,7 @@ class TestSaveAndReuse:
     def test_save_then_known_facts(self, company):
         row = osint_facts.save_fact(
             company, "天津赛得进出口有限公司", "法定代表人", "迟国波",
-            source_url="https://example.com/a", source_name="企查查")
+            source_url="https://example.com/a", source_name="企查查", verified=True)
         assert row is not None
         assert row["subject"] == "天津赛得进出口有限公司"
 
@@ -73,15 +73,15 @@ class TestSaveAndReuse:
     def test_same_fact_updates_observed_at_only(self, company):
         for _ in range(3):
             osint_facts.save_fact(company, "acme.com", "注册资本", "100万",
-                                  source_url="https://example.com/a")
+                                  source_url="https://example.com/a", verified=True)
         rows = osint_facts.list_facts(company, "acme.com")
         assert len(rows) == 1
 
     def test_different_source_keeps_both_rows(self, company):
         osint_facts.save_fact(company, "acme.com", "注册资本", "100万",
-                              source_url="https://a.com")
+                              source_url="https://a.com", verified=True)
         osint_facts.save_fact(company, "acme.com", "注册资本", "100万",
-                              source_url="https://b.com")
+                              source_url="https://b.com", verified=True)
         rows = osint_facts.list_facts(company, "acme.com")
         assert len(rows) == 2
         known = osint_facts.known_facts(company, "acme.com")
@@ -89,8 +89,10 @@ class TestSaveAndReuse:
         assert known["注册资本"]["conflict"] is False
 
     def test_conflicting_values_flagged(self, company):
-        osint_facts.save_fact(company, "acme.com", "员工人数", "8", source_url="https://a.com")
-        osint_facts.save_fact(company, "acme.com", "员工人数", "25", source_url="https://b.com")
+        osint_facts.save_fact(company, "acme.com", "员工人数", "8",
+                              source_url="https://a.com", verified=True)
+        osint_facts.save_fact(company, "acme.com", "员工人数", "25",
+                              source_url="https://b.com", verified=True)
         known = osint_facts.known_facts(company, "acme.com")
         assert known["员工人数"]["conflict"] is True
         assert sorted(known["员工人数"]["values"]) == ["25", "8"]
@@ -98,7 +100,8 @@ class TestSaveAndReuse:
 
     def test_prefixed_target_matches_unprefixed(self, company):
         """第一次用 `company:天津赛得…` 登记，第二次用裸名查 —— 要能对上。"""
-        osint_facts.save_fact(company, "company:天津赛得进出口有限公司", "注册资本", "100万")
+        osint_facts.save_fact(company, "company:天津赛得进出口有限公司", "注册资本", "100万",
+                              verified=True)
         known = osint_facts.known_facts(company, "天津赛得进出口有限公司")
         assert known["注册资本"]["values"] == ["100万"]
 
@@ -124,3 +127,32 @@ class TestSaveAndReuse:
         osint_facts.save_fact(company, "acme.com", "注册资本", "100万")
         assert osint_facts.delete_facts(company, "acme.com") == 1
         assert osint_facts.list_facts(company, "acme.com") == []
+
+
+class TestVerifiedFacts:
+    """审计 P1-D：模型自报的事实不能当已核实复用。"""
+
+    def test_default_save_is_unverified(self, company):
+        row = osint_facts.save_fact(
+            company, "acme.com", "注册资本", "100万", source_url="https://x.example/a")
+        assert row["verified"] == 0
+        assert osint_facts.known_facts(company, "acme.com") == {}
+        pending = osint_facts.unverified_facts(company, "acme.com")
+        assert pending["注册资本"]["values"] == ["100万"]
+        assert pending["注册资本"]["note"] == "上次未能核实"
+
+    def test_verified_save_visible_in_known(self, company):
+        osint_facts.save_fact(
+            company, "acme.com", "注册资本", "100万",
+            source_url="https://x.example/a", verified=True)
+        assert osint_facts.known_facts(company, "acme.com")["注册资本"]["values"] == ["100万"]
+        assert osint_facts.unverified_facts(company, "acme.com") == {}
+
+    def test_verified_does_not_downgrade(self, company):
+        """同一行先核实、后被无证据重写：仍保持 verified。"""
+        osint_facts.save_fact(
+            company, "acme.com", "员工人数", "8", source_url="https://x.example/a",
+            verified=True)
+        osint_facts.save_fact(
+            company, "acme.com", "员工人数", "8", source_url="https://x.example/a")
+        assert osint_facts.known_facts(company, "acme.com")["员工人数"]["values"] == ["8"]

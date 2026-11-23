@@ -147,15 +147,18 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
 
     found.sort(key=lambda item: item["site"].casefold())
     names = "、".join(item["site"] for item in found[:10])
+    # 审计 P1-D：用户名相同 ≠ 同一个人，保留线索但标为候选。
     return SourceResult(
         NAME,
-        "hit",
+        "candidate",
         facts=[{
             "text": (
-                f"用户名 {username}：在 {len(found)}/{len(sites)} 个站点存在公开 profile"
-                f"（{names}）；同名风险需人工确认"
+                f"同名候选，未核实（用户名跨站）：{username} 在 "
+                f"{len(found)}/{len(sites)} 个站点存在公开 profile"
+                f"（{names}）；是否同一人需人工确认"
             ),
             "url": found[0]["url"],
         }],
         data={"username": username, "found": found, "checked": len(sites)},
+        error="用户名相同不等于同一人，未核实",
     )

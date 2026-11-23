@@ -65,8 +65,12 @@ def save_fact(
     source_url: str = "",
     source_name: str = "",
     note: str = "",
+    verified: bool = False,
 ) -> dict | None:
     """登记一条事实（同公司 + 同 subject + 同字段 + 同来源 → 覆盖更新）。
+
+    verified=True 表示 source_url 在本轮已完成工具证据里出现过（P1-D）。
+    未核实的事实仍保存，但 known_facts 不会返回它。
 
     Returns:
         {"id", "subject", "field", "value", ...}；参数不合法或写入失败返回 None。
@@ -84,17 +88,20 @@ def save_fact(
     try:
         conn.execute(
             "INSERT INTO osint_facts(company_id, subject, subject_raw, field, value,"
-            " source_url, source_name, note) VALUES (?,?,?,?,?,?,?,?)"
+            " source_url, source_name, note, verified) VALUES (?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(company_id, subject, field, value, source_url)"
             " DO UPDATE SET observed_at = datetime('now','localtime'),"
-            " source_name = excluded.source_name, note = excluded.note",
+            " source_name = excluded.source_name, note = excluded.note,"
+            # 一旦核实过就不降级：同一行后续用无证据的保存覆盖时保持 1
+            " verified = CASE WHEN osint_facts.verified = 1 OR excluded.verified = 1"
+            " THEN 1 ELSE 0 END",
             (company_id, subject, str(target or "").strip()[:200], field, value,
-             source_url, source_name, note),
+             source_url, source_name, note, 1 if verified else 0),
         )
         conn.commit()
         row = conn.execute(
             "SELECT id, subject, field, value, source_url, source_name, note,"
-            " observed_at FROM osint_facts"
+            " verified, observed_at FROM osint_facts"
             " WHERE company_id=? AND subject=? AND field=? AND value=? AND source_url=?"
             " ORDER BY id DESC LIMIT 1",
             (company_id, subject, field, value, source_url),
@@ -121,14 +128,14 @@ def list_facts(
             subject = normalize_subject(target)
             rows = conn.execute(
                 "SELECT id, subject, subject_raw, field, value, source_url, source_name,"
-                " note, observed_at FROM osint_facts"
+                " note, verified, observed_at FROM osint_facts"
                 " WHERE company_id=? AND subject=? ORDER BY field, id DESC LIMIT ?",
                 (company_id, subject, limit),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, subject, subject_raw, field, value, source_url, source_name,"
-                " note, observed_at FROM osint_facts"
+                " note, verified, observed_at FROM osint_facts"
                 " WHERE company_id=? ORDER BY subject, field, id DESC LIMIT ?",
                 (company_id, limit),
             ).fetchall()
@@ -137,13 +144,8 @@ def list_facts(
     return [dict(r) for r in rows]
 
 
-def known_facts(company_id: int, target: str | None = None) -> dict:
-    """按字段汇总已知事实；同一字段有多个不同值时标 `conflict: true`。
-
-    Returns:
-        {field: {"values": [...], "conflict": bool, "sources": [...]}}
-    """
-    rows = list_facts(company_id, target)
+def _group(rows: list[dict]) -> dict:
+    """把事实行按字段汇总（known / unverified 共用）。"""
     grouped: dict[str, dict] = {}
     for row in rows:
         field = row["field"]
@@ -159,6 +161,31 @@ def known_facts(company_id: int, target: str | None = None) -> dict:
             bucket["subjects"].append(row["subject"])
     for bucket in grouped.values():
         bucket["conflict"] = len(bucket["values"]) > 1
+    return grouped
+
+
+def known_facts(company_id: int, target: str | None = None) -> dict:
+    """按字段汇总**已核实**的事实；同一字段多值标 `conflict: true`。
+
+    2026-11-23 审计 P1-D：只返回 verified=1 —— 模型自报、来源 URL 没在
+    本轮工具证据里出现过的事实不算「已核实」，不能下次直接复用。
+
+    Returns:
+        {field: {"values": [...], "conflict": bool, "sources": [...]}}
+    """
+    rows = [row for row in list_facts(company_id, target) if int(row.get("verified") or 0)]
+    return _group(rows)
+
+
+def unverified_facts(company_id: int, target: str | None = None) -> dict:
+    """未核实事实（单独列出，报告应注明「上次未能核实」）。"""
+    rows = [
+        row for row in list_facts(company_id, target)
+        if not int(row.get("verified") or 0)
+    ]
+    grouped = _group(rows)
+    for bucket in grouped.values():
+        bucket["note"] = "上次未能核实"
     return grouped
 
 

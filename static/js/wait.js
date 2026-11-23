@@ -22,7 +22,10 @@
     aborted:     { en: 'ABORTED',         zh: '已停止' },
     failed:      { en: 'ERROR',           zh: '失败' }
   };
-  var SRC_STATUS = { hit: '命中', miss: '未命中', error: '出错', timeout: '超时', skipped: '跳过', done: '完成' };
+  var SRC_STATUS = {
+    hit: '命中', candidate: '同名候选', miss: '未命中',
+    error: '出错', timeout: '超时', skipped: '跳过', done: '完成'
+  };
   // 评级代号 → 中文（审计 P0-B：limited = 只跑过制裁层，不是低风险）
   var RATING_ZH = {
     low: '低风险', medium: '中风险', high: '高风险',

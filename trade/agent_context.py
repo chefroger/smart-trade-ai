@@ -29,6 +29,32 @@ _current_customer_id: ContextVar[int | None] = ContextVar(
 _current_user_paths: ContextVar[tuple[str, ...]] = ContextVar(
     "trade_agent_user_paths", default=()
 )
+# 本轮已完成工具调用的证据文本（动态供应：工具在 agent 运行中陆续完成，
+# 不能在开始时固定成元组）。事实库用它判断 source_url 是否真的被查过。
+_current_evidence_supplier: ContextVar = ContextVar(
+    "trade_agent_evidence_supplier", default=None
+)
+
+
+def current_tool_evidence() -> tuple[str, ...]:
+    """本轮已完成工具调用的参数/结果文本（无绑定 → 空元组）。"""
+    supplier = _current_evidence_supplier.get()
+    if supplier is None:
+        return ()
+    try:
+        return tuple(str(item) for item in supplier())
+    except Exception:
+        return ()
+
+
+@contextmanager
+def bind_tool_evidence(supplier):
+    """绑定本轮的工具证据供应函数（返回可迭代的文本）。"""
+    token = _current_evidence_supplier.set(supplier)
+    try:
+        yield
+    finally:
+        _current_evidence_supplier.reset(token)
 
 # 引号包裹的路径（支持空格）；未加引号的 POSIX/~/Windows 盘符/UNC 路径。
 _QUOTED_PATH_RE = re.compile(r'["\'`]([^"\'`\n]{2,4096})["\'`]')

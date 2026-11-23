@@ -30,16 +30,20 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def _score(profile: dict, ctx: TargetContext, hint: str) -> int:
-    """候选 profile 与目标的吻合度；域名出现在 blog 里权重最高。"""
+def _score(profile: dict, ctx: TargetContext) -> int:
+    """候选 profile 与目标的吻合度。
+
+    2026-11-23 审计 P1-D：**人名本身不算吻合证据** —— 此前 hint 就是人名，
+    候选 profile 的 name 含人名就 +1，于是「同名即采用」，注释描述的保护
+    实际不存在。只认域名出现在 blog、或公司名吻合。
+    """
     score = 0
     blog = str(profile.get("blog") or "").lower()
     if ctx.domain and ctx.domain.lower() in blog:
         score += 3
-    hint_lower = hint.lower()
-    for field in ("name", "company"):
-        if hint_lower and hint_lower in str(profile.get(field) or "").lower():
-            score += 1
+    company = str(ctx.company_name or "").strip().lower()
+    if company and company in str(profile.get("company") or "").lower():
+        score += 1
     return score
 
 
@@ -112,11 +116,14 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     if not candidates:
         return SourceResult(NAME, "miss", error="GitHub 候选资料均不可读")
 
-    best = max(candidates, key=lambda profile: _score(profile, ctx, hint))
-    if _score(best, ctx, hint) <= 0:
-        # 仅同名、没有任何吻合证据：宁可不报，也不把同名的人挂上去
+    best = max(candidates, key=lambda profile: _score(profile, ctx))
+    if _score(best, ctx) <= 0:
+        # 仅同名、没有任何吻合证据：保留为「同名候选」，明确标注未核实，
+        # 不能当成 hit（审计 P1-D）。
+        facts = _facts(best)
+        facts[0]["text"] = "同名候选，未核实：" + facts[0]["text"]
         return SourceResult(
-            NAME, "miss",
-            error="GitHub 搜索到同名账号，但无域名/公司吻合，未采用",
+            NAME, "candidate", facts=facts, data=best,
+            error="同名候选，未核实（缺域名/公司吻合证据）",
         )
     return SourceResult(NAME, "hit", facts=_facts(best), data=best)
