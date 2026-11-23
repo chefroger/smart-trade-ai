@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.42 — 2026-11-23
+
+- Release：拦截低于 0.21.6 的 Hermes，禁止产出坏包
+- `e5a065d` ci(release): 拦截低于 0.21.6 的 Hermes，禁止产出坏包
+
 ## v0.9.41 — 2026-11-23
 
 - Release：Hermes 必需安装 + 冒烟，构建切 Python 3.14
