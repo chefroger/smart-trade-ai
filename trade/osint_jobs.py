@@ -294,10 +294,32 @@ def _run_job(job_id: int, target: str, budget: float) -> None:
 
         from trade.osint.orchestrator import osint_full_check
 
+        # 绑定公司上下文：EDGAR 等官方接口要取当前公司的 contact_email
+        # （2026-11-23 审计 P2-3）。后台线程不会继承请求线程的 ContextVar。
+        company_id = None
+        try:
+            from trade.database import get_connection
+
+            conn = get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT company_id FROM osint_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                company_id = int(row[0]) if row else None
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 —— 取不到就退回环境变量
+            company_id = None
+
+        from contextlib import nullcontext
+
+        from trade.agent_context import bind_company
+
         started = time.time()
-        report = asyncio.run(
-            osint_full_check(target, budget=budget, on_event=_on_event)
-        )
+        with (bind_company(company_id) if company_id is not None else nullcontext()):
+            report = asyncio.run(
+                osint_full_check(target, budget=budget, on_event=_on_event)
+            )
         if _is_cancelled(job_id):
             return
         append_event(job_id, "verdict", {

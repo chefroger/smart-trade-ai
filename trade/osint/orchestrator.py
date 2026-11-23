@@ -184,6 +184,20 @@ async def osint_full_check(
     # 与 6 层并发；RDAP/CT/Wayback 必须有域名，GitHub 按域名/人名/公司名搜索。
     public_planned: dict[str, Callable] = {}
     if sources_enabled():
+        # EDGAR 等官方接口要求真实联系邮箱：优先当前公司的 contact_email，
+        # 没有才回退环境变量/维护者地址（审计 P2-3）
+        contact_email = ""
+        try:
+            from trade.agent_context import current_company_id
+
+            _cid = current_company_id()
+            if _cid:
+                from trade.company import crud as _company_crud
+
+                _row = _company_crud.get(_cid)
+                contact_email = str((_row or {}).get("contact_email") or "").strip()
+        except Exception:
+            contact_email = ""
         ctx = TargetContext(
             target=target,
             target_type=target_type,
@@ -192,6 +206,7 @@ async def osint_full_check(
             person_name=target if target_type == "person" else None,
             company_name=target if target_type == "company" else None,
             username=username_hint,
+            contact_email=contact_email,
         )
         for module in PUBLIC_SOURCES:
             if not source_applies(module.NAME, ctx):
@@ -792,8 +807,9 @@ def _resolve_entity_name(domain: str | None, *, fetcher=None) -> str | None:
             if m:
                 title = re.sub(r"\s+", " ", m.group(1)).strip()
                 # 去掉分隔符后的后缀："ACME Corp | Official Site" -> "ACME Corp"；
-                # 冒号也要切（"Example Co: the money is in the join" → "Example Co"）
-                title = re.split(r"\s*[|\-–—:]\s*", title)[0].strip()
+                # 半角连字符只在两侧都有空格时切（Coca-Cola / Rolls-Royce 是
+                # 公司名的一部分）；| – — : 保持原规则（2026-11-23 审计 P2-1）。
+                title = re.split(r"(?:\s*[|–—:]\s*)|(?:\s+-\s+)", title)[0].strip()
                 if len(title) >= 3:
                     return title
     except Exception:

@@ -669,3 +669,16 @@ async def test_slow_source_times_out_without_blocking_others(monkeypatch):
     )
     assert report["sources"]["rdap"]["status"] == "timeout"
     assert report["sources"]["ct"]["status"] == "hit"
+
+
+def test_edgar_prefers_company_contact_email(monkeypatch):
+    """审计 P2-3：EDGAR UA 优先当前公司 contact_email，其次环境变量。"""
+    from trade.osint.sources import edgar
+
+    monkeypatch.setenv("TRADE_CONTACT_EMAIL", "env@example.com")
+    from trade.osint.sources.base import TargetContext
+
+    rich = TargetContext(target="Acme", target_type="company", contact_email="ops@buyer.com")
+    assert "ops@buyer.com" in edgar._headers(rich)["User-Agent"]
+    plain = TargetContext(target="Acme", target_type="company")
+    assert "env@example.com" in edgar._headers(plain)["User-Agent"]

@@ -5,13 +5,21 @@
 """
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 
-# 在第 0 步：在所有 import 之前设置 TRADE_HOME
-# 这样 trade.company 模块级别的 TRADE_HOME 常量就会指向临时路径
-if "TRADE_HOME" not in os.environ:
-    os.environ["TRADE_HOME"] = tempfile.mkdtemp(prefix="trade-test-")
+# 在第 0 步：在所有 import 之前**强制**设置 TRADE_HOME
+# 这样 trade.company 模块级别的 TRADE_HOME 常量就会指向临时路径。
+# 2026-11-23 审计：此前只在未设置时兜底，调用者把 TRADE_HOME 指到
+# ~/.trade 时整批用例会触碰真实数据（实测 66 failed / 90 errors）。
+os.environ["TRADE_HOME"] = tempfile.mkdtemp(prefix="trade-test-")
+
+# 硬断言：测试目录绝不能落在真实用户数据目录下
+_real_trade = (Path.home() / ".trade").resolve()
+assert Path(os.environ["TRADE_HOME"]).resolve() != _real_trade, (
+    "TRADE_HOME 指向真实 ~/.trade，测试会污染用户数据"
+)
 
 # 同样必须在 import 之前设置 HERMES_HOME：cron / license / skill_router / memory
 # 都在 import 期按它解析目录，且 treat 会**写入** ~/.hermes（skills、memories/MEMORY.md）。

@@ -734,3 +734,21 @@ class TestTechStackPrecision:
         res = self._page(html)
         assert "Cloudflare" not in res["technologies"]
         assert res["is_enterprise"] is False
+
+
+class TestTitleHyphenSplit:
+    """审计 P2-1：半角连字符只在两侧有空格时切，不能切断公司名。"""
+
+    def _name(self, title: str):
+        from trade.osint.orchestrator import _resolve_entity_name
+
+        html = f"<html><head><title>{title}</title></head></html>"
+        return _resolve_entity_name("acme.com", fetcher=lambda url, timeout=15: html)
+
+    def test_brand_hyphens_are_preserved(self):
+        assert self._name("Coca-Cola Company | Home") == "Coca-Cola Company"
+        assert self._name("Rolls-Royce Holdings | Official") == "Rolls-Royce Holdings"
+        assert self._name("Mercedes-Benz Group AG - Home") == "Mercedes-Benz Group AG"
+
+    def test_spaced_hyphen_still_splits(self):
+        assert self._name("ACME Corp - Official Site") == "ACME Corp"

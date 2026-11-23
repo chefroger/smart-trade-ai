@@ -241,6 +241,14 @@ async def import_company_package(
     _require_paid_feature()
     if not _rate_ok("import", 1, 300):
         raise HTTPException(status_code=429, detail="导入过于频繁，请稍后再试")
+    if not preflight:
+        # 旧的一步导入会在同名客户上静默按名字合并，用户没有任何选择机会。
+        # 强制走预检 + 逐对决定（2026-11-23 审计 P2 残留）。
+        await file.close()
+        raise HTTPException(
+            status_code=409,
+            detail="请先上传预检（preflight=true），确认同名客户处置后再导入",
+        )
     fd, temp_name = mkstemp(prefix="trade-company-upload-", suffix=".zip")
     total = 0
     try:

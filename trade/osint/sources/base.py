@@ -38,6 +38,8 @@ class TargetContext:
     company_name: str | None = None
     github_username: str | None = None
     username: str | None = None
+    # 当前公司的联系邮箱（EDGAR 的 UA 要求），未绑定公司时为空
+    contact_email: str | None = None
 
 
 @dataclass

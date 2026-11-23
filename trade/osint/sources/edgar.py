@@ -25,8 +25,10 @@ SEARCH = "https://efts.sec.gov/LATEST/search-index?q=%22{hint}%22"
 DEFAULT_CONTACT_EMAIL = "chefrogerlau@126.com"
 
 
-def _headers() -> dict[str, str]:
-    email = os.environ.get("TRADE_CONTACT_EMAIL", "").strip() or DEFAULT_CONTACT_EMAIL
+def _headers(ctx: TargetContext | None = None) -> dict[str, str]:
+    # 优先当前公司的 contact_email，其次环境变量，最后维护者地址（审计 P2-3）
+    email = str(getattr(ctx, "contact_email", "") or "").strip()
+    email = email or os.environ.get("TRADE_CONTACT_EMAIL", "").strip() or DEFAULT_CONTACT_EMAIL
     return {
         "User-Agent": f"Trade-AI/1.0 ({email})",
         "Accept": "application/json",
@@ -49,7 +51,7 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
 
     url = SEARCH.format(hint=quote(hint))
     try:
-        payload = fetch_json(url, fetch=fetch, headers=_headers())
+        payload = fetch_json(url, fetch=fetch, headers=_headers(ctx))
     except Exception as exc:  # noqa: BLE001
         return SourceResult(NAME, "error", error=f"EDGAR 查询失败：{exc}")
     if not isinstance(payload, dict):

@@ -156,6 +156,10 @@ def analyze_package(zip_path: Path, *, target_company_id: int | None = None,
         # 目标库没有同名客户：不构成冲突
         if not holders:
             continue
+        # 名字完全一致（连大小写/空格都相同）：按精确匹配静默合并，不进冲突列表
+        # （2026-11-23 审计 P2 残留）。大小写/空格不同仍算冲突，交给用户选。
+        if any((h.get("name") or "").strip() == source_cust_name.strip() for h in holders):
+            continue
         proposed = _proposed_name(source_cust_name, taken)
         taken.add(merge_mod.norm_name(proposed))
         item = {

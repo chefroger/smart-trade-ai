@@ -151,7 +151,7 @@ def test_preflight_reports_conflict_and_is_read_only(desktop, tmp_path):
 
     target = crud.create(name)
     target_customer_id = _insert_customer(
-        target["id"], "Acme", contact="Alice",
+        target["id"], "ACME", contact="Alice",  # 大小写不同才算冲突
         extra1=json.dumps({"tier": "B"}),
     )
     before = _customer_rows(target["id"])
@@ -168,7 +168,7 @@ def test_preflight_reports_conflict_and_is_read_only(desktop, tmp_path):
     assert conflict["source_id"] == packaged[0]["id"] == source_customer_id
     assert conflict["source_name"] == "Acme"
     assert conflict["target_id"] == target_customer_id
-    assert conflict["target_name"] == "Acme"
+    assert conflict["target_name"] == "ACME"
     assert conflict["reason"] == "same_name_case_or_space"
     assert conflict["proposed_new_name"] == "Acme (2)"
     # 预检只读：客户行数与每个字段都必须原样
@@ -183,8 +183,8 @@ def test_proposed_name_skips_taken_suffix(desktop, tmp_path):
     package = _export_and_forget(tmp_path, source)
 
     target = crud.create(name)
-    _insert_customer(target["id"], "Acme")
-    _insert_customer(target["id"], "Acme (2)")
+    _insert_customer(target["id"], "ACME")
+    _insert_customer(target["id"], "ACME (2)")
 
     result = analyze_package(package)
 
@@ -360,7 +360,7 @@ def test_preflight_normalizes_string_customer_ids(desktop, tmp_path):
 
     _rewrite_zip_member(package, "db/customers.json", _stringify_ids)
     target = crud.create(name)
-    _insert_customer(target["id"], "Acme", contact="Alice")
+    _insert_customer(target["id"], "ACME", contact="Alice")
 
     conflict = analyze_package(package)["conflicts"][0]
 
@@ -377,7 +377,7 @@ def test_import_decision_with_string_key_is_honored(desktop, tmp_path):
     source_customer_id = _packaged_customers(package)[0]["id"]
 
     target = crud.create(name)
-    _insert_customer(target["id"], "Acme", contact="Alice")
+    _insert_customer(target["id"], "ACME", contact="Alice")
 
     report = import_company(
         package,
@@ -424,3 +424,20 @@ def test_import_tolerates_non_numeric_inquiry_source_id(desktop, tmp_path):
     finally:
         conn.close()
     assert row is not None and row[0] is None
+
+
+def test_preflight_exact_same_name_is_not_a_conflict(desktop, tmp_path):
+    """完全同名的客户按精确匹配直接合并，不再列进冲突（审计 P2 残留）。"""
+    name = _unique("Exact Name")
+    source = crud.create(name)
+    _insert_customer(source["id"], "Acme Trading", contact="Bob")
+    package = _export_and_forget(tmp_path, source)
+
+    target = crud.create(name)
+    _insert_customer(target["id"], "Acme Trading", contact="Alice")
+
+    result = analyze_package(package)
+
+    assert result["conflicts"] == []
+    # 不列冲突 = 导入时会按精确匹配合并，客户数不变
+    assert result["summary"]["customers_total"] == 1

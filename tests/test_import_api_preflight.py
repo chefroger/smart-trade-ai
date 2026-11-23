@@ -174,7 +174,8 @@ def _conflict_package(tmp_path: Path) -> tuple[Path, dict]:
     _delete_company(source["id"])
 
     target = crud.create(name)
-    _insert_customer(target["id"], "Acme", contact="Alice")
+    # 大小写不同才算冲突；完全同名现在按精确匹配直接合并
+    _insert_customer(target["id"], "ACME", contact="Alice")
     return package, target
 
 
@@ -277,7 +278,7 @@ class TestConfirmImport:
         assert resp.json()["status"] == "queued"
         job = _wait_job(resp.json()["job_id"])
         assert job["status"] == "done", job
-        assert _customer_names(target["id"]) == ["Acme", "Acme (2)"]
+        assert _customer_names(target["id"]) == ["ACME", "Acme (2)"]
 
     def test_expired_upload_returns_410(self, api_client, tmp_path):
         """过期条目 → 410，并从登记表移除。"""
@@ -375,4 +376,17 @@ class TestConfirmImport:
         assert resp.status_code == 202, resp.text
         job = _wait_job(resp.json()["job_id"])
         assert job["status"] == "done", job
-        assert _customer_names(target["id"]) == ["Acme", "Acme (2)"]
+        assert _customer_names(target["id"]) == ["ACME", "Acme (2)"]
+
+
+def test_non_preflight_upload_is_rejected(api_client, tmp_path):
+    """旧的一步导入没有逐对决定：直接 409 要求先预检（审计 P2 残留）。"""
+    client, token = api_client
+    resp = client.post(
+        "/api/trade/companies/import-package",
+        headers={"X-Hermes-Session-Token": token},
+        data={"preflight": "false"},
+        files={"file": ("x.zip", b"not-a-zip", "application/zip")},
+    )
+    assert resp.status_code == 409
+    assert "预检" in resp.json()["detail"]
