@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v0.9.32 — 2026-11-23
+
+- P1：流式竞态、许可证试用加固、去真实人名、CSP 与远程图片占位
+- `d094e35` fix(ui): /trade 加 CSP，模型消息远程图片改点击加载（P1-E）
+- `5e01c17` chore(skills): 提示词/CLI/注释里的真实背调对象换成虚构示例（P1-C）
+- `17dbae4` fix(license): TRADE_TRIAL_DAYS 只在测试进程生效，试用起点双写（P1-10）
+- `de8f94d` fix(chat): 先置 delivered 再发 response，消除成功回答后多写未完成报告（P1-1）
+
 ## v0.9.31 — 2026-11-23
 
 - P0-C：人名/公司名说法兜底进背调，交付前强制补制裁结论
