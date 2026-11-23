@@ -43,6 +43,40 @@ from trade.osint.sources import (
 from trade.osint.tech_stack import detect_tech_stack
 from trade.osint.whois import domain_whois
 
+# 登记类来源（W3）：只证明登记存在，不构成经营/身份核验
+_REGISTRY_SOURCES = frozenset({"us_states", "gleif", "vies", "registries_misc"})
+
+
+def _public_hit_counts(sources: dict) -> tuple[int, int]:
+    """返回 (实质核验 hit 数, 登记类 hit 数)。candidate 不算命中。"""
+    substantive = 0
+    registry = 0
+    for name, item in (sources or {}).items():
+        if not isinstance(item, dict) or item.get("status") != "hit":
+            continue
+        if name in _REGISTRY_SOURCES:
+            registry += 1
+        else:
+            substantive += 1
+    return substantive, registry
+
+
+def _registry_formation_dates(sources: dict) -> list[str]:
+    """从登记类事实里抽取成立日期（报告要写出，W3）。"""
+    import re as _re
+
+    dates: list[str] = []
+    for name in _REGISTRY_SOURCES:
+        item = (sources or {}).get(name)
+        if not isinstance(item, dict):
+            continue
+        for fact in item.get("facts") or []:
+            match = _re.search(r"成立\s*(\d{4}-\d{2}-\d{2})", str(fact.get("text") or ""))
+            if match and match.group(1) not in dates:
+                dates.append(match.group(1))
+    return dates
+
+
 # 单层超时（秒）。全局预算另由 osint_full_check(budget=...) 限制。
 # 名单已改为后台每日刷新（check_sanctions 只读本地库），制裁层不再需要
 # 下载时间，20 秒足够（2026-11-23 审计 P2-3）。
@@ -317,13 +351,9 @@ async def osint_full_check(
         has_domain=bool(lookup_domain),
         sanctions_requested=include_sanctions,
     )
-    # 公开来源 status=hit 的数量（candidate 在未来版本里也不算命中。
-    # 审计 P0-B：人名/公司名没有域名、公开来源也零命中时，本轮实际上只跑了
-    # 制裁筛查，不能给 low/100。
-    public_hits = sum(
-        1 for item in report["sources"].values()
-        if isinstance(item, dict) and item.get("status") == "hit"
-    )
+    # 公开来源按「登记类 / 实质核验」分开计数（W3）：
+    # us_states/GLEIF/VIES 只证明“注册过”，壳公司也能拿 low/100。
+    public_hits, registry_hits = _public_hit_counts(report["sources"])
     score, rating, provisional = compute_verdict(
         report["flags"],
         report["unverified"],
@@ -336,9 +366,15 @@ async def osint_full_check(
     report["provisional_score"] = provisional  # 仅供诊断，不是对外结论
     if rating == "limited":
         report["rating_note"] = (
-            "仅完成制裁筛查：目标没有可查询域名，公开来源也没有命中；"
+            "仅完成制裁筛查：目标没有可查询域名，公开来源也没有实质核验命中；"
             "这不是低风险结论。补到官网或公司注册信息后请重新背调。"
         )
+        dates = _registry_formation_dates(report["sources"])
+        if dates:
+            report["rating_note"] += " 登记成立日期：" + "、".join(dates) + "。"
+        elif registry_hits:
+            report["rating_note"] += " 仅有登记类来源命中，登记不等于经营核验。"
+
 
     # ── 生成建议 ───────────────────────────────────────────────────────
     report["recommendations"] = generate_recommendations(report)

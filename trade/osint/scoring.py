@@ -186,7 +186,8 @@ def compute_verdict(
     Args:
         target_type: email/domain/url/company/person（外部构造的报告可省略）
         has_domain: 目标是否解析出可查询域名
-        public_hits: 公开来源里 status=hit 的数量（candidate 不算命中）
+        public_hits: 公开来源里**实质核验类** status=hit 的数量（W3：登记类
+            us_states/GLEIF/VIES 只证明注册过，不算核验；candidate 也不算命中）
 
     Returns:
         (overall_score, rating, provisional_score)

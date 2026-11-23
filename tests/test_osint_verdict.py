@@ -434,3 +434,49 @@ class TestCliShowsLimited:
         assert "—（仅完成制裁筛查）" in text
         assert "仅完成制裁筛查" in text
         assert "/100" not in text.split("\n")[1]
+
+
+class TestRegistryOnlyHits:
+    """W3：只有登记类命中不能给 low/100。"""
+
+    def test_public_hit_counts_split(self):
+        from trade.osint.orchestrator import _public_hit_counts
+
+        substantive, registry = _public_hit_counts({
+            "us_states": {"status": "hit"},
+            "vies": {"status": "hit"},
+            "github": {"status": "hit"},
+            "rdap": {"status": "miss"},
+        })
+        assert (substantive, registry) == (1, 2)
+
+    @pytest.mark.asyncio
+    async def test_registry_only_company_is_limited(self, monkeypatch):
+        import trade.osint.orchestrator as orch
+        from trade.osint.sources.base import SourceResult
+
+        class _Registry:
+            NAME = "us_states"
+
+            @staticmethod
+            def run(ctx, fetch=None):  # noqa: ARG004
+                return SourceResult(
+                    "us_states", "hit",
+                    facts=[{"text": "纽约州登记：Tensorust LLC，成立 2026-10-30"}],
+                )
+
+        monkeypatch.setattr(orch, "PUBLIC_SOURCES", (_Registry(),))
+        monkeypatch.setattr(orch, "sources_enabled", lambda: True)
+        monkeypatch.setattr(
+            orch, "check_sanctions",
+            lambda name, country=None: _healthy_sanctions(),
+        )
+        monkeypatch.setattr(orch, "_resolve_entity_name", lambda domain, **kw: None)
+
+        report = await orch.osint_full_check(
+            "company:Tensorust LLC", include_tech_stack=False, include_linkedin=False,
+        )
+
+        assert report["overall_rating"] == "limited"
+        assert report["overall_score"] is None
+        assert "2026-10-30" in report["rating_note"]
