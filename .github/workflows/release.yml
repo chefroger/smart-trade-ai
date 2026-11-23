@@ -56,6 +56,27 @@ jobs:
         run: |
           python -c "import run_agent, hermes_cli; print('Hermes:', getattr(hermes_cli, '__version__', 'unknown'))"
 
+      # PyPI 上的 hermes-agent 不是官方最新版（实跑 2026-11-23 装到 0.15.2，
+      # 官方要求 ≥0.21.6）。版本不够时必须让构建失败：否则会产出「能打开、
+      # 但 Agent 版本被 bootstrap 拒绝」的坏包。
+      - name: Assert Hermes version meets minimum
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          from packaging.version import Version
+          import hermes_cli
+          version = str(getattr(hermes_cli, "__version__", "0"))
+          minimum = "0.21.6"
+          print(f"Hermes {version} (minimum {minimum})")
+          if Version(version) < Version(minimum):
+              sys.exit(
+                  f"Hermes {version} 低于最低要求 {minimum}："
+                  "PyPI 的 hermes-agent 不是官方最新版，Mac 独立包需要另行决定"
+                  "如何内嵌官方 Hermes（或改为运行时发现用户自己的 Hermes）。"
+              )
+          PY
+
       - name: Record Hermes version
         id: hermes
         shell: bash

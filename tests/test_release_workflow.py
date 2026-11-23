@@ -28,3 +28,9 @@ class TestReleaseHermesIsMandatory:
     def test_records_hermes_version(self):
         assert "GITHUB_STEP_SUMMARY" in RELEASE
         assert "hermes_cli" in RELEASE
+
+    def test_enforces_minimum_hermes_version(self):
+        """真跑发现 PyPI 的 hermes-agent 只有 0.15.2：必须拦在构建前。"""
+        assert "0.21.6" in RELEASE
+        assert "Assert Hermes version meets minimum" in RELEASE
+        assert "Version(version) < Version(minimum)" in RELEASE
