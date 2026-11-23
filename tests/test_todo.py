@@ -376,3 +376,49 @@ class TestTodoApi:
 
         r = client.patch("/api/trade/todos/99999", json={"title": "x"}, headers=h)
         assert r.status_code == 404
+
+
+class TestTodoReason:
+    """P2：待办要有原因；无截止日的未完成项 UI 显示「未定日期」。"""
+
+    def test_reason_roundtrip(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        import trade.database as _db
+
+        monkeypatch.setattr(_db, "_get_db_path", lambda: tmp_path / "trade.db")
+        from trade.database import init_db
+
+        init_db()
+        import trade.company as co
+
+        def _setup(name, slug, suggested_name=""):
+            wd = tmp_path / (suggested_name or name)
+            wd.mkdir(parents=True, exist_ok=True)
+            for cat, _ in co._WORK_DIR_CATEGORIES:
+                (wd / cat).mkdir(parents=True, exist_ok=True)
+            return wd, True
+
+        monkeypatch.setattr(co, "_setup_work_directory", _setup)
+        company_id = co.create(name="Reason Co", slug="reason-co")["id"]
+
+        from trade import todo
+
+        row = todo.create_todo(
+            company_id, title="回访 Acme", reason="客户说下周给答复",
+        )
+        assert row["reason"] == "客户说下周给答复"
+
+        updated = todo.update_todo(
+            row["id"], company_id=company_id, reason="改为月底跟进",
+        )
+        assert updated["reason"] == "改为月底跟进"
+
+        listing = todo.list_todos(company_id)
+        assert listing["today_items"][0]["reason"] == "改为月底跟进"
+
+        try:
+            todo.create_todo(company_id, title="x", reason="长" * 301)
+        except todo.TodoError:
+            pass
+        else:
+            raise AssertionError("超长 reason 未拒绝")

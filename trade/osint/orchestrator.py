@@ -44,14 +44,14 @@ from trade.osint.tech_stack import detect_tech_stack
 from trade.osint.whois import domain_whois
 
 # 单层超时（秒）。全局预算另由 osint_full_check(budget=...) 限制。
-# sanctions 给 60 秒：首次运行要下载名单文件（下载本身在 check_sanctions 内部）；
-# 工单 P0-1 改成后台每日刷新后，这里可以降到 20 秒左右。
+# 名单已改为后台每日刷新（check_sanctions 只读本地库），制裁层不再需要
+# 下载时间，20 秒足够（2026-11-23 审计 P2-3）。
 _LAYER_TIMEOUTS: dict[str, float] = {
     "email_registration": 90.0,  # holehe 要探测 120+ 站点
     "domain_intel": 20.0,
     "email_verification": 20.0,
     "tech_stack": 20.0,
-    "sanctions": 60.0,
+    "sanctions": 20.0,
     "linkedin": 10.0,
     # 公开来源（P2-2）：单源 15 秒（GDELT 偏慢，给 20 秒）
     "rdap": 15.0,

@@ -57,5 +57,7 @@ catch {
     Write-Host "  Installation aborted: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "  Installer URL: $CoreUrl" -ForegroundColor Yellow
     Write-Host "  Please send both lines above to support." -ForegroundColor Yellow
-    exit 1
+    # Use throw instead of exit: under `irm | iex` an exit closes the user's
+    # PowerShell window immediately; throw stops the script but keeps the window.
+    throw "Installation aborted"
 }

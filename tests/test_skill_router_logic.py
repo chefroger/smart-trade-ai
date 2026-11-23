@@ -599,3 +599,13 @@ def test_plain_message_without_name_does_not_fallback_to_osint():
 
     result = match_skill("帮我写一段产品描述")
     assert result is None or result["name"] != "b2b-osint"
+
+
+def test_routed_entry_uses_keyword_mode_by_default(monkeypatch):
+    """P2-2：match_skill_routed 已接到 helpers；默认 keyword 行为与 match_skill 一致。"""
+    monkeypatch.delenv("TRADE_ROUTER_MODE", raising=False)
+    from trade.skill_router import match_skill, match_skill_routed
+
+    routed = match_skill_routed("王建国是谁")
+    plain = match_skill("王建国是谁")
+    assert routed and plain and routed["name"] == plain["name"] == "b2b-osint"

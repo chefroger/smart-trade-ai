@@ -21,7 +21,7 @@ trap {
     $line = $_.InvocationInfo.ScriptLineNumber
     if ($line) { Write-Host "    出错位置：第 $line 行" -ForegroundColor Red }
     Write-Host "    请把上面这两行发给技术支持。" -ForegroundColor Yellow
-    exit 1
+    throw "安装中止"
 }
 
 # 控制台输出用 UTF-8 —— 否则中文提示在默认 GBK 代码页下是乱码，
@@ -177,7 +177,7 @@ if (-not $PythonCmd) {
     Write-Host ""
     Write-Host "  2) 自己装 3.14：" -ForegroundColor White
     Write-Host "       winget install Python.Python.3.14"
-    exit 1
+    throw "安装中止"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,7 +223,7 @@ if (-not (Test-Path "$VenvDir\Scripts\python.exe")) {
     # ModuleNotFoundError，而真正的原因是这里。
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$VenvDir\Scripts\python.exe")) {
         Write-Host "  ✗ 虚拟环境创建失败（上面的报错见上）。请检查磁盘空间与路径权限后重试。" -ForegroundColor Red
-        exit 1
+        throw "安装中止"
     }
 }
 $PipCmd = "$VenvDir\Scripts\pip.exe"
@@ -328,7 +328,7 @@ if ($hermesCmd) {
     Write-Host "    irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"
     Write-Host ""
     Write-Host "  装好后重新运行本安装脚本。" -ForegroundColor White
-    exit 1
+    throw "安装中止"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -349,7 +349,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host "  请先安装 Git（任选一种；装完**重开** PowerShell 再运行本脚本）：" -ForegroundColor White
     Write-Host "    winget install Git.Git"
     Write-Host "    或手动下载：https://git-scm.com/download/win"
-    exit 1
+    throw "安装中止"
 }
 
 # 长路径（MAX_PATH）：Windows 默认 260 字符上限，venv 里的 site-packages
@@ -389,7 +389,7 @@ function Invoke-RollbackCode {
     if ($VenvOld -and (Test-Path $VenvDir)) { Remove-Item -Recurse -Force $VenvDir }
 }
 
-if (-not (Invoke-CloneOrUpdate "foreign-trade-assistant" $TradeRepo $TradeDir)) { exit 1 }
+if (-not (Invoke-CloneOrUpdate "foreign-trade-assistant" $TradeRepo $TradeDir)) { throw "安装中止" }
 
 Push-Location $TradeDir
 # 装依赖 + trade 自身。
@@ -401,14 +401,14 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ 依赖安装失败（pip 的报错见上）。请检查网络后重新运行本脚本。" -ForegroundColor Red
     Invoke-RollbackCode
     Pop-Location
-    exit 1
+    throw "安装中止"
 }
 & $PipCmd install -e "." --no-deps
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ Foreign Trade Assistant 安装失败（pip 的报错见上）。" -ForegroundColor Red
     Invoke-RollbackCode
     Pop-Location
-    exit 1
+    throw "安装中止"
 }
 
 # 客户语义检索（sqlite-vec）**默认关闭**，安装器不再默认安装它。
@@ -424,7 +424,7 @@ Pop-Location
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ Foreign Trade Assistant 装好了但无法导入，安装不完整。" -ForegroundColor Red
     Invoke-RollbackCode
-    exit 1
+    throw "安装中止"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -456,7 +456,7 @@ if ($VenvOld) {
         if (Test-Path $VenvOldBak) { Move-Item -Path $VenvOldBak -Destination $VenvOld -Force }
         if (Test-Path "$VenvReal.new") { Remove-Item -Recurse -Force "$VenvReal.new" }
         Invoke-RollbackCode
-        exit 1
+        throw "安装中止"
     }
 }
 
@@ -642,7 +642,7 @@ if ($LASTEXITCODE -ne 0) {
 & $PyCmd -c "import sys; from trade.bootstrap import prepare_hermes_import_paths; prepare_hermes_import_paths(); from trade.doctor import run_doctor, format_report, has_fatal_failure; r = run_doctor(deep=False); print(format_report(r)); sys.exit(1 if has_fatal_failure(r, ignore_names=('Hermes 版本',)) else 0)"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ✗ 自检发现致命问题，安装不完整。请把上面的输出发给技术支持。" -ForegroundColor Red
-    exit 1
+    throw "安装中止"
 }
 
 Write-Host ""

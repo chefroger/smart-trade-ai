@@ -12,12 +12,13 @@ from trade.database import get_connection
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TITLE_MAX = 200
+_REASON_MAX = 300
 
 # 列表查询共用的投影：LEFT JOIN 客户，客户被删 / 属于别家时名称取空串
 _SELECT_SQL = (
     "SELECT t.id, t.title, t.due_date, t.customer_id, "
     "COALESCE(c.name, '') AS customer_name, t.done, t.done_at, "
-    "t.source, t.created_at "
+    "t.source, t.reason, t.created_at "
     "FROM todos t "
     "LEFT JOIN customers c ON c.id = t.customer_id AND c.company_id = t.company_id "
 )
@@ -79,6 +80,14 @@ def _validate_due_date(value) -> str:
     except ValueError:
         # 格式对但日历上不存在（如 2026-02-30）
         raise TodoError("截止日期不是有效日期")
+    return text
+
+
+def _validate_reason(value) -> str:
+    """原因：可选，最多 300 字；超长拒绝而不是悄悄截断。"""
+    text = str(value or "").strip()
+    if len(text) > _REASON_MAX:
+        raise TodoError(f"原因不能超过 {_REASON_MAX} 字")
     return text
 
 
@@ -183,19 +192,22 @@ def create_todo(
     due_date="",
     customer_id=None,
     source="manual",
+    reason="",
 ) -> dict:
     """新建待办并返回完整条目；非法输入抛 TodoError。"""
     clean_title = _validate_title(title)
     clean_due = _validate_due_date(due_date)
+    clean_reason = _validate_reason(reason)
 
     conn = get_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
         clean_customer = _coerce_customer_id(conn, customer_id, company_id)
         cur = conn.execute(
-            "INSERT INTO todos (company_id, title, due_date, customer_id, source) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (company_id, clean_title, clean_due, clean_customer, str(source or "manual")),
+            "INSERT INTO todos (company_id, title, due_date, customer_id, source, reason) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (company_id, clean_title, clean_due, clean_customer,
+             str(source or "manual"), clean_reason),
         )
         new_id = int(cur.lastrowid)
         conn.commit()
@@ -212,7 +224,7 @@ def update_todo(todo_id: int, *, company_id: int, **fields) -> dict | None:
 
     done=True 时写入完成时间，done=False 时清空完成时间。
     """
-    allowed = {"title", "due_date", "done", "customer_id"}
+    allowed = {"title", "due_date", "done", "customer_id", "reason"}
     updates = {k: v for k, v in fields.items() if k in allowed}
 
     conn = get_connection()
@@ -226,6 +238,9 @@ def update_todo(todo_id: int, *, company_id: int, **fields) -> dict | None:
         assignments = []
         params: list = []
         # 标题走统一校验，避免空标题把列表项变成空白
+        if "reason" in updates:
+            assignments.append("reason = ?")
+            params.append(_validate_reason(updates["reason"]))
         if "title" in updates:
             assignments.append("title = ?")
             params.append(_validate_title(updates["title"]))

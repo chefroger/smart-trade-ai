@@ -467,6 +467,7 @@ CREATE TABLE IF NOT EXISTS todos (
     done        INTEGER NOT NULL DEFAULT 0,
     done_at     TEXT,                 -- 完成时间（本地时间字符串）
     source      TEXT    NOT NULL DEFAULT 'manual',
+    reason      TEXT    NOT NULL DEFAULT '',   -- 为什么记这条（P2）
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     updated_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     extra1      TEXT    DEFAULT '{}',
@@ -953,6 +954,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
         (3, "scrub_visit_plan_profile_reminders", ""),
         # v4：事实库 verified 列（P1-D）。SQL 占位；实际走幂等逻辑。
         (4, "osint_facts_verified", ""),
+        # v5：待办 reason 列（P2）
+        (5, "todos_reason", ""),
     ]
 
     # 获取已应用的版本
@@ -970,6 +973,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
             _migrate_scrub_visit_plan_payload_v3(conn)
         elif version == 4:
             _migrate_osint_facts_verified_v4(conn)
+        elif version == 5:
+            _migrate_todos_reason_v5(conn)
         else:
             conn.executescript(sql)
         conn.execute(
@@ -1075,6 +1080,16 @@ def _migrate_osint_facts_verified_v4(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE osint_facts ADD COLUMN verified INTEGER NOT NULL DEFAULT 1"
         )
+
+
+def _migrate_todos_reason_v5(conn: sqlite3.Connection) -> None:
+    """迁移 5：待办补 reason 列（P2）。"""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(todos)")}
+    except sqlite3.Error:
+        return
+    if cols and "reason" not in cols:
+        conn.execute("ALTER TABLE todos ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
 
 
 def init_db() -> Path:

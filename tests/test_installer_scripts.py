@@ -383,11 +383,12 @@ class TestPowerShellChecksPipExitCodes:
         # 脚本里共 2 处 pip 调用：requirements + Trade 自身（sqlite-vec 已改为可选）
         assert checked >= 2, f"应覆盖全部 2 处 pip 调用，实际 {checked}"
 
-    def test_failure_exits_nonzero(self):
-        """失败分支必须真的中止脚本，而不是只打印一行。"""
+    def test_failure_throws_instead_of_exit(self):
+        """失败分支必须中止脚本，但不能 exit 掉用户的 PowerShell 窗口。"""
         body = _code_lines(PS1)
 
-        assert "exit 1" in body, "安装失败没有 exit 1"
+        assert "throw" in body, "安装失败没有 throw"
+        assert "exit 1" not in body, "exit 1 会直接关掉 irm|iex 的窗口，应改为 throw"
 
 
 class TestPowerShellLauncherEncoding:

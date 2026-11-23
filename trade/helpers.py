@@ -649,10 +649,10 @@ def build_query(
     last_skill_name 上次使用的 skill 名称，连续同 skill 时跳过重复注入。
     """
 
-    # 0. Skill auto-detection — 评分排序后取最高置信度 skill
-    matched_skills = _skill_router.match_skills(query)
-    matched_name = matched_skills[0]["skill_name"] if matched_skills else None
-    matched_skill = _skill_router.get_skill_by_name(matched_name) if matched_name else None
+    # 0. Skill auto-detection — 走路由总入口：默认 keyword（行为不变），
+    # 显式 TRADE_ROUTER_MODE=hybrid 时才启用语义兜底（2026-11-23 审计 P2-2）
+    matched_skill = _skill_router.match_skill_routed(query)
+    matched_name = matched_skill["name"] if matched_skill else None
 
     # 连续同 skill 时跳过完整注入，大幅节约 token（injection_prompt 通常 1000-2000 tokens）
     same_skill_repeat = bool(last_skill_name and matched_name == last_skill_name)

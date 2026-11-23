@@ -319,9 +319,11 @@ async function loadTodos(isPoll = false) {
 function _todoItemHtml(item, done) {
     /** 单条待办：勾选钮 + 标题（+ 日期/客户）+ 删除钮。 */
     const parts = [];
-    // 截止日与客户是可选信息，有才显示
+    // 无截止日的未完成项明确显示「未定日期」（P2）
     if (item.due_date) parts.push(item.due_date);
+    else if (!done) parts.push('未定日期');
     if (item.customer_name) parts.push(item.customer_name);
+    if (item.reason) parts.push('原因：' + item.reason);
     const sub = parts.join(' · ');
     return '<div class="rail-todo-item' + (done ? ' done' : '') +
         '" data-todo-id="' + esc(String(item.id)) + '">' +
@@ -359,6 +361,7 @@ function _renderRailTodos() {
         esc(t('todo.placeholder')) + '">' +
         '<div class="todo-add-row">' +
         '<input type="date" id="todo-add-due" aria-label="' + esc(t('todo.due')) + '">' +
+        '<input type="text" id="todo-add-reason" maxlength="300" placeholder="原因（可选）">' +
         '<select id="todo-add-customer" aria-label="' + esc(t('todo.customer')) + '">' +
         '<option value="">' + esc(t('todo.no_customer')) + '</option></select>' +
         '<button type="button" class="btn btn-xs primary" id="todo-add-save">' +
@@ -454,13 +457,17 @@ async function _saveTodo() {
     const title = (titleEl && titleEl.value || '').trim();
     // 标题为空：不提交，把焦点放回输入框
     if (!title) { if (titleEl) titleEl.focus(); return; }
+    const reasonEl = document.getElementById('todo-add-reason');
     const body = {title: title};
+    if (reasonEl && reasonEl.value.trim()) body.reason = reasonEl.value.trim();
     if (dueEl && dueEl.value) body.due_date = dueEl.value;
     if (custEl && custEl.value) body.customer_id = Number(custEl.value);
     const r = await api('POST', '/api/trade/todos', body);
     if (!r) return;
     if (titleEl) titleEl.value = '';
     if (dueEl) dueEl.value = '';
+    const reasonClear = document.getElementById('todo-add-reason');
+    if (reasonClear) reasonClear.value = '';
     if (custEl) custEl.value = '';
     await loadTodos(false);
 }

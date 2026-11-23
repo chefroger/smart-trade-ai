@@ -18,6 +18,7 @@ class TodoBody(BaseModel):
     due_date: Any = None
     customer_id: Any = None
     done: Any = None
+    reason: Any = None
 
 
 def _int_or_none(v):
@@ -45,6 +46,7 @@ def create_todo(body: TodoBody, cid: int = Depends(require_company)):
             title=body.title,
             due_date=body.due_date if body.due_date is not None else "",
             customer_id=_int_or_none(body.customer_id),
+            reason=body.reason if body.reason is not None else "",
         )
     # 标题/日期/客户归属校验失败：转 400，而不是冒成 500
     except todo_mod.TodoError as e:
@@ -63,6 +65,8 @@ def update_todo(todo_id: int, body: TodoBody, cid: int = Depends(require_company
         fields["done"] = body.done
     if body.customer_id is not None:
         fields["customer_id"] = _int_or_none(body.customer_id)
+    if body.reason is not None:
+        fields["reason"] = body.reason
     try:
         row = todo_mod.update_todo(todo_id, company_id=cid, **fields)
     # 改挂别家客户 / 非法标题日期：转 400

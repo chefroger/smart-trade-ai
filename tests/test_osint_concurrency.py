@@ -62,30 +62,37 @@ def _sanctions_healthy(*_, **__):
 class TestParallelExecution:
     @pytest.mark.asyncio
     async def test_independent_layers_run_concurrently(self, monkeypatch):
-        """两层各睡 0.35s，并发总耗时 < 0.6s（串行则 ≥ 0.7s）。"""
-        def _slow_whois(domain):
-            time.sleep(0.35)
+        """两层必须同时到达屏障：串行执行会在屏障超时（不再依赖耗时阈值）。"""
+        import threading
+
+        barrier = threading.Barrier(2, timeout=2.0)
+        entered: list[str] = []
+
+        def _whois_at_barrier(domain):  # noqa: ARG001
+            entered.append("whois")
+            barrier.wait()
             return _whois_ok()
 
-        def _slow_tech(url):
-            time.sleep(0.35)
+        def _tech_at_barrier(url):  # noqa: ARG001
+            entered.append("tech")
+            barrier.wait()
             return _tech_ok()
 
-        monkeypatch.setattr(orch, "domain_whois", _slow_whois)
-        monkeypatch.setattr(orch, "detect_tech_stack", _slow_tech)
+        monkeypatch.setattr(orch, "domain_whois", _whois_at_barrier)
+        monkeypatch.setattr(orch, "detect_tech_stack", _tech_at_barrier)
 
-        started = time.monotonic()
         report = await orch.osint_full_check(
             "acme.com",
             include_sanctions=False,
             include_tech_stack=True,
             include_linkedin=False,
         )
-        elapsed = time.monotonic() - started
 
-        assert elapsed < 0.6, f"各层没有并发（耗时 {elapsed:.2f}s）"
+        assert sorted(entered) == ["tech", "whois"], "两层没有同时开始"
         assert report["layers"]["domain_intel"]["registered"] is True
         assert report["layers"]["tech_stack"]["technologies"] == ["nginx"]
+        assert not report["layers"]["domain_intel"].get("error")
+        assert not report["layers"]["tech_stack"].get("error")
 
 
 class TestLayerTimeout:

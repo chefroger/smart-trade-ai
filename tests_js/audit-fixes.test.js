@@ -204,3 +204,10 @@ test('验厂打印与长图过滤家庭称谓', () => {
   assert.match(src, /const safe = _vPrivateFilter\(text\)/);
   assert.match(src, /_vPrivateFilter\(pay\.risks\)/);
 });
+
+// P2：待办无截止日显示「未定日期」，并有原因输入
+test('待办显示未定日期与原因', () => {
+  assert.match(SRC, /未定日期/);
+  assert.match(SRC, /id="todo-add-reason"/);
+  assert.match(SRC, /原因：/);
+});
