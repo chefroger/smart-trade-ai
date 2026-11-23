@@ -163,6 +163,15 @@ class TestFactTools:
                 "target": "acme.com", "field": "法定代表人", "value": "张三",
             })
             started = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
+            # 等任务结束再离开：后台线程继续跑会与下一个用例的 init_db 抢锁
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                payload = json.loads(tools.handle_osint_job_result(
+                    {"job_id": started["job_id"]},
+                ))
+                if payload["job"]["status"] in ("done", "failed", "cancelled", "partial"):
+                    break
+                time.sleep(0.02)
         assert started["known_facts"] == {}
         assert started["unverified_facts"]["法定代表人"]["values"] == ["张三"]
         assert started["unverified_facts"]["法定代表人"]["note"] == "上次未能核实"
