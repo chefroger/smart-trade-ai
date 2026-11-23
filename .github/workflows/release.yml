@@ -36,7 +36,8 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          # 与部署一致：Hermes ≥0.21.6 只提供 3.14 的依赖集，用 3.12 装会失败
+          python-version: "3.14"
 
       - run: python -m pip install --upgrade pip
 
@@ -45,10 +46,23 @@ jobs:
         shell: bash
         run: ${{ matrix.setup-cmd }}
 
-      # Hermes（失败不阻断）
-      - name: Install Hermes Agent
+      # Hermes 是打包版运行时的一部分：装不上就说明这个 .app 里没有 AI，
+      # 必须让构建失败，而不是产出一个坏包（2026-11-23 审计 P2）。
+      - name: Install Hermes Agent (required)
         run: pip install hermes-agent
-        continue-on-error: true
+
+      - name: Verify Hermes import
+        shell: bash
+        run: |
+          python -c "import run_agent, hermes_cli; print('Hermes:', getattr(hermes_cli, '__version__', 'unknown'))"
+
+      - name: Record Hermes version
+        id: hermes
+        shell: bash
+        run: |
+          HERMES_VER="$(python -c "import hermes_cli; print(getattr(hermes_cli, '__version__', 'unknown'))")"
+          echo "ver=$HERMES_VER" >> "$GITHUB_OUTPUT"
+          echo "Hermes agent version: $HERMES_VER" >> "$GITHUB_STEP_SUMMARY"
 
       # 清理旧构建
       - name: Clean old builds
