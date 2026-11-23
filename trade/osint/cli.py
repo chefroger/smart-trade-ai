@@ -35,7 +35,7 @@ _USAGE = (
     "  --target=  显式指定目标（含空格时可直接写，不必加引号）\n"
     "  --budget=  全局时间预算（秒，默认 150）\n"
     "  --progress 向 stderr 逐层输出 JSONL 进度事件\n"
-    "  目标可加前缀：person:\"Matthew Busel\" / company:\"ACME Trading\" / username:Mattbusel"
+    "  目标可加前缀：person:\"Jane Doe\" / company:\"ACME Trading\" / username:janedoe"
 )
 
 

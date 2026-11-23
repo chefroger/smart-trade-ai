@@ -113,7 +113,7 @@ injection_prompt: |
   公开来源（RDAP、证书透明度、被动 DNS、Wayback、GitHub、GLEIF、EU VIES、
   美国纽约/科罗拉多州登记、SEC EDGAR、GDELT 新闻、Gravatar、用户名跨站检索、
   法国/挪威/巴西登记）/LinkedIn dork 指令，并给出综合评分与红旗。
-  人名目标可用 `person:` 前缀（如 `person:"Matthew Busel"`），公司名可用 `company:` 强制指定。
+  人名目标可用 `person:` 前缀（如 `person:"Jane Doe"`），公司名可用 `company:` 强制指定。
   **调用终端工具时必须传 `timeout=600`**：各层并发执行、默认总预算 150 秒，但 holehe 单层可达 90 秒，
   终端默认超时会提前掐断整条命令。
   **结论照抄命令输出**：它标注降级的（如制裁源不可用）如实转述，不要替它补全、
@@ -272,10 +272,10 @@ injection_prompt: |
       python -m trade.osint <邮箱|域名|公司名|人名>
       python -m trade.osint <目标> --json        # 需要结构化数据时
       python -m trade.osint --target="Acme Corp" # 含空格时用 --target=
-      python -m trade.osint --target='person:Matthew Busel'   # 显式按个人背调
+      python -m trade.osint --target='person:Jane Doe'   # 显式按个人背调
       python -m trade.osint --target='company:ACME Trading'   # 强制按公司
       python -m trade.osint --target='domain:acme.com'        # 显式按域名（域名层必跑）
-      python -m trade.osint --target='username:Mattbusel'     # 用户名跨站检索
+      python -m trade.osint --target='username:janedoe'     # 用户名跨站检索
 
   **终端工具调用一律传 `timeout=600`**：各层并发执行，单层 holehe 最多 90 秒，
   终端默认超时会提前截断整条命令（报告只出来一半）。

@@ -151,7 +151,7 @@ Phase 3: 深度背调 (Deep Verification)
        python -m trade.osint <邮箱|域名|公司名|人名>
        python -m trade.osint <目标> --json        # 需要结构化数据时
        python -m trade.osint --target="Acme Corp" # 含空格时用 --target=
-       python -m trade.osint --target='person:Matthew Busel'  # 显式按个人背调
+       python -m trade.osint --target='person:Jane Doe'  # 显式按个人背调
 
    覆盖：邮箱注册检测（holehe）/ WHOIS（RDAP 补位）/ 企业邮箱验证 / 技术栈 /
    制裁名单（OFAC SDN/非 SDN、US CSL、UN、EU、UK）/ 公开来源（RDAP、CT 子域名、

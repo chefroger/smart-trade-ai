@@ -792,7 +792,7 @@ def _resolve_entity_name(domain: str | None, *, fetcher=None) -> str | None:
             if m:
                 title = re.sub(r"\s+", " ", m.group(1)).strip()
                 # 去掉分隔符后的后缀："ACME Corp | Official Site" -> "ACME Corp"；
-                # 冒号也要切（"Tensorust: the money is in the join" → "Tensorust"）
+                # 冒号也要切（"Example Co: the money is in the join" → "Example Co"）
                 title = re.split(r"\s*[|\-–—:]\s*", title)[0].strip()
                 if len(title) >= 3:
                     return title
