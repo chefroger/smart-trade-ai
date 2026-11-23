@@ -48,9 +48,22 @@ def _next_delay(failed: bool, fail_streak: int, interval: float) -> float:
     return _BACKOFF_SECONDS[min(fail_streak, len(_BACKOFF_SECONDS) - 1)]
 
 
+def _tokenizer_marker():
+    from trade.osint.sanctions.store import db_path
+
+    return db_path().parent / ".tokenizer_v2"
+
+
 def _fresh_names(sources: tuple[Source, ...], now: float) -> set[str]:
-    """fetched_at 在 20h 内的名单名（解析失败按不新鲜处理）。"""
+    """fetched_at 在 20h 内的名单名（解析失败按不新鲜处理）。
+
+    升级到新归一化规则（剥中文后缀/停用词）后，旧 tkey 不能直接复用：
+    标记文件不存在时视为全部不新鲜，强制刷新一次重建 token。
+    """
     from datetime import UTC, datetime
+
+    if not _tokenizer_marker().is_file():
+        return set()
 
     conn = _connect()
     fresh: set[str] = set()
@@ -142,6 +155,14 @@ def refresh_all(
                 results[source.name] = {"ok": False, "error": str(exc)}
     finally:
         conn.close()
+    # 至少一份成功 → 记录归一化版本：之后 20h 新鲜跳过才生效
+    if any(item.get("ok") and not item.get("skipped") for item in results.values()):
+        try:
+            marker = _tokenizer_marker()
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("2\n", encoding="utf-8")
+        except OSError:
+            logger.warning("写入 tokenizer 版本标记失败（下次仍会全量刷新）")
     return results
 
 

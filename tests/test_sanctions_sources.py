@@ -361,3 +361,20 @@ class TestRefreshBackoff:
             fetch=lambda source: _parse(src), sources=(src,), skip_fresh=True)
         assert results["CSL"]["ok"] is True
         assert not results["CSL"].get("skipped")
+
+    def test_missing_tokenizer_marker_forces_refresh(self, sanctions_db):
+        """升级后归一化规则变化：没有新版标记时不能跳过刷新（否则旧 tkey 残留）。"""
+        from trade.osint.sanctions import loader
+
+        src = _source("CSL", "csl", ("csl.csv",))
+        loader.refresh_all(fetch=lambda source: _parse(src), sources=(src,))
+        loader._tokenizer_marker().unlink()
+        calls: list[str] = []
+
+        def _boom(source):
+            calls.append(source.name)
+            raise RuntimeError("should refresh")
+
+        results = loader.refresh_all(fetch=_boom, sources=(src,), skip_fresh=True)
+        assert calls == ["CSL"]
+        assert results["CSL"]["ok"] is False
