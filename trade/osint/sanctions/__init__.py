@@ -62,6 +62,8 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
                     "matched_field": str,   # exact_name/name_contains/name_contained_in_query/name_similar
                     "matched_value": str,   # 匹配到的实体名称
                     "score": float,         # 置信度 0.0-1.0
+                    "confirmation": str,    # confirmed / possible
+                    "person": bool,         # 个人条目（姓名一致不足以确认身份）
                     "country": str,         # 实体所在国家（有的名单不提供，为空）
                 },
                 ...
@@ -78,10 +80,16 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
         hit.get("confirmation") == "confirmed" for hit in hits
     )
     possible_count = sum(1 for hit in hits if hit.get("confirmation") == "possible")
+    person_possible = any(
+        hit.get("person") and hit.get("confirmation") == "possible" for hit in hits
+    )
 
     # ── 风险判定 ──────────────────────────────────────────────────────────
     if exact_match_found:
         risk_level = "high"
+    elif person_possible:
+        # 个人只有姓名一致：撞名极常见，不能给 high /「拒绝交易」（W1）
+        risk_level = "medium"
     elif possible_count >= 3:
         risk_level = "medium"  # 多个疑似/同名匹配，需人工核查
     elif hits:
@@ -95,6 +103,11 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
     # ── 行动建议 ──────────────────────────────────────────────────────────
     if exact_match_found:
         suggestion = "命中制裁名单（精确匹配），强烈建议拒绝交易或咨询法律部门。"
+    elif person_possible:
+        suggestion = (
+            "发现同名个人匹配（非精确）：姓名相同不足以确认身份，"
+            "需人工核对出生日期、国籍或证件号后再决定。"
+        )
     elif risk_level == "medium":
         suggestion = "发现疑似匹配项，建议进一步人工核查，确认是否为同一家公司。"
     elif risk_level == "low":

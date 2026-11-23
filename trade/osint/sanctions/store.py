@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import difflib
 import os
 import sqlite3
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from trade.osint.sanctions.normalize import (
     FUZZY_THRESHOLD,
     HIT_THRESHOLD,
     SHORT_NAME_CHARS,
+    STOPWORDS,
     core_tokens,
     normalize_name,
     token_key,
@@ -325,6 +327,73 @@ def _candidates(conn: sqlite3.Connection, q_tokens: frozenset[str]) -> list[sqli
     ).fetchall()
 
 
+def _person_spelling_variant(q_core, entry_core) -> bool:
+    """姓名拼写变体（Victor ↔ Viktor）：只对个人条目放宽一个 token（W1）。"""
+    if len(q_core) < 2:
+        return False
+    q_only = q_core - entry_core
+    e_only = entry_core - q_core
+    if len(q_only) != 1 or not (1 <= len(e_only) <= 2):
+        return False
+    missing = next(iter(q_only))
+    return any(
+        difflib.SequenceMatcher(None, missing, candidate).ratio() >= 0.8
+        for candidate in e_only
+    )
+
+
+_PERSON_ORG_TOKENS = frozenset({
+    "bank", "airlines", "airways", "shipping", "line", "lines", "ministry",
+    "agency", "committee", "council", "fund", "foundation", "university",
+    "hospital", "institute", "association", "authority", "bureau",
+    "laboratories", "laboratory", "labs", "electronics", "companies",
+})
+
+# 常见中文姓氏（拼音）。CSL 的 BIS 等来源没有 type 字段，只能靠
+# 「两段式 姓+名」识别 "Wang Wei" 这类个人；首词是姓氏才启用，
+# 避免把 "Samsung Electronics" 这类公司名误判成个人。
+_CN_SURNAMES = frozenset({
+    "wang", "zhang", "li", "liu", "chen", "yang", "huang", "zhao", "wu",
+    "zhou", "xu", "sun", "ma", "zhu", "hu", "guo", "he", "gao", "lin",
+    "luo", "zheng", "liang", "xie", "song", "tang", "han", "feng", "deng",
+    "cao", "peng", "zeng", "xiao", "tian", "dong", "pan", "yuan", "cai",
+    "jiang", "yu", "du", "ye", "cheng", "su", "wei", "lv", "ding", "ren",
+    "shen", "yao", "lu", "cui", "zhong", "tan", "qiu", "qin", "fan", "jin",
+    "shi", "hou", "shao", "meng", "long", "wan", "duan", "lei", "qian",
+    "yin", "gu", "lai", "gong", "wen", "pang",
+})
+
+
+def _is_person_row(row: sqlite3.Row, tokens: list[str]) -> bool:
+    """该条目是否按个人处理（W1）。
+
+    优先用解析层标的 kind；老库没有 person 标记时退到结构判断：
+      - 一次逗号分成两段、无数字、无公司后缀、总 token ≤3（"WANG, Wei"）
+      - 无逗号的两段式中文姓名（"Wang Wei"；CSL 的 BIS 行没有 type 字段）
+    """
+    if row["kind"] == "person":
+        return True
+    # 老库的别名行 kind='alias'，同样允许结构判断
+    if row["kind"] not in ("entity", "alias"):
+        return False
+    raw = str(row["name"] or "")
+    if any(ch.isdigit() for ch in raw):
+        return False
+    if any(token in STOPWORDS or token in _PERSON_ORG_TOKENS for token in tokens):
+        return False
+    if raw.count(",") == 1:
+        left, right = (part.strip() for part in raw.split(",", 1))
+        if not left or not right:
+            return False
+        # "BOUT, Viktor Anatolijevitch" 这类含父名的三段也算个人
+        return len(tokens) <= 3 and len(left.split()) <= 3 and len(right.split()) <= 3
+    words = raw.split()
+    if len(words) == 2 and all(word.isalpha() for word in words):
+        # 姓在前（"Wang Wei"）或名在前（"Jack Wang"）都算
+        return any(word.casefold() in _CN_SURNAMES for word in words)
+    return False
+
+
 def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]:
     """在本地库中匹配名称，返回按置信度降序的命中列表。
 
@@ -361,9 +430,15 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
 
     best: dict[int, dict] = {}
 
-    def consider(row: sqlite3.Row, score: float, field: str, confirmation: str) -> None:
+    def consider(
+        row: sqlite3.Row, score: float, field: str, confirmation: str, *,
+        person: bool = False,
+    ) -> None:
         if score < (1.0 if is_short else HIT_THRESHOLD):
             return
+        # 个人只有姓名一致（没有出生日期/证件号佐证）→ 不能当 confirmed
+        if person:
+            confirmation = "possible"
         current = best.get(row["id"])
         if current is None or score > current["score"]:
             best[row["id"]] = {
@@ -373,11 +448,16 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
                 "matched_value": row["name"],
                 "score": round(score, 3),
                 "confirmation": confirmation,
+                "person": person,
                 "country": row["country"] or "",
             }
 
     for row in exact_rows:
-        consider(row, 1.0, "exact_name", "confirmed")
+        consider(
+            row, 1.0, "exact_name", "confirmed",
+            # 结构判断用条目自身的 token（老库没有 person 标记时靠它）
+            person=_is_person_row(row, (row["tkey"] or "").split()),
+        )
 
     if q_core:
         for row in candidates:
@@ -390,26 +470,50 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
                 continue
             if entry_core == q_core:
                 # 泛词剥掉后核心一致。单 token 核心只有在短名/品牌查询里才算
-                # confirmed —— 否则「Shenzhen Technology Co Ltd」会把所有
-                # Shenzhen 开头的实体都判成精确命中。
+                # confirmed；非短名查询不再产出「SHENZHEN」这类单 token 疑似命中
+                # （W1 验收）。
                 if len(q_core) >= 2 or is_short:
-                    consider(row, 1.0, "core_exact", "confirmed")
-                    continue
-                consider(row, 0.9, "core_exact_weak", "possible")
+                    consider(
+                        row, 1.0, "core_exact", "confirmed",
+                        person=_is_person_row(row, entry_tokens),
+                    )
                 continue
             if is_short:
-                continue  # 短名只认精确/核心精确
+                # 短品牌名（Rosneft / Huawei）允许核心 token 是条目核心的子集，
+                # 但要求 token 足够长且条目核心 ≤2，避免 "ABC" 这类泛短名；
+                # 仅在短名分支启用，不影响 W1 的 Shenzhen 长问题验收。
+                if (len(q_core) == 1 and len(entry_core) <= 2
+                        and q_core < entry_core
+                        and len(next(iter(q_core))) >= 6):
+                    consider(
+                        row, 1.0, "core_exact", "confirmed",
+                        person=_is_person_row(row, entry_tokens),
+                    )
+                continue
             if q_core <= entry_core or entry_core <= q_core:
                 smaller = len(q_core) if q_core <= entry_core else len(entry_core)
                 larger = len(entry_core) if q_core <= entry_core else len(q_core)
                 field = "name_contains" if q_core <= entry_core else "name_contained_in_query"
-                consider(row, min(smaller / larger * 1.2, 0.95), field, "possible")
+                consider(
+                    row, min(smaller / larger * 1.2, 0.95), field, "possible",
+                    person=_is_person_row(row, entry_tokens),
+                )
             else:
                 union = len(q_core | entry_core)
                 if union:
                     similarity = len(q_core & entry_core) / union
                     if similarity >= FUZZY_THRESHOLD:
-                        consider(row, min(similarity * 0.9, 0.9), "name_similar", "possible")
+                        consider(
+                            row, min(similarity * 0.9, 0.9), "name_similar",
+                            "possible", person=_is_person_row(row, entry_tokens),
+                        )
+                    elif (
+                        (row["kind"] == "person" or "," in str(row["name"] or ""))
+                        and _is_person_row(row, entry_tokens)
+                        and _person_spelling_variant(q_core, entry_core)
+                    ):
+                        # 拼写变体只给 possible，不能当确认命中
+                        consider(row, 0.8, "name_similar", "possible", person=True)
 
     hits = list(best.values())
 

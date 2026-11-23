@@ -14,12 +14,29 @@ from __future__ import annotations
 
 import csv
 import io
+import sys
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from trade.osint.constants import _current_opener
+
+
+@contextmanager
+def _large_csv_fields():
+    """解析名单期间临时放宽 csv 单字段上限（CSL 有超长字段）。
+
+    **不能进程级全局放宽**：`trade/doc_extract.py` 依赖默认的 131072
+    上限拒绝超大单元格（防止内存膨胀），全局提高会静默拆掉那道闸
+    （测试 `test_huge_csv_field_returns_error` 钉住）。
+    """
+    previous = csv.field_size_limit()
+    csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
+    try:
+        yield
+    finally:
+        csv.field_size_limit(previous)
 
 # ── 下载限制 ────────────────────────────────────────────────────────────────
 # 只允许这些官方主机（白名单写死，避免配置被改成任意地址）
@@ -250,18 +267,22 @@ def _clean(cell: str | None) -> str:
 
 
 def parse_source(source: Source, payloads: list[bytes]) -> ParsedList:
-    """按 source.kind 分派到具体解析器。"""
+    """按 source.kind 分派到具体解析器（CSV 系临时放宽单字段上限）。"""
     if source.kind in ("ofac_sdn", "ofac_cons"):
-        return _parse_ofac(source, payloads)
+        with _large_csv_fields():
+            return _parse_ofac(source, payloads)
     text = _decode(payloads[0], source.kind)
     if source.kind == "csl":
-        return _parse_csl(source, text)
+        with _large_csv_fields():
+            return _parse_csl(source, text)
     if source.kind == "un":
         return _parse_un(source, text)
     if source.kind == "eu":
-        return _parse_eu(source, text)
+        with _large_csv_fields():
+            return _parse_eu(source, text)
     if source.kind == "uk":
-        return _parse_uk(source, text)
+        with _large_csv_fields():
+            return _parse_uk(source, text)
     raise ValueError(f"未知名单类型: {source.kind}")
 
 
@@ -293,9 +314,10 @@ def _parse_ofac(source: Source, payloads: list[bytes]) -> ParsedList:
                 country_by_entity[entity_id] = country
 
     rows: list[tuple[str, str, str]] = []
+    entity_kind: dict[str, str] = {}
     primary = 0
     rows_total = 0
-    # PRIM：ent_num, name, type, program, ...
+    # PRIM：ent_num, name, type（individual/entity/vessel）, program, ...
     for row in csv.reader(io.StringIO(prim_text)):
         if not any(cell.strip() for cell in row):
             continue
@@ -306,7 +328,11 @@ def _parse_ofac(source: Source, payloads: list[bytes]) -> ParsedList:
         if not name:
             continue
         entity_id = row[0].strip()
-        rows.append((name, country_by_entity.get(entity_id, ""), "entity"))
+        # W1：个人与实体分开标，制裁命中分级要用
+        raw_type = _clean(row[2]).casefold() if len(row) > 2 else ""
+        kind = "person" if "individual" in raw_type or "person" in raw_type else "entity"
+        entity_kind[entity_id] = kind
+        rows.append((name, country_by_entity.get(entity_id, ""), kind))
         primary += 1
 
     # ALT：ent_num, alt_num, alt_type, alt_name, ...
@@ -318,7 +344,11 @@ def _parse_ofac(source: Source, payloads: list[bytes]) -> ParsedList:
         if not alias:
             continue
         entity_id = row[0].strip()
-        rows.append((alias, country_by_entity.get(entity_id, ""), "alias"))
+        rows.append((
+            alias,
+            country_by_entity.get(entity_id, ""),
+            entity_kind.get(entity_id, "entity"),
+        ))
         aliases += 1
 
     return ParsedList(
@@ -341,13 +371,15 @@ def _parse_csl(source: Source, text: str) -> ParsedList:
     for record in reader:
         rows_total += 1
         name = _clean(record.get("name"))
+        raw_type = _clean(record.get("type")).casefold()
+        kind = "person" if "individual" in raw_type else "entity"
         if name:
-            rows.append((name, "", "entity"))
+            rows.append((name, "", kind))
             primary += 1
         for alias in (_clean(record.get("alt_names")) or "").split(";"):
             alias = _clean(alias)
             if alias and alias.casefold() != name.casefold():
-                rows.append((alias, "", "alias"))
+                rows.append((alias, "", kind))
                 aliases += 1
     return ParsedList(
         label=source.label, source_url=source.urls[0],
@@ -374,12 +406,12 @@ def _parse_un(source: Source, text: str) -> ParsedList:
                 if (value.text or "").strip():
                     country = value.text.strip()
                     break
-            rows.append((name, country, "entity"))
+            rows.append((name, country, "person"))
             primary += 1
         for alias in individual.findall("./INDIVIDUAL_ALIAS"):
             alias_name = (alias.findtext("ALIAS_NAME") or "").strip()
             if alias_name:
-                rows.append((alias_name, "", "alias"))
+                rows.append((alias_name, "", "person"))
                 aliases += 1
 
     for entity in root.findall("./ENTITIES/ENTITY"):
@@ -423,7 +455,9 @@ def _parse_eu(source: Source, text: str) -> ParsedList:
         if key in seen:
             continue
         seen.add(key)
-        rows.append((name, "", "entity"))
+        subject_type = _clean(record.get("Entity_SubjectType")).upper()
+        kind = "person" if subject_type == "P" else "entity"
+        rows.append((name, "", kind))
     return ParsedList(
         label=source.label, source_url=source.urls[0],
         primary=len(rows), aliases=0, rows_total=rows_total, rows=rows,
@@ -431,7 +465,12 @@ def _parse_eu(source: Source, text: str) -> ParsedList:
 
 
 def _parse_uk(source: Source, text: str) -> ParsedList:
-    """UK CSV：首行是 Report Date，第二行才是表头；姓名在 Name 1..6。"""
+    """UK CSV：首行是 Report Date，第二行才是表头；姓名在 Name 1..6。
+
+    W1：`Designation Type` 明确区分 Individual / Entity（2026-11 实测
+    6629 条个人、2562 条实体），个人行必须标 person，否则同名个人会被
+    当成实体判 confirmed。
+    """
     first_newline = text.find("\n")
     body = text[first_newline + 1:] if first_newline >= 0 else text
     reader = csv.DictReader(io.StringIO(body))
@@ -450,8 +489,17 @@ def _parse_uk(source: Source, text: str) -> ParsedList:
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        kind = "alias" if "alias" in (_clean(record.get("Name type")) or "").casefold() else "entity"
-        if kind == "alias":
+        designation = (_clean(record.get("Designation Type")) or "").casefold()
+        is_alias = "alias" in (_clean(record.get("Name type")) or "").casefold()
+        # 个人：Designation Type = Individual；其余按实体处理。
+        # 个人的别名同样标 person（姓名字段没有生日/证件号，撞名必须降级）。
+        if "individual" in designation:
+            kind = "person"
+        elif is_alias:
+            kind = "alias"
+        else:
+            kind = "entity"
+        if is_alias:
             aliases += 1
         rows.append((name, "", kind))
     return ParsedList(

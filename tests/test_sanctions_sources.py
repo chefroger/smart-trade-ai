@@ -81,6 +81,18 @@ class TestParsers:
         assert parsed.aliases >= 2, "alt_names 用分号分隔多个别名"
         assert any("BANK VTB" in row[0].upper() for row in parsed.rows)
 
+    def test_csl_long_field_does_not_abort_parse(self):
+        """W1 依赖 CSL 的人类型：字段超 131072 时不能整份名单解析失败。"""
+        long_alias = "LONGALIAS" * 25_000  # 225000 字符 > csv 默认上限
+        payload = (
+            "name,type,alt_names\n"
+            f"ACME TRADING LLC,Entity,{long_alias}\n"
+        ).encode()
+        parsed = parse_source(_source("CSL", "csl", ("csl.csv",)), [payload])
+        assert parsed.primary == 1
+        assert parsed.aliases == 1
+        assert parsed.rows_total == 1
+
     def test_un_xml_names_and_aliases(self):
         parsed = _parse(_source("UN", "un", ("un.xml",)))
         names = [row[0] for row in parsed.rows]
@@ -102,13 +114,18 @@ class TestParsers:
 
     def test_uk_report_date_line_and_dedup(self):
         parsed = _parse(_source("UK", "uk", ("uk.csv",)))
-        names = [row[0] for row in parsed.rows]
+        kinds = {row[0]: row[2] for row in parsed.rows}
+        names = list(kinds)
         # 4 行数据、1 组重复（同 Unique ID 同名）→ 3 条姓名
         assert parsed.rows_total == 4
         assert len(names) == 3
         assert "HAJI KHAIRULLAH MONEY EXCHANGE" in names
         assert "SMITH JOHN" in names
         assert parsed.aliases == 1
+        # W1：Designation Type 明确区分个人与实体（个人别名同样标 person）
+        assert kinds["SMITH JOHN"] == "person"
+        assert kinds["JOHNNY SMITH"] == "person"
+        assert kinds["HAJI KHAIRULLAH MONEY EXCHANGE"] == "entity"
 
 
 # ── 归一化与匹配规则 ────────────────────────────────────────────────────────
@@ -148,10 +165,13 @@ class TestLocalMatching:
 
         self._seed_cons()
 
-        # 工单验收：First Last 命中 LAST, First
+        # 工单验收：First Last 命中 LAST, First；个人姓名只给 possible/medium（W1）
         exact = check_sanctions("Mohammed Abu Teir")
-        assert exact["is_sanctioned"] is True
-        assert any(hit["matched_value"] == "ABU TEIR, Mohammed" for hit in exact["hits"])
+        assert exact["is_sanctioned"] is False
+        assert exact["risk_level"] == "medium"
+        assert any(hit["matched_value"] == "ABU TEIR, Mohammed"
+                   and hit["confirmation"] == "possible" for hit in exact["hits"])
+        assert "拒绝" not in exact["suggestion"]
 
         # 别名（ALT.CSV）命中
         alias = check_sanctions("Mohammed Abu Tair")
@@ -174,7 +194,7 @@ class TestLocalMatching:
         from trade.osint.sanctions import check_sanctions
 
         result = check_sanctions("Mohammed Abu Teir")
-        assert result["is_sanctioned"] is True
+        assert result["hits"], "本地命中消失"
 
     def test_offline_query_is_fast(self, sanctions_db):
         """本地查询目标 < 200ms（1 万条规模的代表性测试）。"""
@@ -303,14 +323,103 @@ class TestMatchQuality:
         assert result["is_sanctioned"] is True
         assert any(h["matched_value"] == "Viktor Bout" for h in result["hits"])
 
-    def test_same_name_person_is_confirmed_but_distinct_level(self, sanctions_db):
+    def test_same_name_person_is_possible_not_confirmed(self, sanctions_db):
+        """W1 推翻 11-22 的「个人也算 confirmed」：姓名一致不足以确认身份。"""
         from trade.osint.sanctions import check_sanctions
 
         self._seed([("WANG WEI", "entity")])
         result = check_sanctions("Wang Wei")
 
-        assert result["is_sanctioned"] is True
+        assert result["is_sanctioned"] is False
+        assert result["hits"][0]["confirmation"] == "possible"
+
+    def test_person_names_are_possible_medium(self, sanctions_db):
+        """W1：只有姓名一致时不能 high/拒绝；改为 possible + medium。"""
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([
+            ("WANG WEI", "person"),
+            ("ZHANG WEI", "person"),
+            ("LI NA", "person"),
+        ])
+        for query in ("Wang Wei", "Zhang Wei", "Li Na"):
+            result = check_sanctions(query)
+            assert result["is_sanctioned"] is False, query
+            assert result["risk_level"] == "medium", query
+            assert result["hits"][0]["confirmation"] == "possible", query
+            assert "拒绝" not in result["suggestion"], query
+            assert "出生日期" in result["suggestion"], query
+
+    def test_entities_remain_confirmed_high(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([
+            ("HUAWEI TECHNOLOGIES CO LTD", "entity"),
+            ("ROSNEFT OIL COMPANY", "entity"),
+            ("ISLAMIC REVOLUTIONARY GUARD CORPS", "entity"),
+        ])
+        for query in ("HUAWEI", "Rosneft", "Islamic Revolutionary Guard Corps"):
+            result = check_sanctions(query)
+            assert result["is_sanctioned"] is True, query
+            assert result["risk_level"] == "high", query
+            assert result["hits"][0]["confirmation"] == "confirmed", query
+
+    def test_shenzhen_no_single_token_suspect(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([
+            ("SHENZHEN", "entity"),
+            ("SHENZHEN A TECHNOLOGY CO LTD", "entity"),
+        ])
+        result = check_sanctions("Shenzhen Technology Co Ltd")
+        assert all(hit["matched_value"] != "SHENZHEN" for hit in result["hits"])
+
+    def test_person_spelling_variant_is_possible(self, sanctions_db):
+        """W1：Victor Bout 至少要有 possible（Victor ↔ Viktor）。"""
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("BOUT, Viktor Anatolijevitch", "person")])
+        result = check_sanctions("Victor Bout")
+        assert result["hits"], "拼写变体完全没有命中"
+        assert result["risk_level"] == "medium"
+        assert result["hits"][0]["confirmation"] == "possible"
+
+    def test_structural_person_heuristic(self, sanctions_db):
+        """老库没有 person kind 时，'WANG, Wei' 这种结构按个人处理。"""
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("WANG, Wei", "entity")])
+        result = check_sanctions("Wang Wei")
+        assert result["hits"][0]["confirmation"] == "possible"
+        assert result["risk_level"] == "medium"
+
+    def test_untyped_two_token_chinese_name_is_person(self, sanctions_db):
+        """CSL 的 BIS 行没有 type：无逗号两段式中文姓名按个人处理。"""
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("Wang Wei", "entity")])
+        result = check_sanctions("Wang Wei")
+        assert result["hits"][0]["confirmation"] == "possible"
+        assert result["risk_level"] == "medium"
+        assert "拒绝" not in result["suggestion"]
+
+    def test_untyped_reverse_order_chinese_name_is_person(self, sanctions_db):
+        """别名常是「名 姓」（Jack Wang），同样按个人处理。"""
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("Jack Wang", "entity")])
+        result = check_sanctions("Jack Wang")
+        assert result["hits"][0]["confirmation"] == "possible"
+        assert result["risk_level"] == "medium"
+
+    def test_two_token_company_is_not_person(self, sanctions_db):
+        """姓氏启发式不能把 'Samsung Electronics' 这类公司当个人。"""
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([("Samsung Electronics", "entity")])
+        result = check_sanctions("Samsung Electronics")
         assert result["hits"][0]["confirmation"] == "confirmed"
+        assert result["risk_level"] == "high"
 
     def test_chinese_company_suffix_stripped(self, sanctions_db):
         from trade.osint.sanctions import check_sanctions
