@@ -253,3 +253,24 @@ test('顶栏同时接管两个状态元素，画像页优先', () => {
   assert.strictEqual(env.byId['app-top-status'].textContent, 'B2B 外贸助手 · TRADE');
   assert.strictEqual(env.byId['sys-status'].textContent, 'B2B 外贸助手 · TRADE');
 });
+
+test('verdict=limited 显示「仅完成制裁筛查」，不写成已完成', () => {
+  const env = loadComponent();
+  const { wait } = mountTask(env);
+  wait.push({ type: 'verdict', rating: 'limited', unverified: [] });
+  assert.strictEqual(wait.final, true);
+  assert.strictEqual(wait.phaseKey, 'acquired');
+  // 终态文案与大动画读数都必须是「仅完成制裁筛查」
+  assert.match(wait.zhEl.textContent, /仅完成制裁筛查/);
+  // 日志行是 span 嵌套：桩 DOM 不合成 textContent，手动收集每行文本
+  const dump = wait.logEl.children.map(function (row) {
+    return (row.children || []).map(function (c) {
+      return String(c.textContent || '') + (c.children || []).map(function (g) {
+        return String(g.textContent || '');
+      }).join('');
+    }).join(' ');
+  }).join(' | ');
+  assert.match(dump, /仅完成制裁筛查/);
+  assert.ok(!/已完成$/.test(wait.zhEl.textContent), '不得把 limited 显示成已完成');
+  wait.destroy();
+});

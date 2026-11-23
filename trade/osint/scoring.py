@@ -176,14 +176,25 @@ def assess_verification(
 def compute_verdict(
     flags: list[str],
     unverified: list[dict],
+    *,
+    target_type: str | None = None,
+    has_domain: bool = True,
+    public_hits: int = 0,
 ) -> tuple[int | None, str, int]:
-    """fail-closed 汇总：关键层没查成时不给数字结论。
+    """fail-closed 汇总：关键层没查成、或只有制裁一层核验过时不给数字结论。
+
+    Args:
+        target_type: email/domain/url/company/person（外部构造的报告可省略）
+        has_domain: 目标是否解析出可查询域名
+        public_hits: 公开来源里 status=hit 的数量（candidate 不算命中）
 
     Returns:
         (overall_score, rating, provisional_score)
 
-        关键层未核验 → overall_score 为 None（报告显示"—"），rating 为
-        "incomplete"，同时保留 provisional_score 供日志/诊断参考。
+        关键层未核验 → overall_score 为 None，rating 为 "incomplete"。
+        **人名/公司名 + 无域名 + 公开来源无命中** → rating 为 "limited"，
+        overall_score 仍为 None：本次只完成了制裁筛查，不能给 low/100 的
+        绿色结论（2026-11-23 审计 P0-B）。provisional_score 始终保留供诊断。
         已确认命中制裁 → 直接 high（结论已成立，不被「未完成」掩盖）。
     """
     score, rating = compute_risk_score(flags)
@@ -195,6 +206,14 @@ def compute_verdict(
     if any(u.get("required") for u in unverified):
         # 不输出数字：未核验时任何分数都会被读成「结论」
         return None, "incomplete", score
+
+    # 无域名 + 公开来源零命中：只跑过制裁这一层，rating 不能是 low/medium
+    if (
+        target_type in ("person", "company")
+        and not has_domain
+        and int(public_hits or 0) <= 0
+    ):
+        return None, "limited", score
 
     return score, rating, score
 
@@ -224,6 +243,13 @@ def generate_recommendations(report: dict) -> list[str]:
             f"🚫 本次背调未完成核验（{names}），结论为「未完成」，"
             "**不代表低风险**；原因与补齐方式见下方各层说明"
         )
+    if report.get("overall_rating") == "limited":
+        # 审计 P0-B：无域名、公开来源零命中 → 只有制裁层核验过。
+        # 不能让它落成「没有红旗 = 低风险」。
+        recs.insert(0, (
+            "⚠️ 本次仅完成制裁筛查（无域名、公开来源未命中），"
+            "**不是低风险结论**；补齐官网或公司注册信息后请重新背调"
+        ))
     for u in unverified:
         # 用户主动关闭的渠道：明确写出「未查」，不能当成「无风险」
         if u.get("status") == "skipped":

@@ -47,12 +47,23 @@ def format_report(report: dict[str, Any]) -> str:
     """
     lines: list[str] = []
     lines.append(f"══ 背调报告：{report.get('target', '')}（类型：{report.get('target_type', '?')}）══")
-    # 未完成核验时分数为 None：必须显示「—」，不能落到 0/100 或沿用旧分数
+    # 未完成核验 / 仅完成制裁筛查时分数为 None：必须显示「—」，
+    # 不能落到 0/100 或沿用旧分数（审计 P0-B）。
+    rating = report.get("overall_rating", "unknown")
+    rating_zh = {
+        "low": "低风险", "medium": "中风险", "high": "高风险",
+        "incomplete": "未完成核验", "limited": "仅完成制裁筛查",
+    }.get(rating, rating)
     score = report.get("overall_score")
-    score_text = f"{score}/100" if isinstance(score, int) else "—（未完成核验）"
-    lines.append(
-        f"综合评分：{score_text} ｜ 风险等级：{report.get('overall_rating', 'unknown')}"
-    )
+    if isinstance(score, int):
+        score_text = f"{score}/100"
+    elif rating == "limited":
+        score_text = "—（仅完成制裁筛查）"
+    else:
+        score_text = "—（未完成核验）"
+    lines.append(f"综合评分：{score_text} ｜ 风险等级：{rating_zh}")
+    if report.get("rating_note"):
+        lines.append(f"说明：{report['rating_note']}")
     flags = report.get("flags") or []
     lines.append("风险旗标：" + ("、".join(flags) if flags else "无"))
 

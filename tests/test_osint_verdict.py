@@ -345,3 +345,92 @@ class TestCliShowsIncomplete:
 def test_compute_risk_score_unchanged():
     assert compute_risk_score([]) == (100, "low")
     assert compute_risk_score(["sanctioned"]) == (50, "medium")
+
+
+# ── 审计 P0-B：无核验时不给 low / 100 ─────────────────────────────────────
+
+
+class TestLimitedRating:
+    def test_person_without_domain_or_hits_is_limited(self):
+        score, rating, provisional = compute_verdict(
+            [], [], target_type="person", has_domain=False, public_hits=0,
+        )
+        assert score is None, "仅完成制裁筛查时不得输出数字结论"
+        assert rating == "limited"
+        assert provisional == 100
+
+    def test_company_without_domain_or_hits_is_limited(self):
+        _, rating, _ = compute_verdict(
+            [], [], target_type="company", has_domain=False, public_hits=0,
+        )
+        assert rating == "limited"
+
+    def test_public_hit_lifts_limited(self):
+        score, rating, _ = compute_verdict(
+            [], [], target_type="company", has_domain=False, public_hits=1,
+        )
+        assert (score, rating) == (100, "low")
+
+    def test_domain_target_keeps_normal_scoring(self):
+        score, rating, _ = compute_verdict(
+            [], [], target_type="domain", has_domain=True, public_hits=0,
+        )
+        assert (score, rating) == (100, "low")
+
+    def test_sanctioned_hit_beats_limited(self):
+        score, rating, _ = compute_verdict(
+            ["sanctioned"], [], target_type="person", has_domain=False, public_hits=0,
+        )
+        assert (score, rating) == (50, "high")
+
+    def test_incomplete_takes_precedence(self):
+        score, rating, _ = compute_verdict(
+            [], [{"layer": "sanctions", "required": True, "reason": "degraded"}],
+            target_type="person", has_domain=False, public_hits=0,
+        )
+        assert (score, rating) == (None, "incomplete")
+
+
+class TestOrchestratorLimited:
+    @pytest.mark.asyncio
+    async def test_person_without_domain_gets_limited(self, monkeypatch):
+        """制裁库完整、人名无域名、公开来源零命中 → limited，不是 low/100。"""
+        import trade.osint.orchestrator as orch
+
+        monkeypatch.setattr(
+            orch, "check_sanctions",
+            lambda name, country=None: _healthy_sanctions(),
+        )
+        monkeypatch.setattr(orch, "_resolve_entity_name", lambda domain, **kw: None)
+        monkeypatch.setattr(orch, "PUBLIC_SOURCES", [])
+
+        report = await orch.osint_full_check(
+            "person:Jane Doe", include_tech_stack=False, include_linkedin=False,
+        )
+
+        assert report["overall_rating"] == "limited"
+        assert report["overall_score"] is None
+        assert report["provisional_score"] == 100
+        assert "仅完成制裁筛查" in report["rating_note"]
+        assert any("仅完成制裁筛查" in r for r in report["recommendations"])
+
+
+class TestCliShowsLimited:
+    def test_limited_renders_dash_and_note(self):
+        report = {
+            "target": "Jane Doe",
+            "target_type": "person",
+            "overall_score": None,
+            "overall_rating": "limited",
+            "provisional_score": 100,
+            "rating_note": "仅完成制裁筛查：目标没有可查询域名，公开来源也没有命中",
+            "flags": [],
+            "layers": {"sanctions": _healthy_sanctions(), "domain_intel": {"skipped": True}},
+            "unverified": [],
+            "recommendations": ["⚠️ 本次仅完成制裁筛查"],
+        }
+        text = cli.format_report(report)
+
+        assert "—（仅完成制裁筛查）" in text
+        assert "仅完成制裁筛查" in text
+        assert "/100" not in text.split("\n")[1]

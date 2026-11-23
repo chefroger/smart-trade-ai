@@ -23,6 +23,11 @@
     failed:      { en: 'ERROR',           zh: '失败' }
   };
   var SRC_STATUS = { hit: '命中', miss: '未命中', error: '出错', timeout: '超时', skipped: '跳过', done: '完成' };
+  // 评级代号 → 中文（审计 P0-B：limited = 只跑过制裁层，不是低风险）
+  var RATING_ZH = {
+    low: '低风险', medium: '中风险', high: '高风险',
+    incomplete: '未完成核验', limited: '仅完成制裁筛查', unknown: '未知'
+  };
   var MAX_ANIMATED = 2;          // 同屏最多 2 个实例在动，其余静态
   var FRAME_MS = 1000 / 30;      // 30fps 上限
 
@@ -456,8 +461,16 @@
         }
       } else if (type === 'verdict') {
         var un = (ev.unverified || []).length;
-        this._log(un ? un + ' 项未核验' : '全部来源已返回', 'hit', '评级 ' + (ev.rating || '未知'));
-        this.finish({ phase: 'acquired', zh: un ? '已完成 · ' + un + ' 项未核验' : '已完成', verdict: ev.rating });
+        var ratingZh = RATING_ZH[ev.rating] || ev.rating || '未知';
+        this._log(un ? un + ' 项未核验' : '全部来源已返回', 'hit', '评级 ' + ratingZh);
+        // limited：只完成制裁筛查，终态文案不能写成「已完成」让人误读为查全了
+        this.finish({
+          phase: 'acquired',
+          zh: ev.rating === 'limited'
+            ? '仅完成制裁筛查'
+            : (un ? '已完成 · ' + un + ' 项未核验' : '已完成'),
+          verdict: ev.rating
+        });
         return;
       } else if (type === 'error') { this._log(ev.message || '', 'bad', '错误'); this.finish({ phase: 'failed' }); return; }
       else if (type === 'cancelled') { this._log('', 'bad', '已取消'); this.finish({ phase: 'aborted' }); return; }

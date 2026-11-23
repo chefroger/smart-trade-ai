@@ -302,10 +302,28 @@ async def osint_full_check(
         has_domain=bool(lookup_domain),
         sanctions_requested=include_sanctions,
     )
-    score, rating, provisional = compute_verdict(report["flags"], report["unverified"])
-    report["overall_score"] = score          # None = 未完成核验，不展示数字
+    # 公开来源 status=hit 的数量（candidate 在未来版本里也不算命中。
+    # 审计 P0-B：人名/公司名没有域名、公开来源也零命中时，本轮实际上只跑了
+    # 制裁筛查，不能给 low/100。
+    public_hits = sum(
+        1 for item in report["sources"].values()
+        if isinstance(item, dict) and item.get("status") == "hit"
+    )
+    score, rating, provisional = compute_verdict(
+        report["flags"],
+        report["unverified"],
+        target_type=target_type,
+        has_domain=bool(lookup_domain),
+        public_hits=public_hits,
+    )
+    report["overall_score"] = score          # None = 未完成核验/仅完成制裁筛查
     report["overall_rating"] = rating
     report["provisional_score"] = provisional  # 仅供诊断，不是对外结论
+    if rating == "limited":
+        report["rating_note"] = (
+            "仅完成制裁筛查：目标没有可查询域名，公开来源也没有命中；"
+            "这不是低风险结论。补到官网或公司注册信息后请重新背调。"
+        )
 
     # ── 生成建议 ───────────────────────────────────────────────────────
     report["recommendations"] = generate_recommendations(report)

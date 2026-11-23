@@ -1620,7 +1620,13 @@ function _osintEventText(type, payload) {
     if (type === 'job_start') return '已启动（预算 ' + (payload.budget || '?') + ' 秒）';
     if (type === 'source_start') return '查询 ' + (payload.label || payload.source || '') + '…';
     if (type === 'source_done') return (payload.source || '来源') + '：' + (payload.status || '完成');
-    if (type === 'verdict') return '评级 ' + (payload.rating || '未知');
+    if (type === 'verdict') {
+        const zh = {
+            low: '低风险', medium: '中风险', high: '高风险',
+            incomplete: '未完成核验', limited: '仅完成制裁筛查',
+        }[payload.rating] || payload.rating || '未知';
+        return '评级 ' + zh;
+    }
     if (type === 'error') return '错误：' + (payload.message || '');
     if (type === 'cancelled') return '已取消';
     return type;
