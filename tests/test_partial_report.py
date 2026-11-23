@@ -334,3 +334,79 @@ async def test_stream_deadline_saves_partial_report(company):
     # 迟到答案不得作为正常回答落库
     assert all(not s.get("partial") or "未完成报告" in s["response"] for s in saved)
     time.sleep(0.05)
+
+
+class _ToolThenAnswerAgent:
+    """跑一个工具后正常返回回答（模拟正常多步对话）。"""
+
+    def __init__(self, answer: str = "这是最终回答"):
+        self.answer = answer
+        self.tool_start_callback = None
+        self.tool_complete_callback = None
+        self.enabled_toolsets = None
+
+    def chat(self, query):  # noqa: ARG002
+        if self.tool_complete_callback:
+            self.tool_complete_callback("t1", "web_search", {"query": "acme"}, "结果")
+        return self.answer
+
+    def run_conversation(self, query, task_id=None):  # noqa: ARG002
+        return {"final_response": self.chat(query)}
+
+
+@pytest.mark.asyncio
+async def test_stream_normal_answer_with_tools_saves_exactly_one(company):
+    """审计 P1-1：跑过工具的正常回答只能写一条历史，不能多出「已中止」。"""
+    import trade.api.chat as chat
+    from trade.api.models import ChatRequest
+
+    saved: list[dict] = []
+    with patch.object(chat, "create_agent",
+                      side_effect=lambda **kw: _attach_callbacks(_ToolThenAnswerAgent(), kw)), \
+         patch.object(chat, "build_query", return_value=("Q", "H")), \
+         patch.object(chat.chat_memory, "save_with_context",
+                      side_effect=lambda **kw: saved.append(kw) or {"id": 5}), \
+         patch("trade.license.check_license", return_value=(True, "")):
+        resp = await chat.trade_chat_stream(
+            ChatRequest(query="查一下 acme"), company["id"]
+        )
+        async for _ in resp.body_iterator:
+            pass
+
+    assert len(saved) == 1, f"写了 {len(saved)} 条历史：{[s['response'][:20] for s in saved]}"
+    assert "未完成报告" not in saved[0]["response"]
+    assert not saved[0]["partial"]
+
+
+@pytest.mark.asyncio
+async def test_stream_summary_race_never_writes_two_histories(company):
+    """审计 P1-1：总结成功路径本机循环 200 次，每次只能写 1 条。"""
+    import trade.api.chat as chat
+    from trade.api.models import ChatRequest
+
+    for i in range(200):
+        counter: list[int] = []
+        summary_agent = _CountingAgent(counter)
+        full_agent = _CountingAgent(counter)
+
+        def _factory(**kw):
+            return _attach_callbacks(
+                summary_agent if kw.get("enabled_toolsets") == [] else full_agent, kw,
+            )
+
+        saved: list[dict] = []
+        with patch.object(chat, "create_agent", side_effect=_factory), \
+             patch.object(chat, "build_query", return_value=("Q", "H")), \
+             patch.object(chat, "_check_chat_rate_limit", return_value=True), \
+             patch.object(chat.chat_memory, "save_with_context",
+                          side_effect=lambda **kw: saved.append(kw) or {"id": i}), \
+             patch("trade.license.check_license", return_value=(True, "")):
+            resp = await chat.trade_chat_stream(
+                ChatRequest(query="查一下 acme"), company["id"]
+            )
+            async for _ in resp.body_iterator:
+                pass
+
+        assert len(saved) == 1, (
+            f"第 {i} 次写出了 {len(saved)} 条：{[s['response'][:24] for s in saved]}"
+        )

@@ -1050,7 +1050,9 @@ async def trade_chat_stream(
         if not tools.has_completed():
             return None, None
         with partial_lock:
-            if partial_state["saved"]:
+            # 正常回答已经交付：不能再补写一条「未完成报告」（审计 P1-1）。
+            # 事件循环可能先取到 response 再进入 finally，必须在这里兜一层。
+            if delivered["ok"] or partial_state["saved"]:
                 return None, None
             partial_state["saved"] = True
         text = build_partial_report(reason, tools, evidence)
@@ -1220,8 +1222,11 @@ async def trade_chat_stream(
             resp_payload["blocks"] = reply_blocks
         if partial:
             resp_payload["partial"] = True
-        _emit_threadsafe("response", resp_payload)
+        # 先置 delivered 再发 response（审计 P1-1）：反过来的话，事件循环
+        # 可能先取到 response、break 进 finally，此时 delivered 仍为 False，
+        # finally 会再写一条「客户端断开」的未完成报告。
         delivered["ok"] = True
+        _emit_threadsafe("response", resp_payload)
         return result
 
     def _run_agent() -> str | None:
@@ -1346,8 +1351,11 @@ async def trade_chat_stream(
                     # 是超时、也不知道任务已被中止）。
                     _log.error("Agent stream exceeded %.0fs deadline; aborting", _STREAM_DEADLINE_SECONDS)
                     timed_out["value"] = True
-                    # 已跑过工具 → 留下未完成报告（partial=true），别让证据消失
-                    partial_text, _conv_id = _save_partial("超过 30 分钟自动中止")
+                    # 已跑过工具 → 留下未完成报告（partial=true），别让证据消失。
+                    # SQLite 写入放到线程里，别在 async 生成器里同步阻塞事件循环。
+                    partial_text, _conv_id = await asyncio.to_thread(
+                        _save_partial, "超过 30 分钟自动中止",
+                    )
                     message = "⏰ Agent 执行超过 30 分钟，已自动中止。请简化问题或联系支持。"
                     if partial_text:
                         message = f"{message}\n\n{partial_text}"
@@ -1405,7 +1413,7 @@ async def trade_chat_stream(
                     if timed_out["value"]
                     else "客户端断开或用户停止"
                 )
-                _save_partial(reason)
+                await asyncio.to_thread(_save_partial, reason)
             yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(
