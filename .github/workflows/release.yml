@@ -31,7 +31,8 @@ jobs:
               cd dist
               zip -r "TradeWin-${VER}-macOS-x64.zip" "TradeWin.app"
               rm -rf "TradeWin.app"
-          - os: macos-14
+          # macos-latest 目前是 Apple Silicon（macos-14 标签在公开仓库会被取消）
+          - os: macos-latest
             arch: arm64
             setup-cmd: |
               pip install -e ".[desktop]"
