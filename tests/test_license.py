@@ -874,3 +874,20 @@ class TestTrialHardening:
         ok, _ = lic.check_license()
 
         assert not ok, "较早的锚点没有被采用，试用被 license.json 重置"
+
+    def test_existing_install_backfills_anchor_on_read(self, monkeypatch, tmp_path):
+        """老安装只有 license.json：首次读取时必须补写锚点（0.9.32 回归）。"""
+        import json as _json
+
+        lic = self._isolate(monkeypatch, tmp_path)
+        path = lic._license_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            _json.dumps({"first_launch_at": datetime.datetime.now(datetime.UTC).isoformat()}),
+            encoding="utf-8",
+        )
+        assert not lic._trial_anchor_path().exists()
+
+        lic.check_license()
+
+        assert lic._trial_anchor_path().is_file(), "升级后的老安装没有补写试用锚点"

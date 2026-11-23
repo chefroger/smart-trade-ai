@@ -337,6 +337,13 @@ def _get_license_data(company_id: int | None = None) -> dict:
         earliest = _earliest_stamp(data.get("first_launch_at"), anchor)
         if earliest:
             data["first_launch_at"] = earliest
+    elif data.get("first_launch_at"):
+        # 老安装没有锚点：读到时顺手补写（失败只影响下一次，不影响本次）。
+        # 不做这步的话，升级用户删掉 license.json 仍能重置试用。
+        try:
+            _write_trial_anchor(str(data["first_launch_at"]))
+        except OSError as exc:
+            _log.warning("补写试用锚点失败（不影响使用）: %s", exc)
     return data
 
 
