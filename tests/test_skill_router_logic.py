@@ -557,3 +557,45 @@ def test_when_to_use_absent_for_unknown_skill():
     from trade.skill_router import load_when_to_use
 
     assert load_when_to_use("__no_such_skill__") == ()
+
+
+# ── 2026-11-23 工单 P0-C：人名/公司名的自然说法 ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Matthew Busel 是谁",
+        "查一下Matthew Busel这个人的资料",
+        "调查一下 Matthew Busel，tensorust.com 的创始人",
+        "查查张伟这个人",
+        "王建国是谁",
+        "Who is John Smith of Acme Inc?",
+        "这家公司有没有被制裁 Huawei",
+        "这个买家是不是骗子",
+        "Can you check who owns acme-trading.com?",
+        "查一下 Acme Trading 的资料",
+    ],
+)
+def test_person_company_phrasings_route_to_osint(query):
+    """工单 P0-C 的 10 条验收说法全部 → b2b-osint。"""
+    from trade.skill_router import match_skill
+
+    result = match_skill(query)
+    assert result is not None, f"{query!r} 没有匹配任何技能"
+    assert result["name"] == "b2b-osint", f"{query!r} 被判给了 {result['name']}"
+
+
+def test_marketing_and_outreach_still_route_correctly():
+    from trade.skill_router import match_skill
+
+    assert match_skill("LinkedIn 营销怎么做")["name"] == "b2b-linkedin-marketing"
+    assert match_skill("帮我写一封开发信给德国客户")["name"] == "b2b-cold-outreach"
+
+
+def test_plain_message_without_name_does_not_fallback_to_osint():
+    """没有像人名/公司名的片段时不能兜底成背调。"""
+    from trade.skill_router import match_skill
+
+    result = match_skill("帮我写一段产品描述")
+    assert result is None or result["name"] != "b2b-osint"

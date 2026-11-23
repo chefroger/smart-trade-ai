@@ -402,6 +402,82 @@ def _score_skills(query: str) -> list[dict]:
     return results
 
 
+# ── 人名/公司名兜底（2026-11-23 工单 P0-C）──────────────────────────────────
+# 关键词命中不了的说法（「Matthew Busel 是谁」「查查张伟这个人」）不能静默
+# 落回普通提示：那样 OSINT 协议与制裁层整层都不会跑。
+# 注意：不能用 \b —— 中文也是 Python 的 word 字符，「查一下Matthew」里
+# 下与 M 之间没有词边界，会整段漏掉。改看前后不是英文字母。
+_LATIN_NAME_RE = re.compile(
+    r"(?<![A-Za-z])[A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+){1,3}(?![A-Za-z])"
+)
+# 连写人名（MatthewBusel / MattBusel）：首字母大写 + 内部再一个大写段
+_CAMEL_NAME_RE = re.compile(
+    r"(?<![A-Za-z])[A-Z][a-z]{1,}[A-Z][A-Za-z'’\-]*(?![A-Za-z])"
+)
+_CJK_PERSON_RE = re.compile(r"([\u4e00-\u9fff]{2,4})(?:这个人|是谁|的资料)")
+# 「这个人」「她的」等代词不是姓名；「查查张伟」里的动词要剥掉再比对名单
+_CJK_PRONOMINAL = frozenset({"这个人", "那个人", "他的", "她的", "它的", "这份", "那份"})
+_CJK_VERB_PREFIXES = ("调查一下", "查一下", "查一查", "查查", "调查", "了解", "核实", "查")
+# 「有查询意图」：问句/查人动词/背调相关词，任一见效
+_NAME_INTENT_RE = re.compile(
+    r"查|调查|了解|核实|背调|是谁|谁|资料|怎么样|如何|靠谱|可信|骗子|制裁|"
+    r"法人|创始人|ceo|老板|背景|关系|"
+    r"\bwho\b|\bwhat\b|\bcheck\b|\blook\s?up\b|\binvestigate\b|\bverify\b|"
+    r"\bowns?\b|\bowner\b|\bbackground\b|\blegit\b|\bscam\b|\bsanction",
+    re.IGNORECASE,
+)
+# 这些大写词是疑问/动词，不是名字（仅用于单段提取时排除）
+_NAME_STOPWORDS = frozenset({
+    "who", "what", "which", "when", "where", "why", "how", "is", "are",
+    "check", "investigate", "verify", "tell", "this", "that", "company",
+    "linkedin", "the", "of", "and", "can", "could", "would", "should",
+    "please", "do", "does", "did", "me", "my", "our", "your", "they",
+    "their", "you",
+})
+
+_NAME_FALLBACK_SCORE = 6  # 高于常见裸关键词（3 分），低于显式调用（9999）
+
+
+def extract_osint_name(query: str) -> str | None:
+    """从自然语言里取一个像人名/公司名的片段（取不到返回 None）。
+
+    顺序：中文「张三是谁/这个人/的资料」→ 2–4 个首字母大写词 →
+    连写人名（MatthewBusel）→ 单个大写专名（排除疑问词）。
+    """
+    if not query:
+        return None
+    cjk = _CJK_PERSON_RE.search(query)
+    if cjk and cjk.group(1) not in _CJK_PRONOMINAL:
+        name = cjk.group(1)
+        for prefix in _CJK_VERB_PREFIXES:
+            if name.startswith(prefix) and len(name) > len(prefix) + 1:
+                name = name[len(prefix):]
+                break
+        if len(name) >= 2:
+            return name
+    latin = _LATIN_NAME_RE.search(query)
+    if latin:
+        return latin.group(0)
+    camel = _CAMEL_NAME_RE.search(query)
+    if camel:
+        return camel.group(0)
+    # 单个大写专名：只在有查询意图时尝试，避免把 "Check" 之类当名字
+    if _NAME_INTENT_RE.search(query):
+        for token in re.findall(
+            r"(?<![A-Za-z])[A-Z][A-Za-z'’\-]{2,}(?![A-Za-z])", query,
+        ):
+            if token.casefold() not in _NAME_STOPWORDS:
+                return token
+    return None
+
+
+def _name_fallback(query: str) -> str | None:
+    """人名样式 + 查询意图 → 返回名字片段（用于补一条 b2b-osint 命中）。"""
+    if not query or not _NAME_INTENT_RE.search(query):
+        return None
+    return extract_osint_name(query)
+
+
 def match_skills(query: str) -> list[dict]:
     """返回所有匹配的 skill 及其评分，按置信度降序排列。
 
@@ -409,8 +485,25 @@ def match_skills(query: str) -> list[dict]:
         [{"skill_name": str, "score": int, "triggers_matched": [str],
           "word_boundary_hits": int, "substring_hits": int}, ...]
     无匹配时返回空列表 []。
+
+    兜底（工单 P0-C）：关键词都没命中时，若消息含人名样式且带查询意图，
+    补一条 b2b-osint（score=_NAME_FALLBACK_SCORE）。显式 skill 调用不受影响。
     """
-    return _score_skills(query)
+    results = _score_skills(query)
+    if results and int(results[0].get("score", 0)) >= _EXPLICIT_SCORE:
+        return results  # 显式指定了别的技能：不抢
+    if not any(r.get("skill_name") == "b2b-osint" for r in results):
+        name = _name_fallback(query)
+        if name:
+            results.append({
+                "skill_name": "b2b-osint",
+                "score": _NAME_FALLBACK_SCORE,
+                "triggers_matched": [name],
+                "word_boundary_hits": 0,
+                "substring_hits": 0,
+            })
+            results.sort(key=lambda r: -int(r.get("score", 0)))
+    return results
 
 
 def match_skill(query: str) -> dict | None:
@@ -430,7 +523,9 @@ def match_skill(query: str) -> dict | None:
         完整的 skill dict（含 name, triggers, augment_prompt 等），
         或 None 表示无匹配。
     """
-    results = _score_skills(query)
+    # 走 match_skills 而不是 _score_skills：人名兜底（工单 P0-C）只在
+    # match_skills 里补分，直接读 _score_skills 会漏掉「王建国是谁」这类说法。
+    results = match_skills(query)
     if not results:
         return None
     return get_skill_by_name(results[0]["skill_name"])

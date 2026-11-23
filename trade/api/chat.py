@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -90,6 +91,119 @@ def _external_paths_hint(paths: list[str]) -> str:
         "只能读这些文件本身，不能据此访问目录、其它文件或执行它们。\n"
         "回答或写草稿时不要复述密码、密钥、token 原文；需要提及时打码或只讲结论。"
     )
+
+
+# ── OSINT 交付兜底（2026-11-23 工单 P0-C）──────────────────────────────────
+_OSINT_SKILL = "b2b-osint"
+# 算「成功跑过制裁筛查」的工具：后台任务启动即可（它自带制裁层），
+# 或 terminal 里显式跑 trade.osint。
+_OSINT_TOOL_NAMES = frozenset({"osint_job_start", "osint_job_result"})
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+_DOMAIN_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
+
+
+def _osint_target_from_query(query: str) -> str | None:
+    """从用户问题里取制裁筛查对象（显式前缀 > 邮箱 > 人名 > 域名 > 短问题）。
+
+    取不到就返回 None —— 宁可如实写「未执行」，也不要拿整句话去比对名单。
+    """
+    text = " ".join(str(query or "").split())
+    if not text:
+        return None
+    try:
+        from trade.osint.orchestrator import _split_type_prefix, _split_username_prefix
+        from trade.skill_router import extract_osint_name
+
+        target, forced = _split_type_prefix(text)
+        target, _ = _split_username_prefix(target)
+        name = extract_osint_name(target)
+        if forced and target:
+            # 显式前缀后可能还跟着问句（company:Acme Trading 有没有被制裁）：
+            # 能从剩余文本里取出名字就用名字，否则整段就是目标。
+            return name or target
+        match = _EMAIL_RE.search(text)
+        if match:
+            return match.group(0)
+        if name:
+            return name
+        match = _DOMAIN_RE.search(text)
+        if match:
+            return match.group(0)
+        # 很短的问题本身就是目标（如「天津赛得」）
+        if len(text) <= 30:
+            return text
+    except Exception:
+        _log.exception("提取 OSINT 目标失败")
+    return None
+
+
+def _osint_sanctions_used(tools: CompletedToolTracker) -> bool:
+    """本轮是否成功调用过 OSINT 工具（后台任务或 terminal 跑 trade.osint）。"""
+    for item in tools.snapshot():
+        name = str(item.get("name") or "")
+        if name in _OSINT_TOOL_NAMES:
+            return True
+        if name in ("terminal", "bash", "execute_code"):
+            detail = str(item.get("detail") or "")
+            if "trade.osint" in detail or "osint_job" in detail:
+                return True
+    return False
+
+
+def _sanctions_fallback_text(query: str) -> str:
+    """用本地制裁库补一段结论（<1 秒，无网络下载）。"""
+    target = _osint_target_from_query(query)
+    if not target:
+        return "制裁名单筛查：未执行（无法从问题中确定筛查对象）"
+    try:
+        from trade.osint.sanctions import check_sanctions
+
+        result = check_sanctions(target)
+    except Exception as exc:  # noqa: BLE001 —— 兜底失败不能影响主回答
+        _log.exception("交付前制裁兜底失败")
+        return f"制裁名单筛查：未执行（{type(exc).__name__}: {exc}）"
+
+    coverage = result.get("coverage") or {}
+    if coverage.get("degraded", True):
+        return "制裁名单筛查：未执行（本地名单未就绪，不构成「无制裁记录」的结论）"
+    lists = coverage.get("lists") or {}
+    total = int(coverage.get("total_entries") or 0)
+    stale = [
+        f"{info.get('label', code)} 过期 {float(info.get('stale_hours') or 0):.0f} 小时"
+        for code, info in lists.items()
+        if info.get("stale")
+    ]
+    stale_note = ("；" + "、".join(stale[:3])) if stale else ""
+    hits = result.get("hits") or []
+    if result.get("is_sanctioned"):
+        top = "、".join(
+            f"{hit.get('list_label') or hit.get('list')}: {hit.get('matched_value')}"
+            for hit in hits[:3]
+        )
+        return f"制裁名单筛查：⚠️ 命中（{top}）。强烈建议拒绝交易或咨询法律部门。"
+    if hits:
+        return f"制裁名单筛查：发现 {len(hits)} 条疑似匹配（非精确），需人工核查。"
+    return (
+        f"制裁名单筛查：未命中（已比对 {len(lists)} 份名单、本地 {total} 条"
+        f"{stale_note}）。"
+    )
+
+
+def _ensure_sanctions_section(
+    *, query: str, response: str, skill: str, tools: CompletedToolTracker,
+) -> str:
+    """命中 b2b-osint 但没跑过 OSINT 工具、或缺制裁段落时，补一段本地结论。
+
+    条件（工单 P0-C）：本轮命中 OSINT，且
+      - 没有成功调用过 osint_job_start / trade.osint，或
+      - 回答里没有「制裁」段落。
+    两个条件都满足（工具跑过且回答已写制裁）才跳过。
+    """
+    if skill != _OSINT_SKILL or not response:
+        return response
+    if _osint_sanctions_used(tools) and "制裁" in response:
+        return response
+    return f"{response}\n\n【制裁名单筛查】\n{_sanctions_fallback_text(query)}"
 
 
 def _path_under(path: Path, root: Path) -> bool:
@@ -722,6 +836,13 @@ async def trade_chat(
             "具体事实请以本次读取为准。）"
         )
 
+    # 交付前制裁兜底（工单 P0-C）：路由命中 OSINT 却没有跑过工具/没写制裁段落。
+    if agent_ok or partial:
+        response = _ensure_sanctions_section(
+            query=query, response=response,
+            skill=current_skill or "", tools=tools,
+        )
+
     lib_name = ""
     if payload.library_id:
         lib = library_module.get(payload.library_id, company_id=cid)
@@ -1047,6 +1168,13 @@ async def trade_chat_stream(
         # 中止提示，存档后会被下一轮当上下文注入（复审 P1-21 残口）。
         if cancel_event.is_set():
             return None
+
+        # 交付前制裁兜底（工单 P0-C）：与同步端点同一规则。
+        if result:
+            result = _ensure_sanctions_section(
+                query=query, response=result,
+                skill=current_skill or "", tools=tools,
+            )
 
         # W10：先剥 trade-json 围栏，再入库并推 SSE（失败静默为纯文本）
         reply_text = result or "Agent 返回了空响应。"
