@@ -35,6 +35,15 @@
     --ease: cubic-bezier(0.4,0,0.2,1); --ease-out: cubic-bezier(0,0,0.2,1);
     --ease-bounce: cubic-bezier(0.34,1.56,0.64,1);
 }
+/* 私密备忘录（审计 P1-F）：只读，不与打印样式共用 */
+.memo-modal { position: fixed; inset: 0; z-index: 9999; background: rgba(12,13,14,.45);
+    display: flex; align-items: center; justify-content: center; }
+.memo-box { width: min(640px, 92vw); max-height: 80vh; overflow: auto; background: #fff;
+    border: 1px solid var(--line); border-radius: 2px; padding: 18px 20px; }
+.memo-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.memo-box ul { margin: 8px 0 14px; padding-left: 20px; }
+.memo-box .muted { color: var(--muted); font-size: 13px; }
+
 /* 远程图片占位（审计 P1-E）：模型回答不再自动请求跨源图片 */
 .remote-img-hold {
     display: inline-flex; align-items: center; gap: 6px;

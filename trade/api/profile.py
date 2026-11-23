@@ -358,3 +358,50 @@ def delete_gift(
         _map_err(exc)
         raise
     return {"ok": True}
+
+
+# ── 私密备忘录（审计 P1-F）────────────────────────────────────────────────
+# 家庭类 facts 与「客户索要」礼物不进 AI / 打印 / 长图 / 导出，只能在本机
+# 输入固定密语后单独查看。默认每次进入都要输入（不缓存会话）。
+
+class MemoPassBody(BaseModel):
+    passphrase: str = ""
+
+
+@router.get("/profile/memo/status")
+def memo_status(cid: int = Depends(require_company)):
+    """密语是否已设置（不返回任何哈希/盐）。"""
+    from trade import memo as memo_mod
+
+    return {"configured": memo_mod.is_configured()}
+
+
+@router.post("/profile/memo/passphrase")
+def memo_configure(body: MemoPassBody, cid: int = Depends(require_company)):
+    """首次设置密语；已设置时只做校验（不允许静默覆盖）。"""
+    from trade import memo as memo_mod
+
+    if not memo_mod.is_configured():
+        try:
+            memo_mod.configure(body.passphrase)
+        except memo_mod.MemoError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"configured": True, "created": True}
+    if not memo_mod.verify(body.passphrase):
+        raise HTTPException(status_code=403, detail="密语不正确")
+    return {"configured": True, "created": False}
+
+
+@router.post("/customers/{customer_id}/memo")
+def customer_memo(
+    customer_id: int, body: MemoPassBody, cid: int = Depends(require_company),
+):
+    """校验密语后返回该客户的家庭 facts + 客户索要。"""
+    from trade import memo as memo_mod
+
+    _ensure_customer(customer_id, cid)
+    if not memo_mod.is_configured():
+        raise HTTPException(status_code=409, detail="尚未设置密语")
+    if not memo_mod.verify(body.passphrase):
+        raise HTTPException(status_code=403, detail="密语不正确")
+    return memo_mod.memo_items(cid, customer_id)

@@ -287,12 +287,14 @@ def suggest_draft(company_id: int, customer_id: int | None = None) -> dict:
             # 默认取「待确认 + 已确认」：用户刚添加的画像条目还没确认，也必须带出来
             for f in profile_mod.list_facts(customer_id, company_id=company_id):
                 cat = str(f.get("category") or "").strip()
-                # 敏感类（家庭/礼物往来）只计数，原文一律丢弃
-                if cat in profile_mod.SENSITIVE_CATEGORIES:
-                    sensitive_count += 1
-                    continue
                 subject = str(f.get("subject") or "").strip()
                 content = str(f.get("content") or "").strip()
+                # 敏感类（家庭/礼物往来）只计数，原文一律丢弃；
+                # 其他分类里写了家庭称谓（如「重要日期：太太生日」）同样过滤
+                if (cat in profile_mod.SENSITIVE_CATEGORIES
+                        or profile_mod.contains_family_terms(subject + " " + content)):
+                    sensitive_count += 1
+                    continue
                 # 对象和内容都为空：没有可展示信息，跳过
                 if not content and not subject:
                     continue

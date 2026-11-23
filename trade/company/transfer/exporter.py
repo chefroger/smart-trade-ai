@@ -25,6 +25,16 @@ from trade.company.transfer import merge as merge_mod
 from trade.company.transfer.manifest import sha256_file, write_checksums
 
 
+def _row_has_family_terms(row: dict) -> bool:
+    """画像行是否含家庭称谓（导出前的最后一道过滤）。"""
+    try:
+        from trade.profile import contains_family_terms
+    except Exception:
+        return False
+    text = f"{row.get('subject') or ''} {row.get('content') or ''}"
+    return contains_family_terms(text)
+
+
 def _dir_size(root: Path) -> int:
     """目录内普通文件总字节数；不跟进符号链接，读不了的文件按 0 计。"""
     total = 0
@@ -334,12 +344,17 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                 "contacts": _safe_contacts_rows(conn, company_id),
                 # 客户画像：facts 排除敏感类；gifts 排除「客户索要」
                 # 分类清单取自 profile.SENSITIVE_CATEGORIES，避免与隐私规则漂移
-                "customer_facts": _safe_table_rows(
-                    conn,
-                    "SELECT * FROM customer_facts WHERE company_id = ? "
-                    "AND category NOT IN (" + _sensitive_placeholders() + ")",
-                    (company_id, *_sensitive_categories()),
-                ),
+                "customer_facts": [
+                    row for row in _safe_table_rows(
+                        conn,
+                        "SELECT * FROM customer_facts WHERE company_id = ? "
+                        "AND category NOT IN (" + _sensitive_placeholders() + ")",
+                        (company_id, *_sensitive_categories()),
+                    )
+                    # 分类不可靠：其他分类里写了家庭称谓（如「重要日期：太太生日」）
+                    # 同样不得进导出包（审计 P1-F）
+                    if not _row_has_family_terms(row)
+                ],
                 "customer_gifts": _safe_table_rows(
                     conn,
                     "SELECT * FROM customer_gifts WHERE company_id = ? "

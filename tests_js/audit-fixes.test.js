@@ -193,3 +193,14 @@ test('两个更新入口用同一套按钮忙态机制', () => {
     assert.ok(!/btn\.innerHTML\s*=/.test(body), `${fn} 不得手写 btn.innerHTML（还原须走 dataset）`);
   }
 });
+
+// P1-F：打印/长图前必须按内容过滤家庭称谓（分类不可靠）
+test('验厂打印与长图过滤家庭称谓', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'customers.js'), 'utf8');
+  assert.match(src, /function _vPrivateFilter\(/);
+  // 打印统一走 _vsheetSec 内部的 _vPrivateFilter；长图显式过滤内部风险
+  assert.match(src, /const safe = _vPrivateFilter\(text\)/);
+  assert.match(src, /_vPrivateFilter\(pay\.risks\)/);
+});

@@ -539,3 +539,41 @@ class TestAvailabilityFirst:
         assert g.check_tool_call("read_file", {"path": str(outside)}) is None
         assert g.check_tool_call("terminal", {"command": "ls -la ~"}) is None
         assert g.check_tool_call("execute_code", {"code": "print(1)"}) is None
+
+
+class TestMainDbNarrowRule:
+    """P1-F 窄规则：Trade 进程内，工具参数出现主库路径一律拒绝。"""
+
+    def test_blocks_trade_db_even_when_guard_off(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        blocked = g.check_tool_call(
+            "terminal", {"command": f"sqlite3 {tmp_path}/data/trade.db 'select 1'"},
+        )
+        assert blocked and blocked["action"] == "block"
+        assert "主库只能通过 Trade 工具访问" in blocked["message"]
+
+    def test_blocks_data_dir_without_filename(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        blocked = g.check_tool_call(
+            "read_file", {"path": f"{tmp_path}/data/customers.json"},
+        )
+        assert blocked and blocked["action"] == "block"
+
+    def test_normal_desktop_file_still_allowed(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path / "tradehome"))
+        assert g.check_tool_call(
+            "read_file", {"path": str(tmp_path / "桌面" / "合同.txt")},
+        ) is None
+
+    def test_standalone_hermes_untouched(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("TRADE_HOST", raising=False)
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        assert g.check_tool_call(
+            "terminal", {"command": "sqlite3 ~/.trade/data/trade.db '.tables'"},
+        ) is None

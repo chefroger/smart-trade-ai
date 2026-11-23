@@ -319,11 +319,31 @@ def _check_terminal(args: dict) -> dict | None:
     return None
 
 
+def _mentions_main_db(args: dict | None) -> bool:
+    """工具参数里是否出现 Trade 主库路径（trade.db / TRADE_HOME/data）。
+
+    P1-F 窄规则：只挡主库，不挡用户的桌面文件；不改 10-29「守卫默认关闭」。
+    """
+    text = json.dumps(args or {}, ensure_ascii=False, default=str).replace("\\", "/").casefold()
+    if "trade.db" in text:
+        return True
+    base = os.environ.get("TRADE_HOME", "").strip()
+    if base:
+        data_dir = (Path(base) / "data").as_posix().casefold()
+        if data_dir and data_dir in text:
+            return True
+    return False
+
+
 def check_tool_call(tool_name: str, args: dict | None) -> dict | None:
     """返回 block 指令或 None（放行）。纯函数，便于单测。
 
     默认放行一切；只有 `TRADE_TOOL_GUARD=strict` 时才走下面的白名单规则。
+    唯一例外（P1-F）：Trade 进程内，任何工具参数出现主库路径一律拒绝 ——
+    客户索要/家庭 facts 不能靠 terminal/sqlite3 绕过；普通用户文件不受影响。
     """
+    if _inside_trade() and _mentions_main_db(args if isinstance(args, dict) else {}):
+        return _block("主库只能通过 Trade 工具访问（检测到 trade.db / 数据目录）")
     if not strict_mode():
         return None
     if tool_name == "execute_code":

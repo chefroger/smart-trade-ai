@@ -29,6 +29,32 @@ _DEFAULT_AI_VISIBLE_CATEGORIES = frozenset({
 })
 
 GIFT_DIRECTIONS = frozenset({"我方赠送", "客户赠送", "客户索要"})
+
+# 家庭成员称谓（2026-11-23 审计 P1-F）：分类由用户/模型决定，但内容只要
+# 命中这些称谓，即使写在「重要日期/喜好」里也不能进打印、长图、导出、AI。
+FAMILY_TERMS_CJK = (
+    "太太", "妻子", "老婆", "丈夫", "老公", "儿子", "女儿", "孩子",
+    "父母", "爸爸", "妈妈", "父亲", "母亲", "兄弟", "姐妹",
+)
+_FAMILY_TERMS_EN_RE = re.compile(
+    r"\b(?:wife|husband|son|daughter|kids|children|father|mother)\b",
+    re.IGNORECASE,
+)
+
+
+def contains_family_terms(text: Any) -> bool:
+    """内容里是否出现家庭成员称谓（宁可多滤，不把家庭信息带出去）。"""
+    value = str(text or "")
+    if any(term in value for term in FAMILY_TERMS_CJK):
+        return True
+    return bool(_FAMILY_TERMS_EN_RE.search(value))
+
+
+def strip_family_lines(text: Any) -> str:
+    """按行滤掉含家庭称谓的内容（打印/长图/导出前的最后一道）。"""
+    lines = str(text or "").splitlines()
+    kept = [line for line in lines if not contains_family_terms(line)]
+    return "\n".join(kept)
 ATTACH_TO_VALUES = frozenset({"none", "primary", "contact"})
 SOURCE_TYPES = frozenset({"chat", "email", "manual"})
 STATUSES = frozenset({"待确认", "已确认", "已作废"})
@@ -1007,6 +1033,9 @@ def briefing_profile_section(customer_id: int, *, company_id: int) -> str:
                     continue
                 subj = (f.get("subject") or "").strip()
                 cont = (f.get("content") or "").strip()
+                # 分类不可靠：写了家庭称谓的内容（哪怕分类是「重要日期」）也不进 AI
+                if contains_family_terms(subj + " " + cont):
+                    continue
                 bit = f"- [{cat}] {subj + '：' if subj else ''}{cont}"
                 if not _add(bit):
                     break

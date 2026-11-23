@@ -2831,6 +2831,7 @@ async function renderVisitPlansViewInto(container) {
         '<button type="button" class="btn primary" id="visit-save">保存</button>' +
         '<button type="button" class="btn" id="visit-print-btn">打印 A4</button>' +
         '<button type="button" class="btn" id="visit-mobile">手机长图</button>' +
+        '<button type="button" class="btn" id="visit-memo">私密备忘录</button>' +
         '<button type="button" class="btn" id="visit-new">＋ 新建一次来访</button>' +
         '</div></div>' +
         '<div class="visit-grid">' +
@@ -2861,6 +2862,7 @@ async function renderVisitPlansViewInto(container) {
     $('visit-save')?.addEventListener('click', saveVisitPlan);
     $('visit-print-btn')?.addEventListener('click', printVisitPlan);
     $('visit-mobile')?.addEventListener('click', openVisitLongImage);
+    $('visit-memo')?.addEventListener('click', openCustomerMemo);
     $('visit-new')?.addEventListener('click', function () {
         _visitCurrent = null;
         _fillVisitForm();
@@ -2969,8 +2971,68 @@ async function saveVisitPlan() {
     _renderVisitChips();
 }
 
+// 家庭成员称谓过滤（审计 P1-F）：分类不可靠，打印/长图前按内容再滤一次
+const _V_FAMILY_CJK = ['太太', '妻子', '老婆', '丈夫', '老公', '儿子', '女儿',
+    '孩子', '父母', '爸爸', '妈妈', '父亲', '母亲', '兄弟', '姐妹'];
+const _V_FAMILY_EN = /\b(?:wife|husband|son|daughter|kids|children|father|mother)\b/i;
+
+function _vPrivateFilter(text) {
+    return String(text || '').split('\n').filter(function (line) {
+        if (_V_FAMILY_CJK.some(function (t) { return line.indexOf(t) >= 0; })) return false;
+        return !_V_FAMILY_EN.test(line);
+    }).join('\n');
+}
+
 function _vsheetSec(title, text) {
-    return text ? '<h2>' + esc(title) + '</h2><p style="white-space:pre-wrap;">' + esc(text) + '</p>' : '';
+    const safe = _vPrivateFilter(text);
+    return safe ? '<h2>' + esc(title) + '</h2><p style="white-space:pre-wrap;">' + esc(safe) + '</p>' : '';
+}
+
+/** 私密备忘录：本机密语校验后只读查看；不进 AI/打印/长图/导出（P1-F）。 */
+async function openCustomerMemo() {
+    const sel = $('vp-customer');
+    const cid = sel && sel.value ? Number(sel.value) : 0;
+    if (!cid) { toast(currentLang === 'en' ? 'Select a customer first' : '请先选择客户'); return; }
+    let pass = '';
+    try {
+        const st = await api('GET', '/api/trade/profile/memo/status');
+        if (!st || !st.configured) {
+            const first = prompt('首次使用：设置私密备忘录密语（至少 4 位）');
+            if (!first) return;
+            const again = prompt('再输入一次密语');
+            if (again !== first) { toast('两次输入不一致'); return; }
+            const saved = await api('POST', '/api/trade/profile/memo/passphrase', {passphrase: first});
+            if (!saved) return;
+            pass = first;
+        } else {
+            pass = prompt('输入私密备忘录密语');
+            if (!pass) return;
+        }
+        const data = await api('POST', '/api/trade/customers/' + cid + '/memo', {passphrase: pass});
+        if (!data) return;
+        document.querySelectorAll('#memo-modal').forEach(function (el) { el.remove(); });
+        const ov = document.createElement('div');
+        ov.id = 'memo-modal';
+        const facts = (data.facts || []).map(function (f) {
+            return '<li>[' + esc(f.category || '') + '] ' +
+                esc((f.subject || '') + (f.content ? '：' + f.content : '')) + '</li>';
+        }).join('');
+        const gifts = (data.gift_requests || []).map(function (g) {
+            return '<li>' + esc(g.item || '') +
+                (g.approx_value ? '（' + esc(g.approx_value) + ' ' + esc(g.currency || '') + '）' : '') + '</li>';
+        }).join('');
+        ov.className = 'memo-modal';
+        ov.innerHTML = '<div class="memo-box">' +
+            '<div class="memo-head"><strong>私密备忘录</strong>' +
+            '<button type="button" class="btn" id="memo-close">关闭</button></div>' +
+            '<h4>家庭 / 私密档案</h4><ul>' + (facts || '<li>无</li>') + '</ul>' +
+            '<h4>客户索要</h4><ul>' + (gifts || '<li>无</li>') + '</ul>' +
+            '<p class="muted">仅本机查看；不会进入 AI、打印、长图或导出。</p></div>';
+        document.body.appendChild(ov);
+        $('memo-close').onclick = function () { ov.remove(); };
+    } catch (e) {
+        toast('读取私密备忘录失败');
+    }
 }
 
 function printVisitPlan() {
@@ -3044,8 +3106,11 @@ function _vBuildLongImage(plan, includeInternal) {
     /** 手机长图：默认只画公开内容（来访人/日程/对外说明），勾选后才含内部四段。 */
     const W = 1080, PAD = 72, LH = 44;
     const pay = plan.payload || {};
-    const pub = [['来访人', pay.visitors], ['日程', pay.schedule], ['对外说明', pay.summary]];
-    const intl = [['人员与分工', pay.staff], ['访前清单', pay.checklist], ['内部风险', pay.risks]];
+    // 长图同样按内容过滤家庭称谓（分类不可靠，P1-F）
+    const pub = [['来访人', _vPrivateFilter(pay.visitors)], ['日程', _vPrivateFilter(pay.schedule)],
+        ['对外说明', _vPrivateFilter(pay.summary)]];
+    const intl = [['人员与分工', _vPrivateFilter(pay.staff)], ['访前清单', _vPrivateFilter(pay.checklist)],
+        ['内部风险', _vPrivateFilter(pay.risks)]];
     const secs = (includeInternal ? [pub[0], pub[1], intl[0], intl[1], intl[2], pub[2]] : pub)
         .filter(function (s) { return String(s[1] || '').trim(); });
     const meta = [plan.visit_date, (plan.days || 1) + ' 天', plan.location].filter(Boolean).join(' · ');
