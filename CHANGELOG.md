@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.41 — 2026-11-23
+
+- Release：Hermes 必需安装 + 冒烟，构建切 Python 3.14
+- `6b0c1f3` ci(release): Hermes 改为必需安装并冒烟，构建切到 Python 3.14
+
 ## v0.9.40 — 2026-11-23
 
 - P2 第二批：待办原因、路由接线、制裁超时、并发用例、安装器 throw
