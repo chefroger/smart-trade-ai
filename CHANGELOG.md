@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.38 — 2026-11-23
+
+- P2 第一批：title 连字符、EDGAR 公司邮箱、conftest 隔离、导入精确同名/409
+- `8ffe7d0` fix: P2 第一批（title 连字符、EDGAR 公司邮箱、conftest 隔离、导入精确同名）
+
 ## v0.9.37 — 2026-11-23
 
 - 修复 Windows 主库路径检测（P1-F CI 红灯）
