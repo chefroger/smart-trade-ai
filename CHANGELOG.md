@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.43 — 2026-11-23
+
+- Mac 包改为运行时使用用户自己的 Hermes（不内嵌）
+- `cd145a7` feat(release): Mac 包改为运行时使用用户自己的 Hermes
+
 ## v0.9.42 — 2026-11-23
 
 - Release：拦截低于 0.21.6 的 Hermes，禁止产出坏包
