@@ -445,3 +445,45 @@ class TestPartialReportEvidence:
         assert "茅台" not in text
         assert "[已按隐私规则隐藏]" in text
         assert "结果：正常结果" in text
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_finalize_save_writes_one_history(company):
+    """W12：正常回答落库期间超时/断开，不能再补写一条「未完成报告」。
+
+    构造：Agent 先跑完一个工具、立即返回回答；`save_with_context` 在写正常
+    回答时阻塞 1 秒；把流式 deadline 调到 0.15 秒，让超时分支正好在落库
+    期间触发。没有 finalizing 标志时，超时分支会先写一条 partial，落库
+    完成后再写正常回答 → 两条历史。
+    """
+    import trade.api.chat as chat
+    from trade.api.models import ChatRequest
+
+    started = threading.Event()
+    saved: list[dict] = []
+
+    def _save(**kw):
+        saved.append(kw)
+        if not kw.get("partial"):
+            started.set()
+            time.sleep(1.0)  # 模拟慢写库（期间 deadline 触发）
+        return {"id": 11}
+
+    with patch.object(chat, "_STREAM_DEADLINE_SECONDS", 0.15), \
+         patch.object(chat, "create_agent",
+                      side_effect=lambda **kw: _attach_callbacks(_ToolThenAnswerAgent(), kw)), \
+         patch.object(chat, "build_query", return_value=("Q", "H")), \
+         patch.object(chat.chat_memory, "save_with_context", side_effect=_save), \
+         patch("trade.license.check_license", return_value=(True, "")):
+        resp = await chat.trade_chat_stream(
+            ChatRequest(query="查一下 acme"), company["id"]
+        )
+        async for _ in resp.body_iterator:
+            pass
+
+    assert started.is_set(), "正常回答没有进入落库（测试构造失效）"
+    assert len(saved) == 1, (
+        f"写了 {len(saved)} 条历史："
+        f"{[(s.get('partial'), s['response'][:16]) for s in saved]}"
+    )
+    assert not saved[0].get("partial")

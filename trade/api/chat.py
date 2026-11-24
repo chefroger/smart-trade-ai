@@ -1055,7 +1055,9 @@ async def trade_chat_stream(
 
     # ── 未完成报告（P0-5）───────────────────────────────────────────────
     partial_lock = threading.Lock()
-    partial_state = {"saved": False}   # 只写一次（超时分支与 finally 都会尝试）
+    # 只写一次（超时分支与 finally 都会尝试）；W12：finalizing=True 表示
+    # 正常回答正在落库，此时任何「未完成报告」都不能再写第二条历史。
+    partial_state = {"saved": False, "finalizing": False}
     delivered = {"ok": False}          # 正常回答是否已落库并下发
 
     def _save_partial(reason: str) -> tuple[str | None, int | None]:
@@ -1063,9 +1065,9 @@ async def trade_chat_stream(
         if not tools.has_completed():
             return None, None
         with partial_lock:
-            # 正常回答已经交付：不能再补写一条「未完成报告」（审计 P1-1）。
-            # 事件循环可能先取到 response 再进入 finally，必须在这里兜一层。
-            if delivered["ok"] or partial_state["saved"]:
+            # 正常回答已经交付、或正在落库：不能再补写「未完成报告」
+            # （审计 P1-1 / W12：超时分支可能在 _finalize 写库期间并发进来）。
+            if delivered["ok"] or partial_state["saved"] or partial_state["finalizing"]:
                 return None, None
             partial_state["saved"] = True
         text = build_partial_report(reason, tools, evidence)
@@ -1183,6 +1185,11 @@ async def trade_chat_stream(
         # 中止提示，存档后会被下一轮当上下文注入（复审 P1-21 残口）。
         if cancel_event.is_set():
             return None
+
+        # W12：从这里到落库完成，超时分支/finally 的 _save_partial 必须让路，
+        # 否则「落库期间断开」会写出两条历史（正常回答 + 未完成报告）。
+        with partial_lock:
+            partial_state["finalizing"] = True
 
         # 交付前制裁兜底（工单 P0-C）：与同步端点同一规则。
         if result:
