@@ -30,7 +30,8 @@ test('每个前端模块语法可解析', () => {
 
 test('HTML 先内联 TOKEN，再按模块顺序加载', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'static', 'trade_chat.html'), 'utf8');
-    const tokenAt = html.indexOf('<script>let TOKEN = "__TRADE_SESSION_TOKEN__";</script>');
+    // 内联脚本带 per-request nonce（O-17），只认内容位置，不认旧的无属性写法
+    const tokenAt = html.indexOf('let TOKEN = "__TRADE_SESSION_TOKEN__";');
     assert.ok(tokenAt !== -1, 'TOKEN 内联脚本必须留在模块脚本之前');
     let cursor = tokenAt;
     for (const name of JS_ORDER) {

@@ -1095,6 +1095,28 @@ def _create_system_router() -> APIRouter:
 # ── App factory ──────────────────────────────────────────────────────────────
 
 
+def _build_trade_csp(nonce: str) -> str:
+    """SPA 的 CSP（审计 P1-E / O-17 第一步）。
+
+    - `script-src-elem` 用 nonce 管住内联 <script> 元素（注入脚本需带 nonce）；
+    - `script-src`/`script-src-attr` 仍保留 unsafe-inline，供大量内联事件
+      属性使用；迁移完 handler 后再移除，避免一次性改坏 UI。
+    - style-src 仍为 unsafe-inline（内联样式另行处理）。
+    不支持 script-src-elem/attr 的旧浏览器回退到 script-src（行为不变）。
+    """
+    return (
+        "default-src 'self'; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self'; "
+        f"script-src 'self' 'unsafe-inline'; "
+        f"script-src-elem 'self' 'nonce-{nonce}'; "
+        "script-src-attr 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self' data:; "
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+
+
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用。
 
@@ -1284,20 +1306,15 @@ def serve_trade_chat(app: FastAPI) -> None:
             )
         html = _TRADE_CHAT_HTML.read_text(encoding="utf-8")
         html = html.replace("__TRADE_SESSION_TOKEN__", _SESSION_TOKEN)
-        # CSP（审计 P1-E）：默认只信本机；图片只允许 self/data/blob，
-        # 远程图片由前端换成「点击加载」占位，避免提示注入零点击外带数据。
-        # 仍保留 script/style 的 unsafe-inline：页面有内联 token 引导脚本与
-        # 大量内联样式，改成 nonce 需要动模板初始化链路，单独一步再做。
-        csp = (
-            "default-src 'self'; "
-            "img-src 'self' data: blob:; "
-            "connect-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "font-src 'self' data:; "
-            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        # CSP nonce（审计 O-17 第一步）：内联 <script> 元素改为每次请求一个
+        # nonce；`script-src` 保留 unsafe-inline 作为内联事件属性的回退，
+        # 等 100+ 个 on*= 属性迁移完后再整体移除。
+        nonce = secrets.token_urlsafe(16)
+        html = html.replace("__TRADE_CSP_NONCE__", nonce)
+        return HTMLResponse(
+            content=html,
+            headers={"Content-Security-Policy": _build_trade_csp(nonce)},
         )
-        return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
