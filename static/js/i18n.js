@@ -746,7 +746,10 @@ function _updateSidebarLabels() {
             var label = el.querySelector('.nav-label');
             if (label) label.textContent = t(key);
             if (ctx && view === 'chat') {
-                el.setAttribute('onclick', "navToView('chat','"+ctx+"','"+t(key)+"')");
+                // O-17：不再动态写 onclick（CSP script-src-attr 'none'），
+                // 改更新 data-args，语言切换时导航名一起翻译
+                el.setAttribute('data-act', 'navToView');
+                el.setAttribute('data-args', JSON.stringify(['chat', ctx, t(key)]));
             }
         }
     });

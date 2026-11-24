@@ -57,4 +57,7 @@ def test_no_inline_event_attributes_remain():
             if text[max(0, match.start() - 5):match.start()] == "data-":
                 continue
             offenders.append(f"{path.name}:{text[:match.start()].count(chr(10)) + 1}")
+        # 动态 setAttribute('onclick', ...) 同样会被 CSP 拦截
+        for match in re.finditer(r"setAttribute\(\s*['\"]on", text):
+            offenders.append(f"{path.name}:{text[:match.start()].count(chr(10)) + 1} (setAttribute)")
     assert not offenders, f"仍存在内联事件属性: {offenders[:10]}"
