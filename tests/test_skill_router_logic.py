@@ -640,6 +640,11 @@ def test_routed_entry_uses_keyword_mode_by_default(monkeypatch):
         "这个询盘是不是真的买家",
         "帮我看一下这个客户的信用风险",
         "帮我分析这个客户的采购习惯",
+        "Is this inquiry from a real buyer?",
+        "Is this buyer legit?",
+        "What is this customer's credit risk?",
+        "Analyze this customer's purchasing habits",
+        "Tell me their procurement habits",
     ],
 )
 def test_w6_optional_customer_intel_phrasings(query):

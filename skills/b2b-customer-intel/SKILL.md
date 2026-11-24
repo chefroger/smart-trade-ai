@@ -33,6 +33,18 @@ triggers:
   - 客户的采购习惯
   - 客户采购习惯
   - 采购习惯
+  - is this inquiry from a real buyer
+  - is this inquiry real
+  - real buyer
+  - fake inquiry
+  - inquiry authenticity
+  - is this buyer legit
+  - customer credit risk
+  - customer's credit risk
+  - credit risk
+  - purchasing habits
+  - procurement habits
+  - buying habits
   - customer intel
   - know your customer
   - client analysis
