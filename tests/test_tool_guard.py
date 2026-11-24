@@ -629,3 +629,53 @@ class TestMainDbNarrowRule:
         assert g.check_tool_call(
             "terminal", {"command": "sqlite3 /Users/someone/Desktop/report.db '.tables'"},
         ) is None
+
+    def test_backups_dirs_are_main_db_copies(self, monkeypatch, tmp_path):
+        """S5：备份目录同样是主库副本。"""
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.delenv("TRADE_HOME", raising=False)
+        for args in (
+            {"path": "~/.trade/backups/trade-20260101.tar.gz"},
+            {"path": "%LOCALAPPDATA%\\trade\\backups\\trade.db"},
+        ):
+            assert g._mentions_main_db(args) is True, args
+        # 自定义 TRADE_HOME 下的 backups
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        assert g.check_tool_call(
+            "read_file", {"path": f"{tmp_path}/backups/trade-backup.db"},
+        ) is not None
+
+    def test_scan_commands_on_root_or_trade_dir_are_blocked(self, monkeypatch):
+        """S5：find / grep -r / grep -a / strings / xxd / od / base64 -d /
+        sqlite3 扫 ~、/ 或 trade 目录，同时带主库特征 → BLOCK。"""
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.delenv("TRADE_HOME", raising=False)
+        probes = [
+            {"command": "find ~ -name '*.db'"},
+            {"command": "xxd ~/.trade/backups/dump.db | head"},
+            {"command": "sqlite3 ~/.trade/backups/latest.db '.tables'"},
+            {"command": "strings ~/.trade/backups/backup.tar.gz | grep 索要"},
+            {"command": "grep -a 索要 ~/.trade/backups/dump.sql"},
+            {"command": "grep -r customer_gifts ~"},
+            {"command": "base64 -d ~/.trade/backups/x.b64"},
+            {"command": "od -c ~/dump.db"},
+        ]
+        for args in probes:
+            assert g._mentions_main_db(args) is True, args
+            blocked = g.check_tool_call("terminal", args)
+            assert blocked and blocked["action"] == "block", args
+
+    def test_scan_commands_on_desktop_are_allowed(self, monkeypatch):
+        """S5 的反面：不扫 ~、/ 或 trade 目录时，桌面文件照常放行。"""
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.delenv("TRADE_HOME", raising=False)
+        for args in (
+            {"command": "grep -r invoice ~/Desktop/orders"},
+            {"command": "find /Users/someone/Desktop -name '*.pdf'"},
+            {"command": "xxd /Users/someone/Desktop/report.db"},
+        ):
+            assert g._mentions_main_db(args) is False, args
+            assert g.check_tool_call("terminal", args) is None, args
