@@ -110,3 +110,26 @@ def test_every_skill_md_has_chinese_and_english_triggers():
     }
     assert not missing, f"SKILL.md 触发词缺少中/英文: {list(missing)}"
 
+
+
+def test_every_skill_md_trigger_is_routable_in_registry():
+    """O-新16 恢复：SKILL.md 声明过的触发词必须在注册表里，Trade 才路由得到。
+
+    与 tests/test_skill_trigger_parity.py 是同一不变量；912d1a0 加过这条，
+    74aafa3 清理分歧表时连它一起删了且未说明。这里保留一份，避免
+    「声明了但路由不到」只在另一个文件里才被发现。
+    """
+    from trade.skill_registry import _SKILLS
+
+    registry = {
+        skill["name"]: {str(t).strip().lower() for t in skill.get("triggers", [])}
+        for skill in _SKILLS
+    }
+    missing = {}
+    for name, triggers in _skill_md_triggers().items():
+        if name not in registry:
+            continue
+        extra = sorted({t.lower() for t in triggers} - registry[name])
+        if extra:
+            missing[name] = extra
+    assert not missing, f"SKILL.md 触发词未进入注册表（路由不到）: {missing}"
