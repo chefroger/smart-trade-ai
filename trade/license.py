@@ -487,7 +487,12 @@ def ensure_license_state(company_id: int | None = None) -> tuple[str, str]:
     # 未激活或正常试用/到期：无需恢复
     if state != "tampered":
         return state, message
-    data = _get_license_data(company_id)
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # W15 O-新3：防御纵深，读取异常不升级成 500
+        _log.exception("读取许可证数据失败")
+        return state, message
     # 没有原始激活码就无法自恢复，只能要求用户重新激活
     if not data.get("code"):
         return state, message
@@ -622,7 +627,23 @@ def _make_request_code() -> str:
 
 def status(company_id: int | None = None) -> dict:
     """返回许可证状态，供前端展示。到期时自动包含 request_code。"""
-    data = _get_license_data(company_id)
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # W15 O-新3：读取异常时给前端可展示的 tampered，而不是 500
+        _log.exception("读取许可证数据失败")
+        return {
+            "days_remaining": 0,
+            "activated": False,
+            "expires_at": None,
+            "trial_used": 0,
+            "trial_total": _TRIAL_DAYS,
+            "request_code": "",
+            "read_only": True,
+            "status": "tampered",
+            "machine_mismatch": False,
+            "message": "许可证数据读取异常，请使用激活码重新激活。",
+        }
     now = datetime.now(UTC)
     # 与写门控一致：展示前先尝试自恢复，避免 UI 长期显示「异常」而聊天已恢复
     state, _message = ensure_license_state(company_id)

@@ -938,3 +938,23 @@ class TestTimezoneAndReadFailures:
         assert state == "tampered" and message
         ok, msg = license_mod.check_license(1)
         assert ok is False and msg
+
+    def test_status_read_exception_returns_tampered(self, monkeypatch):
+        from trade import license as license_mod
+
+        monkeypatch.setattr(
+            license_mod, "_get_license_data",
+            lambda cid=None: (_ for _ in ()).throw(RuntimeError("broken")),
+        )
+        s = license_mod.status(1)
+        assert s["status"] == "tampered" and s["read_only"] is True
+
+    def test_ensure_state_read_exception_does_not_raise(self, monkeypatch):
+        from trade import license as license_mod
+
+        monkeypatch.setattr(
+            license_mod, "_get_license_data",
+            lambda cid=None: (_ for _ in ()).throw(RuntimeError("broken")),
+        )
+        state, message = license_mod.ensure_license_state(1)
+        assert state == "tampered" and message

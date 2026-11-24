@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           # ── macOS (pywebview → .app.zip) ──
-          # 两种架构分别出包：Intel（macos-15-intel）与 Apple Silicon（macos-14）。
+          # 两种架构分别出包：Intel（macos-15-intel）与 Apple Silicon（macos-15）。
           # 用户的 Mac 可能是 Intel；arm64 包在 Intel 上根本无法启动。
           - os: macos-15-intel
             arch: x64
@@ -30,7 +30,8 @@ jobs:
             artifact-glob: dist/TradeWin-*.zip
             post-build: |
               cd dist
-              BIN=$(ls -d "TradeWin.app/Contents/MacOS/"* | head -n1)
+              BIN="TradeWin.app/Contents/MacOS/TradeWin"
+              [ -f "$BIN" ] || { echo "::error::找不到主程序 $BIN"; exit 1; }
               ARCHS=$(lipo -archs "$BIN")
               echo "built archs: $ARCHS（期望 $EXPECTED_ARCH）"
               case " $ARCHS " in
@@ -49,7 +50,8 @@ jobs:
             artifact-glob: dist/TradeWin-*.zip
             post-build: |
               cd dist
-              BIN=$(ls -d "TradeWin.app/Contents/MacOS/"* | head -n1)
+              BIN="TradeWin.app/Contents/MacOS/TradeWin"
+              [ -f "$BIN" ] || { echo "::error::找不到主程序 $BIN"; exit 1; }
               ARCHS=$(lipo -archs "$BIN")
               echo "built archs: $ARCHS（期望 $EXPECTED_ARCH）"
               case " $ARCHS " in

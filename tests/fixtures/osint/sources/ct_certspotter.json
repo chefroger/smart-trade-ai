@@ -4,7 +4,7 @@
 		"tbs_sha256": "2e497d2e9d6872034ffe3fdcf4ee76ce6d30795849aee829df9f6cbd5aeb6028",
 		"cert_sha256": "0770342e180407e6cb988d358b573000d9e71e7c7e8844ec6b6ea53df745ccf3",
 		"dns_names": [
-			"tensorust.com"
+			"acmebuyer.com"
 		],
 		"pubkey_sha256": "806433fc62135120b6c99f36da2cb4783a50e7b2ffef42a4dd6c7ac95e52fe72",
 		"not_before": "2026-10-15T06:29:18Z",
@@ -16,7 +16,7 @@
 		"tbs_sha256": "8c244fe07477129bb85bbe5ace4b7c7dc31a760fc09e7f2e7e0be256d6447799",
 		"cert_sha256": "4782e55685b28e6dba9112c35d33fd52bf21035ab3ce3109121dc11d73333d61",
 		"dns_names": [
-			"www.tensorust.com"
+			"www.acmebuyer.com"
 		],
 		"pubkey_sha256": "e04c955e6a87e20b32789892fcdb72afa13cfe24ddc3f13ff418d9c3f3bbf631",
 		"not_before": "2026-10-15T06:29:17Z",
@@ -28,7 +28,7 @@
 		"tbs_sha256": "f1aba416be04b4b26a764d2b305d33f779bc391e57b7c0105cfca29c9276528e",
 		"cert_sha256": "e2ec5c4fcd99c3fb73fbcc82d678406fb9f924777e338005d1647e49ab642945",
 		"dns_names": [
-			"shop.tensorust.com"
+			"shop.acmebuyer.com"
 		],
 		"pubkey_sha256": "abc5b16fe055f9bc35a086b858e8916b0ce48a189639e26f51c8e6d9927743b5",
 		"not_before": "2026-10-15T07:00:04Z",
@@ -40,8 +40,8 @@
 		"tbs_sha256": "064ac2fbb3f6a37f27b055165d553b6f0674d881d6e93ae33b48378ec71a76fe",
 		"cert_sha256": "b7ac22e730c283092ae636fead2b67ecc388879d2d4e72c249c89e23dc0af229",
 		"dns_names": [
-			"*.tensorust.com",
-			"tensorust.com"
+			"*.acmebuyer.com",
+			"acmebuyer.com"
 		],
 		"pubkey_sha256": "207e3adff55f7f109770d537e5c4c2e5c5cc3308071bd1ac4b9d38b3d08804a1",
 		"not_before": "2026-10-15T08:10:10Z",
@@ -53,7 +53,7 @@
 		"tbs_sha256": "798ab8cd7a3781c2e85dc002a1d5c96853891ad234fc6d59245d89b3d5455b3f",
 		"cert_sha256": "ab19ecce3daf8b41f1c11d181e3189b03734069af20cf877e96d457fc4b027fc",
 		"dns_names": [
-			"tollbit.tensorust.com"
+			"tollbit.acmebuyer.com"
 		],
 		"pubkey_sha256": "b26db62d19f52796bbb4d5b7855c3d26168767c40da048077b3de90e9f996c21",
 		"not_before": "2026-10-30T09:08:41Z",

@@ -68,7 +68,7 @@ def fake_fetch(url: str, timeout: int = 15, **_kw):
     if "api.gleif.org" in url:
         return _read("gleif_search.json") if "Apple" in url else json.dumps({"data": []})
     if "data.ny.gov" in url:
-        return _read("us_ny.json") if "TENSORUST" in url.upper() else "[]"
+        return _read("us_ny.json") if "ACMEBUYER" in url.upper() else "[]"
     if "data.colorado.gov" in url:
         return _read("us_co.json") if "GOOGLE" in url.upper() else "[]"
     if "efts.sec.gov" in url:
@@ -76,7 +76,7 @@ def fake_fetch(url: str, timeout: int = 15, **_kw):
             return _read("edgar.json")
         return json.dumps({"hits": {"hits": [], "total": {"value": 0}}})
     if "gdeltproject.org" in url:
-        return _read("gdelt_artlist.json") if "tensorust" in url.lower() else json.dumps({"articles": []})
+        return _read("gdelt_artlist.json") if "acmebuyer" in url.lower() else json.dumps({"articles": []})
     if "vies/rest-api" in url:
         return _read("vies.json")
     if "api.gravatar.com" in url:
@@ -92,10 +92,10 @@ def fake_fetch(url: str, timeout: int = 15, **_kw):
 
 def ctx(**overrides) -> TargetContext:
     base = TargetContext(
-        target="tensorust.com",
+        target="acmebuyer.com",
         target_type="domain",
-        domain="tensorust.com",
-        company_name="Tensorust",
+        domain="acmebuyer.com",
+        company_name="Acmebuyer",
     )
     for key, value in overrides.items():
         setattr(base, key, value)
@@ -116,7 +116,7 @@ class TestTargetType:
             ("Doha Pearl Contracting W.L.L.", "company"),
             ("Microsoft", "company"),
             ("华为技术有限公司", "company"),
-            ("tensorust.com", "domain"),
+            ("acmebuyer.com", "domain"),
             ("a@b.com", "email"),
             ("https://x.com/a", "url"),
         ],
@@ -167,8 +167,8 @@ class TestTargetType:
         assert _extract_lookup_domain(target, ttype, None) == "spiderimpex.com"
 
     def test_title_split_on_colon(self):
-        html = "<html><head><title>Tensorust: the money is in the join</title></head></html>"
-        assert _resolve_entity_name("tensorust.com", fetcher=lambda *a, **k: html) == "Tensorust"
+        html = "<html><head><title>Acmebuyer: the money is in the join</title></head></html>"
+        assert _resolve_entity_name("acmebuyer.com", fetcher=lambda *a, **k: html) == "Acmebuyer"
 
 
 # ── P2-2：每个来源的成功 / 空 / 错误 ────────────────────────────────────────
@@ -181,7 +181,7 @@ class TestRdap:
         assert result.data["creation_date"].startswith("2026-10-15")
         assert result.data["registrar"]
         assert any("注册时间" in fact["text"] for fact in result.facts)
-        assert result.facts[0]["url"] == "https://rdap.org/domain/tensorust.com"
+        assert result.facts[0]["url"] == "https://rdap.org/domain/acmebuyer.com"
 
     def test_empty(self):
         result = rdap.run(ctx(), fetch=lambda *a, **k: "{}")
@@ -322,7 +322,7 @@ class TestGleif:
 
     def test_non_matching_result_is_not_used(self):
         result = gleif.run(
-            ctx(company_name="Tensorust", domain=None, target_type="company"),
+            ctx(company_name="Acmebuyer", domain=None, target_type="company"),
             fetch=fake_fetch,
         )
         assert result.status == "miss"
@@ -363,7 +363,7 @@ class TestVies:
 class TestUsStates:
     def test_ny_registration_and_address_type(self):
         result = us_states.run(
-            ctx(company_name="TENSORUST LLC", domain=None, target_type="company"),
+            ctx(company_name="ACMEBUYER LLC", domain=None, target_type="company"),
             fetch=fake_fetch,
         )
         assert result.status == "hit"
@@ -405,7 +405,7 @@ class TestEdgar:
 
     def test_empty(self):
         result = edgar.run(
-            ctx(company_name="Tensorust", domain=None, target_type="company"),
+            ctx(company_name="Acmebuyer", domain=None, target_type="company"),
             fetch=fake_fetch,
         )
         assert result.status == "miss"
@@ -441,7 +441,7 @@ class TestGdelt:
     def test_success(self):
         result = gdelt.run(ctx(), fetch=fake_fetch)
         assert result.status == "hit"
-        assert "Tensorust" in result.facts[0]["text"]
+        assert "Acmebuyer" in result.facts[0]["text"]
         assert result.facts[0]["url"].startswith("https://")
 
     def test_error_is_reported(self):
@@ -460,7 +460,7 @@ class TestGdelt:
 class TestGravatar:
     def test_success(self):
         result = gravatar.run(
-            ctx(email="matt@tensorust.com", domain=None, target_type="email"),
+            ctx(email="matt@acmebuyer.com", domain=None, target_type="email"),
             fetch=fake_fetch,
         )
         assert result.status == "candidate"
@@ -602,7 +602,7 @@ class TestUsernameExtraction:
 
         assert _extract_username("https://github.com/janedoe", "url") == "janedoe"
         assert _extract_username("https://www.linkedin.com/in/janedoe/", "url") == "janedoe"
-        assert _extract_username("matt@tensorust.com", "email") == "matt"
+        assert _extract_username("matt@acmebuyer.com", "email") == "matt"
         assert _split_username_prefix("username:janedoe") == ("janedoe", "janedoe")
 
 
@@ -634,7 +634,7 @@ async def test_orchestrator_collects_sources_and_rdap_fills_whois(monkeypatch):
     )
     events: list[dict] = []
     report = await osint_full_check(
-        "tensorust.com",
+        "acmebuyer.com",
         include_sanctions=False,
         include_tech_stack=False,
         include_linkedin=False,
@@ -689,7 +689,7 @@ async def test_slow_source_times_out_without_blocking_others(monkeypatch):
         return fake_fetch(url, timeout)
 
     report = await osint_full_check(
-        "tensorust.com",
+        "acmebuyer.com",
         include_sanctions=False,
         include_tech_stack=False,
         include_linkedin=False,

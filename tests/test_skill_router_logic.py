@@ -567,7 +567,7 @@ def test_when_to_use_absent_for_unknown_skill():
     [
         "Jane Doe 是谁",
         "查一下Jane Doe这个人的资料",
-        "调查一下 Jane Doe，tensorust.com 的创始人",
+        "调查一下 Jane Doe，acmebuyer.com 的创始人",
         "查查张伟这个人",
         "王建国是谁",
         "Who is John Smith of Acme Inc?",

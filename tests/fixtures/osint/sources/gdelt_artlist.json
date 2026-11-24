@@ -1,16 +1,16 @@
 {
  "articles": [
   {
-   "url": "https://example.com/tensorust-launch",
-   "title": "Tensorust launches new data tool",
+   "url": "https://example.com/acmebuyer-launch",
+   "title": "Acmebuyer launches new data tool",
    "seendate": "20261115T120000Z",
    "domain": "example.com",
    "language": "English",
    "sourcecountry": "United States"
   },
   {
-   "url": "https://techsite.example/tensorust-review",
-   "title": "Review: Tensorust's data kits",
+   "url": "https://techsite.example/acmebuyer-review",
+   "title": "Review: Acmebuyer's data kits",
    "seendate": "20261030T080000Z",
    "domain": "techsite.example",
    "language": "English",

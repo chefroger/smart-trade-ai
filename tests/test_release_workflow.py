@@ -56,6 +56,11 @@ class TestPostBuildArchCheck:
         # matrix 的 x64 → x86_64；其余 arm64
         assert "matrix.arch == 'x64' && 'x86_64' || 'arm64'" in RELEASE
 
+    def test_checks_named_binary_not_first_file(self):
+        """O-新11：按主程序名取二进制，不能靠 head -n1 猜。"""
+        assert 'BIN="TradeWin.app/Contents/MacOS/TradeWin"' in RELEASE
+        assert "head -n1" not in RELEASE
+
 
 class TestManualDispatchCreatesDraftRelease:
     """W8：手动触发也要产出 Release（draft），不能只有 tag 触发才挂产物。"""

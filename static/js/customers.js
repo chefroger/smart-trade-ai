@@ -3036,6 +3036,8 @@ function _memoPromptPassword(title, withConfirm) {
         const left = _memoLockedLeft();
         if (left > 0) { toast('密语已锁定，请 ' + left + ' 秒后再试'); resolve(null); return; }
         const ov = document.createElement('div');
+        // O-新7：与结果弹层同 id，navToView 的清理选择器才扫得到
+        ov.id = 'memo-modal';
         ov.className = 'memo-modal';
         ov.innerHTML = '<div class="memo-box" style="max-width:380px;">' +
             '<div class="memo-head"><strong>' + esc(title) + '</strong></div>' +

@@ -1,6 +1,6 @@
 """P0-2 评分 fail-closed：关键层没查成时不再输出「low / 100」。
 
-工单 2026-11-21 的验收场景：tensorust.com 的「WHOIS 失败 + 制裁降级」
+工单 2026-11-21 的验收场景：acmebuyer.com 的「WHOIS 失败 + 制裁降级」
 下，结论不能是 low。这里的测试全部离线：
   - assess_verification 的层状态判定（纯函数）
   - compute_verdict 的 fail-closed 汇总
@@ -215,7 +215,7 @@ class TestRecommendationsDisclose:
         assert "本次未查" in text and "无风险" in text
 
 
-# ── 端到端：tensorust.com 场景（工单验收）─────────────────────────────────
+# ── 端到端：acmebuyer.com 场景（工单验收）─────────────────────────────────
 
 
 class TestOrchestratorFailClosed:
@@ -240,7 +240,7 @@ class TestOrchestratorFailClosed:
         monkeypatch.setattr(orch, "_resolve_entity_name", lambda domain, **kw: None)
 
         report = await orch.osint_full_check(
-            "tensorust.com",
+            "acmebuyer.com",
             include_sanctions=True,
             include_tech_stack=True,
             include_linkedin=False,
@@ -311,7 +311,7 @@ class TestOrchestratorFailClosed:
 class TestCliShowsIncomplete:
     def _report(self, **overrides) -> dict:
         report = {
-            "target": "tensorust.com",
+            "target": "acmebuyer.com",
             "target_type": "domain",
             "overall_score": None,
             "overall_rating": "incomplete",
@@ -462,7 +462,7 @@ class TestRegistryOnlyHits:
             def run(ctx, fetch=None):  # noqa: ARG004
                 return SourceResult(
                     "us_states", "hit",
-                    facts=[{"text": "纽约州登记：Tensorust LLC，成立 2026-10-30"}],
+                    facts=[{"text": "纽约州登记：Acmebuyer LLC，成立 2026-10-30"}],
                 )
 
         monkeypatch.setattr(orch, "PUBLIC_SOURCES", (_Registry(),))
@@ -474,7 +474,7 @@ class TestRegistryOnlyHits:
         monkeypatch.setattr(orch, "_resolve_entity_name", lambda domain, **kw: None)
 
         report = await orch.osint_full_check(
-            "company:Tensorust LLC", include_tech_stack=False, include_linkedin=False,
+            "company:Acmebuyer LLC", include_tech_stack=False, include_linkedin=False,
         )
 
         assert report["overall_rating"] == "limited"

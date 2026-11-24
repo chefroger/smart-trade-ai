@@ -5,7 +5,8 @@
 
 状态机：queued → running → done | failed | partial | cancelled
   - 服务重启时，遗留的 running/queued 统一标 partial（已有事件仍可读）
-  - cancel 只标记状态并停止后续事件落库；已经跑完的线程不影响结果
+  - cancel 标记状态并停止后续事件落库；O-22 起会把 should_cancel 传进
+    编排器，取消未完成的层并立即收尾（已在跑的 HTTP 线程无法强杀，结果丢弃）
 """
 
 from __future__ import annotations

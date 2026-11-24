@@ -30,6 +30,10 @@ def _large_csv_fields():
     **不能进程级全局放宽**：`trade/doc_extract.py` 依赖默认的 131072
     上限拒绝超大单元格（防止内存膨胀），全局提高会静默拆掉那道闸
     （测试 `test_huge_csv_field_returns_error` 钉住）。
+
+    O-新12：csv limit 是进程级全局值，并发解析时可能交错。制裁刷新
+    实际是串行化的（单刷新线程），影响窗口极窄；这里只在解析期间放宽并
+    立即恢复，作为已知限制记录。
     """
     previous = csv.field_size_limit()
     csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
