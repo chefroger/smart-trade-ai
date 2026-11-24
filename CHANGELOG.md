@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.9.52 — 2026-11-24
+
+- O-17 完成：147 个内联事件迁移到 data-* 委托，CSP script-src/attr 移除 unsafe-inline
+- `1a06a10` security(csp): 完成内联事件迁移，移除 script unsafe-inline（O-17）
+- `9ba90b4` refactor(ui): HTML 内联事件迁移到 data-act 委托（O-17 第二步）
+
 ## v0.9.51 — 2026-11-24
 
 - O-新6：密语失败后端节流（5 次锁定 60 秒），刷新无法绕过
