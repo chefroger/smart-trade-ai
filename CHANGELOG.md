@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.54 — 2026-11-24
+
+- O-17 样式收口：style-src-elem 只允许外部样式；脚本/事件 unsafe-inline 已移除
+- `c5c3b37` security(csp): 样式元素只允许外部文件（O-17 样式收口）
+
 ## v0.9.53 — 2026-11-24
 
 - 修复语言切换动态写 onclick 导致的 CSP 拦截（O-17 补漏）
