@@ -1515,7 +1515,8 @@ function _redactHermesLine(line) {
         .replace(/[A-Za-z]:\\[^\s"']+/g, '[路径]')
         .replace(/\\\\[^\s"']+/g, '[路径]')
         .replace(/(?:\/[\w.\-]+){2,}/g, '[路径]')
-        .replace(/\b[A-Za-z0-9_\-]{24,}\b/g, '[token]');
+        // W15 O-25：阈值降到 20 —— 20–23 位密钥此前会原样通过
+        .replace(/\b[A-Za-z0-9_\-]{20,}\b/g, '[token]');
 }
 
 function _hermesWaitLine(line) {

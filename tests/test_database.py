@@ -447,3 +447,20 @@ class TestVisitPlanPayloadScrub:
             conn.commit()
         finally:
             conn.close()
+
+
+def test_osint_facts_verified_v4_defaults_to_unverified():
+    """W15 O-6：迁移 v4 给历史事实默认 verified=0（不能凭空宣称已核实）。"""
+    import sqlite3
+
+    from trade.database import _migrate_osint_facts_verified_v4
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute("CREATE TABLE osint_facts (id INTEGER PRIMARY KEY, field TEXT)")
+        _migrate_osint_facts_verified_v4(conn)
+        conn.execute("INSERT INTO osint_facts(field) VALUES ('法定代表人')")
+        value = conn.execute("SELECT verified FROM osint_facts").fetchone()[0]
+        assert value == 0
+    finally:
+        conn.close()

@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TITLE_MAX = 200
@@ -201,7 +201,7 @@ def create_todo(
 
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         clean_customer = _coerce_customer_id(conn, customer_id, company_id)
         cur = conn.execute(
             "INSERT INTO todos (company_id, title, due_date, customer_id, source, reason) "
@@ -229,7 +229,7 @@ def update_todo(todo_id: int, *, company_id: int, **fields) -> dict | None:
 
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         # 没有任何可更新字段：原样返回当前行（或 None），不产生无意义的 UPDATE
         if not updates:
             conn.commit()
@@ -284,7 +284,7 @@ def delete_todo(todo_id: int, *, company_id: int) -> bool:
     """按 id + 公司删除待办，返回是否真的删到了行。"""
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         cur = conn.execute(
             "DELETE FROM todos WHERE id = ? AND company_id = ?",
             (todo_id, company_id),

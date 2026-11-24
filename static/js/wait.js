@@ -374,6 +374,8 @@
   };
 
   Wait.prototype.phase = function (key, zh) {
+    // W15 O-24：finish 之后再调 phase 不得改文案（finish 内部先调 phase 再置 final）
+    if (this.final) return;
     var p = PHASES[key] || PHASES.working;
     var zhText = zh ? redact(zh) : p.zh;
     if (key === this.phaseKey && this.zhEl.textContent === zhText) return;
@@ -492,9 +494,10 @@
   Wait.prototype.finish = function (o) {
     if (this.final) return;
     o = o || {};
-    this.final = true;
     var three = this.three;
+    // 先 phase 再置 final（phase 现在带 final 守卫）
     this.phase(o.phase || 'acquired', o.zh);
+    this.final = true;
     this.root.classList.add('is-final');
     this.cancelBtn.disabled = true; this.cancelBtn.textContent = o.phase === 'aborted' ? '已停止' : '完成';
     if (this.verdictEl && o.verdict) {

@@ -8,7 +8,7 @@ B2B 客户 CRUD，支持可选的文档库关联。
 import json
 import os
 
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 # CRM 商机阶段白名单（与前端 _CRM_STAGES / API Literal 对齐）
 CRM_STAGES = frozenset({"询盘", "报价", "样品", "订单"})
@@ -585,7 +585,7 @@ def record_follow_up(
     conn = get_connection()
     try:
         # 与其他写路径一致：IMMEDIATE 先拿写锁，避免 SNAPSHOT 升级失败
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         row = conn.execute(
             "SELECT extra2, extra3 FROM customers WHERE id = ? AND company_id = ?",
             (customer_id, company_id),
@@ -895,7 +895,7 @@ def update(
         # busy_timeout 完全不生效（2026-10-21 实测：瞬间 "database is locked"）。
         # 场景：用户点「保存客户」的同时，chat 请求正往 chat_memory 插一条对话
         # → 保存直接失败。IMMEDIATE 从一开始就排队拿写锁，busy_timeout 生效。
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
 
         # 读取当前 JSON 用于合并（company_id 贯穿所有写操作）
         row = conn.execute(
@@ -982,7 +982,7 @@ def delete(customer_id: int, *, company_id: int) -> bool:
     """按公司作用域删除客户。如果删除了行则返回 True。"""
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         # 双保险：显式清 contacts / inquiries（外键 CASCADE 也会清；缺表静默）
         from trade.contacts import delete_for_customer
         from trade.inquiry import delete_for_customer as delete_inquiries_for_customer

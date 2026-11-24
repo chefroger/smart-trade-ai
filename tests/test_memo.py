@@ -181,3 +181,18 @@ class TestMemoItems:
         joined = " ".join((r.get("subject") or "") + (r.get("content") or "") for r in rows)
         assert "太太" not in joined and "3 月 8 日" not in joined
         assert "咖啡" in joined
+
+
+def test_config_write_is_atomic(env, monkeypatch, tmp_path):
+    """W15 O-19：写 memo.json 用临时文件 + os.replace，不留 .tmp 半成品。"""
+    import json
+
+    from trade import memo
+
+    monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+    memo.configure("open sesame")
+    path = memo.memo_config_path()
+    assert path.is_file()
+    assert not path.with_name(path.name + ".tmp").exists()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["salt"] and data["hash"]

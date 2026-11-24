@@ -300,6 +300,13 @@ class TestSyncRunBudget:
         monkeypatch.setattr(chat, "_SYNC_TIMEOUT_SECONDS", 120.0)
         assert chat._sync_run_budget() == 60
 
+    def test_small_configured_budget_is_respected(self, monkeypatch):
+        """W15 O-23：用户显式配置 10s 不能被抬回 30s。"""
+        import trade.api.chat as chat
+
+        monkeypatch.setenv("TRADE_RUN_BUDGET_SECONDS", "10")
+        assert chat._sync_run_budget() == 10
+
 
 async def _collect_stream(company) -> tuple[str, list[dict]]:
     import trade.api.chat as chat

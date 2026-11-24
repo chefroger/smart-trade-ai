@@ -55,6 +55,10 @@ layout: default
 
 如果你用的是 Mac 电脑，按以下步骤操作。
 
+> **使用打包版 TradeWin.app 的用户注意（W15 O-12）**：`.app` **不内嵌 Hermes**。
+> 请先按本页第五步安装 Hermes（确保 `hermes` 命令可用、Python 3.14 就绪），
+> 再打开 TradeWin.app；否则 Trade 虽能启动，但 AI 功能会显示不可用。
+
 ### 第一步：确保科学上网已启动
 
 这个工具需要从 GitHub 下载代码。在开始之前，**必须先打开你的科学上网工具**（VPN / Clash / V2Ray 等），确保网络通畅。

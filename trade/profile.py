@@ -13,7 +13,7 @@ import unicodedata
 from datetime import date, datetime
 from typing import Any
 
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 from trade.privacy_terms import contains_family_terms
 
 _log = logging.getLogger(__name__)
@@ -449,7 +449,7 @@ def create_fact_manual(
 
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         existing = conn.execute(
             "SELECT * FROM customer_facts WHERE customer_id=? AND fingerprint=?",
             (customer_id, fp),
@@ -576,7 +576,7 @@ def update_fact(
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         clash = conn.execute(
             "SELECT id FROM customer_facts WHERE customer_id=? AND fingerprint=? AND id!=?",
             (customer_id, fp, fact_id),
@@ -786,7 +786,7 @@ def create_gift_manual(
 
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         existing = conn.execute(
             "SELECT * FROM customer_gifts WHERE customer_id=? AND fingerprint=?",
             (customer_id, fp),
@@ -909,7 +909,7 @@ def update_gift(
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         clash = conn.execute(
             "SELECT id FROM customer_gifts WHERE customer_id=? AND fingerprint=? AND id!=?",
             (customer_id, fp, gift_id),
@@ -1186,7 +1186,7 @@ def _insert_pending_fact(
     fp = fact_fingerprint(category, subject, content)
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         cur = conn.execute(
             "INSERT OR IGNORE INTO customer_facts ("
             "company_id, customer_id, attach_to, contact_id, category, subject, "
@@ -1222,7 +1222,7 @@ def _insert_pending_gift(
     fp = gift_fingerprint(direction, item, gift_date, occasion)
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         cur = conn.execute(
             "INSERT OR IGNORE INTO customer_gifts ("
             "company_id, customer_id, attach_to, contact_id, direction, item, "

@@ -610,3 +610,90 @@ class TestTokenizerMigration:
         assert result["hits"] == []
         assert "迁移" in result["suggestion"]
         assert "无制裁记录" in result["suggestion"]
+
+
+# ── 刷新/匹配安全（W15 O-1/O-2/O-5）───────────────────────────────────────
+
+
+class TestRefreshSafety:
+    def _make_db(self, path, *, fetched_at: str, entries: int = 10):
+        import sqlite3
+
+        from trade.osint.sanctions import store
+        from trade.osint.sanctions.store import _now_iso
+
+        conn = sqlite3.connect(str(path))
+        conn.row_factory = sqlite3.Row
+        store.ensure_writable_db(conn)
+        conn.execute(
+            "INSERT INTO lists(name, label, entries, aliases, rows_total, source_url, "
+            "fetched_at, last_attempt_at) VALUES (?,?,?,?,?,?,?,?)",
+            ("OFAC", "美国 OFAC SDN 名单", entries, 0, entries,
+             "https://example.test/x.csv", fetched_at,
+             _now_iso()),
+        )
+        conn.execute(
+            "INSERT INTO entities(list, name, norm, tkey, country, kind) VALUES (?,?,?,?,?,?)",
+            ("OFAC", "ACME TRADING", "acme trading", "acme trading", "", "entity"),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_corrupt_fetched_at_is_degraded(self, sanctions_db):
+        """O-1：损坏时间戳不能回落成「刚抓过」。"""
+        from trade.osint.sanctions.store import get_coverage
+
+        self._make_db(sanctions_db, fetched_at="not-a-date")
+        cov = get_coverage()
+        assert cov["lists"]["OFAC"]["degraded"] is True
+        assert cov["degraded"] is True
+        assert "无法解析" in (cov["lists"]["OFAC"].get("note") or "")
+
+    def test_save_list_refuses_sharp_shrink(self, sanctions_db):
+        """O-2：解析条目剧烈缩水时保留旧数据。"""
+        import sqlite3
+
+        from trade.osint.sanctions import store
+        from trade.osint.sanctions.sources import ParsedList, Source
+
+        self._make_db(sanctions_db, fetched_at="2026-11-23T00:00:00+00:00", entries=1000)
+        src = Source("OFAC", "OFAC", "ofac_sdn", ("https://example.test/x.csv",))
+        parsed = ParsedList(
+            label="OFAC", source_url=src.urls[0], primary=1, aliases=0,
+            rows_total=1, rows=[("ACME TRADING", "", "entity")],
+        )
+        conn = sqlite3.connect(str(sanctions_db))
+        conn.row_factory = sqlite3.Row
+        try:
+            store.ensure_writable_db(conn)
+            with pytest.raises(ValueError, match="缩水"):
+                store.save_list(conn, src, parsed)
+        finally:
+            conn.close()
+
+    def test_candidate_cap_follows_up_with_and_query(self, sanctions_db, monkeypatch):
+        """O-5：候选达到上限时用 AND 补查，真命中不被挤出。"""
+        import sqlite3
+
+        from trade.osint.sanctions import store
+
+        conn = sqlite3.connect(str(sanctions_db))
+        conn.row_factory = sqlite3.Row
+        try:
+            store.ensure_writable_db(conn)
+            conn.executemany(
+                "INSERT INTO entities(list, name, norm, tkey, country, kind) "
+                "VALUES (?,?,?,?,?,?)",
+                [
+                    ("OFAC", "ACME OTHER", "acme other", "acme other", "", "entity"),
+                    ("OFAC", "ACME TRADING", "acme trading", "acme trading", "", "entity"),
+                ],
+            )
+            store.rebuild_fts(conn)
+            conn.commit()
+            monkeypatch.setattr(store, "_CANDIDATE_LIMIT", 1)
+            rows = store._candidates(conn, frozenset({"acme", "trading"}))
+            names = {row["name"] for row in rows}
+            assert "ACME TRADING" in names
+        finally:
+            conn.close()

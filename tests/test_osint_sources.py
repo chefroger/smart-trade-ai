@@ -390,6 +390,11 @@ class TestUsStates:
 
 
 class TestEdgar:
+    @pytest.fixture(autouse=True)
+    def _contact_email(self, monkeypatch):
+        # W15 O-8：不内置个人邮箱；测试统一显式配置
+        monkeypatch.setenv("TRADE_CONTACT_EMAIL", "ops@acme.test")
+
     def test_success(self):
         result = edgar.run(
             ctx(company_name="Apple", domain=None, target_type="company"),
@@ -412,12 +417,20 @@ class TestEdgar:
         )
         assert result.status == "skipped"
 
-    def test_contact_email_default_is_real(self, monkeypatch):
-        """审计 P2-9：默认联系邮箱不能是 .example 保留域（SEC 会拒绝）。"""
+    def test_unconfigured_contact_email_skips(self, monkeypatch):
+        """W15 O-8：不内置个人邮箱；未配置时 skipped，不冒用身份请求 SEC。"""
         monkeypatch.delenv("TRADE_CONTACT_EMAIL", raising=False)
-        ua = edgar._headers()["User-Agent"]
-        assert "example" not in ua
-        assert edgar.DEFAULT_CONTACT_EMAIL in ua
+        assert edgar._headers() == {}
+        result = edgar.run(
+            ctx(company_name="Apple", domain=None, target_type="company"),
+            fetch=fake_fetch,
+        )
+        assert result.status == "skipped"
+
+    def test_invalid_contact_email_is_rejected(self, monkeypatch):
+        """W15 O-16：格式不合法的邮箱不能发出去。"""
+        monkeypatch.setenv("TRADE_CONTACT_EMAIL", "not-an-email")
+        assert edgar._headers() == {}
 
     def test_contact_email_configured_via_env(self, monkeypatch):
         monkeypatch.setenv("TRADE_CONTACT_EMAIL", "ops@acme.test")
@@ -557,8 +570,24 @@ class TestUsernames:
             {"name": "Retry", "uri_check": "https://retry.example/{account}",
              "e_string": "profile", "e_code": 301},
         ])
-        result = usernames.run(ctx(username="matt"), fetch=lambda *a, **k: (200, "profile page"))
+        result = usernames.run(
+            ctx(username="matt"),
+            # 第三个元素是最终 URL：与请求 URL 不同 = 确实跟随了重定向
+            fetch=lambda *a, **k: (200, "profile page", "https://retry.example/matt/"),
+        )
         assert result.status == "candidate"
+
+    def test_direct_200_when_redirect_expected_is_not_a_hit(self, monkeypatch):
+        """W15 O-3：直接 200（最终 URL 未变）不能冒充「跟随了重定向」。"""
+        monkeypatch.setattr(usernames, "_load_sites", lambda: [
+            {"name": "Retry", "uri_check": "https://retry.example/{account}",
+             "e_string": "profile", "e_code": 301},
+        ])
+        result = usernames.run(
+            ctx(username="matt"),
+            fetch=lambda *a, **k: (200, "profile page", "https://retry.example/matt"),
+        )
+        assert result.status == "miss"
 
     def test_fetch_page_wraps_plain_fetcher_as_200(self):
         from trade.osint.sources.base import fetch_page

@@ -1,13 +1,15 @@
 """SEC EDGAR 全文检索（工单 P2-2）：美国上市/申报主体的申报记录。
 
-统一检索接口要求 UA 带联系邮箱；邮箱取自 `TRADE_CONTACT_EMAIL`（写在
-`~/.hermes/.env`），未配置时用项目维护者的真实邮箱兜底 —— 不能用
-`.example` 保留域占位（SEC 会拒绝，且审计 P2-9 指出它不可配置）。
+统一检索接口要求 UA 带联系邮箱；邮箱取自当前公司的 contact_email 或
+`TRADE_CONTACT_EMAIL`（写在 `~/.hermes/.env`）。**不内置任何个人邮箱兜底**
+（W15 O-8）：未配置或格式不合法时该层 skipped 并写明原因，不冒用他人身份
+向 SEC 发请求。
 """
 
 from __future__ import annotations
 
 import os
+import re
 
 from trade.osint.sources.base import (
     Fetcher,
@@ -21,14 +23,22 @@ from trade.osint.sources.base import (
 NAME = "edgar"
 LABEL = "SEC EDGAR 申报"
 SEARCH = "https://efts.sec.gov/LATEST/search-index?q=%22{hint}%22"
-# SEC 要求 UA 带可联系的真实邮箱；保留域 .example 会被拒（审计 P2-9）
-DEFAULT_CONTACT_EMAIL = "chefrogerlau@126.com"
+# 简单格式校验（W15 O-16）：有 @、有域名点、无空白
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
+
+def _contact_email(ctx: TargetContext | None = None) -> str:
+    """当前可用的联系邮箱（公司配置优先，其次环境变量）；无/非法返回空串。"""
+    email = str(getattr(ctx, "contact_email", "") or "").strip()
+    email = email or os.environ.get("TRADE_CONTACT_EMAIL", "").strip()
+    return email if _EMAIL_RE.match(email) else ""
 
 
 def _headers(ctx: TargetContext | None = None) -> dict[str, str]:
-    # 优先当前公司的 contact_email，其次环境变量，最后维护者地址（审计 P2-3）
-    email = str(getattr(ctx, "contact_email", "") or "").strip()
-    email = email or os.environ.get("TRADE_CONTACT_EMAIL", "").strip() or DEFAULT_CONTACT_EMAIL
+    """EDGAR 请求头；未配置合法联系邮箱时返回空 dict（调用方应 skipped）。"""
+    email = _contact_email(ctx)
+    if not email:
+        return {}
     return {
         "User-Agent": f"Trade-AI/1.0 ({email})",
         "Accept": "application/json",
@@ -48,10 +58,16 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     hint = _hint(ctx).strip()
     if not hint or ctx.target_type == "person":
         return skipped(NAME, "没有可用于 EDGAR 的公司名")
+    headers = _headers(ctx)
+    if not headers:
+        return skipped(
+            NAME,
+            "未配置合法的联系邮箱（TRADE_CONTACT_EMAIL），SEC 要求 UA 带联系邮箱",
+        )
 
     url = SEARCH.format(hint=quote(hint))
     try:
-        payload = fetch_json(url, fetch=fetch, headers=_headers(ctx))
+        payload = fetch_json(url, fetch=fetch, headers=headers)
     except Exception as exc:  # noqa: BLE001
         return SourceResult(NAME, "error", error=f"EDGAR 查询失败：{exc}")
     if not isinstance(payload, dict):

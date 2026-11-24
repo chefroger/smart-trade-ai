@@ -221,51 +221,6 @@ function stopVersionCheck() {
     if (_versionPollTimer) { clearInterval(_versionPollTimer); _versionPollTimer = null; }
 }
 
-async function doUpdateSystem() {
-    const btn = document.getElementById('update-banner');
-    if (!(await _confirmTradeUpdate())) return;
-    // 按钮忙态统一走 _setBtnBusy（存 innerHTML 再还原），与 doTradeUpdate 同机制：
-    // 手写 textContent 会把图标按钮的图标抹掉，恢复时也只能硬编码一份 HTML。
-    _setBtnBusy(btn, true);
-    _setUpdateInFlight(true);
-    // 忙态提示走 toast：按钮已变成旋转图标，文字提示不能丢（与 doTradeUpdate 一致）
-    toast(t('sys.updating_now'));
-    try {
-        const resp = await api('POST', '/api/trade/system/update',
-            {target_sha: _pendingUpdateTarget || null},
-            {'X-Confirm-Update': 'yes'});
-        if (resp?.ok) {
-            // 只显示用户在确认框里见过的 SHA；预览失败时宁可不显示
-            const appliedShort = (_pendingUpdateTarget || '').slice(0, 8);
-            const suffix = appliedShort ? '（目标 ' + appliedShort + '）' : '';
-            toast('✅ 更新完成。请点击"🔄 重启"以应用新版本。' + suffix);
-            // 非致命步骤失败只算警告，不阻止升级，但必须让用户看见
-            if (resp.warnings && resp.warnings.length) {
-                toast('⚠️ 升级完成，但有 ' + resp.warnings.length + ' 项警告：' + resp.warnings.join('; '),
-                    {sticky: true});
-            }
-            // 后端永不自动重启：升级**全部完成**后才露出重启按钮
-            if (btn) { btn.remove(); }
-            _setUpdateInFlight(false);
-            _showRestartPrompt();
-            checkVersion();
-        } else if (resp?.error || (resp?.errors && resp.errors.length)) {
-            // 之前这里只有一句「更新失败」，用户无从知道原因
-            toast(_updateErrorText(resp), {sticky: true});
-            _setBtnBusy(btn, false);
-            _setUpdateInFlight(false);
-        } else {
-            // resp 为 null 时 api() 已 toast，不重复提示
-            _setUpdateInFlight(false);
-        }
-    } catch(e) {
-        // 更新请求不会触发服务重启（后端不自动重启）：按普通网络失败处理
-        toast(t('sys.update_network'));
-        _setBtnBusy(btn, false);
-        _setUpdateInFlight(false);
-    }
-}
-
 async function loadCronStatus(isPoll = false) {
     if (!currentCompanyId) return;
     const data = await api('GET', '/api/trade/cron/today', null, undefined, {

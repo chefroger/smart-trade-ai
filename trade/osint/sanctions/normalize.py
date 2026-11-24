@@ -14,7 +14,7 @@ import unicodedata
 _PUNCT_RE = re.compile(r"[^\w\s]+|_+", re.UNICODE)
 _SPACE_RE = re.compile(r"\s+")
 
-# 中文公司名的法定后缀：不参与匹配（"华为技术有限公司" 应能用 "华为" 对上）
+# 中文公司名的法定后缀：不参与匹配（"某某科技有限公司" 应能用 "某某" 对上）
 _CJK_SUFFIXES = (
     "股份有限公司", "有限责任公司", "集团有限公司", "有限公司",
     "集团", "公司", "控股", "实业", "贸易", "科技", "技术",
@@ -39,7 +39,7 @@ def normalize_name(name: str) -> str:
 
     "ABU TEIR, Mohammed" → "abu teir mohammed"
     "Müller GmbH"        → "muller gmbh"
-    "华为技术有限公司"     → "华为"
+    "某某科技有限公司"     → "某某"
     """
     text = unicodedata.normalize("NFKD", str(name or ""))
     text = "".join(ch for ch in text if not unicodedata.combining(ch))

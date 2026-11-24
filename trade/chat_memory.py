@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import datetime
 
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ def set_conversation_note(
     """写入对话标题/摘要到 conversations.extra3（合并，保留 skill 等既有键）。"""
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         row = conn.execute(
             "SELECT extra3 FROM conversations WHERE id = ? AND company_id = ?",
             (conversation_id, company_id),

@@ -312,6 +312,10 @@ def _earliest_stamp(*values: str | None) -> str | None:
             parsed = datetime.fromisoformat(str(value))
         except (TypeError, ValueError):
             continue
+        # W15 O-21：手写/旧版戳可能没有时区；与带时区的锚点比较会 TypeError。
+        # 统一按 UTC 解释（正常流程写出的都是 UTC 感知格式）。
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
         if best_dt is None or parsed < best_dt:
             best, best_dt = str(value), parsed
     return best
@@ -444,7 +448,12 @@ def license_state(company_id: int | None = None) -> tuple[str, str]:
     只读判断，不会写 first_launch_at —— 供中间件/副驾门控频繁调用。
     到期是**软着陆**：数据仍可查看，只停起草；message 是给用户看的口径。
     """
-    data = _get_license_data(company_id)
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # W15 O-21：手改文件/读取异常不能把接口打成 500（fail-closed 到重新激活）
+        _log.exception("读取许可证数据失败")
+        return "tampered", "许可证数据读取异常，请使用激活码重新激活。"
     now = datetime.now(UTC)
 
     if data.get("activated") and data.get("expires_at"):
@@ -512,7 +521,12 @@ def check_license(company_id: int | None = None) -> tuple[bool, str]:
     """
     global _LICENSE_WRITE_ERROR, _PROCESS_FIRST_LAUNCH
 
-    data = _get_license_data(company_id)
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # W15 O-21：读取异常按「不允许起草」处理，但不能 500
+        _log.exception("读取许可证数据失败")
+        return False, "许可证数据读取异常，请重新激活后再起草。"
     now = datetime.now(UTC)
 
     # 损坏的试用起点：尽量重写为有效时间；若进程内已知起点已超期，则拒绝

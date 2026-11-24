@@ -67,12 +67,22 @@ def set_unlock_mode(mode: str) -> str:
         raise MemoError("策略只能是 always 或 session")
     data = _load_config()
     data["unlock_mode"] = value
+    _write_config(data)
+    return value
+
+
+def _write_config(data: dict) -> None:
+    """原子写 memo.json（W15 O-19）：临时文件 + os.replace，避免半截 JSON。
+
+    Windows 没有 POSIX 0600 权限位；POSIX 上仍收紧为 0600。
+    """
     path = memo_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, path)
     if os.name != "nt":
         path.chmod(0o600)
-    return value
 
 
 def _hash(passphrase: str, salt_hex: str, iterations: int) -> str:
@@ -99,11 +109,7 @@ def configure(passphrase: str) -> None:
         # 保留用户已选的策略（配置密语不应重置为默认）
         "unlock_mode": unlock_mode(),
     }
-    path = memo_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    if os.name != "nt":
-        path.chmod(0o600)
+    _write_config(payload)
 
 
 def verify(passphrase: str) -> bool:

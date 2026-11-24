@@ -68,10 +68,10 @@ test('升级失败/警告用常驻提示，不再 3 秒一闪而过', () => {
   assert.match(SRC, /function toast\(msg, opts\)/);
   assert.match(SRC, /toast-close/);
   assert.match(css, /\.toast\.sticky/);
-  // 两个升级入口的失败分支都要带出真实原因，并常驻
+  // 升级入口的失败分支要带出真实原因，并常驻（W15 O-20 后只剩 doTradeUpdate）
   assert.match(SRC, /function _updateErrorText\(resp\)/);
   const hits = SRC.match(/toast\(_updateErrorText\(resp\), \{sticky: true\}\)/g) || [];
-  assert.strictEqual(hits.length, 2, '两个升级入口都要常驻显示失败原因');
+  assert.ok(hits.length >= 1, '升级入口要常驻显示失败原因');
   // 旧的一闪而过写法不得回来
   assert.ok(!SRC.includes("toast(t('sys.update_fail') + errMsg)"));
   assert.ok(!SRC.includes("toast('⚠️ 更新失败')"));
@@ -145,18 +145,13 @@ test('更新确认框展示目标 SHA，并把它传给后端（显示即所用�
   assert.match(body, /\/api\/trade\/system\/update-preview/);
   assert.match(body, /_pendingUpdateTarget = d\.sha/);
   assert.match(body, /\{target\}/);
-  for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
-    const b = SRC.slice(SRC.indexOf(fn), SRC.indexOf('\n}', SRC.indexOf(fn)));
-    assert.match(b, /target_sha: _pendingUpdateTarget/, `${fn} 必须把目标 SHA 传给后端`);
-  }
+  const fn = 'async function doTradeUpdate';
+  const b = SRC.slice(SRC.indexOf(fn), SRC.indexOf('\n}', SRC.indexOf(fn)));
+  assert.match(b, /target_sha: _pendingUpdateTarget/, `${fn} 必须把目标 SHA 传给后端`);
 });
 
-test('doUpdateSystem 不再假装服务会自动重启', () => {
-  const start = SRC.indexOf('async function doUpdateSystem');
-  const body = SRC.slice(start, SRC.indexOf('\n}', start));
-  assert.ok(!body.includes('服务器有可能抢先重启'), 'catch 分支不得再假设服务自动重启');
-  assert.ok(!body.includes('restartScheduled = true'));
-  assert.match(body, /_showRestartPrompt\(\)/);
+test('无用入口 doUpdateSystem 已删除（W15 O-20）', () => {
+  assert.ok(!SRC.includes('async function doUpdateSystem'));
 });
 
 test('Hermes 升级成功改为手动重启', () => {
@@ -164,34 +159,28 @@ test('Hermes 升级成功改为手动重启', () => {
   assert.ok(!SRC.includes('reloadAfterHermesUpgrade'), '旧的自动等待重启必须删掉');
 });
 
-test('两个更新入口都先确认再 POST', () => {
-  for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
-    const start = SRC.indexOf(fn);
-    assert.ok(start > 0, `找不到 ${fn}`);
-    const body = SRC.slice(start, SRC.indexOf('\n}', start));
-    const confirmAt = body.indexOf('_confirmTradeUpdate');
-    const postAt = body.indexOf("api('POST', '/api/trade/system/update'");
-    assert.ok(confirmAt > 0 && confirmAt < postAt, `${fn} 必须先确认再发更新请求`);
-    assert.match(body, /'X-Confirm-Update': 'yes'/, `${fn} 必须带后端要求的确认头`);
-  }
+test('更新入口先确认再 POST', () => {
+  const fn = 'async function doTradeUpdate';
+  const start = SRC.indexOf(fn);
+  assert.ok(start > 0, `找不到 ${fn}`);
+  const body = SRC.slice(start, SRC.indexOf('\n}', start));
+  const confirmAt = body.indexOf('_confirmTradeUpdate');
+  const postAt = body.indexOf("api('POST', '/api/trade/system/update'");
+  assert.ok(confirmAt > 0 && confirmAt < postAt, `${fn} 必须先确认再发更新请求`);
+  assert.match(body, /'X-Confirm-Update': 'yes'/, `${fn} 必须带后端要求的确认头`);
 });
 
-test('两个更新入口用同一套按钮忙态机制', () => {
-  // 2026-11-20：_setBtnBusy 从 textContent 改成 innerHTML 之后，
-  // doUpdateSystem 里手写的 btn.textContent / btn.innerHTML 成了同类 bug 的残留
-  // ——textContent 会把图标按钮的图标抹掉，恢复也只能硬编码一份 HTML。
-  // 两个入口必须走同一个机制，否则改一处就漏一处。
-  for (const fn of ['async function doTradeUpdate', 'async function doUpdateSystem']) {
-    const start = SRC.indexOf(fn);
-    assert.ok(start > 0, `找不到 ${fn}`);
-    const body = SRC.slice(start, SRC.indexOf('\n}', start));
-    // 2026-11-22：长等待改用统一内联样式 _setBtnWait（返回 restore），
-    // 短刷新仍用 _setBtnBusy；两者都必须是同一套“存原样、恢复原样”的机制。
-    assert.match(body, /_setBtnBusy\(btn, true\)|_setBtnWait\(btn,/, `${fn} 必须用统一忙态机制进入等待`);
-    assert.match(body, /_setBtnBusy\(btn, false\)|restoreBtn\(\)/, `${fn} 必须用统一机制还原按钮`);
-    assert.ok(!/btn\.textContent\s*=/.test(body), `${fn} 不得手写 btn.textContent（会抹掉图标）`);
-    assert.ok(!/btn\.innerHTML\s*=/.test(body), `${fn} 不得手写 btn.innerHTML（还原须走 dataset）`);
-  }
+test('更新入口用统一按钮忙态机制', () => {
+  // 手写 textContent/innerHTML 会把图标按钮的图标抹掉，恢复也只能硬编码 HTML。
+  const fn = 'async function doTradeUpdate';
+  const start = SRC.indexOf(fn);
+  assert.ok(start > 0, `找不到 ${fn}`);
+  const body = SRC.slice(start, SRC.indexOf('\n}', start));
+  // 长等待用 _setBtnWait（返回 restore），短刷新用 _setBtnBusy；同一套“存原样、恢复原样”
+  assert.match(body, /_setBtnBusy\(btn, true\)|_setBtnWait\(btn,/, `${fn} 必须用统一忙态机制进入等待`);
+  assert.match(body, /_setBtnBusy\(btn, false\)|restoreBtn\(\)/, `${fn} 必须用统一机制还原按钮`);
+  assert.ok(!/btn\.textContent\s*=/.test(body), `${fn} 不得手写 btn.textContent（会抹掉图标）`);
+  assert.ok(!/btn\.innerHTML\s*=/.test(body), `${fn} 不得手写 btn.innerHTML（还原须走 dataset）`);
 });
 
 // P1-F：打印/长图前必须按内容过滤家庭称谓（分类不可靠）
@@ -210,4 +199,14 @@ test('待办显示未定日期与原因', () => {
   assert.match(SRC, /未定日期/);
   assert.match(SRC, /id="todo-add-reason"/);
   assert.match(SRC, /原因：/);
+});
+
+test('切视图会关闭挂在 body 上的私密备忘录（W15 O-14）', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'ui.js'), 'utf8');
+  const start = src.indexOf('function navToView');
+  const body = src.slice(start, src.indexOf('\n}', start) + 2000);
+  assert.match(body, /#memo-modal/, 'navToView 必须清理 #memo-modal');
+  assert.match(body, /remove\(\)/);
 });

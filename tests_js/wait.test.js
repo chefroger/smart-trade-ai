@@ -274,3 +274,13 @@ test('verdict=limited 显示「仅完成制裁筛查」，不写成已完成', (
   assert.ok(!/已完成$/.test(wait.zhEl.textContent), '不得把 limited 显示成已完成');
   wait.destroy();
 });
+
+test('finish 之后 phase 不再改文案（W15 O-24）', () => {
+  const env = loadComponent();
+  const { wait } = mountTask(env);
+  wait.finish({ phase: 'acquired' });
+  const before = wait.zhEl.textContent;
+  wait.phase('searching', '不该出现');
+  assert.strictEqual(wait.zhEl.textContent, before);
+  wait.destroy();
+});

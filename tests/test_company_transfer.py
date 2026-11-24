@@ -1108,3 +1108,13 @@ class TestVersionResolution:
             f"版本不一致：trade.__version__={__version__!r}，"
             f"pyproject={py_version!r}"
         )
+
+
+def test_family_filter_fails_closed_when_profile_unavailable(monkeypatch):
+    """W15 O-15：过滤函数不可用时按敏感处理，不能 fail-open 放进导出包。"""
+    import sys
+
+    from trade.company.transfer import exporter
+
+    monkeypatch.setitem(sys.modules, "trade.profile", None)
+    assert exporter._row_has_family_terms({"subject": "x", "content": "y"}) is True

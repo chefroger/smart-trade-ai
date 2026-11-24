@@ -18,6 +18,23 @@ except ImportError:
 _crypto_needed = pytest.mark.skipif(not _HAS_CRYPTO, reason="cryptography 未安装")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_license_files(monkeypatch, tmp_path):
+    """W15 O-28：每个用例独立的 license.json / 试用锚点。
+
+    此前 status()/check_license() 在 mock 数据下仍会走真实写盘，
+    把 40 天前的戳写进会话级 license.json，后续 test_chat_smoke 读到过期
+    许可直接 402（两文件合跑必现）。隔离路径后互不影响。
+    """
+    from trade import license as license_mod
+
+    monkeypatch.setattr(license_mod, "_license_file_path", lambda: tmp_path / "license.json")
+    monkeypatch.setattr(license_mod, "_trial_anchor_path", lambda: tmp_path / "trial_anchor")
+    monkeypatch.setattr(license_mod, "_PROCESS_FIRST_LAUNCH", None)
+    monkeypatch.setattr(license_mod, "_LICENSE_WRITE_ERROR", "")
+    yield
+
+
 class TestMachineId:
     """机器码生成测试"""
 
@@ -891,3 +908,33 @@ class TestTrialHardening:
         lic.check_license()
 
         assert lic._trial_anchor_path().is_file(), "升级后的老安装没有补写试用锚点"
+
+
+class TestTimezoneAndReadFailures:
+    """W15 O-21：时区归一化 + 读取异常不 500。"""
+
+    def test_naive_and_aware_stamps_compare(self, monkeypatch):
+        import json
+
+        from trade import license as license_mod
+
+        license_mod._license_file_path().write_text(
+            json.dumps({"first_launch_at": "2026-01-01T00:00:00"}), encoding="utf-8",
+        )
+        license_mod._trial_anchor_path().write_text(
+            "2026-06-01T00:00:00+00:00", encoding="utf-8",
+        )
+        data = license_mod._get_license_data()
+        assert data["first_launch_at"] == "2026-01-01T00:00:00"
+
+    def test_read_exception_does_not_raise(self, monkeypatch):
+        from trade import license as license_mod
+
+        def _boom(cid=None):
+            raise RuntimeError("broken license")
+
+        monkeypatch.setattr(license_mod, "_get_license_data", _boom)
+        state, message = license_mod.license_state(1)
+        assert state == "tampered" and message
+        ok, msg = license_mod.check_license(1)
+        assert ok is False and msg

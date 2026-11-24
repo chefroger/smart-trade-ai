@@ -72,7 +72,7 @@ def ensure_tokenizer_migrated() -> bool:
     """旧库就地重建 norm/tkey（W5），失败绝不抛异常。
 
     归一化规则升级（剥中文后缀/泛词）后、首次成功刷新前，旧库里的
-    `norm`/`tkey` 仍是旧口径：查「华为」「华为技术有限公司」都会漏。
+    `norm`/`tkey` 仍是旧口径：查「某某」「某某科技有限公司」都会漏。
     这里在第一次查询前把现有条目按当前规则重算一遍（只写两列 + 重建
     FTS），几秒内完成；随后写版本标记，之后不再执行。
 
@@ -213,6 +213,18 @@ def save_list(conn: sqlite3.Connection, source, parsed, *, fetched_at: str | Non
         raise ValueError(
             f"解析结果为空，拒绝覆盖旧名单（主名 {parsed.primary}，源行 {parsed.rows_total}）"
         )
+    # W15 O-2：剧烈缩水（官方格式变更/下载截断但没抛错）同样不能删全表。
+    # 阈值 50%：正常名单日变化远小于此。
+    previous = conn.execute(
+        "SELECT entries FROM lists WHERE name = ?", (source.name,),
+    ).fetchone()
+    previous_entries = int(previous["entries"] or 0) if previous else 0
+    new_primary = int(parsed.primary or 0)
+    if previous_entries >= 100 and new_primary < previous_entries // 2:
+        raise ValueError(
+            f"解析条目剧烈缩水（{previous_entries} → {new_primary}），"
+            "保留上次成功数据"
+        )
     conn.execute("DELETE FROM entities WHERE list = ?", (source.name,))
     conn.executemany(
         "INSERT INTO entities(list, name, norm, tkey, country, kind) VALUES (?,?,?,?,?,?)",
@@ -324,12 +336,20 @@ def get_coverage() -> dict:
             "degraded": False,
         }
         total_entries += entry["entries"]
+        parse_failed = False
         try:
             fetched = datetime.fromisoformat(row["fetched_at"])
+            # 无时区戳（手写/旧版）按 UTC 解释，否则与 aware 的 now 相减会 TypeError
+            if fetched.tzinfo is None:
+                fetched = fetched.replace(tzinfo=UTC)
             age_hours = max(0.0, (now - fetched).total_seconds() / 3600)
         except (ValueError, TypeError):
-            # 无时区/损坏的 fetched_at 不能让整个制裁层瘫痪（审计 P2-7）
-            age_hours = 0.0
+            # W15 O-1：损坏时间戳不能回落成「刚抓过」（fail-open）。
+            # 按过期一周以上处理，让 degraded 生效。
+            parse_failed = True
+            age_hours = float(STALE_DEGRADED_HOURS + 1)
+            entry["degraded"] = True
+            degraded = True
         stale = age_hours > STALE_WARN_HOURS
         if stale:
             any_stale = True
@@ -355,6 +375,9 @@ def get_coverage() -> dict:
             entry["degraded"] = True
             entry["note"] = "名单解析结果为 0 条，按降级处理"
             degraded = True
+        if parse_failed:
+            note = "fetched_at 无法解析，按过期数据处理"
+            entry["note"] = f"{entry['note']}；{note}" if entry.get("note") else note
         lists[source.name] = entry
 
     if legacy_tokenizer:
@@ -384,31 +407,65 @@ def _has_fts(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+# 候选集上限（W15 O-5）：达到上限时补一次 AND 查询，避免真命中被挤出
+_CANDIDATE_LIMIT = 20000
+
+
+def _merge_rows(primary: list[sqlite3.Row], extra: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """按 id 合并两组候选（保持首组的顺序）。"""
+    seen = {row["id"] for row in primary}
+    merged = list(primary)
+    for row in extra:
+        if row["id"] not in seen:
+            seen.add(row["id"])
+            merged.append(row)
+    return merged
+
+
 def _candidates(conn: sqlite3.Connection, q_tokens: frozenset[str]) -> list[sqlite3.Row]:
     """取可能匹配的候选行（token 至少共享一个）。
 
     FTS5 可用时用全文索引；不可用时用 LIKE（慢一些，但结果集一致）。
+    W15 O-5：OR + LIMIT 理论上有「真命中被挤出」的风险 —— 结果达到上限时
+    再用**所有 token 的 AND** 补查一次（核心匹配/子集匹配都必须包含全部
+    查询核心 token），把被挤出的行捞回来。
     """
     if not q_tokens:
         return []
+    and_clause = " AND ".join("norm LIKE ?" for _ in q_tokens)
+    and_params = [f"%{token}%" for token in sorted(q_tokens)]
+
+    def _and_followup(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+        if len(rows) < _CANDIDATE_LIMIT:
+            return rows
+        extra = conn.execute(
+            f"SELECT id, name, list, country, kind, tkey FROM entities "
+            f"WHERE {and_clause} LIMIT {_CANDIDATE_LIMIT}",
+            and_params,
+        ).fetchall()
+        return _merge_rows(rows, extra)
+
     if _has_fts(conn):
         expression = " OR ".join(f'"{token}"' for token in sorted(q_tokens))
         try:
-            return conn.execute(
+            rows = conn.execute(
                 "SELECT e.id, e.name, e.list, e.country, e.kind, e.tkey "
                 "FROM entities e WHERE e.id IN "
-                "(SELECT rowid FROM entities_fts WHERE entities_fts MATCH ?) LIMIT 20000",
+                "(SELECT rowid FROM entities_fts WHERE entities_fts MATCH ?) "
+                f"LIMIT {_CANDIDATE_LIMIT}",
                 (expression,),
             ).fetchall()
+            return _and_followup(rows)
         except sqlite3.OperationalError:
             pass  # FTS 索引尚未建立（首次刷新中断）：走 LIKE 兜底
     clauses = " OR ".join("norm LIKE ?" for _ in q_tokens)
     params = [f"%{token}%" for token in sorted(q_tokens)]
-    return conn.execute(
+    rows = conn.execute(
         f"SELECT id, name, list, country, kind, tkey FROM entities "
-        f"WHERE {clauses} LIMIT 20000",
+        f"WHERE {clauses} LIMIT {_CANDIDATE_LIMIT}",
         params,
     ).fetchall()
+    return _and_followup(rows)
 
 
 def _person_spelling_variant(q_core, entry_core) -> bool:

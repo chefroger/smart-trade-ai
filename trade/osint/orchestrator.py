@@ -119,6 +119,7 @@ async def osint_full_check(
     budget: float = 150.0,
     on_event: EventCallback | None = None,
     source_fetcher=None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict:
     """完整 OSINT 尽职调查（异步并发编排，LLM 友好）。
 
@@ -137,6 +138,7 @@ async def osint_full_check(
         budget: 全局时间预算（秒），默认 150；预算耗尽时未完成的层标 timeout
         on_event: 可选进度回调，收到 source_start / source_done 事件 dict
         source_fetcher: 测试注入的公开来源取数函数（默认走真实 HTTP）
+        should_cancel: 可选取消判定（W15 O-22）；命中后取消未完成的层并返回
 
     Returns:
         完整报告 dict，结构见需求文档 3.11.8 节：
@@ -270,7 +272,7 @@ async def osint_full_check(
             ),
             on_event=on_event,
         )
-    results = dict(zip(tasks, await asyncio.gather(*tasks.values()), strict=True))
+    results = await _await_layers(tasks, should_cancel)
     report["sources"] = {name: results[name] for name in public_planned}
 
     # ── 落报告：未规划的层写 None / skipped ─────────────────────────────
@@ -436,6 +438,48 @@ def _spawn_blocking(fn: Callable, *args) -> asyncio.Future:
     return fut
 
 
+async def _await_layers(
+    tasks: dict[str, asyncio.Task], should_cancel: Callable[[], bool] | None = None,
+) -> dict[str, dict]:
+    """等待各层完成；提供 should_cancel 时每 0.5s 检查并取消未完成的层。
+
+    W15 O-22：取消后不再等所有层跑完（in-flight 的 HTTP 线程无法强杀，
+    但其结果会被丢弃，任务立即收尾）。
+    """
+    if should_cancel is None:
+        values = await asyncio.gather(*tasks.values())
+        return dict(zip(tasks, values, strict=True))
+
+    finished: dict[asyncio.Task, object] = {}
+    pending = set(tasks.values())
+    while pending:
+        if should_cancel():
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            break
+        done, pending = await asyncio.wait(
+            pending, timeout=0.5, return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            if task.cancelled():
+                continue
+            exc = task.exception()
+            finished[task] = exc if exc is not None else task.result()
+
+    results: dict[str, dict] = {}
+    for name, task in tasks.items():
+        if task in finished:
+            value = finished[task]
+            if isinstance(value, BaseException):
+                results[name] = _failure_layer(name, "error", detail=str(value))
+            else:
+                results[name] = value
+        else:
+            results[name] = _failure_layer(name, "cancelled")
+    return results
+
+
 async def _run_layer(
     source: str,
     fn: Callable,
@@ -514,10 +558,12 @@ def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str 
         reason = f"超时（{timeout:.0f} 秒）"
     elif kind == "budget":
         reason = "预算耗尽，未执行"
+    elif kind == "cancelled":
+        reason = "已取消（用户中止）"
     else:
         reason = detail or "未知错误"
 
-    stub: dict = {"error": reason, "timed_out": kind in ("timeout", "budget")}
+    stub: dict = {"error": reason, "timed_out": kind in ("timeout", "budget", "cancelled")}
     if source in SOURCE_LABELS:
         # 公开来源桩：字段与 SourceResult.to_dict() 对齐
         stub.update({
@@ -578,7 +624,7 @@ def _split_type_prefix(target: str) -> tuple[str, str | None]:
     1. 补 `domain:` —— 模型用它指定域名目标，但此前不在白名单里，于是
        `domain:spiderimpex.com` 被当成**公司名**：域名层静默跳过，报告还写
        “目标不含域名”，看起来查过了其实跑空（两次背调覆盖范围因此不同）。
-    2. 补中文前缀（`公司:` 等）—— 此前 `公司:天津赛得进出口有限公司` 的前缀
+    2. 补中文前缀（`公司:` 等）—— 此前 `公司:某某进出口有限公司` 的前缀
        没被剥掉，目标串带着前缀去查制裁名单，查询串被污染。
     """
     text = str(target or "").strip()

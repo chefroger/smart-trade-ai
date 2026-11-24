@@ -10,7 +10,7 @@ import sqlite3
 from typing import Any
 
 from trade import customer as customer_module
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 # function 白名单；脏值归一为「其他」
 _FUNCTIONS = frozenset({"决策人", "财务", "仓储", "其他"})
@@ -232,7 +232,7 @@ def create(customer_id: int, *, company_id: int, data: dict) -> dict:
     fields = _validate_payload(data, partial=False)
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         cur = conn.execute(
             """
             INSERT INTO contacts (
@@ -283,7 +283,7 @@ def update(
     fields = _validate_payload(data, partial=True)
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         row = conn.execute(
             "SELECT * FROM contacts WHERE id = ? AND customer_id = ? AND company_id = ?",
             (contact_id, customer_id, company_id),
@@ -342,7 +342,7 @@ def delete(customer_id: int, contact_id: int, *, company_id: int) -> bool:
         raise LookupError("客户不存在")
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         cur = conn.execute(
             "DELETE FROM contacts WHERE id = ? AND customer_id = ? AND company_id = ?",
             (contact_id, customer_id, company_id),

@@ -267,6 +267,8 @@ function navToView(view, chatCtx, chatName) {
     // 切视图时关闭客户详情/画像页内视图，避免 body.wall-open / profile-open 把新视图隐藏
     if (typeof closeCustomerProfile === 'function') closeCustomerProfile();
     if (typeof closeCustomerWall === 'function') closeCustomerWall();
+    // W15 O-14：私密备忘录浮层挂在 body 上，不属于任何视图，切视图必须关掉
+    document.querySelectorAll('#memo-modal').forEach(function (el) { el.remove(); });
     // 新手引导进行中时阻止导航
     if (!isOnboardingCompleted() && document.getElementById('onboarding-panel')) {
         toast(t('toast.complete_onboarding'));

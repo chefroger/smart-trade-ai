@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 _LOGISTICS_FIELDS = frozenset({
     "incoterm", "port_of_loading", "container", "lead_time_text", "shipped_at",
@@ -361,7 +361,7 @@ def create(
                 "currency": currency,
             }]
         prepared = _prepare_items(items, currency)
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         # 物流列可能尚未迁移（升级后未重启）——缺列时降级不写，不 500
         try:
             cur = conn.execute(
@@ -498,7 +498,7 @@ def update(
         # deferred BEGIN 只开读快照，之后升级成写锁时若期间有别的连接提交过，
         # SQLite 抛 SQLITE_BUSY_SNAPSHOT 且**不重试**（busy_timeout 不生效），
         # 并发下必然 "database is locked"（2026-10-21 实测）。
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         existing = conn.execute(
             "SELECT * FROM orders WHERE id = ? AND company_id = ?",
             (order_id, company_id),

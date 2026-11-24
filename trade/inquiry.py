@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from trade.customer import _normalize_crm_stage
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 STAGE_ORDER = {"询盘": 0, "报价": 1, "样品": 2, "订单": 3}
 STAGE_AUTO = "自动"
@@ -144,7 +144,7 @@ def create(
     stage = _normalize_crm_stage(stage)
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         cust = conn.execute(
             "SELECT id FROM customers WHERE id=? AND company_id=?",
             (customer_id, company_id),
@@ -197,7 +197,7 @@ def update(
     """改 title/stage；改 stage 后重算。"""
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         row = conn.execute(
             "SELECT * FROM inquiries WHERE id=? AND company_id=?",
             (inquiry_id, company_id),
@@ -228,7 +228,7 @@ def delete(inquiry_id: int, *, company_id: int) -> bool:
     """删除询盘并重算；不存在返回 True（幂等 ok）。"""
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         row = conn.execute(
             "SELECT customer_id FROM inquiries WHERE id=? AND company_id=?",
             (inquiry_id, company_id),
@@ -272,7 +272,7 @@ def set_stage_override(
     """PUT stage 新语义：四值设 override；「自动」清 override 并重算。"""
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         row = conn.execute(
             "SELECT * FROM customers WHERE id=? AND company_id=?",
             (customer_id, company_id),

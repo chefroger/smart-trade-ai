@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re as _re
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -264,18 +265,27 @@ def _bound_company():
         return None
 
 
-def _source_url_verified(source_url: str) -> bool:
-    """来源 URL 是否出现在本轮已完成工具的证据里（P1-D）。
+_URL_IN_TEXT_RE = _re.compile(r"https?://[^\s<>\"'`）)】]+", _re.IGNORECASE)
 
+
+def _source_url_verified(source_url: str) -> bool:
+    """来源 URL 是否出现在本轮已完成工具的证据里（P1-D / W15 O-4）。
+
+    必须做**完整 URL 相等**比较，不能用子串：`https://evil/?u=https://good`
+    这类参数里嵌套的地址会让子串匹配误判为「已核实」。
     没有证据（Hermes 独立运行、或模型自己编的 URL）一律不算核实。
     """
-    url = str(source_url or "").strip().lower()
+    url = str(source_url or "").strip().lower().rstrip("/")
     if not url:
         return False
     try:
         from trade.agent_context import current_tool_evidence
 
-        return any(url in text.lower() for text in current_tool_evidence())
+        for text in current_tool_evidence():
+            for candidate in _URL_IN_TEXT_RE.findall(str(text)):
+                if candidate.strip().lower().rstrip("/.,;)") == url:
+                    return True
+        return False
     except Exception:
         return False
 

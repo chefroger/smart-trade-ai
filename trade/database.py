@@ -700,7 +700,7 @@ def _migrate_from_v0(conn: sqlite3.Connection) -> bool:
     # executescript 会隐式提交未决事务；先收尾再显式开启，保证整段原子性
     if conn.in_transaction:
         conn.commit()
-    conn.execute("BEGIN IMMEDIATE")
+    begin_immediate(conn)
     try:
         # 先创建 companies + trade_companies 表
         conn.execute("""
@@ -1067,10 +1067,31 @@ def _migrate_scrub_visit_plan_payload_v3(conn: sqlite3.Connection) -> None:
         pass
 
 
-def _migrate_osint_facts_verified_v4(conn: sqlite3.Connection) -> None:
-    """迁移 4：事实库补 verified 列（P1-D）。
+def begin_immediate(
+    conn: sqlite3.Connection, *, attempts: int = 3, delay: float = 0.05,
+) -> None:
+    """`BEGIN IMMEDIATE` + 争用重试（W15 O-26）。
 
-    历史事实默认 1（此前口径就是「已核实」）；新写入由本轮工具证据决定。
+    30s busy_timeout 之后仍可能抛 "database is locked"（长事务/多进程）。
+    这里最多重试 3 次（0.05/0.1s），最后一次仍失败则原样抛出（fail-loud）。
+    """
+    import time as _time
+
+    for attempt in range(attempts):
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            _time.sleep(delay * (2 ** attempt))
+
+
+def _migrate_osint_facts_verified_v4(conn: sqlite3.Connection) -> None:
+    """迁移 4：事实库补 verified 列（P1-D / W15 O-6）。
+
+    历史事实**默认 0（未核实）**：升级前没有「本轮工具证据」这一概念，
+    不能凭空宣称已核实；新写入仍由本轮证据决定。
     """
     try:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(osint_facts)")}
@@ -1078,7 +1099,7 @@ def _migrate_osint_facts_verified_v4(conn: sqlite3.Connection) -> None:
         return  # 表还没建：新库 SCHEMA_SQL 已含 verified
     if cols and "verified" not in cols:
         conn.execute(
-            "ALTER TABLE osint_facts ADD COLUMN verified INTEGER NOT NULL DEFAULT 1"
+            "ALTER TABLE osint_facts ADD COLUMN verified INTEGER NOT NULL DEFAULT 0"
         )
 
 

@@ -26,11 +26,15 @@ from trade.company.transfer.manifest import sha256_file, write_checksums
 
 
 def _row_has_family_terms(row: dict) -> bool:
-    """画像行是否含家庭称谓（导出前的最后一道过滤）。"""
+    """画像行是否含家庭称谓（导出前的最后一道过滤）。
+
+    W15 O-15：过滤函数不可用时**按敏感处理**（fail-closed），
+    不能因为导入失败把家庭信息放进导出包。
+    """
     try:
         from trade.profile import contains_family_terms
     except Exception:
-        return False
+        return True
     text = f"{row.get('subject') or ''} {row.get('content') or ''}"
     return contains_family_terms(text)
 

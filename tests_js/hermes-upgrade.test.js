@@ -322,6 +322,13 @@ test('升级日志脱敏：24 位密钥、JWT、UNC 路径', () => {
 
     const key = '0123456789abcdef01234567'; // 24 位 hex
     assert.ok(!api._redactHermesLine('api_key=' + key).includes(key), '24 位密钥原文漏出');
+    // W15 O-25：20–23 位密钥也必须脱敏
+    for (const shortKey of ['0123456789abcdef0123', '0123456789abcdef01234']) {
+        assert.ok(
+            !api._redactHermesLine('api_key=' + shortKey).includes(shortKey),
+            '20–23 位密钥原文漏出',
+        );
+    }
 
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
     assert.strictEqual(api._redactHermesLine('Authorization: Bearer ' + jwt).includes(jwt), false);

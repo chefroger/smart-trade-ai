@@ -586,7 +586,8 @@ class TestOrphanPurgeLeavesAuditTrail:
 
         files = list(_audit_dir().glob("*.jsonl"))
         assert files, "删了东西却没写审计日志"
-        content = files[0].read_text(encoding="utf-8")
+        # W15 O-29：files[0] 不稳定（可能有其它测试的审计文件）；合并全部内容
+        content = "\n".join(path.read_text(encoding="utf-8") for path in files)
         assert "purge_orphan_dir" in content
         assert "孤儿公司" in content, "审计里要记下删的是哪个目录"
         assert "1 个文件" in content, "审计里要记下影响面"

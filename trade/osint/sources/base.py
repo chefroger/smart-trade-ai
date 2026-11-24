@@ -133,6 +133,50 @@ def fetch_page(
         return None
 
 
+def fetch_page_final(
+    url: str,
+    *,
+    timeout: int = 20,
+    fetch: Fetcher | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, str, str] | None:
+    """与 fetch_page 相同，但额外返回最终 URL（W15 O-3）。
+
+    用于区分「直接 200」与「301/302 被自动跟随后的 200」：后者才是
+    WhatsMyName e_code 期望的重定向命中。注入的 fetch 无法得知跳转，
+    按直接请求处理（final_url = url）。
+    """
+    if fetch is not None:
+        value = fetch(url, timeout)
+        if value is None:
+            return None
+        if isinstance(value, tuple):
+            # 测试可给 (code, text, final_url) 模拟「被跟随的重定向」
+            final = str(value[2]) if len(value) >= 3 else url
+            return int(value[0]), str(value[1]), final
+        return 200, value, url
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; Trade-AI/1.0; +https://github.com)",
+            "Accept": "*/*",
+            **(headers or {}),
+        },
+    )
+    try:
+        with _current_opener().open(request, timeout=timeout) as response:
+            text = response.read(MAX_BYTES).decode("utf-8", errors="replace")
+            return int(getattr(response, "status", 200)), text, str(response.geturl() or url)
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read(MAX_BYTES).decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            body = ""
+        return int(exc.code), body, str(getattr(exc, "url", "") or url)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def fetch_json(
     url: str,
     *,

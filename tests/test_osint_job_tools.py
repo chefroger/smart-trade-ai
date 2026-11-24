@@ -86,11 +86,13 @@ class TestHandlers:
         assert "error" in result
 
         # 等任务收尾，避免线程活过本用例的临时库
-        deadline = time.time() + 5
+        deadline = time.time() + 15
         while time.time() < deadline:
             if osint_jobs.get_job(companies["first"], started["job_id"])["status"] in osint_jobs.TERMINAL:
                 break
             time.sleep(0.02)
+        else:
+            pytest.fail("后台任务 15s 内未到终态，后续用例可能抢锁（W15 O-27）")
 
     def test_missing_target(self, companies):
         with bind_company(companies["first"]):
@@ -164,7 +166,7 @@ class TestFactTools:
             })
             started = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
             # 等任务结束再离开：后台线程继续跑会与下一个用例的 init_db 抢锁
-            deadline = time.time() + 5
+            deadline = time.time() + 15
             while time.time() < deadline:
                 payload = json.loads(tools.handle_osint_job_result(
                     {"job_id": started["job_id"]},
@@ -172,6 +174,8 @@ class TestFactTools:
                 if payload["job"]["status"] in ("done", "failed", "cancelled", "partial"):
                     break
                 time.sleep(0.02)
+            else:
+                pytest.fail("后台任务 15s 内未结束，后续用例可能抢锁（W15 O-27）")
         assert started["known_facts"] == {}
         assert started["unverified_facts"]["法定代表人"]["values"] == ["张三"]
         assert started["unverified_facts"]["法定代表人"]["note"] == "上次未能核实"
@@ -189,11 +193,13 @@ class TestFactTools:
             started = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
         assert started["known_facts"]["注册资本"]["values"] == ["100万"]
 
-        deadline = time.time() + 5
+        deadline = time.time() + 15
         while time.time() < deadline:
             if osint_jobs.get_job(companies["first"], started["job_id"])["status"] in osint_jobs.TERMINAL:
                 break
             time.sleep(0.02)
+        else:
+            pytest.fail("后台任务 15s 内未到终态，后续用例可能抢锁（W15 O-27）")
 
     def test_facts_are_company_scoped(self, companies):
         with bind_company(companies["first"]):
@@ -216,3 +222,14 @@ class TestFactTools:
                 "target": "acme.com", "field": "", "value": "x",
             }))
         assert "error" in result
+
+
+def test_source_url_verified_is_exact_not_substring(monkeypatch):
+    """W15 O-4：参数里嵌套的 URL 不能让子串匹配误判为已核实。"""
+    import trade.agent_context as ac
+    from trade.hermes_chat_memory_plugin import tools
+
+    nested = "https://evil.test/?u=https://cr.example/acme"
+    monkeypatch.setattr(ac, "current_tool_evidence", lambda: (nested,))
+    assert tools._source_url_verified("https://cr.example/acme") is False
+    assert tools._source_url_verified(nested) is True

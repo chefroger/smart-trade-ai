@@ -18,7 +18,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ def create_job(company_id: int, target: str) -> tuple[dict, bool]:
         # check-then-insert 必须串行化（2026-11-22 审计 P2-1）：两个并发请求同时
         # SELECT 看不到对方、再各自 INSERT，10 分钟去重就被击穿，整条背调重复外部采集。
         # BEGIN IMMEDIATE 拿写锁（busy_timeout=30s），跨进程也成立。
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         try:
             # 只复用**还在排队/运行**的任务。复用已完成任务会让用户以为“又背调了一次”，
             # 实际看到的是几分钟前的旧结果，且大动画不会出现（界面按设计跳过已完成任务）。
@@ -318,7 +318,11 @@ def _run_job(job_id: int, target: str, budget: float) -> None:
         started = time.time()
         with (bind_company(company_id) if company_id is not None else nullcontext()):
             report = asyncio.run(
-                osint_full_check(target, budget=budget, on_event=_on_event)
+                osint_full_check(
+                    target, budget=budget, on_event=_on_event,
+                    # W15 O-22：取消后立即收尾，不再等整条采集跑完
+                    should_cancel=lambda: _is_cancelled(job_id),
+                )
             )
         if _is_cancelled(job_id):
             return

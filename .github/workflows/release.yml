@@ -1,7 +1,8 @@
 name: Release Build (Mac)
 
-# 只保留手动触发（2026-11-20 决定）：Mac 包还没验证，且包里内嵌的 Hermes
-# 是构建时的版本、失败不阻断（审计 P1-9）。确认可分发后再恢复 tag 触发。
+# 手动触发为主（2026-11-20 决定）：Mac 包未经真机分发验证时，手动构建的
+# Release 一律是 draft（W8）。tag 触发在恢复后同样产出正式 Release。
+# 包内不内嵌 Hermes，运行时使用用户自己的 ~/.hermes/hermes-agent（W15 O-11）。
 on:
   workflow_dispatch:
 

@@ -72,13 +72,14 @@ def _sync_run_budget() -> int | None:
     """同步端点的单轮预算 = min(配置值, 外层超时 - 余量)。
 
     用户显式调低预算时尊重更小的值；关闭预算（0/负数）时返回 None 不传。
-    下限 30s：测试会把超时缩到亚秒级，不能算出 0/负数。
+    下限 1s：只防「超时-余量」算出 0/负数，不再把用户配置的小值抬到 30s
+    （W15 O-23）。
     """
     budget = configured_run_budget_seconds()
     if budget is None:
         return None
     cap = int(_SYNC_TIMEOUT_SECONDS - _SYNC_BUDGET_MARGIN_SECONDS)
-    return max(30, min(budget, cap))
+    return max(1, min(budget, cap))
 
 
 def _external_paths_hint(paths: list[str]) -> str:
@@ -133,7 +134,7 @@ def _osint_target_from_query(query: str) -> str | None:
         match = _DOMAIN_RE.search(text)
         if match:
             return match.group(0)
-        # 短句兜底只接受「没有疑问/指代词」的裸目标（如「天津赛得」「Huawei」）。
+        # 短句兜底只接受「没有疑问/指代词」的裸目标（如「某某公司」「Huawei」）。
         # 含「这个/这家/是不是/吗/靠谱」等一律不猜 —— 拿整句比对名单会把
         # 「这个买家是不是骗子」筛成绿色「未命中」（W2）。
         if len(text) <= 30 and not _QUESTION_MARKERS_RE.search(text):

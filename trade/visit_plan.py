@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from trade.database import get_connection
+from trade.database import begin_immediate, get_connection
 
 
 class VisitPlanError(Exception):
@@ -94,7 +94,7 @@ def create_plan(
 ) -> int:
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         _assert_customer_in_company(conn, customer_id, company_id)
         cur = conn.execute(
             "INSERT INTO visit_plans "
@@ -132,7 +132,7 @@ def update_plan(plan_id: int, *, company_id: int, **fields) -> dict | None:
     cols = ", ".join(f"{k} = ?" for k in updates)
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         # 改挂客户时同样校验归属，不能把计划挪到别家客户身上
         if "customer_id" in updates and updates["customer_id"]:
             _assert_customer_in_company(conn, updates["customer_id"], company_id)
@@ -156,7 +156,7 @@ def delete_plan(plan_id: int, *, company_id: int) -> bool:
     """软删除，保留审计痕迹。"""
     conn = get_connection()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
         cur = conn.execute(
             "UPDATE visit_plans SET status = 'deleted', updated_at = datetime('now','localtime') "
             "WHERE id = ? AND company_id = ?",

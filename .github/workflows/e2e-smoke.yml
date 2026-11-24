@@ -11,6 +11,9 @@ on:
     paths:
       - "static/**"
       - "tests_e2e/**"
+      # W15 O-18：app/服务入口改动会直接影响静态资源挂载与 SPA 注入
+      - "trade/app.py"
+      - "server.py"
       - ".github/workflows/e2e-smoke.yml"
   # 审计 O-22：直推 main（本项目的主流程）同样要跑浏览器冒烟
   push:
@@ -18,6 +21,8 @@ on:
     paths:
       - "static/**"
       - "tests_e2e/**"
+      - "trade/app.py"
+      - "server.py"
       - ".github/workflows/e2e-smoke.yml"
   schedule:
     # 每天 19:00 UTC = 次日 03:00 CST

@@ -298,3 +298,25 @@ def test_spawn_blocking_propagates_exception():
         with pytest.raises(ValueError):
             await orch._spawn_blocking(lambda: (_ for _ in ()).throw(ValueError("boom")))
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_cancelled_job_stops_waiting_for_layers():
+    """W15 O-22：should_cancel 命中后取消未完成的层，立即收尾。"""
+    from trade.osint.orchestrator import _await_layers
+
+    async def _slow():
+        await asyncio.sleep(30)
+        return {"ok": True}
+
+    tasks = {name: asyncio.create_task(_slow()) for name in ("a", "b")}
+    checks = {"n": 0}
+
+    def _should_cancel():
+        checks["n"] += 1
+        return checks["n"] > 1  # 第一次检查不取消，0.5s 后取消
+
+    started = time.time()
+    results = await _await_layers(tasks, _should_cancel)
+    assert time.time() - started < 3, "取消后仍在等慢层跑完"
+    assert all(res.get("error", "").startswith("已取消") for res in results.values())
