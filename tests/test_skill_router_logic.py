@@ -632,3 +632,20 @@ def test_routed_entry_uses_keyword_mode_by_default(monkeypatch):
     routed = match_skill_routed("王建国是谁")
     plain = match_skill("王建国是谁")
     assert routed and plain and routed["name"] == plain["name"] == "b2b-osint"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "这个询盘是不是真的买家",
+        "帮我看一下这个客户的信用风险",
+        "帮我分析这个客户的采购习惯",
+    ],
+)
+def test_w6_optional_customer_intel_phrasings(query):
+    """W6 可选补全：单客户真实性/信用风险/采购习惯 → 客户深度画像。"""
+    from trade.skill_router import match_skill
+
+    result = match_skill(query)
+    assert result is not None, f"{query!r} 没有匹配任何技能"
+    assert result["name"] == "b2b-customer-intel", f"{query!r} 被判给了 {result['name']}"

@@ -1477,6 +1477,10 @@ STOP RULE（防止无效搜索）:
             "deep profile", "buyer intelligence",
             # 2026-11-11 审计：SKILL.md frontmatter 声明了但注册表缺 → Trade 路由不到
             "客户的决策风格", "客户重要日期", "这个客户什么性格",
+            # W6 可选补全：单客户真实性 / 信用风险 / 采购习惯
+            "这个询盘是不是真的买家", "询盘真假", "真的买家",
+            "客户的信用风险", "客户信用风险", "信用风险",
+            "客户的采购习惯", "客户采购习惯", "采购习惯",
         ],
         "aliases": ["b2b-customer-mgmt", "b2b-buyer-persona"],
         "input_fmt": "客户的任何已知信息（公司名/LinkedIn/名片/聊天记录/展会记录）",

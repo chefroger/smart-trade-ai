@@ -24,6 +24,15 @@ triggers:
   - 客户的决策风格
   - 深入了解客户
   - 分析一下这个客户
+  - 这个询盘是不是真的买家
+  - 询盘真假
+  - 真的买家
+  - 客户的信用风险
+  - 客户信用风险
+  - 信用风险
+  - 客户的采购习惯
+  - 客户采购习惯
+  - 采购习惯
   - customer intel
   - know your customer
   - client analysis
