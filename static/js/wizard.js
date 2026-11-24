@@ -203,12 +203,7 @@ async function wizardLaunch() {
     }
 }
 
-// 向导进度条动画
-(function() {
-    var style = document.createElement('style');
-    style.textContent = '@keyframes wizardProgress { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }';
-    document.head.appendChild(style);
-})();
+// O-17：进度条动画移到 trade_chat.css，避免运行时注入 <style> 被 CSP 拦截
 function saveState() {
     if (currentCompanyId) sessionStorage.setItem('trade_cid', currentCompanyId);
     else sessionStorage.removeItem('trade_cid');

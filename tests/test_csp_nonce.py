@@ -66,7 +66,11 @@ def test_no_inline_event_attributes_remain():
 
 
 def test_no_style_elements_in_page():
-    """style-src-elem 只允许外部样式：页面不得出现内联 <style>。"""
+    """style-src-elem 只允许外部样式：页面/JS 不得动态注入 <style>。"""
     import re
 
     assert not re.search(r"<style[\s>]", HTML, re.IGNORECASE)
+    for path in sorted((ROOT / "static" / "js").glob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        assert "createElement('style')" not in text, f"{path.name} 动态注入 <style>"
+        assert 'createElement("style")' not in text, f"{path.name} 动态注入 <style>"

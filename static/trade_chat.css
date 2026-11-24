@@ -2145,3 +2145,9 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 
 /* O-17：技能帮助行的悬停高亮（原内联 onmouseover/onmouseout） */
 .skill-copy-row:hover { background: var(--bg-input); }
+
+/* O-17：向导进度条动画（原运行时注入的 <style>） */
+@keyframes wizardProgress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
