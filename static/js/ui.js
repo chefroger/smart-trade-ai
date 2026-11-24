@@ -116,15 +116,16 @@ function neutralizeRemoteImages(root) {
         var ph = document.createElement('button');
         ph.type = 'button';
         ph.className = 'remote-img-hold';
-        ph.textContent = '点击加载图片（' + abs.hostname + '）';
-        (function (url, alt, node) {
+        ph.textContent = '在新标签页打开图片（' + abs.hostname + '）';
+        (function (url, node) {
             node.addEventListener('click', function () {
-                var real = document.createElement('img');
-                real.src = url;
-                real.alt = alt;
-                if (node.parentNode) node.parentNode.replaceChild(real, node);
+                // W7：CSP 只允许同源图片，在当前页插 <img> 只会裂图。
+                // 改为新标签页打开链接；noopener/noreferrer 阻断反向控制与 Referer。
+                if (typeof window !== 'undefined' && typeof window.open === 'function') {
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                }
             });
-        })(abs.href, img.getAttribute('alt') || '', ph);
+        })(abs.href, ph);
         if (img.parentNode) img.parentNode.replaceChild(ph, img);
     }
 }

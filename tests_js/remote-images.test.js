@@ -38,24 +38,42 @@ test('neutralizeRemoteImages 把远程 img 换成点击加载按钮', () => {
     parentNode: holder,
   };
   const root = { querySelectorAll() { return [img]; } };
+  const created = [];
+  const opened = [];
 
   global.document = {
     createElement(tag) {
-      return {
+      const el = {
         tagName: String(tag).toUpperCase(), className: '', type: '', textContent: '',
-        addEventListener() {},
+        onClick: null,
+        addEventListener(type, fn) { if (type === 'click') this.onClick = fn; },
       };
+      created.push(el);
+      return el;
     },
   };
+  global.window = { open(...args) { opened.push(args); } };
   try {
     api.neutralizeRemoteImages(root);
+    // W7：点击后在新标签页打开链接，当前页绝不插入跨源 <img>（CSP 会裂图）
+    assert.ok(replaced.node && replaced.node.onClick, '按钮没有绑定点击事件');
+    replaced.node.onClick();
   } finally {
     delete global.document;
+    delete global.window;
   }
 
   assert.ok(replaced.node, '远程图片没有被替换');
   assert.strictEqual(replaced.node.className, 'remote-img-hold');
-  assert.match(replaced.node.textContent, /点击加载图片（x\.example）/);
+  assert.match(replaced.node.textContent, /x\.example/);
+  assert.strictEqual(opened.length, 1, '点击必须打开新标签页');
+  assert.strictEqual(opened[0][0], 'https://x.example/a.png?d=1');
+  assert.strictEqual(opened[0][1], '_blank');
+  assert.match(String(opened[0][2] || ''), /noopener/);
+  assert.ok(
+    !created.some((el) => el.tagName === 'IMG'),
+    '当前页不能插入跨源 <img>',
+  );
 });
 
 test('同源图片保持原样', () => {
