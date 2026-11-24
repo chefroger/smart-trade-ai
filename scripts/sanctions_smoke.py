@@ -2,7 +2,8 @@
 """制裁名单真实下载冒烟（2026-11-23 审计 P0-A）。
 
 普通测试全部 mock 网络，测不到「官方站点的重定向目标变了」这类问题。
-本脚本对 OFAC SDN 与 UN 真实发起下载，只读前 1 MB 就断开，断言最终主机
+本脚本对全部六份名单（OFAC SDN / OFAC 非 SDN / CSL / UN / EU / UK）真实
+发起下载，只读前 1 MB 就断开，断言 HTTP 200、读到非空字节，且最终主机
 仍在两层白名单内（入口主机 + 按入口配对的跳转目标）。
 
 用法：
@@ -15,8 +16,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# 冒烟目标：这两份名单历史上都 302 到官方 CDN（审计 P0-A 的触发点）
-TARGETS = ("OFAC", "UN")
+# 冒烟目标（S10）：覆盖全部名单。OFAC 与 UN 历史上都 302 到官方 CDN
+# （审计 P0-A 的触发点）；EU / UK / CSL 也要查 —— EU 返回 500 时现有
+# 只测两份的冒烟完全看不出来。
+TARGETS = ("OFAC", "OFAC_NS", "CSL", "UN", "EU", "UK")
 
 
 def main() -> int:
