@@ -2974,12 +2974,22 @@ async function saveVisitPlan() {
 // 家庭成员称谓过滤（审计 P1-F / W13）：分类不可靠，打印/长图前按内容再滤一次。
 // 词表与后端 trade/privacy_terms.py 相同；优先从 API 取，失败用内置兜底。
 let _V_FAMILY_CJK = ['太太', '妻子', '老婆', '爱人', '丈夫', '老公', '配偶',
+    '男朋友', '女朋友', '未婚夫', '未婚妻',
     '儿子', '女儿', '孩子', '宝宝', '小孩', '孙子', '孙女', '孙辈',
     '父母', '爸爸', '妈妈', '父亲', '母亲', '岳父', '岳母', '公公', '婆婆',
-    '兄弟', '姐妹', '哥哥', '弟弟', '姐姐', '妹妹', '家人', '家属'];
-// O-新5：「先生/夫人」按所属语境识别，避免「王先生」被当成家庭信息
-let _V_SPOUSE_TITLE = /(?:^|[我他她的\s：:，,。；;、])(?:先生|夫人)/;
-let _V_FAMILY_EN = /\b(?:spouse|partner|kid|kids|child|children|wife|husband|son|daughter|father|mother|brother|sister|family|esposa|esposo|hijo|hija|frau|sohn|tochter|жена|муж|сын|дочь)\b/i;
+    '奶奶', '爷爷', '外公', '外婆', '女婿', '儿媳', '媳妇',
+    '侄子', '侄女', '外甥', '外甥女', '叔叔', '阿姨', '舅舅', '姑姑',
+    '兄弟', '姐妹', '哥哥', '弟弟', '姐姐', '妹妹',
+    '妻', '奥さん', '息子', '家人', '家属'];
+// O-新5 / O-新21：「先生/夫人」按所属语境识别，避免「王先生」被当成家庭信息
+let _V_SPOUSE_TITLE = /(?:^|[我他她的\s：:，,。；;、和与跟陪])(?:先生|夫人)/;
+// S4：「夫 / 娘」只在日语助词或所属语境下才算（避免 工夫/姑娘/老板娘）
+let _V_CJK_KIN = /(?:^|[私僕俺彼女我他她前的和与跟陪])\s*(?:夫|娘)(?=$|[はがをにものでもさんですだ妻女\s，。、,\.：:])/;
+// 用 [^A-Za-z] 而不是 \b：JS 的 \b 是 ASCII 口径，fiancé / jeune 这类带变音
+// 符号的词在 \b 下边界判定不到（S4）。
+let _V_FAMILY_EN = /(?:^|[^A-Za-z])(?:spouse|kid|kids|child|children|wife|husband|daughter|father|mother|sister|mom|mum|dad|grandson|granddaughter|grandmother|grandfather|girlfriend|boyfriend|fiancé|fiancée|fiance|fiancee|niece|nephew|in-law|in-laws|in law|esposa|esposo|hijo|hija|frau|sohn|tochter|жена|муж|сын|дочь|femme|mari|fils|fille|filho|filha|mujer|marido)(?![A-Za-z])/i;
+// S4：partner/brother/son/family 只有所属语境才算；「我们的 partner 工厂」不算
+let _V_CONTEXT_EN = /(?:\b(?:my|his|her|their|our|your)\s+partner\b(?!\s+(?:factory|company|firm|plant|supplier))|\b(?:my|his|her|their|our|your)\s+(?:brother|son|family)\b|[A-Za-z]+(?:'s|’s)\s+(?:partner|brother|son|family)\b|的\s*partner\b(?!\s*(?:工厂|公司|企业|集团|供应商|客户|经销商|渠道|厂家))|的\s*(?:brother|son|family)\b)/i;
 let _vPrivacyTermsPromise = null;
 
 function _ensurePrivacyTerms() {
@@ -2993,7 +3003,20 @@ function _ensurePrivacyTerms() {
                 const words = data.latin.map(function (w) {
                     return String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 });
-                _V_FAMILY_EN = new RegExp('\\b(?:' + words.join('|') + ')\\b', 'i');
+                _V_FAMILY_EN = new RegExp(
+                    '(?:^|[^A-Za-z])(?:' + words.join('|') + ')(?![A-Za-z])', 'i');
+            }
+            if (Array.isArray(data.context_latin) && data.context_latin.length) {
+                const ctx = data.context_latin.map(function (w) {
+                    return String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                });
+                _V_CONTEXT_EN = new RegExp(
+                    '(?:\\b(?:my|his|her|their|our|your)\\s+partner\\b'
+                    + '(?!\\s+(?:factory|company|firm|plant|supplier))'
+                    + '|\\b(?:my|his|her|their|our|your)\\s+(?:brother|son|family)\\b'
+                    + "|[A-Za-z]+(?:'s|’s)\\s+(?:" + ctx.join('|') + ')\\b'
+                    + '|的\\s*partner\\b(?!\\s*(?:工厂|公司|企业|集团|供应商|客户|经销商|渠道|厂家))'
+                    + '|的\\s*(?:brother|son|family)\\b)', 'i');
             }
         })
         .catch(function () { /* 兜底词表已足够，不打扰用户 */ });
@@ -3004,7 +3027,9 @@ function _vPrivateFilter(text) {
     return String(text || '').split('\n').filter(function (line) {
         if (_V_FAMILY_CJK.some(function (t) { return line.indexOf(t) >= 0; })) return false;
         if (_V_SPOUSE_TITLE.test(line)) return false;
-        return !_V_FAMILY_EN.test(line);
+        if (_V_CJK_KIN.test(line)) return false;
+        if (_V_FAMILY_EN.test(line)) return false;
+        return !_V_CONTEXT_EN.test(line);
     }).join('\n');
 }
 
