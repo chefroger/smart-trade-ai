@@ -207,7 +207,7 @@ OSINT_JOB_START_SCHEMA = _schema(
     "（否则用户只会看到旧结果、也没有进度动画）。启动后用 osint_job_result 读取进度与结果。"
     "返回里带 known_facts：此前已核实过的事实（同目标），先看它，别重复查。",
     {
-        "target": _str("背调目标，例如 acme.com / domain:acme.com / person:\"Matthew Busel\" / username:Mattbusel"),
+        "target": _str("背调目标，例如 acme.com / domain:acme.com / person:\"Jane Doe\" / username:janedoe"),
     },
     ["target"],
 )

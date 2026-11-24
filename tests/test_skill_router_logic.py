@@ -27,7 +27,7 @@ import pytest
         ("领英", "b2b-linkedin-marketing"),
         # 个人背调不能被 LinkedIn 营销劫持（2026-11-22 实测：粘贴个人主页 +
         # 「查一下这个人」被判给 b2b-linkedin-marketing，整层机器判定丢失）
-        ("https://www.linkedin.com/in/matthewbusel/ 帮我查一下这个人", "b2b-osint"),
+        ("https://www.linkedin.com/in/janedoe/ 帮我查一下这个人", "b2b-osint"),
         ("帮我查一下这个人", "b2b-osint"),
         ("帮我查一下 这个人", "b2b-osint"),
         ("这个人是谁", "b2b-osint"),
@@ -565,9 +565,9 @@ def test_when_to_use_absent_for_unknown_skill():
 @pytest.mark.parametrize(
     "query",
     [
-        "Matthew Busel 是谁",
-        "查一下Matthew Busel这个人的资料",
-        "调查一下 Matthew Busel，tensorust.com 的创始人",
+        "Jane Doe 是谁",
+        "查一下Jane Doe这个人的资料",
+        "调查一下 Jane Doe，tensorust.com 的创始人",
         "查查张伟这个人",
         "王建国是谁",
         "Who is John Smith of Acme Inc?",

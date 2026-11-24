@@ -1,6 +1,6 @@
 """P2-1 / P2-2：目标类型、公开来源（RDAP/CT/Wayback/GitHub）与 CLI 渲染。
 
-夹具是真实响应的快照（tensorust.com / Mattbusel，2026-11-22 抓取）。
+夹具按真实响应结构脱敏（用户名/姓名已替换为示例值 janedoe / Jane Doe）。
 全部离线：来源通过注入的 fetcher 读取夹具。
 """
 
@@ -60,7 +60,7 @@ def fake_fetch(url: str, timeout: int = 15, **_kw):
         return _read("github_search.json")
     if "api.github.com/users/" in url:
         login = url.rstrip("/").rsplit("/", 1)[-1]
-        if login == "Mattbusel":
+        if login == "janedoe":
             return _read("github_user.json")
         return json.dumps({"login": login})
     if "api.hackertarget.com" in url:
@@ -110,7 +110,7 @@ class TestTargetType:
         ("value", "expected"),
         [
             ("John Smith", "person"),
-            ("Matthew Charles Vladislav Busel", "person"),
+            ("Jane Doe", "person"),
             ("张三", "person"),
             ("ACME Corporation", "company"),
             ("Doha Pearl Contracting W.L.L.", "company"),
@@ -125,7 +125,7 @@ class TestTargetType:
         assert _detect_target_type(value) == expected
 
     def test_explicit_prefixes(self):
-        assert _split_type_prefix('person: Matthew Busel') == ("Matthew Busel", "person")
+        assert _split_type_prefix('person: Jane Doe') == ("Jane Doe", "person")
         assert _split_type_prefix("company:ACME Trading") == ("ACME Trading", "company")
         assert _split_type_prefix("ACME") == ("ACME", None)
 
@@ -151,7 +151,7 @@ class TestTargetType:
         assert _split_type_prefix("domain：spiderimpex.com") == ("spiderimpex.com", "domain")
         from trade.osint.orchestrator import _split_username_prefix
 
-        assert _split_username_prefix("username：Mattbusel") == ("Mattbusel", "Mattbusel")
+        assert _split_username_prefix("username：janedoe") == ("janedoe", "janedoe")
 
     def test_unknown_prefix_with_domain_is_not_downgraded(self):
         """未知前缀 + 域名 → 仍按域名查，不静默降级成公司名。"""
@@ -249,19 +249,19 @@ class TestGithub:
     def test_search_picks_profile_with_matching_domain(self):
         result = github.run(ctx(), fetch=fake_fetch)
         assert result.status == "hit"
-        assert result.data["login"] == "Mattbusel"
+        assert result.data["login"] == "janedoe"
         text = result.facts[0]["text"]
-        assert "Matthew Charles Vladislav Busel" in text
+        assert "Jane Doe" in text
         assert "New York" in text
         assert "2024-09-27" in text
 
     def test_direct_username(self):
         result = github.run(
-            ctx(target_type="person", domain=None, github_username="Mattbusel"),
+            ctx(target_type="person", domain=None, github_username="janedoe"),
             fetch=fake_fetch,
         )
         assert result.status == "hit"
-        assert result.data["login"] == "Mattbusel"
+        assert result.data["login"] == "janedoe"
 
     def test_same_name_without_evidence_is_not_used(self):
         """只有同名、没有域名/公司吻合 → 不采用（防止挂错人）。"""
@@ -512,9 +512,9 @@ class TestUsernames:
         ])
 
         def _fetch(url, timeout=4, **_k):
-            return "profile u/Mattbusel" if "github.com" in url else None
+            return "profile u/janedoe" if "github.com" in url else None
 
-        result = usernames.run(ctx(username="Mattbusel"), fetch=_fetch)
+        result = usernames.run(ctx(username="janedoe"), fetch=_fetch)
         # 用户名相同不等于同一人：只作候选（审计 P1-D）
         assert result.status == "candidate"
         assert "同名候选" in result.facts[0]["text"]
@@ -571,10 +571,10 @@ class TestUsernameExtraction:
     def test_from_profile_url(self):
         from trade.osint.orchestrator import _extract_username, _split_username_prefix
 
-        assert _extract_username("https://github.com/Mattbusel", "url") == "Mattbusel"
-        assert _extract_username("https://www.linkedin.com/in/matthewbusel/", "url") == "matthewbusel"
+        assert _extract_username("https://github.com/janedoe", "url") == "janedoe"
+        assert _extract_username("https://www.linkedin.com/in/janedoe/", "url") == "janedoe"
         assert _extract_username("matt@tensorust.com", "email") == "matt"
-        assert _split_username_prefix("username:Mattbusel") == ("Mattbusel", "Mattbusel")
+        assert _split_username_prefix("username:janedoe") == ("janedoe", "janedoe")
 
 
 class TestSwitch:
@@ -627,7 +627,7 @@ async def test_orchestrator_collects_sources_and_rdap_fills_whois(monkeypatch):
     assert sources["wayback"]["status"] == "hit"
     assert sources["github"]["status"] == "hit"
     assert "shop" in sources["ct"]["data"]["subdomains"]
-    assert any("Matthew Charles Vladislav Busel" in f["text"]
+    assert any("Jane Doe" in f["text"]
                for f in sources["github"]["facts"])
     # 第二批：州登记与新闻
     assert sources["us_states"]["status"] == "hit"
@@ -643,7 +643,7 @@ async def test_orchestrator_collects_sources_and_rdap_fills_whois(monkeypatch):
     assert "⑦ 公开来源" in text
     assert "[RDAP 域名注册] 注册时间：2026-10-15" in text
     assert "tollbit" in text
-    assert "Matthew Charles Vladislav Busel" in text
+    assert "Jane Doe" in text
 
 
 @pytest.mark.asyncio

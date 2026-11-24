@@ -1,8 +1,8 @@
-"""技能必须通用：提示词/注册表/CLI 不得出现真实背调对象。
+"""技能必须通用：提示词/注册表/CLI/插件不得出现真实背调对象。
 
-2026-11-23 审计：真实人名 Matthew Busel / Mattbusel / Tensorust 被写进
-OSINT 提示词与 CLI 帮助，既违反「技能通用」，也把一次真实背调对象公开在仓库。
-测试用例可以继续用真名，只扫描会被模型读到的文件。
+2026-11-23 审计：一次真实背调的人名/账号被写进 OSINT 提示词与 CLI 帮助，
+既违反「技能通用」，也把真实对象公开在仓库。W10 起连注释、示例、测试
+都要清理，因此本文件不再写出完整姓名（用拼接构造匹配项）。
 """
 
 from __future__ import annotations
@@ -22,13 +22,16 @@ _SCANNED = [
     ROOT / "trade" / "osint" / "orchestrator.py",
 ]
 _SCANNED += sorted((ROOT / "skills").glob("*/SKILL.md"))
+# W10：Hermes 插件工具说明也会被模型读到，一并扫描
+_SCANNED += sorted((ROOT / "trade" / "hermes_chat_memory_plugin").glob("*.py"))
 
+# 拼接构造，避免扫描器本身把真名留在仓库里
 FORBIDDEN = (
-    "Matthew Busel",
-    "Mattbusel",
-    "matthewbusel",
-    "Tensorust",
-    "tensorust",
+    "Matthew" + " Busel",
+    "Matt" + "busel",
+    "matthew" + "busel",
+    "Tensor" + "ust",
+    "tensor" + "ust",
 )
 
 

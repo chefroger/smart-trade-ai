@@ -403,14 +403,14 @@ def _score_skills(query: str) -> list[dict]:
 
 
 # ── 人名/公司名兜底（2026-11-23 工单 P0-C）──────────────────────────────────
-# 关键词命中不了的说法（「Matthew Busel 是谁」「查查张伟这个人」）不能静默
+# 关键词命中不了的说法（「Jane Doe 是谁」「查查张伟这个人」）不能静默
 # 落回普通提示：那样 OSINT 协议与制裁层整层都不会跑。
-# 注意：不能用 \b —— 中文也是 Python 的 word 字符，「查一下Matthew」里
-# 下与 M 之间没有词边界，会整段漏掉。改看前后不是英文字母。
+# 注意：不能用 \b —— 中文也是 Python 的 word 字符，「查一下Jane」里
+# 下与 J 之间没有词边界，会整段漏掉。改看前后不是英文字母。
 _LATIN_NAME_RE = re.compile(
     r"(?<![A-Za-z])[A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+){1,3}(?![A-Za-z])"
 )
-# 连写人名（MatthewBusel / MattBusel）：首字母大写 + 内部再一个大写段
+# 连写人名（JaneDoe / JaneDoe）：首字母大写 + 内部再一个大写段
 _CAMEL_NAME_RE = re.compile(
     r"(?<![A-Za-z])[A-Z][a-z]{1,}[A-Z][A-Za-z'’\-]*(?![A-Za-z])"
 )
@@ -452,7 +452,7 @@ def extract_osint_name(query: str) -> str | None:
     """从自然语言里取一个像人名/公司名的片段（取不到返回 None）。
 
     顺序：中文「张三是谁/这个人/的资料」→ 2–4 个首字母大写词 →
-    连写人名（MatthewBusel）→ 单个大写专名（排除疑问词）。
+    连写人名（JaneDoe）→ 单个大写专名（排除疑问词）。
     """
     if not query:
         return None

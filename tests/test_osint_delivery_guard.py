@@ -23,8 +23,8 @@ class TestTargetExtraction:
     @pytest.mark.parametrize(
         ("query", "expected"),
         [
-            ("Matthew Busel 是谁", "Matthew Busel"),
-            ("查一下MatthewBusel这个人的资料", "MatthewBusel"),
+            ("Jane Doe 是谁", "Jane Doe"),
+            ("查一下JaneDoe这个人的资料", "JaneDoe"),
             ("查查张伟这个人", "张伟"),
             ("王建国是谁", "王建国"),
             ("company:Acme Trading 有没有被制裁", "Acme Trading"),
