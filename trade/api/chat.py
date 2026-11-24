@@ -229,11 +229,25 @@ def _osint_sanctions_used(tools: CompletedToolTracker) -> bool:
     return False
 
 
+def _missing_lists_note(lists: dict) -> str:
+    """degraded 时列出未就绪的名单（S3：结论不完整必须写明）。"""
+    missing = [
+        info.get("label") or code
+        for code, info in lists.items()
+        if info.get("degraded")
+    ]
+    if not missing:
+        return ""
+    return "；" + "、".join(f"{label}未就绪" for label in missing[:6]) + "，结论不完整"
+
+
 def _sanctions_fallback_text(query: str) -> str:
     """用本地制裁库补一段结论（<1 秒，无网络下载）。
 
     S2：中文目标无命中时不得写「未命中」——本地名单以英文/拼音为主，
     中文名无法直接比对；只给出「未执行（中文名）」，让用户补英文名。
+    S3：名单不全（coverage.degraded）但已有命中时，必须把命中如实报出来，
+    同时说明还有哪些名单未就绪，不能整个藏掉。
     """
     target, reason = _osint_target_info(query)
     if not target:
@@ -251,15 +265,24 @@ def _sanctions_fallback_text(query: str) -> str:
     degraded = bool(coverage.get("degraded", True))
     total = int(coverage.get("total_entries") or 0)
     hits = result.get("hits") or []
+    missing_note = _missing_lists_note(lists) if degraded else ""
 
     if result.get("is_sanctioned"):
         top = "、".join(
             f"{hit.get('list_label') or hit.get('list')}: {hit.get('matched_value')}"
             for hit in hits[:3]
         )
-        return f"制裁名单筛查：⚠️ 命中（{top}）。强烈建议拒绝交易或咨询法律部门。"
+        tail = f"{missing_note}。" if missing_note else "。"
+        return (
+            f"制裁名单筛查：⚠️ 命中（{top}）{tail}"
+            "强烈建议拒绝交易或咨询法律部门。"
+        )
     if hits:
-        return f"制裁名单筛查：发现 {len(hits)} 条疑似匹配（非精确），需人工核查。"
+        tail = f"{missing_note}。" if missing_note else "。"
+        return (
+            f"制裁名单筛查：发现 {len(hits)} 条疑似匹配（非精确），"
+            f"需人工核查{tail}"
+        )
     # 没有命中：先判中文目标，再判名单是否就绪。
     if reason == "cjk":
         return (
