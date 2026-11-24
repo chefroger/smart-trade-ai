@@ -1308,9 +1308,10 @@ def serve_trade_chat(app: FastAPI) -> None:
             )
         html = _TRADE_CHAT_HTML.read_text(encoding="utf-8")
         html = html.replace("__TRADE_SESSION_TOKEN__", _SESSION_TOKEN)
-        # CSP nonce（审计 O-17 第一步）：内联 <script> 元素改为每次请求一个
-        # nonce；`script-src` 保留 unsafe-inline 作为内联事件属性的回退，
-        # 等 100+ 个 on*= 属性迁移完后再整体移除。
+        # CSP nonce（审计 O-17）：内联 <script> 元素每次请求一个 nonce；
+        # 内联 on*= 事件属性已全部迁移到 data-* 委托，script-src-attr 为
+        # 'none'，script-src/script-src-elem 不再放行 unsafe-inline。
+        # 仍保留 unsafe-inline 的只有 style-src-attr（400+ 处内联 style）。
         nonce = secrets.token_urlsafe(16)
         html = html.replace("__TRADE_CSP_NONCE__", nonce)
         return HTMLResponse(
