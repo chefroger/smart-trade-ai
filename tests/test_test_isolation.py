@@ -18,6 +18,21 @@ from pathlib import Path
 class TestHermesHomeIsolation:
     """HERMES_HOME 必须被重定向到临时目录。"""
 
+    def test_trade_home_is_temp_and_not_real_home(self):
+        """TRADE_HOME 同样必须隔离。"""
+        trade_home = os.environ.get("TRADE_HOME", "")
+        assert trade_home, "conftest 必须设置 TRADE_HOME"
+        real_trade = (Path.home() / ".trade").resolve()
+        assert Path(trade_home).resolve() != real_trade
+        assert real_trade not in Path(trade_home).resolve().parents
+
+    def test_conftest_registers_temp_dir_cleanup(self):
+        """W11：会话结束必须删除两个 mkdtemp 目录，不能每次运行漏 /tmp。"""
+        src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
+        assert "pytest_sessionfinish" in src
+        assert "shutil.rmtree" in src
+        assert "trade-test-hermes-" in src
+
     def test_hermes_home_env_is_set_and_not_real_home(self):
         """HERMES_HOME 必须已设置，且不指向真实的 ~/.hermes。"""
         hermes_home = os.environ.get("HERMES_HOME", "")

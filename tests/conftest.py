@@ -3,7 +3,9 @@
 
 设置 TRADE_HOME 环境变量，防止 _setup_work_directory 和 _get_trade_home 触碰真实桌面。
 """
+import atexit
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -13,19 +15,39 @@ import pytest
 # 这样 trade.company 模块级别的 TRADE_HOME 常量就会指向临时路径。
 # 2026-11-23 审计：此前只在未设置时兜底，调用者把 TRADE_HOME 指到
 # ~/.trade 时整批用例会触碰真实数据（实测 66 failed / 90 errors）。
-os.environ["TRADE_HOME"] = tempfile.mkdtemp(prefix="trade-test-")
+_TRADE_TEST_DIR = Path(tempfile.mkdtemp(prefix="trade-test-"))
+os.environ["TRADE_HOME"] = str(_TRADE_TEST_DIR)
 
 # 硬断言：测试目录绝不能落在真实用户数据目录下
 _real_trade = (Path.home() / ".trade").resolve()
-assert Path(os.environ["TRADE_HOME"]).resolve() != _real_trade, (
+assert _TRADE_TEST_DIR.resolve() != _real_trade, (
     "TRADE_HOME 指向真实 ~/.trade，测试会污染用户数据"
 )
 
 # 同样必须在 import 之前设置 HERMES_HOME：cron / license / skill_router / memory
-# 都在 import 期按它解析目录，且 treat 会**写入** ~/.hermes（skills、memories/MEMORY.md）。
+# 都在 import 期按它解析目录，且 Trade 会**写入** ~/.hermes（skills、memories/MEMORY.md）。
 # 不隔离的后果真实发生过：测试里的 install_skills() 覆盖了真实的 ~/.hermes/skills。
-if "HERMES_HOME" not in os.environ:
-    os.environ["HERMES_HOME"] = tempfile.mkdtemp(prefix="trade-test-hermes-")
+# W11：无条件指向 mkdtemp —— 只尊重外部传入的值会让调用者误指真实 ~/.hermes。
+_HERMES_TEST_DIR = Path(tempfile.mkdtemp(prefix="trade-test-hermes-"))
+os.environ["HERMES_HOME"] = str(_HERMES_TEST_DIR)
+_real_hermes = (Path.home() / ".hermes").resolve()
+assert _HERMES_TEST_DIR.resolve() != _real_hermes, (
+    "HERMES_HOME 指向真实 ~/.hermes，测试会覆盖用户技能/记忆"
+)
+
+
+def _cleanup_temp_dirs() -> None:
+    """会话结束清理两个临时目录（W11：此前每次 pytest 残留 2 个目录）。"""
+    for path in (_TRADE_TEST_DIR, _HERMES_TEST_DIR):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+atexit.register(_cleanup_temp_dirs)
+
+
+def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001 —— pytest 钩子签名固定
+    """pytest 正常/异常退出都清理。"""
+    _cleanup_temp_dirs()
 
 # 制裁名单后台刷新默认关闭：测试进程会活过 60 秒，一旦触发就会去打官方
 # 名单（几十 MB × 6），既慢又不可靠。需要刷新的测试显式调用 refresh_all()。
