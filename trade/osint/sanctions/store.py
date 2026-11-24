@@ -544,7 +544,8 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
       - 完整 token 或**核心 token** 集合一致 → confirmed（score 1.0）；
         子集/拼写差异 → possible（≤0.95）。
       - 短名（<8 字符）只接受完整/核心 token 精确匹配（如 HUAWEI → 名单里的
-        HUAWEI TECHNOLOGIES CO LTD 的核心集都是 {huawei}）。
+        HUAWEI TECHNOLOGIES CO LTD 的核心集都是 {huawei}）；子集只给
+        possible（"London" 不能确认 "MINGMEN LONDON LTD"）。
     """
     q_norm = normalize_name(name)
     if not q_norm:
@@ -620,14 +621,16 @@ def search(name: str, country: str | None = None, limit: int = 20) -> list[dict]
                     )
                 continue
             if is_short:
-                # 短品牌名（Rosneft / Huawei）允许核心 token 是条目核心的子集，
-                # 但要求 token 足够长且条目核心 ≤2，避免 "ABC" 这类泛短名；
-                # 仅在短名分支启用，不影响 W1 的 Shenzhen 长问题验收。
+                # 短名（<8 字符）核心 token 是条目核心的子集：只给 possible。
+                # W15 O-新1：此前给 confirmed，导致 "London" 命中
+                # MINGMEN LONDON LTD / "Moscow" 命中 Moscow Exchange 都被判
+                # high。品牌名（HUAWEI/Rosneft）在真实名单里有精确或核心相等
+                # 的行，confirmed 走上面的等值分支，不依赖这里。
                 if (len(q_core) == 1 and len(entry_core) <= 2
                         and q_core < entry_core
                         and len(next(iter(q_core))) >= 6):
                     consider(
-                        row, 1.0, "core_exact", "confirmed",
+                        row, 1.0, "core_contains", "possible",
                         person=_is_person_row(row, entry_tokens),
                     )
                 continue

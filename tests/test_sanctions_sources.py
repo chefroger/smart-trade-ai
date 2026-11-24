@@ -406,7 +406,8 @@ class TestMatchQuality:
 
         self._seed([
             ("HUAWEI TECHNOLOGIES CO LTD", "entity"),
-            ("ROSNEFT OIL COMPANY", "entity"),
+            # 真实名单里有精确的 ROSNEFT 行；O-新1 后不再依赖子集确认
+            ("ROSNEFT", "entity"),
             ("ISLAMIC REVOLUTIONARY GUARD CORPS", "entity"),
         ])
         for query in ("HUAWEI", "Rosneft", "Islamic Revolutionary Guard Corps"):
@@ -414,6 +415,21 @@ class TestMatchQuality:
             assert result["is_sanctioned"] is True, query
             assert result["risk_level"] == "high", query
             assert result["hits"][0]["confirmation"] == "confirmed", query
+
+    def test_short_name_subset_is_possible_not_confirmed(self, sanctions_db):
+        """O-新1：短名子集（London → MINGMEN LONDON LTD）只能是 possible。"""
+        from trade.osint.sanctions import check_sanctions
+
+        self._seed([
+            ("MINGMEN LONDON LTD", "entity"),
+            ("CHASCA LONDON LIMITED", "entity"),
+            ("LLC MOSCOW ARMS COMPANY", "entity"),
+        ])
+        for query in ("London", "Moscow"):
+            result = check_sanctions(query)
+            assert result["is_sanctioned"] is False, query
+            assert result["risk_level"] != "high", query
+            assert all(h["confirmation"] == "possible" for h in result["hits"]), query
 
     def test_shenzhen_no_single_token_suspect(self, sanctions_db):
         from trade.osint.sanctions import check_sanctions
