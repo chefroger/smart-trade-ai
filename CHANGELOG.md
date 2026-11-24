@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.55 — 2026-11-24
+
+- 修复向导动态 <style> 与 style-src-elem 的冲突（O-17 补漏）
+- `54c19dd` fix(ui): 向导动画不再运行时注入 style 元素（O-17 补漏）
+
 ## v0.9.54 — 2026-11-24
 
 - O-17 样式收口：style-src-elem 只允许外部样式；脚本/事件 unsafe-inline 已移除
