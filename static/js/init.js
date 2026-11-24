@@ -155,11 +155,110 @@ function renderNoCompanyPage() {
         },
     };
 
+    // S1：只认界面里真实出现的动作名，绝不执行 window[任意字符串]
+    var ALLOWED_ACTS = new Set([
+        '_chatInputChanged',
+        '_chatInputKeydown',
+        '_custGoPage',
+        '_visitSelect',
+        'addOrderItemRow',
+        'autoSlug',
+        'batchCreateCronTasks',
+        'bindMailbox',
+        'bulkImportCustomers',
+        'clearAllCronTasks',
+        'clearChat',
+        'closeBackdrop',
+        'closeCustomerDetail',
+        'copySelf',
+        'copySkillTrigger',
+        'createCompany',
+        'createLibrary',
+        'deleteCompany',
+        'deleteConversation',
+        'deleteCustomTemplate',
+        'deleteOrder',
+        'doActivate',
+        'doRestartTrade',
+        'doTradeUpdate',
+        'editTemplatePrompt',
+        'exportCompany',
+        'filterConversations',
+        'filterCustomers',
+        'hideModal',
+        'linkCustomerLib',
+        'loadActiveCronJobs',
+        'navToView',
+        'onChatLibraryChange',
+        'onCompanyChange',
+        'onCopilotConsentChange',
+        'onMailboxFormDirty',
+        'onMailboxPresetChange',
+        'onTemplateTimeChange',
+        'onboardingFinish',
+        'onboardingGoToStep2',
+        'onboardingSaveAndContinue',
+        'onboardingSkip',
+        'onboardingStartOSINT',
+        'onboardingStopOSINT',
+        'openCustomerWall',
+        'openFollowUpModal',
+        'pullMailbox',
+        'removeById',
+        'removeOrderItemRow',
+        'restartOnboarding',
+        'runActiveJob',
+        'runSingleTemplate',
+        'saveCompanyIdentity',
+        'saveCopilotSettings',
+        'saveCustomTemplate',
+        'saveCustomer',
+        'saveCustomerDetail',
+        'saveOrder',
+        'sendMsg',
+        'showActivateModal',
+        'showAddCompanyModal',
+        'showAddCustomTemplateModal',
+        'showAddLibraryModal',
+        'showConversationDetail',
+        'showCopilotSettings',
+        'showCustomerEditModal',
+        'showImportCompanyDialog',
+        'showOrderEditModal',
+        'showOrderModal',
+        'showSkillsHelp',
+        'showUpgradeHelp',
+        'switchLang',
+        'switchModalTab',
+        'testMailboxConnection',
+        'toastArg',
+        'toggleCustomerStar',
+        'toggleOverdueFilter',
+        'toggleStarredFilter',
+        'toggleWallStar',
+        'unbindMailbox',
+        'unlinkCustomerLib',
+        'updateMailboxSecret',
+        'updateSkills',
+        'wizardBack',
+        'wizardClose',
+        'wizardLaunch',
+        'wizardNext',
+        'wizardSelectType',
+    ]);
+
     function _run(el, ev) {
+        // 模型/历史消息内部永远不执行 UI 动作（S1：防提示注入）
+        if (el.closest && el.closest('.msg-body')) return;
         if (el.dataset.stop === '1' && ev && ev.stopPropagation) ev.stopPropagation();
         var act = el.dataset.act || '';
         if (!act) return;
+        if (!SPECIAL[act] && !ALLOWED_ACTS.has(act)) {
+            console.warn('[trade] 未登记的动作，已忽略:', act);
+            return;
+        }
         if (el.dataset.pre) {
+            if (!ALLOWED_ACTS.has(el.dataset.pre)) return;
             var preFn = window[el.dataset.pre];
             if (typeof preFn === 'function') preFn();
         }
@@ -179,6 +278,7 @@ function renderNoCompanyPage() {
     document.addEventListener('change', function (ev) {
         var el = ev.target && ev.target.closest && ev.target.closest('[data-onchange]');
         if (!el) return;
+        if ((el.closest && el.closest('.msg-body')) || !ALLOWED_ACTS.has(el.dataset.onchange)) return;
         var fn = window[el.dataset.onchange];
         if (typeof fn !== 'function') return;
         var args = _baseArgs(el);
@@ -188,17 +288,19 @@ function renderNoCompanyPage() {
     document.addEventListener('input', function (ev) {
         var el = ev.target && ev.target.closest && ev.target.closest('[data-oninput]');
         if (!el) return;
+        if ((el.closest && el.closest('.msg-body')) || !ALLOWED_ACTS.has(el.dataset.oninput)) return;
         var fn = window[el.dataset.oninput];
         if (typeof fn === 'function') fn(el);
     });
     document.addEventListener('keydown', function (ev) {
         var el = ev.target && ev.target.closest && ev.target.closest('[data-enter],[data-keydown]');
         if (!el) return;
-        if (el.dataset.enter && ev.key === 'Enter') {
+        if (el.closest && el.closest('.msg-body')) return;
+        if (el.dataset.enter && ev.key === 'Enter' && ALLOWED_ACTS.has(el.dataset.enter)) {
             var enterFn = window[el.dataset.enter];
             if (typeof enterFn === 'function') enterFn(ev);
         }
-        if (el.dataset.keydown) {
+        if (el.dataset.keydown && ALLOWED_ACTS.has(el.dataset.keydown)) {
             var keyFn = window[el.dataset.keydown];
             if (typeof keyFn === 'function') keyFn(ev);
         }

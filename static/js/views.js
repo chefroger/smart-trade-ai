@@ -521,7 +521,7 @@ async function loadDirectoryTree() {
     const identity = await api('GET', `/api/trade/companies/${currentCompanyId}/agent-identity`);
     if (identity?.agent_identity_md) {
         $('file-preview').innerHTML = `<div class="file-preview-header"><h3>📄 agent-identity.md</h3></div>
-            <div>${DOMPurify.sanitize(marked.parse(identity.agent_identity_md), {ALLOWED_TAGS:['p','br','strong','em','ul','ol','li','h1','h2','h3','blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span'],ALLOWED_ATTR:['href','target','class']})}</div>`;
+            <div>${DOMPurify.sanitize(marked.parse(identity.agent_identity_md), {ALLOWED_TAGS:['p','br','strong','em','ul','ol','li','h1','h2','h3','blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span'],ALLOWED_ATTR:['href','target','class'],ALLOW_DATA_ATTR:false})}</div>`;
     }
 }
 
@@ -840,7 +840,7 @@ async function onboardingStartOSINT() {
             var respDiv = document.createElement('div');
             respDiv.className = 'onboarding-response';
             var raw = marked.parse(responseText);
-            respDiv.innerHTML = DOMPurify.sanitize(raw, { ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6','blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'], ALLOWED_ATTR: ['href','target','class','src','alt','width','height'] });
+            respDiv.innerHTML = DOMPurify.sanitize(raw, { ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6','blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'], ALLOWED_ATTR: ['href','target','class','src','alt','width','height'], ALLOW_DATA_ATTR: false });
             if (typeof neutralizeRemoteImages === 'function') neutralizeRemoteImages(respDiv);
             resultsArea.appendChild(respDiv);
             showOnboardingActions();
