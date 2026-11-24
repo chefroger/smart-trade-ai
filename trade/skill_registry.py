@@ -42,7 +42,10 @@ _SKILLS: list[dict] = [
             # English
             "due diligence", "osint", "company verification", "domain age",
             "risk assessment", "check company", "check domain",
-            "whois lookup", "sanctions check", "osint check", "company background", "check this company",
+            "whois lookup", "sanctions", "sanctioned", "check sanctions",
+            "sanction check", "sanctions check", "osint check", "company background", "check this company",
+            # 2026-11-24 S7：制裁问法补齐（原先只有 sanctions check）
+            "制裁情况",
             # 口语改写（2026-11-09 PPT 差距 B4）
             "is this company legit", "is this customer legit", "can i trust this company",
             "who is this company", "company legit", "trust this company",
@@ -558,7 +561,7 @@ STOP RULE（防止无效搜索）:
             "曝光量", "点击率",
             # English — 裸 seo 归 b2b-seo-aeo（文章/AEO）；平台侧用关键词/排名
             "platform diagnosis", "alibaba optimization", "made-in-china",
-            "keyword optimization", "product title", "ranking",
+            "keyword optimization", "product title",
             "search ranking", "product listing", "alibaba international", "alibaba",
             # Fragments
             "阿里店铺", "阿里国际站", "平台上排名", "关键词排名", "搜索排名",
@@ -728,7 +731,7 @@ STOP RULE（防止无效搜索）:
             "import data", "export data", "trade data",
             "import from china", "imports from china", "import records",
             "import history", "import shipments", "bill of lading",
-            "importer", "who imports", "importyeti",
+            "importer of record", "who imports", "importyeti",
         ],
         # 领域优先词：命中时压过“查一下这家公司”这类通用核查触发词
         "priority_keywords": ["进口", "提单", "海关", "import", "importyeti"],
@@ -765,7 +768,7 @@ STOP RULE（防止无效搜索）:
             "营销方案", "营销定位", "市场定位", "新公司竞争对手分析",
             "开始使用", "首次设置",
             # English
-            "new company", "deploy", "setup", "marketing plan",
+            "new company", "marketing plan",
             "product introduction", "marketing positioning",
             "first time setup",
             # Fragments
@@ -1009,14 +1012,14 @@ STOP RULE（防止无效搜索）:
             "邀请函",
             "邀请客户来展会",
             # Chinese — 验厂
-            "验厂", "客户要来工厂", "验厂邀请", "工厂审核", "audit",
+            "验厂", "客户要来工厂", "验厂邀请", "工厂审核",
             "来厂考察", "厂里来验", "来验厂", "来厂验",
             # Chinese — 节日
             "节日问候", "节日祝福", "发个祝福", "过节",
             # Chinese — 样品
             "寄样", "样品寄送", "样品跟进", "寄样品", "样品到了吗",
             # Chinese — 物流
-            "物流", "货运", "船期", "延迟", "航线变更", "tracking",
+            "物流", "货运", "船期", "延迟", "航线变更",
             "货到哪了", "查一下货",
             # Chinese — 售后/满意度/年度
             "售后", "收货跟进", "满意度调查", "客户反馈",
@@ -1026,7 +1029,7 @@ STOP RULE（防止无效搜索）:
             # 「展会邀请」归 b2b-exhibition（那里已有「展会邀约」），这里不并入
             # English
             "payment reminder", "overdue", "chase payment",
-            "claim", "complaint", "refund", "compensation",
+            "complaint", "refund", "compensation",
             "trade fair", "invitation",
             "factory audit", "factory visit", "plant tour",
             "holiday greeting", "season's greetings",
@@ -1484,7 +1487,7 @@ STOP RULE（防止无效搜索）:
             "is this inquiry from a real buyer", "is this inquiry real",
             "real buyer", "fake inquiry", "inquiry authenticity",
             "is this buyer legit",
-            "customer credit risk", "customer's credit risk", "credit risk",
+            "customer credit risk", "customer's credit risk",
             "purchasing habits", "procurement habits", "buying habits",
         ],
         "aliases": ["b2b-customer-mgmt", "b2b-buyer-persona"],

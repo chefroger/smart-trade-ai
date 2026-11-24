@@ -24,7 +24,6 @@ triggers:
   - made-in-china
   - keyword optimization
   - product title
-  - ranking
   - search ranking
   - product listing
   - alibaba international

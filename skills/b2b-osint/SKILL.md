@@ -16,9 +16,14 @@ triggers:
   - 查一下这个域名
   - 域名注册时间
   - 制裁名单
+  - 制裁情况
   - OFAC
   - 企业邮箱验证
   - 查公司
+  - sanctions
+  - sanctioned
+  - check sanctions
+  - sanction check
   # ... (see skill_registry.py for full list)
 category: 客户开发
 version: 1.3.2
