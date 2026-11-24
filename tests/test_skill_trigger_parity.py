@@ -67,34 +67,10 @@ def _registry_triggers() -> dict[str, set[str]]:
 
 # 已登记的声明-路由分歧：skill → (触发词, 原因)
 # 原因只写「为什么不并入注册表」，不写「以后再说」。
-_ALLOWED_DIVERGENCE: dict[str, dict[str, str]] = {
-    # ── 归属冲突：另一个 skill 已经拥有这个词，两个都加会靠打分器抢 ──
-    # 注（2026-11-17，合并 cursor/skill-trigger-conflicts-6c95）：
-    # 下列词原属「SKILL.md 声明了、注册表没有」的分歧登记，现已从对应 SKILL.md
-    # 的 triggers 声明里删掉（归属已收敛到别的 skill），分歧本身不存在了；
-    # 登记若留着，test_allowed_divergence_still_needed 会判为过期。
-    # 已删除的词：客户画像 / 帮我找客户 / 怎么找客户 / customer profile /
-    # 客户档案 / 市场调研 / 竞争对手分析（customs-data 与 onboarding 各一）/
-    # 商业提案 / 背景调查 / trade fair / sales training / 客户分析 /
-    # 客户跟进 / 开发信 / 产品介绍 / 产品推广 / 产品目录 /
-    # objection handling / 风险评估 / 参展 / 展会邀约 / 广交会 / 展会邀请
-    #
-    # 注：询盘/报价/谈判 裸词已从 SKILL.md 声明与注册表同步删掉（2026-11-11），
-    # 改用「询盘处理/报价策略/谈判技巧」等复合词，避免抢 inquiry/doc-gen 等技能。
-    "b2b-sales-playbook": {
-        # 有意收窄：裸短词会把无关问法劫持进来
-        "not responding": (
-            "裸词会把 'the shipment is not responding' 也劫持进来；"
-            "注册表用带宾语的 'customer is not responding' 覆盖同一意图"
-        ),
-    },
-    "chat-memory": {
-        "帮我找": (
-            "裸词会把 '帮我找招标 / 帮我找供应商' 全部劫持到历史查询；"
-            "注册表用 '帮我找之前 / 帮我找上次 / 帮我找历史' 的长词形式"
-        ),
-    },
-}
+_ALLOWED_DIVERGENCE: dict[str, dict[str, str]] = {}
+# 2026-11-24：最后两条登记（b2b-sales-playbook 的裸 "not responding"、
+# chat-memory 的裸「帮我找」）已按登记原因从 SKILL.md 收窄为带宾语/长词写法，
+# 声明与注册表一致，分歧表清空。以后再出现分歧必须重新登记原因。
 
 
 class TestTriggerParity:
