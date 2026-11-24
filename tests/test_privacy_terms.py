@@ -71,3 +71,12 @@ def test_payload_has_all_categories():
     assert "spouse" in payload["latin"]
     assert "esposa" in payload["latin"]
     assert "客户索要" in payload["gift"]
+
+
+def test_spouse_title_requires_possessive_context():
+    """O-新5：「先生/夫人」只在所属语境才算家庭信息。"""
+    assert contains_family_terms("王先生是采购经理") is False
+    assert contains_family_terms("王夫人负责采购") is False
+    assert contains_family_terms("我先生下月出差") is True
+    assert contains_family_terms("我的夫人喜欢兰花") is True
+    assert contains_family_terms("先生生日是 5 月 1 日") is True

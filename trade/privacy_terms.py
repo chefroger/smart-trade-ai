@@ -14,8 +14,9 @@ from typing import Any
 
 # 中文亲属称谓（子串匹配，含单字复合词）
 FAMILY_TERMS_CJK = (
-    # 伴侣（先生/夫人 也用于泛称，按审计要求从严过滤）
-    "太太", "妻子", "老婆", "夫人", "爱人", "先生", "丈夫", "老公", "配偶",
+    # 伴侣。「先生/夫人」同时是泛称（王先生/王夫人），不能裸子串匹配，
+    # 由 _SPOUSE_TITLE_RE 按所属语境识别（O-新5）。
+    "太太", "妻子", "老婆", "爱人", "丈夫", "老公", "配偶",
     # 子女与孙辈
     "儿子", "女儿", "孩子", "宝宝", "小孩", "孙子", "孙女", "孙辈",
     # 父母与姻亲
@@ -50,11 +51,17 @@ _FAMILY_LATIN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# O-新5：「先生/夫人」只有出现在所属语境（我先生/我的夫人/行首/标点后）才按
+# 家庭称谓处理；「王先生是采购经理」是正常称呼，不能从打印/导出里滤掉。
+_SPOUSE_TITLE_RE = re.compile(r"(?:^|[我他她的\s：:，,。；;、])(?:先生|夫人)")
+
 
 def contains_family_terms(text: Any) -> bool:
     """内容里是否出现家庭成员称谓（宁可多滤，不把家庭信息带出去）。"""
     value = str(text or "")
     if any(term in value for term in FAMILY_TERMS_CJK):
+        return True
+    if _SPOUSE_TITLE_RE.search(value):
         return True
     return bool(_FAMILY_LATIN_RE.search(value))
 

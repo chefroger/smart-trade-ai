@@ -2973,10 +2973,12 @@ async function saveVisitPlan() {
 
 // 家庭成员称谓过滤（审计 P1-F / W13）：分类不可靠，打印/长图前按内容再滤一次。
 // 词表与后端 trade/privacy_terms.py 相同；优先从 API 取，失败用内置兜底。
-let _V_FAMILY_CJK = ['太太', '妻子', '老婆', '夫人', '爱人', '先生', '丈夫', '老公', '配偶',
+let _V_FAMILY_CJK = ['太太', '妻子', '老婆', '爱人', '丈夫', '老公', '配偶',
     '儿子', '女儿', '孩子', '宝宝', '小孩', '孙子', '孙女', '孙辈',
     '父母', '爸爸', '妈妈', '父亲', '母亲', '岳父', '岳母', '公公', '婆婆',
     '兄弟', '姐妹', '哥哥', '弟弟', '姐姐', '妹妹', '家人', '家属'];
+// O-新5：「先生/夫人」按所属语境识别，避免「王先生」被当成家庭信息
+let _V_SPOUSE_TITLE = /(?:^|[我他她的\s：:，,。；;、])(?:先生|夫人)/;
 let _V_FAMILY_EN = /\b(?:spouse|partner|kid|kids|child|children|wife|husband|son|daughter|father|mother|brother|sister|family|esposa|esposo|hijo|hija|frau|sohn|tochter|жена|муж|сын|дочь)\b/i;
 let _vPrivacyTermsPromise = null;
 
@@ -3001,6 +3003,7 @@ function _ensurePrivacyTerms() {
 function _vPrivateFilter(text) {
     return String(text || '').split('\n').filter(function (line) {
         if (_V_FAMILY_CJK.some(function (t) { return line.indexOf(t) >= 0; })) return false;
+        if (_V_SPOUSE_TITLE.test(line)) return false;
         return !_V_FAMILY_EN.test(line);
     }).join('\n');
 }
