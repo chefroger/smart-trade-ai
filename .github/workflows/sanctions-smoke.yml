@@ -1,7 +1,9 @@
 name: Sanctions download smoke
 
 # 2026-11-23 审计 P0-A：官方名单站点会 302 到 CDN，mock 测试测不到。
-# 每晚真实下载 OFAC SDN 与 UN 的前 1 MB，校验最终主机仍在两层白名单内。
+# S10（2026-11-24）：覆盖全部六份名单（OFAC SDN / OFAC 非 SDN / CSL / UN /
+# EU / UK）；每晚真实下载前 1 MB，校验 HTTP 200、非空响应与最终主机白名单。
+# 任何一份失败脚本退出码非 0，workflow 标红。
 
 on:
   push:
@@ -30,5 +32,5 @@ jobs:
           python-version: "3.12"
 
       # 只用到标准库 + 仓库内代码，不装任何第三方依赖
-      - name: Download OFAC / UN headers and verify redirect hosts
+      - name: Download all sanctions lists and verify redirect hosts
         run: python scripts/sanctions_smoke.py
