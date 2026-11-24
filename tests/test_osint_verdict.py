@@ -480,3 +480,9 @@ class TestRegistryOnlyHits:
         assert report["overall_rating"] == "limited"
         assert report["overall_score"] is None
         assert "2026-10-30" in report["rating_note"]
+        # S9：有登记命中时写「已查到公司登记」，不再说没有实质核验命中
+        assert "已查到公司登记" in report["rating_note"]
+        assert "纽约州" in report["rating_note"]
+        assert "登记只证明主体存在" in report["rating_note"]
+        assert "不证明经营真实性" in report["rating_note"]
+        assert "也没有实质核验命中" not in report["rating_note"]

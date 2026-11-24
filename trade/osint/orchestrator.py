@@ -77,6 +77,38 @@ def _registry_formation_dates(sources: dict) -> list[str]:
     return dates
 
 
+def _registry_jurisdictions(sources: dict) -> list[str]:
+    """从登记类事实里抽取州/国（S9：报告写「已查到公司登记（州/国）」）。"""
+    import re as _re
+
+    places: list[str] = []
+
+    def _add(value: object) -> None:
+        text = str(value or "").strip()
+        if text and text not in places:
+            places.append(text)
+
+    for name in _REGISTRY_SOURCES:
+        item = (sources or {}).get(name)
+        if not isinstance(item, dict) or item.get("status") != "hit":
+            continue
+        # GLEIF 等提供结构化国家代码
+        _add((item.get("data") or {}).get("country"))
+        for fact in item.get("facts") or []:
+            text = str(fact.get("text") or "")
+            # 「纽约州登记」「法国登记」「注册地：US」
+            match = _re.search(r"([\u4e00-\u9fff]{2,8}州)登记", text)
+            if not match:
+                match = _re.search(r"([\u4e00-\u9fff]{2,8})登记[：:]", text)
+            if match:
+                _add(match.group(1))
+                continue
+            match = _re.search(r"注册地[：:]\s*([A-Z]{2})", text)
+            if match:
+                _add(match.group(1))
+    return places
+
+
 # 单层超时（秒）。全局预算另由 osint_full_check(budget=...) 限制。
 # 名单已改为后台每日刷新（check_sanctions 只读本地库），制裁层不再需要
 # 下载时间，20 秒足够（2026-11-23 审计 P2-3）。
@@ -367,15 +399,25 @@ async def osint_full_check(
     report["overall_rating"] = rating
     report["provisional_score"] = provisional  # 仅供诊断，不是对外结论
     if rating == "limited":
-        report["rating_note"] = (
-            "仅完成制裁筛查：目标没有可查询域名，公开来源也没有实质核验命中；"
-            "这不是低风险结论。补到官网或公司注册信息后请重新背调。"
-        )
         dates = _registry_formation_dates(report["sources"])
-        if dates:
-            report["rating_note"] += " 登记成立日期：" + "、".join(dates) + "。"
-        elif registry_hits:
-            report["rating_note"] += " 仅有登记类来源命中，登记不等于经营核验。"
+        if registry_hits:
+            # S9：有登记类命中时如实写「已查到公司登记」，不再说「没有实质
+            # 核验命中」——登记本身就是命中，只是不足以证明经营真实性。
+            places = _registry_jurisdictions(report["sources"])
+            where = "、".join(places[:2]) or "公开登记库"
+            if dates:
+                basis = f"{where}，成立于 {'、'.join(dates[:2])}"
+            else:
+                basis = f"{where}，成立日期未提供"
+            report["rating_note"] = (
+                f"已查到公司登记（{basis}）；登记只证明主体存在，"
+                "不证明经营真实性。补充官网、域名或其它核验来源后再评级。"
+            )
+        else:
+            report["rating_note"] = (
+                "仅完成制裁筛查：目标没有可查询域名，公开来源也没有实质核验命中；"
+                "这不是低风险结论。补到官网或公司注册信息后请重新背调。"
+            )
 
 
     # ── 生成建议 ───────────────────────────────────────────────────────
