@@ -437,6 +437,16 @@ _NAME_STOPWORDS = frozenset({
 
 _NAME_FALLBACK_SCORE = 6  # 高于常见裸关键词（3 分），低于显式调用（9999）
 
+# 「X 的资料/背景」是查 X；「X 的苹果」是查苹果（W6）
+_INQUIRY_NOUNS = (
+    "资料", "背景", "信息", "情况", "简历", "介绍", "官网", "联系方式",
+    "法人", "创始人", "底细", "来头", "产品", "业务", "公司", "关系",
+)
+# 「是谁写的/做的」问的是动作主语，不是某个人的身份（W6）
+_WHO_ACTION_RE = re.compile(r"是谁(写|做|发|出|设计|制定|提供|告诉|说|给|选|买|卖)")
+# 只靠这些通用指代触发词命中的 osint 结果，可以被上一条规则剔除
+_IDENTITY_TRIGGERS = frozenset({"这个人是谁", "是谁", "谁", "这个人", "那个人"})
+
 
 def extract_osint_name(query: str) -> str | None:
     """从自然语言里取一个像人名/公司名的片段（取不到返回 None）。
@@ -461,21 +471,48 @@ def extract_osint_name(query: str) -> str | None:
     camel = _CAMEL_NAME_RE.search(query)
     if camel:
         return camel.group(0)
-    # 单个大写专名：只在有查询意图时尝试，避免把 "Check" 之类当名字
+    # 单个大写专名：只在有查询意图时尝试，避免把 "Check" 之类当名字。
+    # W6：全大写短词（LED/ABC）是产品/缩写，不是人名 —— 否则
+    # 「海关数据里谁在进口 LED 灯」会被兜底成个人背调。
     if _NAME_INTENT_RE.search(query):
         for token in re.findall(
             r"(?<![A-Za-z])[A-Z][A-Za-z'’\-]{2,}(?![A-Za-z])", query,
         ):
-            if token.casefold() not in _NAME_STOPWORDS:
-                return token
+            if token.casefold() in _NAME_STOPWORDS:
+                continue
+            if token.isupper() and len(token) <= 4:
+                continue
+            return token
     return None
 
 
+def _name_is_inquiry_subject(query: str, name: str) -> bool:
+    """名字是询问对象，而不是所属格（W6）。
+
+    「Tim Cook 的苹果最近怎么样」问的是苹果，不是 Tim Cook；
+    「Tim Cook's company」同理。这类说法不能兜底成个人背调。
+    """
+    index = query.find(name)
+    if index < 0:
+        return True
+    tail = query[index + len(name):]
+    if tail.startswith(("'s", "’s")):
+        return False
+    stripped = tail.lstrip()
+    if stripped.startswith("的"):
+        # 「X 的资料/背景」仍是查 X；「X 的苹果」不是
+        return stripped[1:].lstrip().startswith(_INQUIRY_NOUNS)
+    return True
+
+
 def _name_fallback(query: str) -> str | None:
-    """人名样式 + 查询意图 → 返回名字片段（用于补一条 b2b-osint 命中）。"""
+    """人名样式 + 查询意图 + 名字是询问对象 → 补一条 b2b-osint 命中。"""
     if not query or not _NAME_INTENT_RE.search(query):
         return None
-    return extract_osint_name(query)
+    name = extract_osint_name(query)
+    if not name or not _name_is_inquiry_subject(query, name):
+        return None
+    return name
 
 
 def match_skills(query: str) -> list[dict]:
@@ -492,6 +529,15 @@ def match_skills(query: str) -> list[dict]:
     results = _score_skills(query)
     if results and int(results[0].get("score", 0)) >= _EXPLICIT_SCORE:
         return results  # 显式指定了别的技能：不抢
+    if _WHO_ACTION_RE.search(query):
+        # W6：「这个人是谁写的开发信模板」问的是谁写的，不是查这个人
+        results = [
+            r for r in results
+            if not (
+                r.get("skill_name") == "b2b-osint"
+                and set(r.get("triggers_matched") or ()) <= _IDENTITY_TRIGGERS
+            )
+        ]
     if not any(r.get("skill_name") == "b2b-osint" for r in results):
         name = _name_fallback(query)
         if name:
@@ -501,8 +547,15 @@ def match_skills(query: str) -> list[dict]:
                 "triggers_matched": [name],
                 "word_boundary_hits": 0,
                 "substring_hits": 0,
+                "_name_fallback": True,
             })
-            results.sort(key=lambda r: -int(r.get("score", 0)))
+            # W6：同分时具体业务技能（如 customs-data）排在兜底背调之前
+            results.sort(key=lambda r: (
+                -int(r.get("score", 0)),
+                1 if r.get("_name_fallback") else 0,
+            ))
+            for r in results:
+                r.pop("_name_fallback", None)
     return results
 
 

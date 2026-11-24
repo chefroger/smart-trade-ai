@@ -586,6 +586,29 @@ def test_person_company_phrasings_route_to_osint(query):
     assert result["name"] == "b2b-osint", f"{query!r} 被判给了 {result['name']}"
 
 
+def test_possessive_or_action_phrasing_does_not_route_to_osint():
+    """W6：名字只是所属格/动作主语时，不是个人背调对象。"""
+    from trade.skill_router import match_skill
+
+    assert (match_skill("Tim Cook 的苹果最近怎么样") or {}).get("name") != "b2b-osint"
+    assert (
+        match_skill("这个人是谁写的开发信模板好") or {}
+    ).get("name") != "b2b-osint"
+
+
+def test_customs_data_beats_product_acronym_fallback():
+    """W6：LED 是产品缩写不是人名；海关数据查询不能被兜底成背调。"""
+    from trade.skill_router import match_skills
+
+    ranked = match_skills("帮我查一下美国海关数据里谁在进口 LED 灯")
+    assert ranked, "没有任何匹配"
+    assert ranked[0]["skill_name"] == "b2b-customs-data"
+    osint_scores = [r["score"] for r in ranked if r["skill_name"] == "b2b-osint"]
+    assert all(ranked[0]["score"] > score for score in osint_scores), (
+        "具体业务技能必须分数胜出，不能只靠排序稳定"
+    )
+
+
 def test_marketing_and_outreach_still_route_correctly():
     from trade.skill_router import match_skill
 
