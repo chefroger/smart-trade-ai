@@ -18,6 +18,17 @@ triggers:
   - 阿里店铺
   - 平台上排名
   # ... (see skill_registry.py for full list)
+  # English（2026-11-24 W6：与注册表同步补全）
+  - platform diagnosis
+  - alibaba optimization
+  - made-in-china
+  - keyword optimization
+  - product title
+  - ranking
+  - search ranking
+  - product listing
+  - alibaba international
+  - alibaba
 category: 平台运营
 version: 1.4.1
 author: Foreign Trade Assistant

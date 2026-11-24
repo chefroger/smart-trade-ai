@@ -16,10 +16,17 @@ triggers:
   - 市场定位
   - 开始使用
   # ... (see skill_registry.py for full list)
+  # English（2026-11-24 W6：与注册表同步补全）
+  - new company
+  - deploy
+  - setup
+  - marketing plan
+  - product introduction
+  - marketing positioning
+  - first time setup
 category: 系统工具
 version: 1.0.0
 author: Foreign Trade Assistant
-
 ---
 
 初始化完成后提示用户：可以随时说「检查知识库」，我会扫描缺文件、空文件、过期资质和前后矛盾项。

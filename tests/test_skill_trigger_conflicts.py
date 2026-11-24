@@ -73,3 +73,59 @@ def test_audit_script_strict_passes():
     report = mod.run_audit()
     assert not report["exact_conflicts"]
     assert not report["p0_probe_failures"], report["p0_probe_failures"]
+
+
+def _skill_md_triggers():
+    """读取每个 skills/*/SKILL.md 的 frontmatter triggers。"""
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parent.parent
+    out = {}
+    for path in sorted((root / "skills").glob("*/SKILL.md")):
+        text = path.read_text(encoding="utf-8")
+        match = re.match(r"^---\n(.*?)\n---", text, re.S)
+        if not match:
+            continue
+        data = yaml.safe_load(match.group(1)) or {}
+        triggers = [str(t) for t in (data.get("triggers") or [])]
+        if triggers:
+            out[path.parent.name] = triggers
+    return out
+
+
+def test_every_skill_md_has_chinese_and_english_triggers():
+    """W6 补全：每个 SKILL.md 的触发词必须中英双全。"""
+    import re
+
+    cjk = re.compile(r"[\u4e00-\u9fff]")
+    latin = re.compile(r"[A-Za-z]")
+    missing = {
+        name: triggers
+        for name, triggers in _skill_md_triggers().items()
+        if not any(cjk.search(t) for t in triggers)
+        or not any(latin.search(t) for t in triggers)
+    }
+    assert not missing, f"SKILL.md 触发词缺少中/英文: {list(missing)}"
+
+
+def test_every_skill_md_trigger_is_routable_in_registry():
+    """W6：SKILL.md 声明过的触发词必须在注册表里，Trade 才路由得到。"""
+    from trade.skill_registry import _SKILLS
+
+    registry = {
+        skill["name"]: {str(t).strip().lower() for t in skill.get("triggers", [])}
+        for skill in _SKILLS
+    }
+    missing = {}
+    for name, triggers in _skill_md_triggers().items():
+        if name not in registry:
+            continue
+        extra = sorted(
+            {t.lower() for t in triggers} - registry[name]
+        )
+        if extra:
+            missing[name] = extra
+    assert not missing, f"SKILL.md 触发词未进入注册表（路由不到）: {missing}"

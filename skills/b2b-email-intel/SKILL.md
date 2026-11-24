@@ -19,10 +19,23 @@ triggers:
   - 邮箱真实性
   - 查一下这个邮箱
   # ... (see skill_registry.py for full list)
+  # English（2026-11-24 W6：与注册表同步补全）
+  - email intel
+  - email lookup
+  - email profile
+  - email search
+  - email verification
+  - email address
+  - check whether this email is real
+  - is this email real
+  - 邮箱 osint
+  - check this email
+  - email check
+  - who owns this email
+  - find email owner
 category: 客户开发
 version: 1.0.1
 author: Foreign Trade Assistant
-
 ---
 
 ## 输出要求

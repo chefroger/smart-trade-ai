@@ -40,7 +40,6 @@ triggers:
   - close the deal
   - closing follow up
   - customer not responding
-  - not responding
   - sales playbook
   - sales knowledge base
   - sales SOP

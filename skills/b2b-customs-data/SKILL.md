@@ -18,6 +18,25 @@ triggers:
   - 查采购商
   - 找买家
   # ... (see skill_registry.py for full list)
+  # English（2026-11-24 W6：与注册表同步补全）
+  - customs data
+  - import export records
+  - trade data mining
+  - buyer analysis
+  - supplier analysis
+  - trade intelligence
+  - import data
+  - export data
+  - trade data
+  - import from china
+  - imports from china
+  - import records
+  - import history
+  - import shipments
+  - bill of lading
+  - importer
+  - who imports
+  - importyeti
 category: 数据分析
 version: 1.3.3
 author: Foreign Trade Assistant
