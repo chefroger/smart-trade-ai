@@ -38,3 +38,21 @@ class TestReleaseBuildsBothMacArchitectures:
         assert "macos-latest" in RELEASE
         assert "-macOS-x64.zip" in RELEASE
         assert "-macOS-arm64.zip" in RELEASE
+
+
+class TestManualDispatchCreatesDraftRelease:
+    """W8：手动触发也要产出 Release（draft），不能只有 tag 触发才挂产物。"""
+
+    def test_attach_runs_for_manual_dispatch(self):
+        assert "github.event_name == 'workflow_dispatch'" in RELEASE
+        # tag 触发的原条件仍须保留
+        assert "startsWith(github.ref, 'refs/tags/v')" in RELEASE
+
+    def test_manual_release_is_draft_and_has_tag(self):
+        assert "draft: ${{ github.event_name == 'workflow_dispatch' }}" in RELEASE
+        assert "tag_name: ${{ steps.version.outputs.tag }}" in RELEASE
+
+    def test_version_step_emits_release_tag(self):
+        # 手动触发时 ref_name 是分支名，Release 必须用 v<版本号>
+        assert 'REL_TAG="v$VER"' in RELEASE
+        assert 'echo "tag=$REL_TAG" >> "$GITHUB_OUTPUT"' in RELEASE
