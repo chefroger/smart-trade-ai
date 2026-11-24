@@ -49,9 +49,10 @@ def _next_delay(failed: bool, fail_streak: int, interval: float) -> float:
 
 
 def _tokenizer_marker():
-    from trade.osint.sanctions.store import db_path
+    # 与 store.ensure_tokenizer_migrated() 共用同一个版本标记（W5）
+    from trade.osint.sanctions.store import tokenizer_marker_path
 
-    return db_path().parent / ".tokenizer_v2"
+    return tokenizer_marker_path()
 
 
 def _fresh_names(sources: tuple[Source, ...], now: float) -> set[str]:

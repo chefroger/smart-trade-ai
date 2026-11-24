@@ -538,3 +538,75 @@ class TestRefreshBackoff:
         results = loader.refresh_all(fetch=_boom, sources=(src,), skip_fresh=True)
         assert calls == ["CSL"]
         assert results["CSL"]["ok"] is False
+
+
+# ── 归一化升级窗口（W5）────────────────────────────────────────────────────
+
+
+class TestTokenizerMigration:
+    """归一化规则升级后、首次刷新前，旧库中文名不能漏查。"""
+
+    def _legacy_db(self, path):
+        import sqlite3
+
+        from trade.osint.sanctions import store
+        from trade.osint.sanctions.store import _now_iso
+
+        conn = sqlite3.connect(str(path))
+        conn.row_factory = sqlite3.Row
+        store.ensure_writable_db(conn)
+        # 旧口径：norm/tkey 保留「华为技术有限公司」整串（未剥后缀）
+        conn.execute(
+            "INSERT INTO entities(list, name, norm, tkey, country, kind) "
+            "VALUES (?,?,?,?,?,?)",
+            ("OFAC", "华为技术有限公司", "华为技术有限公司", "华为技术有限公司", "China", "entity"),
+        )
+        conn.execute(
+            "INSERT INTO entities(list, name, norm, tkey, country, kind) "
+            "VALUES (?,?,?,?,?,?)",
+            ("OFAC", "HUAWEI TECHNOLOGIES CO., LTD.", "huawei technologies co ltd",
+             "co huawei ltd technologies", "", "entity"),
+        )
+        # 所有名单都标健康（否则先命中 degraded 分支，测不到迁移提示）
+        for source in store.SOURCES:
+            conn.execute(
+                "INSERT INTO lists(name, label, entries, aliases, rows_total, source_url, "
+                "fetched_at, last_attempt_at) VALUES (?,?,?,?,?,?,?,?)",
+                (source.name, source.label, 1, 0, 1, source.urls[0],
+                 _now_iso(), _now_iso()),
+            )
+        conn.commit()
+        conn.close()
+
+    def test_legacy_db_migrates_on_first_query(self, sanctions_db):
+        from trade.osint.sanctions import check_sanctions
+        from trade.osint.sanctions.store import tokenizer_marker_path
+
+        self._legacy_db(sanctions_db)
+        assert not tokenizer_marker_path().is_file()
+
+        for query in ("华为技术有限公司", "华为"):
+            result = check_sanctions(query)
+            assert result["hits"], query
+
+        assert tokenizer_marker_path().is_file(), "迁移后必须写版本标记"
+
+    def test_coverage_flags_legacy_before_migration(self, sanctions_db):
+        from trade.osint.sanctions.store import get_coverage
+
+        self._legacy_db(sanctions_db)
+        coverage = get_coverage()
+        assert coverage["tokenizer_legacy"] is True
+        note = coverage["lists"]["OFAC"].get("note") or ""
+        assert "迁移" in note and "漏查" in note
+
+    def test_legacy_suggestion_when_migration_fails(self, sanctions_db, monkeypatch):
+        import trade.osint.sanctions as sanctions_pkg
+
+        self._legacy_db(sanctions_db)
+        monkeypatch.setattr(sanctions_pkg, "_ensure_migrated", lambda: False)
+
+        result = sanctions_pkg.check_sanctions("华为")
+        assert result["hits"] == []
+        assert "迁移" in result["suggestion"]
+        assert "无制裁记录" in result["suggestion"]

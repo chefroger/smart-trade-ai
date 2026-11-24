@@ -23,6 +23,7 @@ from trade.osint.sanctions.loader import (
     refresh_all,
     start_background_refresh,
 )
+from trade.osint.sanctions.store import ensure_tokenizer_migrated as _ensure_migrated
 from trade.osint.sanctions.store import search as _search
 
 __all__ = [
@@ -74,6 +75,9 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
             "coverage": dict,           # 数据源健康度（每份名单的 entries/fetched_at/degraded）
         }
     """
+    # W5：归一化规则升级后、首次成功刷新前，旧库 tkey 是旧口径。
+    # 首次查询前就地迁移（幂等，失败只降级提示，不阻断）。
+    _ensure_migrated()
     hits = _search(name, country=country, limit=20)
     # confirmed = 完整 token 或核心 token 一致；possible = 子集/拼写差异
     exact_match_found = any(
@@ -122,6 +126,13 @@ def check_sanctions(name: str, country: str | None = None) -> dict:
         ]
         suggestion = (
             "⚠️ 制裁名单尚未成功下载（" + "、".join(missing[:6]) + "），"
+            "本次**不构成「无制裁记录」的结论**。请稍后重试，"
+            "或通过官方渠道（OFAC/UN/EU/UK 官网）人工复核后再决策。"
+        )
+    elif coverage.get("tokenizer_legacy"):
+        # W5：迁移没跑成（只读库等），旧库中文名可能漏查 —— 不能说「未发现匹配」
+        suggestion = (
+            "⚠️ 本地名单尚未按新归一化规则迁移（旧数据可能漏查中文名），"
             "本次**不构成「无制裁记录」的结论**。请稍后重试，"
             "或通过官方渠道（OFAC/UN/EU/UK 官网）人工复核后再决策。"
         )

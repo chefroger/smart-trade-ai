@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import os
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +30,8 @@ from trade.osint.sanctions.normalize import (
     tokens_of,
 )
 from trade.osint.sanctions.sources import SOURCE_LABELS, SOURCES
+
+logger = logging.getLogger(__name__)
 
 DB_FILENAME = "sanctions.db"
 # 过期上限（2026-11-23 审计 P0-A）：
@@ -54,6 +58,69 @@ def _resolve_cache_dir() -> Path:
 def db_path() -> Path:
     """当前进程使用的制裁库路径。"""
     return _resolve_cache_dir() / DB_FILENAME
+
+
+def tokenizer_marker_path() -> Path:
+    """归一化规则版本标记（刷新成功后写入；缺失 = 旧库的旧 tkey）。"""
+    return db_path().parent / ".tokenizer_v2"
+
+
+_migration_lock = threading.Lock()
+
+
+def ensure_tokenizer_migrated() -> bool:
+    """旧库就地重建 norm/tkey（W5），失败绝不抛异常。
+
+    归一化规则升级（剥中文后缀/泛词）后、首次成功刷新前，旧库里的
+    `norm`/`tkey` 仍是旧口径：查「华为」「华为技术有限公司」都会漏。
+    这里在第一次查询前把现有条目按当前规则重算一遍（只写两列 + 重建
+    FTS），几秒内完成；随后写版本标记，之后不再执行。
+
+    Returns:
+        True = 标记已存在或迁移成功；False = 无数据/失败（调用方应降级提示）。
+    """
+    marker = tokenizer_marker_path()
+    if marker.is_file():
+        return True
+    with _migration_lock:
+        if marker.is_file():  # 双检：并发首查只迁一次
+            return True
+        if not db_path().is_file():
+            # 还没有名单库：_connect(write=True) 会建出空文件，导致
+            # search() 以为库已就绪而报 "no such table"
+            return False
+        try:
+            conn = _connect(write=True)
+            if conn is None:
+                return False
+            try:
+                has_table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='entities'"
+                ).fetchone()
+                if has_table is None:
+                    return False  # 还没有任何名单：首次刷新会直接写入新口径
+                rows = conn.execute("SELECT id, name FROM entities").fetchall()
+                if not rows:
+                    return False
+                updates = []
+                for row in rows:
+                    norm = normalize_name(row["name"])
+                    toks = tokens_of(norm)
+                    updates.append((norm, token_key(toks), row["id"]))
+                conn.executemany(
+                    "UPDATE entities SET norm = ?, tkey = ? WHERE id = ?", updates,
+                )
+                rebuild_fts(conn)
+                conn.commit()
+            finally:
+                conn.close()
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("2\n", encoding="utf-8")
+            logger.info("制裁库归一化迁移完成（%d 条）", len(rows))
+            return True
+        except Exception:  # noqa: BLE001 —— 迁移失败降级为提示，不能阻断查询
+            logger.warning("制裁库归一化迁移失败，本次结果可能漏查中文名", exc_info=True)
+            return False
 
 
 # ── 连接与建表 ──────────────────────────────────────────────────────────────
@@ -211,9 +278,17 @@ def get_coverage() -> dict:
     """
     conn = _connect()
     rows: dict[str, sqlite3.Row] = {}
+    legacy_tokenizer = False
     if conn is not None:
         try:
             rows = {r["name"]: r for r in conn.execute("SELECT * FROM lists")}
+            # W5：旧库没有版本标记且有数据 → norm/tkey 可能仍是旧口径
+            if not tokenizer_marker_path().is_file():
+                legacy_tokenizer = (
+                    conn.execute("SELECT 1 FROM entities LIMIT 1").fetchone() is not None
+                )
+        except sqlite3.Error:
+            legacy_tokenizer = False
         finally:
             conn.close()
 
@@ -282,9 +357,18 @@ def get_coverage() -> dict:
             degraded = True
         lists[source.name] = entry
 
+    if legacy_tokenizer:
+        # 迁移没跑成（只读库/权限/首次查询前直接调 coverage）：如实提示。
+        # 不并入 degraded —— degraded 的文案是「尚未成功下载」，与这里不符。
+        note = "本地名单尚未按新归一化规则迁移，中文名可能漏查"
+        for entry in lists.values():
+            if entry.get("fetched_at"):
+                entry["note"] = f"{entry['note']}；{note}" if entry.get("note") else note
+
     return {
         "degraded": degraded,
         "stale": any_stale,
+        "tokenizer_legacy": legacy_tokenizer,
         "total_entries": total_entries,
         "lists": lists,
     }
