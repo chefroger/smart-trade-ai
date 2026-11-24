@@ -770,6 +770,8 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
             'blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'],
         // 不放行 style/id：模型输出不该带自定义样式与可覆盖的 DOM id（审计 P1-E）
         ALLOWED_ATTR: ['href','target','class','src','alt','width','height'],
+        // S1：模型输出不得携带 data-*（可被委托层当成动作执行）
+        ALLOW_DATA_ATTR: false,
     });
     // 跨源图片改为点击加载，防提示注入零点击外带数据
     if (typeof neutralizeRemoteImages === 'function') neutralizeRemoteImages(body);
