@@ -241,3 +241,11 @@ def test_bare_targets_still_screened(monkeypatch):
     for query in ("天津赛得", "Huawei"):
         assert chat._osint_target_from_query(query) == query
         assert "未命中" in chat._sanctions_fallback_text(query)
+
+
+def test_verb_prefix_is_stripped_but_pronouns_still_blocked():
+    """O-新2：剥掉查询动词后取目标；指代/疑问句仍不猜。"""
+    assert chat._osint_target_from_query("帮我查一下华为") == "华为"
+    assert chat._osint_target_from_query("查一下 Huawei") == "Huawei"
+    assert chat._osint_target_from_query("帮我查下这个客户靠谱吗") is None
+    assert chat._osint_target_from_query("这个买家是不是骗子") is None

@@ -103,7 +103,13 @@ _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 _DOMAIN_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
 # 疑问/指代词：出现时不允许把整句当筛查目标
 _QUESTION_MARKERS_RE = re.compile(
-    r"这个|这家|该|是不是|吗|靠谱|怎么样|如何|谁|哪|什么|请问|帮我查|客户|买家|卖家",
+    r"这个|这家|该|是不是|吗|靠谱|怎么样|如何|谁|哪|什么|请问|客户|买家|卖家",
+)
+# 短句兜底前先剥掉查询动词（O-新2）：「帮我查一下华为」的目标是「华为」，
+# 不是整句。剥完仍为空或仍含指代/疑问词时照旧不猜。
+_LEAD_VERB_RE = re.compile(
+    r"^\s*(?:请|麻烦)?\s*(?:帮我)?\s*"
+    r"(?:查一查|查一下|调查一下|核实一下|了解一下|查查|查下|调查|核实|了解|查)\s*",
 )
 
 
@@ -137,8 +143,12 @@ def _osint_target_from_query(query: str) -> str | None:
         # 短句兜底只接受「没有疑问/指代词」的裸目标（如「某某公司」「Huawei」）。
         # 含「这个/这家/是不是/吗/靠谱」等一律不猜 —— 拿整句比对名单会把
         # 「这个买家是不是骗子」筛成绿色「未命中」（W2）。
+        # O-新2：先剥查询动词，让「帮我查一下华为」仍能筛查「华为」。
         if len(text) <= 30 and not _QUESTION_MARKERS_RE.search(text):
-            return text
+            stripped = _LEAD_VERB_RE.sub("", text).strip()
+            if stripped:
+                return stripped
+            return None
     except Exception:
         _log.exception("提取 OSINT 目标失败")
     return None
