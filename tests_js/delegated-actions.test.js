@@ -116,3 +116,22 @@ test('sanitize 明确禁止 data-* 属性（S1）', () => {
   const count = (chat + views).match(/ALLOW_DATA_ATTR\s*:\s*false/g) || [];
   assert.strictEqual(count.length, 3, '三处 DOMPurify.sanitize 都必须禁止 data-*');
 });
+
+test('O-新17：合成事件的 preventDefault/stopPropagation 转发给真实事件', () => {
+  const { handlers, win } = load();
+  let prevented = 0;
+  let stopped = 0;
+  win.onboardingSkip = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  };
+  const el = { dataset: { act: 'onboardingSkip', event: '1' }, value: '' };
+  const real = {
+    target: { closest: () => el },
+    preventDefault: () => { prevented += 1; },
+    stopPropagation: () => { stopped += 1; },
+  };
+  handlers.click(real);
+  assert.strictEqual(prevented, 1, '跳过引导必须拦住 <a href="#"> 的默认跳转');
+  assert.strictEqual(stopped, 1);
+});

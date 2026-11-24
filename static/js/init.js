@@ -123,14 +123,17 @@ function renderNoCompanyPage() {
         return args;
     }
 
-    function _clickArgs(el) {
+    function _clickArgs(el, ev) {
         var args = [];
         if (el.dataset.event === '1') {
             // 传合成事件：currentTarget/target 都指向按钮本身（委托监听里
-            // 原生 event.currentTarget 是 document，会让按钮忙态挂错对象）
+            // 原生 event.currentTarget 是 document，会让按钮忙态挂错对象）。
+            // O-新17：preventDefault/stopPropagation 必须转发到真实事件 ——
+            // 否则 <a href="#"> 的默认跳转（挂 # + 滚回顶部）拦不住。
             args.push({
                 currentTarget: el, target: el,
-                preventDefault: function () {}, stopPropagation: function () {},
+                preventDefault: function () { if (ev && ev.preventDefault) ev.preventDefault(); },
+                stopPropagation: function () { if (ev && ev.stopPropagation) ev.stopPropagation(); },
             });
         }
         if (el.dataset.value === '1') args.push(el.value);
@@ -268,7 +271,7 @@ function renderNoCompanyPage() {
             console.warn('[trade] 未找到动作函数:', act);
             return;
         }
-        fn.apply(el, _clickArgs(el));
+        fn.apply(el, _clickArgs(el, ev));
     }
 
     document.addEventListener('click', function (ev) {
