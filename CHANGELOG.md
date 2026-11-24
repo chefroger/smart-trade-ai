@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.53 — 2026-11-24
+
+- 修复语言切换动态写 onclick 导致的 CSP 拦截（O-17 补漏）
+- `4c602de` fix(ui): 语言切换不再动态写 onclick（O-17 补漏）
+
 ## v0.9.52 — 2026-11-24
 
 - O-17 完成：147 个内联事件迁移到 data-* 委托，CSP script-src/attr 移除 unsafe-inline
