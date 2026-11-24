@@ -1101,7 +1101,8 @@ def _build_trade_csp(nonce: str) -> str:
     - 内联 <script> 元素必须带 per-request nonce；
     - 内联事件属性已全部迁移到 data-* 委托（O-17），script-src /
       script-src-attr 不再放行 unsafe-inline；
-    - style-src 仍为 unsafe-inline（内联样式另行处理）。
+    - style-src-elem 只允许外部样式（页面无内联 <style>）；style-src-attr
+      仍保留 unsafe-inline，供 400+ 处内联 style 属性使用（下一步再迁移）。
     """
     return (
         "default-src 'self'; "
@@ -1111,6 +1112,8 @@ def _build_trade_csp(nonce: str) -> str:
         f"script-src-elem 'self' 'nonce-{nonce}'; "
         "script-src-attr 'none'; "
         "style-src 'self' 'unsafe-inline'; "
+        "style-src-elem 'self'; "
+        "style-src-attr 'unsafe-inline'; "
         "font-src 'self' data:; "
         "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     )

@@ -23,7 +23,9 @@ def test_csp_has_element_nonce_and_attr_fallback():
     assert "script-src-attr 'none'" in csp
     assert "script-src 'self' 'unsafe-inline'" not in csp
     assert "script-src-elem 'self' 'unsafe-inline'" not in csp
-    assert "style-src 'self' 'unsafe-inline'" in csp
+    # 样式元素只允许外部文件；属性级仍保留回退（400+ 处内联 style）
+    assert "style-src-elem 'self'" in csp
+    assert "style-src-attr 'unsafe-inline'" in csp
 
 
 def test_every_inline_script_has_nonce_placeholder():
@@ -61,3 +63,10 @@ def test_no_inline_event_attributes_remain():
         for match in re.finditer(r"setAttribute\(\s*['\"]on", text):
             offenders.append(f"{path.name}:{text[:match.start()].count(chr(10)) + 1} (setAttribute)")
     assert not offenders, f"仍存在内联事件属性: {offenders[:10]}"
+
+
+def test_no_style_elements_in_page():
+    """style-src-elem 只允许外部样式：页面不得出现内联 <style>。"""
+    import re
+
+    assert not re.search(r"<style[\s>]", HTML, re.IGNORECASE)
