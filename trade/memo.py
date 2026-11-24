@@ -12,6 +12,8 @@ import hmac
 import json
 import os
 import secrets
+import threading
+import time
 from pathlib import Path
 
 PBKDF2_ITERATIONS = 200_000
@@ -21,6 +23,44 @@ _MAX_PASSPHRASE = 128
 # 密语策略（W13）：每次输入（默认）或本会话内有效
 UNLOCK_MODES = frozenset({"always", "session"})
 DEFAULT_UNLOCK_MODE = "always"
+
+# 后端节流（O-新6）：前端锁定刷新即清零，这里补一层进程内保护。
+MAX_FAILURES = 5
+LOCK_SECONDS = 60
+_throttle_lock = threading.Lock()
+_fail_count = 0
+_lock_until = 0.0
+
+
+def lock_remaining() -> int:
+    """密语锁定剩余秒数（0 = 未锁定）。"""
+    with _throttle_lock:
+        return max(0, int(_lock_until - time.monotonic()))
+
+
+def register_failure() -> None:
+    """记录一次密语失败；连续 MAX_FAILURES 次后锁定 LOCK_SECONDS。"""
+    global _fail_count, _lock_until
+    with _throttle_lock:
+        _fail_count += 1
+        if _fail_count >= MAX_FAILURES:
+            _lock_until = time.monotonic() + LOCK_SECONDS
+            _fail_count = 0
+
+
+def register_success() -> None:
+    """成功校验后清零失败计数（锁定期内不允许调用，由端点先拦截）。"""
+    global _fail_count
+    with _throttle_lock:
+        _fail_count = 0
+
+
+def reset_throttle() -> None:
+    """测试/维护用：清空锁定状态。"""
+    global _fail_count, _lock_until
+    with _throttle_lock:
+        _fail_count = 0
+        _lock_until = 0.0
 
 
 class MemoError(ValueError):

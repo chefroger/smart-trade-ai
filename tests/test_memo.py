@@ -196,3 +196,30 @@ def test_config_write_is_atomic(env, monkeypatch, tmp_path):
     assert not path.with_name(path.name + ".tmp").exists()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["salt"] and data["hash"]
+
+
+class TestBackendThrottle:
+    """O-新6：后端锁定，刷新前端页面不能绕过。"""
+
+    def test_five_failures_lock_then_expire(self):
+        from trade import memo
+
+        memo.reset_throttle()
+        for _ in range(memo.MAX_FAILURES):
+            memo.register_failure()
+        assert memo.lock_remaining() > 0
+        # 模拟时间过去：把 lock_until 拨到过去，剩余应为 0
+        memo._lock_until = 0.0
+        assert memo.lock_remaining() == 0
+        memo.reset_throttle()
+
+    def test_success_resets_failure_count(self):
+        from trade import memo
+
+        memo.reset_throttle()
+        for _ in range(memo.MAX_FAILURES - 1):
+            memo.register_failure()
+        memo.register_success()
+        memo.register_failure()  # 计数已清零，不会立即锁
+        assert memo.lock_remaining() == 0
+        memo.reset_throttle()

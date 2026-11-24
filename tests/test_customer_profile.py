@@ -984,3 +984,26 @@ class TestGiftRequestHint:
         )
         assert normal.status_code == 200
         assert "hint" not in normal.json()
+
+
+class TestMemoBackendLockout:
+    """O-新6：连续 5 次错密语后后端返回 429，刷新页面无效。"""
+
+    def test_five_wrong_then_locked(self, api_client, customer_id):
+        from trade import memo
+
+        memo.reset_throttle()
+        try:
+            memo.configure("secret-123")
+            client, token, cid = api_client
+            url = f"/api/trade/customers/{customer_id}/memo"
+            for _ in range(memo.MAX_FAILURES):
+                r = client.post(url, headers=_h(token, cid),
+                                json={"passphrase": "wrong"})
+                assert r.status_code == 403
+            locked = client.post(url, headers=_h(token, cid),
+                                 json={"passphrase": "secret-123"})
+            assert locked.status_code == 429
+            assert "秒后重试" in locked.json()["detail"]
+        finally:
+            memo.reset_throttle()
