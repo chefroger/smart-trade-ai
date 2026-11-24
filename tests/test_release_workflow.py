@@ -35,9 +35,26 @@ class TestReleaseBuildsBothMacArchitectures:
     def test_intel_and_arm64_runners_are_both_present(self):
         # 用户机器可能是 Intel：只出 arm64 包等于没验证
         assert "macos-15-intel" in RELEASE
-        assert "macos-latest" in RELEASE
         assert "-macOS-x64.zip" in RELEASE
         assert "-macOS-arm64.zip" in RELEASE
+
+    def test_arm64_runner_is_pinned_not_latest(self):
+        """W9：arm64 固定到 macos-15，不依赖 macos-latest 的指向。"""
+        assert "- os: macos-15\n" in RELEASE
+        assert "- os: macos-latest" not in RELEASE
+
+
+class TestPostBuildArchCheck:
+    """W9：构建产物架构必须与 matrix 一致，否则失败。"""
+
+    def test_post_build_checks_lipo_arch(self):
+        assert "lipo -archs" in RELEASE
+        assert "产物架构不符" in RELEASE
+        assert "exit 1" in RELEASE
+
+    def test_expected_arch_mapping(self):
+        # matrix 的 x64 → x86_64；其余 arm64
+        assert "matrix.arch == 'x64' && 'x86_64' || 'arm64'" in RELEASE
 
 
 class TestManualDispatchCreatesDraftRelease:

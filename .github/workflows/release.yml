@@ -29,10 +29,17 @@ jobs:
             artifact-glob: dist/TradeWin-*.zip
             post-build: |
               cd dist
+              BIN=$(ls -d "TradeWin.app/Contents/MacOS/"* | head -n1)
+              ARCHS=$(lipo -archs "$BIN")
+              echo "built archs: $ARCHS（期望 $EXPECTED_ARCH）"
+              case " $ARCHS " in
+                *" $EXPECTED_ARCH "*) ;;
+                *) echo "::error::产物架构不符：期望 $EXPECTED_ARCH，实际 $ARCHS"; exit 1 ;;
+              esac
               zip -r "TradeWin-${VER}-macOS-x64.zip" "TradeWin.app"
               rm -rf "TradeWin.app"
-          # macos-latest 目前是 Apple Silicon（macos-14 标签在公开仓库会被取消）
-          - os: macos-latest
+          # W9：固定 Apple Silicon runner，不依赖 macos-latest 指向漂移
+          - os: macos-15
             arch: arm64
             setup-cmd: |
               pip install -e ".[desktop]"
@@ -41,6 +48,13 @@ jobs:
             artifact-glob: dist/TradeWin-*.zip
             post-build: |
               cd dist
+              BIN=$(ls -d "TradeWin.app/Contents/MacOS/"* | head -n1)
+              ARCHS=$(lipo -archs "$BIN")
+              echo "built archs: $ARCHS（期望 $EXPECTED_ARCH）"
+              case " $ARCHS " in
+                *" $EXPECTED_ARCH "*) ;;
+                *) echo "::error::产物架构不符：期望 $EXPECTED_ARCH，实际 $ARCHS"; exit 1 ;;
+              esac
               zip -r "TradeWin-${VER}-macOS-arm64.zip" "TradeWin.app"
               rm -rf "TradeWin.app"
 
@@ -98,6 +112,8 @@ jobs:
         shell: bash
         env:
           VER: ${{ steps.version.outputs.ver }}
+          # lipo 的架构名：matrix 的 x64 对应 x86_64
+          EXPECTED_ARCH: ${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}
         run: ${{ matrix.post-build }}
 
       # Artifact
