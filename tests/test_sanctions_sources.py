@@ -406,15 +406,23 @@ class TestMatchQuality:
 
         self._seed([
             ("HUAWEI TECHNOLOGIES CO LTD", "entity"),
-            # 真实名单里有精确的 ROSNEFT 行；O-新1 后不再依赖子集确认
-            ("ROSNEFT", "entity"),
+            # O-新15：种子必须是生产实际依赖的真实两行。裸 ROSNEFT 行在真实
+            # 名单里只给 possible；Rosneft 能 confirmed 靠的是 ROSNEFT
+            # TRADING S.A.（核心 token 剥掉 trading/sa 后等于 {rosneft}）。
+            ("ROSNEFT OIL COMPANY", "entity"),
+            ("ROSNEFT TRADING S.A.", "entity"),
             ("ISLAMIC REVOLUTIONARY GUARD CORPS", "entity"),
         ])
         for query in ("HUAWEI", "Rosneft", "Islamic Revolutionary Guard Corps"):
             result = check_sanctions(query)
             assert result["is_sanctioned"] is True, query
             assert result["risk_level"] == "high", query
-            assert result["hits"][0]["confirmation"] == "confirmed", query
+            # O-新15：Rosneft 可能同时命中「OIL COMPANY」（possible）与
+            # 「TRADING S.A.」（confirmed）两行 —— 生产靠后者确认，断言存在
+            # confirmed 命中，而不是要求排序第一。
+            assert any(
+                h["confirmation"] == "confirmed" for h in result["hits"]
+            ), query
 
     def test_short_name_subset_is_possible_not_confirmed(self, sanctions_db):
         """O-新1：短名子集（London → MINGMEN LONDON LTD）只能是 possible。"""
