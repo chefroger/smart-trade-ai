@@ -208,8 +208,8 @@ class TestBackendThrottle:
         for _ in range(memo.MAX_FAILURES):
             memo.register_failure()
         assert memo.lock_remaining() > 0
-        # 模拟时间过去：把 lock_until 拨到过去，剩余应为 0
-        memo._lock_until = 0.0
+        # 模拟时间过去：把锁定截止写回过去，剩余应为 0
+        memo._save_throttle(0, 0.0)
         assert memo.lock_remaining() == 0
         memo.reset_throttle()
 
@@ -223,3 +223,25 @@ class TestBackendThrottle:
         memo.register_failure()  # 计数已清零，不会立即锁
         assert memo.lock_remaining() == 0
         memo.reset_throttle()
+
+    def test_throttle_survives_restart(self, monkeypatch, tmp_path):
+        """S8：失败计数与锁定截止写进 memo.json，重启不清零。"""
+        import importlib
+        import json
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        from trade import memo
+
+        memo.reset_throttle()
+        for _ in range(memo.MAX_FAILURES):
+            memo.register_failure()
+        assert memo.lock_remaining() > 0
+
+        data = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        assert data["throttle_until"] > 0
+        assert "throttle_failures" in data
+
+        # 模拟应用重启：重新加载模块，状态只能来自磁盘
+        reloaded = importlib.reload(memo)
+        assert reloaded.lock_remaining() > 0
+        reloaded.reset_throttle()

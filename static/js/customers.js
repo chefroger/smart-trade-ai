@@ -3066,10 +3066,10 @@ function _memoPromptPassword(title, withConfirm) {
         ov.className = 'memo-modal';
         ov.innerHTML = '<div class="memo-box" style="max-width:380px;">' +
             '<div class="memo-head"><strong>' + esc(title) + '</strong></div>' +
-            '<input type="password" id="memo-pass" autocomplete="current-password" ' +
+            '<input type="password" id="memo-pass" autocomplete="off" ' +
             'placeholder="密语" style="width:100%;margin:10px 0;padding:8px;box-sizing:border-box;">' +
             (withConfirm
-                ? '<input type="password" id="memo-pass2" autocomplete="new-password" ' +
+                ? '<input type="password" id="memo-pass2" autocomplete="off" ' +
                   'placeholder="再输入一次" style="width:100%;margin:0 0 10px;padding:8px;box-sizing:border-box;">'
                 : '') +
             '<div style="display:flex;gap:8px;justify-content:flex-end;">' +

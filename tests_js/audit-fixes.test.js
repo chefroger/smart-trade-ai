@@ -210,3 +210,16 @@ test('切视图会关闭挂在 body 上的私密备忘录（W15 O-14）', () => 
   assert.match(body, /#memo-modal/, 'navToView 必须清理 #memo-modal');
   assert.match(body, /remove\(\)/);
 });
+
+// S8：密语输入框与二次确认框都关闭浏览器自动填充
+test('私密备忘录密语输入框 autocomplete=off（S8）', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'customers.js'), 'utf8');
+  const start = src.indexOf('function _memoPromptPassword');
+  const body = src.slice(start, src.indexOf('\n}', start) + 2000);
+  assert.match(body, /id="memo-pass" autocomplete="off"/);
+  assert.match(body, /id="memo-pass2" autocomplete="off"/);
+  assert.doesNotMatch(body, /autocomplete="current-password"/);
+  assert.doesNotMatch(body, /autocomplete="new-password"/);
+});

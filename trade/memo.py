@@ -24,43 +24,66 @@ _MAX_PASSPHRASE = 128
 UNLOCK_MODES = frozenset({"always", "session"})
 DEFAULT_UNLOCK_MODE = "always"
 
-# 后端节流（O-新6）：前端锁定刷新即清零，这里补一层进程内保护。
+# 后端节流（O-新6 / S8）：前端锁定刷新即清零，这里补一层后端保护。
+# S8：失败计数与锁定截止写进 memo.json（原子写），重启应用不能清零。
 MAX_FAILURES = 5
 LOCK_SECONDS = 60
 _throttle_lock = threading.Lock()
-_fail_count = 0
-_lock_until = 0.0
+
+
+def _throttle_state() -> tuple[int, float]:
+    """从 memo.json 读失败计数与锁定截止（epoch 秒）。"""
+    data = _load_config()
+    try:
+        count = max(0, int(data.get("throttle_failures") or 0))
+    except (TypeError, ValueError):
+        count = 0
+    try:
+        until = float(data.get("throttle_until") or 0)
+    except (TypeError, ValueError):
+        until = 0.0
+    return count, until
+
+
+def _save_throttle(count: int, until: float) -> None:
+    """把节流状态写回 memo.json；写失败不阻断请求（可用性优先）。"""
+    try:
+        data = _load_config()
+        data["throttle_failures"] = int(count)
+        data["throttle_until"] = round(float(until), 3)
+        _write_config(data)
+    except OSError:
+        pass
 
 
 def lock_remaining() -> int:
     """密语锁定剩余秒数（0 = 未锁定）。"""
     with _throttle_lock:
-        return max(0, int(_lock_until - time.monotonic()))
+        _, until = _throttle_state()
+        return max(0, int(until - time.time()))
 
 
 def register_failure() -> None:
     """记录一次密语失败；连续 MAX_FAILURES 次后锁定 LOCK_SECONDS。"""
-    global _fail_count, _lock_until
     with _throttle_lock:
-        _fail_count += 1
-        if _fail_count >= MAX_FAILURES:
-            _lock_until = time.monotonic() + LOCK_SECONDS
-            _fail_count = 0
+        count, until = _throttle_state()
+        count += 1
+        if count >= MAX_FAILURES:
+            until = time.time() + LOCK_SECONDS
+            count = 0
+        _save_throttle(count, until)
 
 
 def register_success() -> None:
     """成功校验后清零失败计数（锁定期内不允许调用，由端点先拦截）。"""
-    global _fail_count
     with _throttle_lock:
-        _fail_count = 0
+        _save_throttle(0, 0.0)
 
 
 def reset_throttle() -> None:
     """测试/维护用：清空锁定状态。"""
-    global _fail_count, _lock_until
     with _throttle_lock:
-        _fail_count = 0
-        _lock_until = 0.0
+        _save_throttle(0, 0.0)
 
 
 class MemoError(ValueError):
