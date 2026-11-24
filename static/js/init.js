@@ -96,3 +96,58 @@ function renderNoCompanyPage() {
         + importBtn
         + '</div></div>');
 }
+
+// #region delegated-actions —— 内联事件迁移（O-17 第二步），勿删标记
+// 目标：把 on* 属性替换成 data-*，用委托监听执行；为最终移除 CSP
+// unsafe-inline 做准备。data-act 只接受全局函数名 + JSON 字面量参数，
+// 不解析表达式、不 eval，避免把注入的 HTML 变成任意代码执行。
+(function () {
+    function _args(el, ev) {
+        var args = [];
+        if (el.dataset.args) {
+            try {
+                var parsed = JSON.parse(el.dataset.args);
+                if (Array.isArray(parsed)) args = parsed;
+            } catch (e) { args = []; }
+        }
+        if (el.dataset.event === '1') {
+            // 传合成事件：currentTarget/target 都指向按钮本身（委托监听里
+            // 原生 event.currentTarget 是 document，会让按钮忙态挂错对象）
+            var synth = {
+                currentTarget: el, target: el,
+                preventDefault: function () {}, stopPropagation: function () {},
+            };
+            args = [synth].concat(args);
+        }
+        if (el.dataset.value === '1') args = [el.value].concat(args);
+        return args;
+    }
+
+    function _run(el, ev) {
+        var fn = window[el.dataset.act];
+        if (typeof fn !== 'function') {
+            console.warn('[trade] 未找到动作函数:', el.dataset.act);
+            return;
+        }
+        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+        fn.apply(el, _args(el, ev));
+    }
+
+    document.addEventListener('click', function (ev) {
+        var el = ev.target && ev.target.closest && ev.target.closest('[data-act]');
+        if (el) _run(el, ev);
+    });
+    document.addEventListener('change', function (ev) {
+        var el = ev.target && ev.target.closest && ev.target.closest('[data-onchange]');
+        if (!el) return;
+        var fn = window[el.dataset.onchange];
+        if (typeof fn === 'function') fn(el.value);
+    });
+    document.addEventListener('input', function (ev) {
+        var el = ev.target && ev.target.closest && ev.target.closest('[data-oninput]');
+        if (!el) return;
+        var fn = window[el.dataset.oninput];
+        if (typeof fn === 'function') fn(el);
+    });
+})();
+// #endregion delegated-actions

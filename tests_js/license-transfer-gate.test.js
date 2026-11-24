@@ -125,7 +125,7 @@ test('付费视图/上下文有路由兜底', () => {
 
 test('试用用户拿不到导出/导入入口（两个按钮都不在 HTML 里裸奔）', () => {
     // 导入按钮：只允许出现在带 hidden 的容器里
-    const importBtn = /<button[^>]*onclick="showImportCompanyDialog\(\)"[^>]*>/.exec(HTML);
+    const importBtn = /<button[^>]*data-act="showImportCompanyDialog"[^>]*>/.exec(HTML);
     assert.ok(importBtn, '找不到导入按钮');
     const row = /<div[^>]*id="import-company-row"[^>]*>/.exec(HTML);
     assert.ok(
@@ -134,7 +134,8 @@ test('试用用户拿不到导出/导入入口（两个按钮都不在 HTML 里�
     );
     // 导出按钮：HTML 里不应有静态的导出按钮（它由 JS 按状态渲染）
     assert.ok(
-        !/onclick="exportCompany\(/.test(HTML),
+        !/onclick="exportCompany\(/.test(HTML)
+        && !/data-act="exportCompany"/.test(HTML),
         'static/trade_chat.html 不应有静态导出按钮——它必须由 JS 按许可证状态渲染',
     );
 });

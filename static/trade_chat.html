@@ -25,7 +25,7 @@
     <div class="sidebar-header">
         <div class="logo-row">
             <div class="logo">TRADE<small class="brand-sub">AI · v2</small></div>
-            <select id="lang-select" aria-label="Language" onchange="switchLang(this.value)" class="lang-select">
+            <select id="lang-select" aria-label="Language" data-onchange="switchLang" class="lang-select">
                 <option value="zh">中文</option>
                 <option value="en">English</option>
             </select>
@@ -42,10 +42,10 @@
         <div class="company-select">
             <div class="co-lbl">COMPANY / 当前公司</div>
             <div class="csel-row">
-                <select id="company-select" aria-label="选择公司" onchange="onCompanyChange(this.value)">
+                <select id="company-select" aria-label="选择公司" data-onchange="onCompanyChange">
                     <option value="">— 选择公司 —</option>
                 </select>
-                <button id="company-add-btn" class="hidden" data-paid onclick="showAddCompanyModal()" title="添加公司">+</button>
+                <button id="company-add-btn" class="hidden" data-paid data-act="showAddCompanyModal" title="添加公司">+</button>
             </div>
         </div>
     </div>
@@ -53,60 +53,60 @@
     <nav class="sidebar-nav">
         <div class="nav-section">
             <div class="nav-section-title">工作台 · DESK</div>
-            <div class="nav-item active" data-view="chat" data-chat-context="daily" onclick="navToView('chat','daily','今日简报')">
+            <div class="nav-item active" data-view="chat" data-chat-context="daily" data-act="navToView" data-args="[&quot;chat&quot;,&quot;daily&quot;,&quot;今日简报&quot;]">
                 <span class="nav-icon" data-icon="layout-dashboard"></span><span class="nav-label">今日简报</span>
             </div>
         </div>
 
         <div class="nav-section">
             <div class="nav-section-title">获客引流 · LEADS</div>
-            <div class="nav-item" data-view="chat" data-chat-context="lead" onclick="navToView('chat','lead','客户开发')">
+            <div class="nav-item" data-view="chat" data-chat-context="lead" data-act="navToView" data-args="[&quot;chat&quot;,&quot;lead&quot;,&quot;客户开发&quot;]">
                 <span class="nav-icon" data-icon="target"></span><span class="nav-label">客户开发</span>
             </div>
-            <div class="nav-item" data-view="chat" data-chat-context="platform" onclick="navToView('chat','platform','平台诊断')">
+            <div class="nav-item" data-view="chat" data-chat-context="platform" data-act="navToView" data-args="[&quot;chat&quot;,&quot;platform&quot;,&quot;平台诊断&quot;]">
                 <span class="nav-icon" data-icon="globe"></span><span class="nav-label">网站诊断</span>
             </div>
-            <div class="nav-item" data-view="chat" data-chat-context="social" onclick="navToView('chat','social','社媒营销')">
+            <div class="nav-item" data-view="chat" data-chat-context="social" data-act="navToView" data-args="[&quot;chat&quot;,&quot;social&quot;,&quot;社媒营销&quot;]">
                 <span class="nav-icon" data-icon="share-2"></span><span class="nav-label">社媒营销</span>
             </div>
-            <div class="nav-item" data-view="chat" data-chat-context="linkedin" onclick="navToView('chat','linkedin','LinkedIn 营销')">
+            <div class="nav-item" data-view="chat" data-chat-context="linkedin" data-act="navToView" data-args="[&quot;chat&quot;,&quot;linkedin&quot;,&quot;LinkedIn 营销&quot;]">
                 <span class="nav-icon" data-icon="briefcase-business"></span><span class="nav-label">LinkedIn</span>
             </div>
-            <div class="nav-item" data-view="chat" data-chat-context="customs" onclick="navToView('chat','customs','海关数据')">
+            <div class="nav-item" data-view="chat" data-chat-context="customs" data-act="navToView" data-args="[&quot;chat&quot;,&quot;customs&quot;,&quot;海关数据&quot;]">
                 <span class="nav-icon" data-icon="ship"></span><span class="nav-label">海关数据</span>
             </div>
         </div>
 
         <div class="nav-section hidden" data-paid>
             <div class="nav-section-title">销售转化 · CONVERT</div>
-            <div class="nav-item" data-view="customers" onclick="navToView('customers')">
+            <div class="nav-item" data-view="customers" data-act="navToView" data-args="[&quot;customers&quot;]">
                 <span class="nav-icon" data-icon="users"></span><span class="nav-label">客户管理</span>
                 <span class="nav-badge" id="daily-brief-badge" hidden>0</span>
             </div>
-            <div class="nav-item" data-view="mailboxes" onclick="navToView('mailboxes')">
+            <div class="nav-item" data-view="mailboxes" data-act="navToView" data-args="[&quot;mailboxes&quot;]">
                 <span class="nav-icon" data-icon="mail"></span><span class="nav-label" data-i18n="nav.mailboxes">邮箱</span>
             </div>
-            <div class="nav-item" data-view="chat" data-chat-context="docs" onclick="navToView('chat','docs','文档库')">
+            <div class="nav-item" data-view="chat" data-chat-context="docs" data-act="navToView" data-args="[&quot;chat&quot;,&quot;docs&quot;,&quot;文档库&quot;]">
                 <span class="nav-icon" data-icon="folder-open"></span><span class="nav-label">文档库</span>
             </div>
-            <div class="nav-item" data-view="chat" data-chat-context="docgen" onclick="navToView('chat','docgen','文档生成')">
+            <div class="nav-item" data-view="chat" data-chat-context="docgen" data-act="navToView" data-args="[&quot;chat&quot;,&quot;docgen&quot;,&quot;文档生成&quot;]">
                 <span class="nav-icon" data-icon="file-text"></span><span class="nav-label">文档生成</span>
             </div>
         </div>
 
         <div class="nav-section hidden" data-paid>
             <div class="nav-section-title">工具 · TOOLS</div>
-            <div class="nav-item" data-view="chat" data-chat-context="osint" onclick="navToView('chat','osint','客户背调')">
+            <div class="nav-item" data-view="chat" data-chat-context="osint" data-act="navToView" data-args="[&quot;chat&quot;,&quot;osint&quot;,&quot;客户背调&quot;]">
                 <span class="nav-icon" data-icon="search-check"></span><span class="nav-label">客户背调</span>
             </div>
-            <div class="nav-item" data-view="tasks" onclick="navToView('tasks')">
+            <div class="nav-item" data-view="tasks" data-act="navToView" data-args="[&quot;tasks&quot;]">
                 <span class="nav-icon" data-icon="calendar-clock"></span><span class="nav-label">定时任务</span>
             </div>
         </div>
 
         <div class="nav-section hidden" data-paid>
             <div class="nav-section-title">历史 · LOG</div>
-            <div class="nav-item" data-view="history" onclick="navToView('history')">
+            <div class="nav-item" data-view="history" data-act="navToView" data-args="[&quot;history&quot;]">
                 <span class="nav-icon" data-icon="history"></span><span class="nav-label">对话记录</span>
             </div>
         </div>
@@ -124,14 +124,14 @@
     <div class="sidebar-bottom">
     <div id="usage-today" class="usage-today" hidden></div>
     <div class="sidebar-footer">
-        <button id="system-update-btn" class="hidden" data-paid onclick="doTradeUpdate(event)" data-tip="更新系统"><span class="i i-20" style="--i:url('/static/icons/lucide-download.svg')"></span></button>
-        <button id="system-restart-btn" onclick="doRestartTrade(event)" data-tip="重启" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-refresh-cw.svg')"></span></button>
-        <button id="skills-help-btn" onclick="showSkillsHelp()" data-tip="技能帮助"><span class="i i-20" style="--i:url('/static/icons/lucide-book-open.svg')"></span></button>
-        <button id="skills-update-btn" onclick="updateSkills(event)" data-tip="更新技能" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-refresh-cw.svg')"></span></button>
-        <button id="upgrade-help-btn" class="hidden" data-paid onclick="showUpgradeHelp()" data-tip="升级说明"><span class="i i-20" style="--i:url('/static/icons/lucide-book-open.svg')"></span></button>
-        <button id="onboarding-btn" onclick="restartOnboarding()" data-tip="新手引导"><span class="i i-20" style="--i:url('/static/icons/lucide-graduation-cap.svg')"></span></button>
+        <button id="system-update-btn" class="hidden" data-paid data-act="doTradeUpdate" data-event="1" data-tip="更新系统"><span class="i i-20" style="--i:url('/static/icons/lucide-download.svg')"></span></button>
+        <button id="system-restart-btn" data-act="doRestartTrade" data-event="1" data-tip="重启" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-refresh-cw.svg')"></span></button>
+        <button id="skills-help-btn" data-act="showSkillsHelp" data-tip="技能帮助"><span class="i i-20" style="--i:url('/static/icons/lucide-book-open.svg')"></span></button>
+        <button id="skills-update-btn" data-act="updateSkills" data-event="1" data-tip="更新技能" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-refresh-cw.svg')"></span></button>
+        <button id="upgrade-help-btn" class="hidden" data-paid data-act="showUpgradeHelp" data-tip="升级说明"><span class="i i-20" style="--i:url('/static/icons/lucide-book-open.svg')"></span></button>
+        <button id="onboarding-btn" data-act="restartOnboarding" data-tip="新手引导"><span class="i i-20" style="--i:url('/static/icons/lucide-graduation-cap.svg')"></span></button>
         <!-- 聊天副驾设置入口暂时隐藏（2026-11-06）；弹窗与接口保留，改回可见只需删掉 hidden。 -->
-        <button id="copilot-settings-btn" onclick="showCopilotSettings()" data-tip="聊天副驾" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-settings.svg')"></span></button>
+        <button id="copilot-settings-btn" data-act="showCopilotSettings" data-tip="聊天副驾" hidden><span class="i i-20" style="--i:url('/static/icons/lucide-settings.svg')"></span></button>
         <div id="license-bar" style="display:none;"></div>
     </div>
     </div>
@@ -176,7 +176,7 @@
             密码管理器、网银/支付类应用在拒读名单内；剪贴板通道默认关闭。
         </p>
         <div class="form-group">
-            <label><input type="checkbox" id="copilot-consent" onchange="onCopilotConsentChange()">
+            <label><input type="checkbox" id="copilot-consent" data-onchange="onCopilotConsentChange">
                 我已阅读并同意上面的说明（隐私说明版本 <span id="copilot-required-version">1</span>）</label>
         </div>
         <div class="form-group">
@@ -199,8 +199,8 @@
         </div>
         <p id="copilot-availability" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;"></p>
         <div class="form-actions">
-            <button class="btn" onclick="hideModal('copilot-settings-modal')">取消</button>
-            <button class="btn btn-primary" onclick="saveCopilotSettings()">保存</button>
+            <button class="btn" data-act="hideModal" data-args="[&quot;copilot-settings-modal&quot;]">取消</button>
+            <button class="btn btn-primary" data-act="saveCopilotSettings">保存</button>
         </div>
     </div>
 </div>
@@ -210,18 +210,18 @@
     <div class="modal wide">
         <h3>🏢 公司设置</h3>
         <div class="modal-tabs">
-            <button class="modal-tab active" onclick="switchModalTab('tab-companies')" id="tab-btn-companies">公司列表</button>
-            <button class="modal-tab" onclick="switchModalTab('tab-identity')" id="tab-btn-identity">Agent 身份</button>
+            <button class="modal-tab active" data-act="switchModalTab" data-args="[&quot;tab-companies&quot;]" id="tab-btn-companies">公司列表</button>
+            <button class="modal-tab" data-act="switchModalTab" data-args="[&quot;tab-identity&quot;]" id="tab-btn-identity">Agent 身份</button>
         </div>
         <div id="tab-companies">
             <div id="import-company-row" class="hidden" style="display:flex;gap:8px;margin-bottom:10px;">
-                <button class="btn" onclick="showImportCompanyDialog()"><span class="i i-16" style="--i:url('/static/icons/lucide-upload.svg')"></span> 导入公司数据</button>
+                <button class="btn" data-act="showImportCompanyDialog"><span class="i i-16" style="--i:url('/static/icons/lucide-upload.svg')"></span> 导入公司数据</button>
             </div>
             <div id="company-list-ui" style="margin-bottom:14px;"></div>
             <hr style="border:none;border-top:1px solid var(--border);margin:14px 0;">
             <h4 style="font-size:13px;font-weight:600;margin-bottom:10px;">添加新公司</h4>
             <div class="form-row">
-                <div class="form-group"><label for="co-name">公司名称 *</label><input type="text" id="co-name" placeholder="例如：我的外贸公司" oninput="autoSlug()"></div>
+                <div class="form-group"><label for="co-name">公司名称 *</label><input type="text" id="co-name" placeholder="例如：我的外贸公司" data-oninput="autoSlug"></div>
                 <div class="form-group"><label for="co-slug">Slug</label><input type="text" id="co-slug" readonly placeholder="自动生成" style="color:var(--text-muted);background:var(--bg-main);cursor:not-allowed;" title="由系统根据公司名称自动生成"></div>
             </div>
             <div class="form-row">
@@ -230,8 +230,8 @@
             </div>
             <div class="form-group"><label for="co-website">网站</label><input type="text" id="co-website" placeholder="https://..."></div>
             <div class="form-actions">
-                <button class="btn" onclick="hideModal('company-modal')">关闭</button>
-                <button class="btn btn-primary" onclick="createCompany()">创建公司</button>
+                <button class="btn" data-act="hideModal" data-args="[&quot;company-modal&quot;]">关闭</button>
+                <button class="btn btn-primary" data-act="createCompany">创建公司</button>
             </div>
         </div>
         <div id="tab-identity" class="hidden">
@@ -239,8 +239,8 @@
             <div class="form-group"><label for="identity-editor">Agent 身份 (Markdown)</label>
             <textarea id="identity-editor" placeholder="粘贴 agent-identity.md 内容..."></textarea></div>
             <div class="form-actions">
-                <button class="btn" onclick="hideModal('company-modal')">关闭</button>
-                <button class="btn btn-primary" onclick="saveCompanyIdentity()">保存</button>
+                <button class="btn" data-act="hideModal" data-args="[&quot;company-modal&quot;]">关闭</button>
+                <button class="btn btn-primary" data-act="saveCompanyIdentity">保存</button>
             </div>
         </div>
     </div>
@@ -292,8 +292,8 @@
         <div class="form-group"><label for="cust-note">备注 / 跟进项目</label><textarea id="cust-note" placeholder="该联系人负责的项目、需求、注意事项等" style="min-height:80px;"></textarea></div>
         <div class="form-group"><label for="cust-follow-up-note">AI 跟进建议</label><textarea id="cust-follow-up-note" placeholder="AI 基于客户画像自动生成的跟进策略..." style="min-height:60px;"></textarea></div>
         <div class="form-actions">
-            <button class="btn" onclick="hideModal('customer-modal')">取消</button>
-            <button class="btn btn-primary" onclick="saveCustomer()">保存</button>
+            <button class="btn" data-act="hideModal" data-args="[&quot;customer-modal&quot;]">取消</button>
+            <button class="btn btn-primary" data-act="saveCustomer">保存</button>
         </div>
     </div>
 </div>
@@ -307,8 +307,8 @@
         <div class="form-group"><label for="lib-path">文件夹路径 *</label><input type="text" id="lib-path" placeholder="/Users/xxx/Documents/客户资料"><p class="hint">📌 Mac: 文件夹上右键 → Option键 → 复制路径名</p></div>
         <div class="form-group"><label for="lib-desc">描述</label><input type="text" id="lib-desc" placeholder="可选"></div>
         <div class="form-actions">
-            <button class="btn" onclick="hideModal('library-modal')">取消</button>
-            <button class="btn btn-primary" onclick="createLibrary()">添加</button>
+            <button class="btn" data-act="hideModal" data-args="[&quot;library-modal&quot;]">取消</button>
+            <button class="btn btn-primary" data-act="createLibrary">添加</button>
         </div>
     </div>
 </div>
@@ -331,7 +331,7 @@
             <p style="margin-top:8px;">等待执行完毕，看到「重启完成」提示后，刷新浏览器页面（<kbd style="background:var(--bg-muted);padding:1px 4px;">Ctrl+Shift+R</kbd>）即可。</p>
             <p style="color:var(--text-muted);font-size:12px;margin-top:12px;">如果 <code>hermes</code> 命令找不到，说明 Hermes Agent 未安装。请先参考 <a href="https://github.com/chefroger/smart-trade-ai#readme" target="_blank" style="color:var(--primary);">安装说明</a> 安装 Hermes。</p>
         </div>
-        <div class="form-actions"><button class="btn" onclick="hideModal('upgrade-help-modal')">关闭</button></div>
+        <div class="form-actions"><button class="btn" data-act="hideModal" data-args="[&quot;upgrade-help-modal&quot;]">关闭</button></div>
     </div>
 </div>
 
@@ -341,7 +341,7 @@
         <h3>📖 全部 45 个技能速查</h3>
         <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">在聊天框输入关键词，Trade 自动匹配合适的技能。点击复制图标可复制快速启动提示词。</p>
         <div id="skills-help-content" style="max-height:58vh;overflow-y:auto;line-height:1.6;"></div>
-        <div class="form-actions"><button class="btn" onclick="hideModal('skills-help-modal')">关闭</button></div>
+        <div class="form-actions"><button class="btn" data-act="hideModal" data-args="[&quot;skills-help-modal&quot;]">关闭</button></div>
     </div>
 </div>
 
