@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.9.50 — 2026-11-24
+
+- O-17 第一步：内联 script 元素使用 per-request nonce（script-src-elem），事件属性暂留回退
+- `5f5d632` security(csp): 内联脚本改用 per-request nonce（O-17 第一步）
+
 ## v0.9.49 — 2026-11-24
 
 - 2026-11-24 审计跟进：O-新1 短名子集降级、O-新2 动词剥离、O-新5 先生/夫人语境化，及 O-新3/4/7/8/10/11/12 小修
