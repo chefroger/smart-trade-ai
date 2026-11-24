@@ -953,3 +953,34 @@ class TestPrivacyHintsAndTerms:
             json={"unlock_mode": "forever"},
         )
         assert bad.status_code == 400
+
+
+class TestGiftRequestHint:
+    """W14：手工事实像「客户索要」时提示改记礼物表。"""
+
+    def test_looks_like_gift_patterns(self):
+        from trade import profile as p
+
+        assert p.looks_like_gift("客户要了两盒茶叶") is True
+        assert p.looks_like_gift("买家想要两瓶茅台") is True
+        assert p.looks_like_gift("对方索要购物卡") is True
+        assert p.looks_like_gift("客户要求提供报价单") is False
+        assert p.looks_like_gift("客户喜欢手冲咖啡") is False
+
+    def test_fact_with_gift_content_gets_hint(self, api_client, customer_id):
+        client, token, cid = api_client
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "subject": "礼物", "content": "客户要了两盒茶叶"},
+        )
+        assert r.status_code == 200, r.text
+        assert "礼物往来" in (r.json().get("hint") or "")
+
+        normal = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "subject": "咖啡", "content": "客户喜欢手冲"},
+        )
+        assert normal.status_code == 200
+        assert "hint" not in normal.json()

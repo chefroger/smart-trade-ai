@@ -108,14 +108,18 @@ def post_fact(
     except Exception as exc:
         _map_err(exc)
         raise
-    # W13：内容像家庭成员信息时提示改记「家庭」类（不阻断写入）
+    # W13/W14：内容像家庭成员信息 → 提示改「家庭」类；
+    # 像「客户索要」→ 提示改记礼物表（都只提示，不阻断写入）
     from trade.privacy_terms import contains_family_terms
 
-    if (body.category or "") != "家庭" and contains_family_terms(
-        f"{body.subject or ''} {body.content or ''}"
-    ):
-        if isinstance(result, dict):
-            result = {**result, "hint": "内容包含家庭成员信息，建议把分类改为「家庭」"}
+    text = f"{body.subject or ''} {body.content or ''}"
+    hints = []
+    if (body.category or "") != "家庭" and contains_family_terms(text):
+        hints.append("内容包含家庭成员信息，建议把分类改为「家庭」")
+    if (body.category or "") != "礼物往来" and profile_mod.looks_like_gift(text):
+        hints.append("内容像客户索要/送礼，建议改记到「礼物往来」表")
+    if hints and isinstance(result, dict):
+        result = {**result, "hint": "；".join(hints)}
     return result
 
 

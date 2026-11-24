@@ -52,6 +52,21 @@ _EXTRACT_LOCK = threading.Lock()
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# 「客户索要」的常见说法（W14）：「客户要了两盒茶叶」应提示改记礼物表。
+# 末尾必须是具体索取物/动作，避免「客户要求提供报价」这类正常业务被误判。
+_GIFT_REQUEST_RE = re.compile(
+    r"(?:客户|买家|对方|客人|他|她)\s*"
+    r"(?:要了|想要|索要|要求|希望|提出要|问我们要)"
+    r".{0,16}"
+    r"(?:送|寄|带|拿|礼物|礼品|样品|茶叶|酒|烟|特产|红包|购物卡|"
+    r"瓶|盒|箱|条|斤|包|件|台|部|套)",
+)
+
+
+def looks_like_gift(text: Any) -> bool:
+    """内容是否像「客户索要」（W14：提示改记礼物表，而不是普通事实）。"""
+    return bool(_GIFT_REQUEST_RE.search(str(text or "")))
+
 
 # ── 工具 ────────────────────────────────────────────────────────────────────
 
@@ -1287,6 +1302,8 @@ def extract_from_sources(
         added_facts = added_gifts = skipped = dropped = 0
         # W13：内容命中家庭称谓但分类不是「家庭」的条数（只在成功入库时计）
         family_misclassified = 0
+        # W14：内容像「客户索要」却当成普通事实入库的条数
+        gift_misclassified = 0
 
         for item in obj.get("facts") or []:
             if not isinstance(item, dict):
@@ -1321,6 +1338,8 @@ def extract_from_sources(
                 added_facts += 1
                 if cat != "家庭" and contains_family_terms(f"{subj} {cont}"):
                     family_misclassified += 1
+                if looks_like_gift(f"{subj} {cont}"):
+                    gift_misclassified += 1
             else:
                 skipped += 1
 
@@ -1382,6 +1401,11 @@ def extract_from_sources(
             result["family_hint"] = (
                 f"有 {family_misclassified} 条内容像家庭成员信息，"
                 "建议把分类改为「家庭」（这类内容不会注入 AI/打印/导出）"
+            )
+        if gift_misclassified:
+            result["gift_hint"] = (
+                f"有 {gift_misclassified} 条内容像客户索要/送礼，"
+                "建议改记到「礼物往来」表（客户索要不会注入 AI）"
             )
         return result
     finally:
