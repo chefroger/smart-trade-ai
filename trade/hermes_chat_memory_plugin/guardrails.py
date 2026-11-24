@@ -320,6 +320,23 @@ def _check_terminal(args: dict) -> dict | None:
     return None
 
 
+# S5：扫描命令 + 根目录 + 主库特征，三者同时出现按主库处理。
+# 覆盖 find / grep -r / grep -a / strings / xxd / od / base64 -d / sqlite3 的
+# 「换个姿势读主库」写法（审计 R5d 剩余绕过）。
+_SCAN_CMD_RE = re.compile(
+    r"\b(?:find|strings|xxd|od|sqlite3?)\b"
+    r"|\bgrep\s+-[a-z]*[ra]\b"
+    r"|\bbase64\s+(?:-d|--decode)\b"
+)
+# 扫描范围：~、/（单独作为参数）或 trade 目录
+_SCAN_SCOPE_RE = re.compile(
+    r"(?:^|[\s\"'])~(?:[/\s\"']|$)"
+    r"|(?:^|[\s\"'])/(?:[\s\"']|$)"
+    r"|/\.trade|\.trade\b|/trade/|appdata/local/trade"
+)
+_SENSITIVE_HINT_RE = re.compile(r"\.db\b|sqlite|customer_gifts|索要")
+
+
 def _mentions_main_db(args: dict | None) -> bool:
     """工具参数里是否出现 Trade 主库路径（W13 窄规则）。
 
@@ -327,6 +344,12 @@ def _mentions_main_db(args: dict | None) -> bool:
     **不依赖 TRADE_HOME**：真实部署里该变量可能未设置，改为直接识别默认数据
     目录（`~/.trade/data`、`%LOCALAPPDATA%\\trade\\data`，大小写/斜杠兼容），
     并覆盖 `*.db` 通配与 `sqlite3` + trade 目录的组合写法。
+
+    S5：备份目录（`~/.trade/backups`、`TRADE_HOME/backups`、Windows
+    `%LOCALAPPDATA%\\trade\\backups`）同样是主库副本；扫描命令（find /
+    grep -r / grep -a / strings / xxd / od / base64 -d / sqlite3）出现在
+    `~`、`/` 或 trade 目录下，又带 `.db / sqlite / customer_gifts / 索要`
+    特征时，一律按主库处理。
     """
     # JSON 在 Windows 上把 \ 转义成 \\：先折叠任意斜杠串，再统一小写比较
     text = re.sub(r"[/\\]+", "/", json.dumps(
@@ -334,20 +357,34 @@ def _mentions_main_db(args: dict | None) -> bool:
     )).casefold()
     if "trade.db" in text:
         return True
-    # 默认数据目录（POSIX / Windows）：glob / split / find 都绕不开这个前缀
-    for marker in ("/.trade/data", "/appdata/local/trade/data", "%localappdata%/trade/data"):
+    # 默认数据目录与备份目录（POSIX / Windows）：glob / split / find 都绕不开
+    for marker in (
+        "/.trade/data",
+        "/.trade/backups",
+        "/appdata/local/trade/data",
+        "/appdata/local/trade/backups",
+        "%localappdata%/trade/data",
+        "%localappdata%/trade/backups",
+    ):
         if marker in text:
             return True
     base = os.environ.get("TRADE_HOME", "").strip()
     if base:
         # 与 args 同样规范化：Windows 的 TRADE_HOME 是反斜杠
-        normalized_base = re.sub(r"[/\\]+", "/", base).rstrip("/")
-        data_dir = (normalized_base + "/data").casefold()
-        if data_dir and data_dir in text:
-            return True
+        normalized_base = re.sub(r"[/\\]+", "/", base).rstrip("/").casefold()
+        for sub in ("/data", "/backups"):
+            if normalized_base + sub in text:
+                return True
     # sqlite3 + trade 目录 + .db（含 *.db 通配）：堵拆开写的组合
     if ".db" in text and "sqlite" in text and (
         ".trade" in text or "appdata/local/trade" in text
+    ):
+        return True
+    # S5：扫描命令 + 根目录/trade 目录 + 主库特征
+    if (
+        _SCAN_CMD_RE.search(text)
+        and _SCAN_SCOPE_RE.search(text)
+        and _SENSITIVE_HINT_RE.search(text)
     ):
         return True
     return False
