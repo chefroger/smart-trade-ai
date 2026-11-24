@@ -38,6 +38,28 @@ class TestTargetExtraction:
     def test_empty_query_returns_none(self):
         assert chat._osint_target_from_query("   ") is None
 
+    @pytest.mark.parametrize(
+        ("query", "expected_target", "expected_reason"),
+        [
+            # S2 专名优先：没有查询意图词时也要取出拉丁专名
+            ("能不能和 Rosneft 做生意", "Rosneft", ""),
+            ("帮我背调 Rosneft", "Rosneft", ""),
+            ("和 Huawei 合作有风险吗", "Huawei", ""),
+            # S2 中文目标：剥掉疑问/动词后剩下的中文串
+            ("背调一下华为", "华为", "cjk"),
+            ("帮我查一下华为", "华为", "cjk"),
+            ("海康威视", "海康威视", "cjk"),
+            ("华为有没有被制裁", "华为", "cjk"),
+            ("帮我看看天津赛得", "天津赛得", "cjk"),
+            ("天津赛得", "天津赛得", "cjk"),
+            # 指代/疑问句取不到对象
+            ("这个买家是不是骗子", None, "ambiguous"),
+            ("帮我查下这个客户靠谱吗", None, "ambiguous"),
+        ],
+    )
+    def test_target_info_marks_cjk_and_ambiguous(self, query, expected_target, expected_reason):
+        assert chat._osint_target_info(query) == (expected_target, expected_reason)
+
 
 class TestEnsureSection:
     def test_appends_when_osint_tool_not_used(self, monkeypatch):
@@ -238,9 +260,75 @@ def test_bare_targets_still_screened(monkeypatch):
             "coverage": {"degraded": False, "total_entries": 10, "lists": {"OFAC": {}}},
         },
     )
-    for query in ("天津赛得", "Huawei"):
-        assert chat._osint_target_from_query(query) == query
-        assert "未命中" in chat._sanctions_fallback_text(query)
+    # 英文裸名照常给「未命中」
+    assert chat._osint_target_from_query("Huawei") == "Huawei"
+    assert "未命中" in chat._sanctions_fallback_text("Huawei")
+    # S2：中文裸名能取到目标、也真的查过了，但英文名单无法比对 → 不写「未命中」
+    assert chat._osint_target_from_query("天津赛得") == "天津赛得"
+    text = chat._sanctions_fallback_text("天津赛得")
+    assert "未执行" in text and "中文名称无法比对" in text
+    assert "未命中" not in text
+
+
+class TestS2ChineseAndQuestionFallback:
+    """S2 验收表：中文目标 → 未执行（中文名）；专名优先 → 命中。"""
+
+    def _no_hit_complete(self, monkeypatch):
+        monkeypatch.setattr(
+            "trade.osint.sanctions.check_sanctions",
+            lambda name, country=None: {
+                "hits": [], "is_sanctioned": False,
+                "coverage": {"degraded": False, "total_entries": 10, "lists": {"OFAC": {}}},
+            },
+        )
+
+    def _confirmed_hit(self, monkeypatch, value="ROSNEFT"):
+        monkeypatch.setattr(
+            "trade.osint.sanctions.check_sanctions",
+            lambda name, country=None: {
+                "hits": [{"list_label": "OFAC SDN", "matched_value": value,
+                          "confirmation": "confirmed"}],
+                "is_sanctioned": True,
+                "coverage": {"degraded": False, "total_entries": 10, "lists": {"OFAC": {}}},
+            },
+        )
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "背调一下华为",
+            "帮我查一下华为",
+            "海康威视",
+            "华为有没有被制裁",
+            "帮我看看天津赛得",
+            "天津赛得",
+        ],
+    )
+    def test_cjk_targets_without_hits_are_not_executed(self, monkeypatch, query):
+        self._no_hit_complete(monkeypatch)
+        text = chat._sanctions_fallback_text(query)
+        assert "未执行" in text and "中文名称无法比对" in text
+        assert "未命中" not in text
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "能不能和 Rosneft 做生意",
+            "帮我背调 Rosneft",
+            "和 Huawei 合作有风险吗",
+        ],
+    )
+    def test_latin_proper_name_is_screened(self, monkeypatch, query):
+        self._confirmed_hit(monkeypatch)
+        text = chat._sanctions_fallback_text(query)
+        assert "⚠️ 命中" in text
+        assert "ROSNEFT" in text
+
+    def test_pronoun_questions_stay_not_executed(self, monkeypatch):
+        self._no_hit_complete(monkeypatch)
+        for query in ("这个买家是不是骗子", "帮我查下这个客户靠谱吗"):
+            text = chat._sanctions_fallback_text(query)
+            assert "未执行" in text and "无法从问题中确定筛查对象" in text
 
 
 def test_verb_prefix_is_stripped_but_pronouns_still_blocked():

@@ -103,27 +103,75 @@ _EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 _DOMAIN_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
 # 疑问/指代词：出现时不允许把整句当筛查目标
 _QUESTION_MARKERS_RE = re.compile(
-    r"这个|这家|该|是不是|吗|靠谱|怎么样|如何|谁|哪|什么|请问|客户|买家|卖家",
+    r"这个|这家|该|是不是|吗|靠谱|怎么样|如何|谁|哪|什么|请问|客户|买家|卖家|"
+    r"有没有|能否|能不能|是否|可以|风险|制裁|合作|做生意|背调|看看|看一下|核查",
 )
-# 短句兜底前先剥掉查询动词（O-新2）：「帮我查一下华为」的目标是「华为」，
+# 短句兜底前先剥掉查询动词（O-新2 / S2）：「帮我查一下华为」的目标是「华为」，
 # 不是整句。剥完仍为空或仍含指代/疑问词时照旧不猜。
 _LEAD_VERB_RE = re.compile(
     r"^\s*(?:请|麻烦)?\s*(?:帮我)?\s*"
-    r"(?:查一查|查一下|调查一下|核实一下|了解一下|查查|查下|调查|核实|了解|查)\s*",
+    r"(?:查一查|查一下|调查一下|核实一下|了解一下|核查一下|背调一下|"
+    r"查查|查下|看一下|看看|调查|核实|了解|核查|背调|查)\s*",
+)
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+# 拉丁专名：首字母大写、至少 3 个字母（排除 LED/ABC 这类全大写短缩写）
+_LATIN_PROPER_RE = re.compile(r"(?<![A-Za-z])[A-Z][A-Za-z'’\-]{2,}(?![A-Za-z])")
+# 这些大写词不是筛查对象（句子首词/疑问/动词/国家形容词）
+_LATIN_COMMON = frozenset({
+    "find", "search", "look", "sanction", "sanctions", "risk", "hi",
+    "hello", "dear", "thank", "thanks", "but", "if", "or", "for",
+    "with", "from", "about", "by", "to", "in", "on", "was", "were",
+    "has", "have", "had", "will", "may", "might", "must", "shall",
+    "here", "there", "now", "then", "so", "also", "just", "only",
+    "german", "chinese", "american", "british", "french", "japanese",
+    "korean", "indian", "italian", "spanish", "russian", "brazilian",
+    "vietnamese", "turkish", "dutch", "polish", "mexican", "canadian",
+    "australian", "european", "african", "asian",
+})
+# 中文目标抽取前剥掉的疑问/泛用词（保留公司名里的行业词，交给 normalize 处理）
+_CJK_STRIP_RE = re.compile(
+    r"有没有|能否|能不能|是不是|是否|可以|请问|帮我|帮忙|麻烦|关于|有关|"
+    r"制裁|合作|做生意|风险|靠谱|情况|资料|信息|背景|产品|业务|"
+    r"这个|这家|那个|那家|我们|你们|他们|对方|买家|卖家|客户|骗子|"
+    r"被|遭|受到|吗|呢|吧|一下|核查|背调|看看|看一下",
 )
 
 
-def _osint_target_from_query(query: str) -> str | None:
-    """从用户问题里取制裁筛查对象（显式前缀 > 邮箱 > 人名 > 域名 > 短问题）。
+def _extract_latin_proper(text: str, stopwords: frozenset[str]) -> str | None:
+    """取句子里第一个像专名的拉丁词（S2：专名优先）。"""
+    blocked = stopwords | _LATIN_COMMON
+    for token in _LATIN_PROPER_RE.findall(text):
+        if token.casefold() in blocked:
+            continue
+        if token.isupper() and len(token) <= 4:
+            continue
+        return token
+    return None
 
-    取不到就返回 None —— 宁可如实写「未执行」，也不要拿整句话去比对名单。
+
+def _extract_cjk_candidate(text: str) -> str | None:
+    """剥掉查询动词与疑问/泛用词后，剩下的中文串（2-20 字）才是目标。"""
+    stripped = _LEAD_VERB_RE.sub("", text)
+    stripped = _CJK_STRIP_RE.sub("", stripped)
+    match = re.search(r"[\u4e00-\u9fff]{2,20}", stripped)
+    return match.group(0) if match else None
+
+
+def _osint_target_info(query: str) -> tuple[str | None, str]:
+    """取制裁筛查对象，并说明它的形态（S2）。
+
+    返回 (target, reason)：
+      - (名字, "")       —— 英文/拼音目标，正常比对名单；
+      - (中文名, "cjk")  —— 目标只含中文；本地名单以英文为主，无命中时
+                            不得宣称「未命中」；
+      - (None, "ambiguous") —— 取不到对象（疑问/指代句），按未执行处理。
     """
     text = " ".join(str(query or "").split())
     if not text:
-        return None
+        return None, "ambiguous"
     try:
         from trade.osint.orchestrator import _split_type_prefix, _split_username_prefix
-        from trade.skill_router import extract_osint_name
+        from trade.skill_router import _NAME_STOPWORDS, extract_osint_name
 
         target, forced = _split_type_prefix(text)
         target, _ = _split_username_prefix(target)
@@ -131,15 +179,25 @@ def _osint_target_from_query(query: str) -> str | None:
         if forced and target:
             # 显式前缀后可能还跟着问句（company:Acme Trading 有没有被制裁）：
             # 能从剩余文本里取出名字就用名字，否则整段就是目标。
-            return name or target
+            chosen = name or target
+            return chosen, ("cjk" if _CJK_CHAR_RE.search(chosen) else "")
         match = _EMAIL_RE.search(text)
         if match:
-            return match.group(0)
+            return match.group(0), ""
         if name:
-            return name
+            return name, ("cjk" if _CJK_CHAR_RE.search(name) else "")
+        # S2 专名优先：「能不能和 Rosneft 做生意」没有查询意图词，
+        # 上面的 extract_osint_name 取不到，但 Rosneft 就是要筛查的对象。
+        proper = _extract_latin_proper(text, _NAME_STOPWORDS)
+        if proper:
+            return proper, ""
         match = _DOMAIN_RE.search(text)
         if match:
-            return match.group(0)
+            return match.group(0), ""
+        # 中文目标：剥掉疑问/泛用词后剩下的中文串（S2 中文名判定）。
+        cjk = _extract_cjk_candidate(text)
+        if cjk:
+            return cjk, "cjk"
         # 短句兜底只接受「没有疑问/指代词」的裸目标（如「某某公司」「Huawei」）。
         # 含「这个/这家/是不是/吗/靠谱」等一律不猜 —— 拿整句比对名单会把
         # 「这个买家是不是骗子」筛成绿色「未命中」（W2）。
@@ -147,11 +205,15 @@ def _osint_target_from_query(query: str) -> str | None:
         if len(text) <= 30 and not _QUESTION_MARKERS_RE.search(text):
             stripped = _LEAD_VERB_RE.sub("", text).strip()
             if stripped:
-                return stripped
-            return None
+                return stripped, ("cjk" if _CJK_CHAR_RE.search(stripped) else "")
     except Exception:
         _log.exception("提取 OSINT 目标失败")
-    return None
+    return None, "ambiguous"
+
+
+def _osint_target_from_query(query: str) -> str | None:
+    """兼容旧调用方：只返回目标，不带形态标记（见 `_osint_target_info`）。"""
+    return _osint_target_info(query)[0]
 
 
 def _osint_sanctions_used(tools: CompletedToolTracker) -> bool:
@@ -168,8 +230,12 @@ def _osint_sanctions_used(tools: CompletedToolTracker) -> bool:
 
 
 def _sanctions_fallback_text(query: str) -> str:
-    """用本地制裁库补一段结论（<1 秒，无网络下载）。"""
-    target = _osint_target_from_query(query)
+    """用本地制裁库补一段结论（<1 秒，无网络下载）。
+
+    S2：中文目标无命中时不得写「未命中」——本地名单以英文/拼音为主，
+    中文名无法直接比对；只给出「未执行（中文名）」，让用户补英文名。
+    """
+    target, reason = _osint_target_info(query)
     if not target:
         return "制裁名单筛查：未执行（无法从问题中确定筛查对象）"
     try:
@@ -181,17 +247,11 @@ def _sanctions_fallback_text(query: str) -> str:
         return f"制裁名单筛查：未执行（{type(exc).__name__}: {exc}）"
 
     coverage = result.get("coverage") or {}
-    if coverage.get("degraded", True):
-        return "制裁名单筛查：未执行（本地名单未就绪，不构成「无制裁记录」的结论）"
     lists = coverage.get("lists") or {}
+    degraded = bool(coverage.get("degraded", True))
     total = int(coverage.get("total_entries") or 0)
-    stale = [
-        f"{info.get('label', code)} 过期 {float(info.get('stale_hours') or 0):.0f} 小时"
-        for code, info in lists.items()
-        if info.get("stale")
-    ]
-    stale_note = ("；" + "、".join(stale[:3])) if stale else ""
     hits = result.get("hits") or []
+
     if result.get("is_sanctioned"):
         top = "、".join(
             f"{hit.get('list_label') or hit.get('list')}: {hit.get('matched_value')}"
@@ -200,6 +260,20 @@ def _sanctions_fallback_text(query: str) -> str:
         return f"制裁名单筛查：⚠️ 命中（{top}）。强烈建议拒绝交易或咨询法律部门。"
     if hits:
         return f"制裁名单筛查：发现 {len(hits)} 条疑似匹配（非精确），需人工核查。"
+    # 没有命中：先判中文目标，再判名单是否就绪。
+    if reason == "cjk":
+        return (
+            "制裁名单筛查：未执行（名单为英文/拼音，中文名称无法比对，"
+            "请提供英文或拼音名称）"
+        )
+    if degraded:
+        return "制裁名单筛查：未执行（本地名单未就绪，不构成「无制裁记录」的结论）"
+    stale = [
+        f"{info.get('label', code)} 过期 {float(info.get('stale_hours') or 0):.0f} 小时"
+        for code, info in lists.items()
+        if info.get("stale")
+    ]
+    stale_note = ("；" + "、".join(stale[:3])) if stale else ""
     return (
         f"制裁名单筛查：未命中（已比对 {len(lists)} 份名单、本地 {total} 条"
         f"{stale_note}）。"
