@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## v0.9.46 — 2026-11-24
+
+- 合并修正 d：W1–W15（个人命中降级、交付兜底、登记类评级、重定向钉主机、tkey 迁移、路由兜底、远程图新标签、draft Release、架构校验、真名清理、临时目录、落库竞态、隐私词表/备忘录/主库规则、礼物提示、29 项 O 级）
+- `efe9ccd` fix: 处理 29 项 O 级审计项（W15）
+- `a627b48` fix(profile): 手工事实像「客户索要」时提示改记礼物表（W14）
+- `3b228f8` fix(privacy): 统一家庭词表 + 密语弹窗/锁定 + 主库窄规则（W13）
+- `6382baf` fix(chat): 落库期间断开不再写第二条历史（W12）
+- `bb99e5a` test: 隔离并清理测试临时目录（W11）
+- `0f2f1dd` fix(osint): 清除仓库里的真实背调对象（W10）
+- `35e894a` ci(release): 校验 Mac 产物架构并固定 arm64 runner（W9）
+- `e4a65c9` fix(release): 手动触发也产出 draft Release（W8）
+- `96229ab` fix(ui): 远程图片改为新标签页打开（W7）
+- `52e17f7` fix(router): 人名兜底只认询问对象，业务技能优先（W6）
+- `7742825` fix(osint): 归一化升级窗口就地重建旧库 tkey（W5）
+- `3933b09` fix(osint): 制裁名单重定向钉死官方桶主机（W4）
+- `d462a46` fix(osint): 只有登记类命中时不给 low/100（W3）
+- `cb60553` fix(api): 交付前制裁兜底不再拿整句比对名单（W2）
+- `ed3fcb8` fix(osint): 个人姓名命中降为 possible/medium（W1）
+
 ## v0.9.45 — 2026-11-23
 
 - Release：arm64 构建改用 macos-latest
