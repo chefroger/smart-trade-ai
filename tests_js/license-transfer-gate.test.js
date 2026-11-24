@@ -55,7 +55,7 @@ test('导出按钮在渲染时按状态决定，不事后隐藏', () => {
     assert.ok(idx !== -1, '找不到 loadCompanyListUI()');
     const body = SRC.slice(idx, idx + 2000);
     assert.ok(
-        /_licenseGateAllowsPaid\(\)\s*\?[\s\S]*?onclick="exportCompany\(/.test(body),
+        /_licenseGateAllowsPaid\(\)\s*\?[\s\S]*?data-act="exportCompany"/.test(body),
         '导出按钮必须写成「有付费权限才渲染」，不能无条件输出再靠 CSS 隐藏',
     );
 });

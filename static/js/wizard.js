@@ -46,11 +46,11 @@ function wizardRenderStep1() {
         <div class="onboarding-input-row">
             <input type="text" id="wizard-product-input" placeholder="例如：LED工矿灯、不锈钢螺丝、全棉T恤..."
                 class="onboarding-text-input"
-                onkeydown="if(event.key==='Enter')wizardNext()" autofocus />
+                data-enter="wizardNext" autofocus />
         </div>
-        <button class="btn btn-primary btn-lg" onclick="wizardNext()">下一步：卖到哪里去？ →</button>
+        <button class="btn btn-primary btn-lg" data-act="wizardNext">下一步：卖到哪里去？ →</button>
         <div class="onboarding-skip" style="display:flex;justify-content:flex-end;">
-            <a onclick="wizardClose()" title="跳过向导">跳过向导</a>
+            <a data-act="wizardClose" title="跳过向导">跳过向导</a>
         </div>
     </div>`;
 }
@@ -68,12 +68,12 @@ function wizardRenderStep2() {
         <div class="onboarding-input-row">
             <input type="text" id="wizard-market-input" placeholder="例如：德国、美国、中东..."
                 class="onboarding-text-input"
-                onkeydown="if(event.key==='Enter')wizardNext()" autofocus />
+                data-enter="wizardNext" autofocus />
         </div>
-        <button class="btn btn-primary btn-lg" onclick="wizardNext()">下一步：找什么类型？ →</button>
+        <button class="btn btn-primary btn-lg" data-act="wizardNext">下一步：找什么类型？ →</button>
         <div class="onboarding-skip" style="display:flex;justify-content:space-between;">
-            <a onclick="wizardBack()">← 返回修改</a>
-            <a onclick="wizardClose()">跳过向导</a>
+            <a data-act="wizardBack">← 返回修改</a>
+            <a data-act="wizardClose">跳过向导</a>
         </div>
     </div>`;
 }
@@ -87,28 +87,28 @@ function wizardRenderStep3() {
         </div>
         <h2 class="onboarding-title" style="font-size:20px;">想找什么类型的客户？</h2>
         <div class="wizard-choice-row">
-            <button class="wizard-choice-btn" onclick="wizardSelectType('distributor',this)">
+            <button class="wizard-choice-btn" data-act="wizardSelectType" data-arg="distributor" data-from="this">
                 <span class="wc-icon">📦</span>
                 <div class="wc-text">
                     <div class="wc-title">批发商 / 分销商</div>
                     <div class="wc-desc">大量采购再分销到本地市场</div>
                 </div>
             </button>
-            <button class="wizard-choice-btn" onclick="wizardSelectType('oem',this)">
+            <button class="wizard-choice-btn" data-act="wizardSelectType" data-arg="oem" data-from="this">
                 <span class="wc-icon">🏭</span>
                 <div class="wc-text">
                     <div class="wc-title">品牌商 / OEM 工厂</div>
                     <div class="wc-desc">贴牌生产，长期大单</div>
                 </div>
             </button>
-            <button class="wizard-choice-btn" onclick="wizardSelectType('retailer',this)">
+            <button class="wizard-choice-btn" data-act="wizardSelectType" data-arg="retailer" data-from="this">
                 <span class="wc-icon">🏪</span>
                 <div class="wc-text">
                     <div class="wc-title">零售商 / 连锁店</div>
                     <div class="wc-desc">小批量多频次采购</div>
                 </div>
             </button>
-            <button class="wizard-choice-btn" onclick="wizardSelectType('any',this)">
+            <button class="wizard-choice-btn" data-act="wizardSelectType" data-arg="any" data-from="this">
                 <span class="wc-icon">🌍</span>
                 <div class="wc-text">
                     <div class="wc-title">都行，帮我一起找</div>
@@ -117,10 +117,10 @@ function wizardRenderStep3() {
             </button>
         </div>
         <button class="btn btn-primary btn-lg wizard-launch-btn" id="wizard-launch-btn" disabled
-            onclick="wizardLaunch()">${btnIcon('target')} 开始找客户！</button>
+            data-act="wizardLaunch">${btnIcon('target')} 开始找客户！</button>
         <div class="onboarding-skip" style="display:flex;justify-content:space-between;">
-            <a onclick="wizardBack()">← 返回修改</a>
-            <a onclick="wizardClose()">跳过向导</a>
+            <a data-act="wizardBack">← 返回修改</a>
+            <a data-act="wizardClose">跳过向导</a>
         </div>
     </div>`;
 }

@@ -59,6 +59,12 @@ function showUpgradeHelp() {
     showModal('upgrade-help-modal');
 }
 
+function copySkillTrigger(name, trigger) {
+    /** O-17：技能帮助行点击复制（替代内联 onclick）。 */
+    navigator.clipboard.writeText(name || '');
+    toast(t('skills.copied') + (trigger || ''));
+}
+
 function showSkillsHelp() {
     var container = $('skills-help-content');
     if (!container) return;
@@ -69,7 +75,7 @@ function showSkillsHelp() {
         for (var si = 0; si < group.items.length; si++) {
             var sk = group.items[si];
         var firstTrigger = sk.t.split('、')[0];
-        html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;" onmouseover="this.style.background=\'var(--bg-input)\'" onmouseout="this.style.background=\'\'" onclick="var t=this.querySelector(\'code\').textContent;navigator.clipboard.writeText(' + escJs(firstTrigger) + ');toast(t(\'skills.copied\')+' + escJs(firstTrigger) + ')" title="' + (currentLang==='en'?'Click to copy prompt':'点击复制提示词') + '">';
+        html += '<div class="skill-copy-row" data-act="copySkillTrigger" data-arg="' + esc(sk.n) + '" data-arg2="' + esc(firstTrigger) + '" style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:4px;cursor:pointer;" title="' + (currentLang==='en'?'Click to copy prompt':'点击复制提示词') + '">';
             html += '<code style="font-size:12px;white-space:nowrap;background:var(--bg-muted);padding:1px 6px;border-radius:3px;min-width:130px;">' + esc(sk.n) + '</code>';
             html += '<span style="flex:1;font-size:12px;color:var(--text-secondary);">' + esc(sk.d) + '</span>';
             html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">💬 ' + esc(sk.t.split('、').slice(0,2).join(' | ')) + '</span>';

@@ -176,21 +176,21 @@ function _licenseBarText(data) {
         ? '#FEE2E2'
         : (days <= LICENSE_EXPIRING_DAYS ? '#FEF3C7' : '#DBEAFE');
     const reqCodeHtml = d.request_code
-        ? ' · ' + t('license.req_code') + ': <code style="background:' + codeBg + ';padding:1px 6px;border-radius:3px;font-size:11px;user-select:all;cursor:text;" onclick="navigator.clipboard.writeText(this.textContent);toast(t(\'toast.copied\'))">' + esc(d.request_code) + '</code>'
+        ? ' · ' + t('license.req_code') + ': <code style="background:' + codeBg + ';padding:1px 6px;border-radius:3px;font-size:11px;user-select:all;cursor:text;" data-act="copySelf">' + esc(d.request_code) + '</code>'
         : '';
 
     if (isExpired) {
         // 软着陆：说明数据还在、只是起草暂停，并保留激活入口
         return {
             text: '⚠️ ' + t('license.expired') + ' · ' + t('license.expired_soft')
-                + ' · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml,
+                + ' · <a href="#" data-act="showActivateModal" style="color:#DC2626;text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml,
             tone: 'danger',
         };
     }
     if (isExpiring) {
         return {
             text: '✅ ' + t('license.active') + ' · ' + t('license.expiring') + (expires ? ' ' + expires : '')
-                + ' · <a href="#" onclick="showActivateModal()" style="color:' + (days === 0 ? '#DC2626' : '#D97706') + ';text-decoration:underline;font-weight:600;">' + t('license.activate_btn') + '</a>' + reqCodeHtml,
+                + ' · <a href="#" data-act="showActivateModal" style="color:' + (days === 0 ? '#DC2626' : '#D97706') + ';text-decoration:underline;font-weight:600;">' + t('license.activate_btn') + '</a>' + reqCodeHtml,
             tone: days === 0 ? 'danger' : 'warn',
         };
     }
@@ -203,7 +203,7 @@ function _licenseBarText(data) {
     }
     if (status === 'trial') {
         let text = '<span class="i i-16" style="--i:url(\'/static/icons/lucide-clock.svg\')"></span> ' + t('license.trial') + ' ' + t('license.days_left', { n: days })
-            + ' · <a href="#" onclick="showActivateModal()" style="color:' + (days <= LICENSE_EXPIRING_DAYS ? '#D97706' : '#2563EB') + ';text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
+            + ' · <a href="#" data-act="showActivateModal" style="color:' + (days <= LICENSE_EXPIRING_DAYS ? '#D97706' : '#2563EB') + ';text-decoration:underline;">' + t('license.activate_btn') + '</a>' + reqCodeHtml;
         // 第 20 天起显示价值小结（只报真实事件数，不估算）
         if (d.trial_summary) {
             const ts = d.trial_summary;
@@ -218,7 +218,7 @@ function _licenseBarText(data) {
     }
     if (isTampered) {
         return {
-            text: '⚠️ License Error · <a href="#" onclick="showActivateModal()" style="color:#DC2626;text-decoration:underline;font-weight:600;">Reactivate</a>' + reqCodeHtml,
+            text: '⚠️ License Error · <a href="#" data-act="showActivateModal" style="color:#DC2626;text-decoration:underline;font-weight:600;">Reactivate</a>' + reqCodeHtml,
             tone: 'danger',
         };
     }
@@ -277,8 +277,8 @@ function showLicenseExpired(msg) {
         '<img src="/static/wechat-contact.jpeg" alt="WeChat QR" style="width:200px;border-radius:8px;margin:8px 0;">' +
         '<p style="font-size:11px;color:var(--text-muted);">' + (currentLang==='en'?'WeChat QR · Note "Trade"':'微信扫码 · 备注「Trade」') + '</p>' +
         '<p style="font-size:11px;color:var(--text-muted);">📧 lauroge@gmail.com</p>' +
-        '<button class="btn btn-primary" onclick="showActivateModal()">' + t('license.activate_btn') + '</button>' +
-        '<button class="btn" onclick="this.closest(\'.modal-backdrop\').remove()" style="margin-top:8px;">' + t('btn.close') + '</button>' +
+        '<button class="btn btn-primary" data-act="showActivateModal">' + t('license.activate_btn') + '</button>' +
+        '<button class="btn" data-act="closeBackdrop" style="margin-top:8px;">' + t('btn.close') + '</button>' +
     '</div>';
     document.body.appendChild(div);
 }
@@ -296,10 +296,10 @@ async function showActivateModal() {
     div.innerHTML = '<div class="modal" style="text-align:center;">' +
         '<h3>🔑 ' + (currentLang==='en'?'Activate Trade Assistant':'激活 Trade Assistant') + '</h3>' +
         '<p style="margin:8px 0;color:var(--text-secondary);">' + (currentLang==='en'?'Send the code below to the author to get an activation code':'请将下方申请码发送给作者获取激活码') + '</p>' +
-        (reqCode ? '<div style="background:var(--bg-secondary);padding:10px 14px;border-radius:var(--radius-sm);font-family:monospace;font-size:16px;letter-spacing:2px;margin:8px 0;cursor:pointer;user-select:all;" onclick="navigator.clipboard.writeText(this.textContent);toast(t(\'toast.copied\'))" title="' + (currentLang==='en'?'Click to copy':'点击复制') + '">' + reqCode + '</div>' : '') +
+        (reqCode ? '<div style="background:var(--bg-secondary);padding:10px 14px;border-radius:var(--radius-sm);font-family:monospace;font-size:16px;letter-spacing:2px;margin:8px 0;cursor:pointer;user-select:all;" data-act="copySelf" title="' + (currentLang==='en'?'Click to copy':'点击复制') + '">' + reqCode + '</div>' : '') +
         '<input type="text" id="activate-code-input" aria-label="Activation code" placeholder="' + (currentLang==='en'?'Paste activation code':'粘贴作者提供的激活码') + '" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:monospace;font-size:14px;text-align:center;text-transform:uppercase;margin:12px 0;">' +
-        '<button class="btn btn-primary" onclick="doActivate()" style="margin-top:8px;">' + btnIcon('check') + ' ' + (currentLang==='en'?'Activate':'激活') + '</button>' +
-        '<button class="btn" onclick="this.closest(\'.modal-backdrop\').remove()">' + t('btn.cancel') + '</button>' +
+        '<button class="btn btn-primary" data-act="doActivate" style="margin-top:8px;">' + btnIcon('check') + ' ' + (currentLang==='en'?'Activate':'激活') + '</button>' +
+        '<button class="btn" data-act="closeBackdrop">' + t('btn.cancel') + '</button>' +
         '<p id="activate-msg" style="margin-top:10px;font-size:12px;"></p>' +
     '</div>';
     document.body.appendChild(div);

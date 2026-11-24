@@ -1098,19 +1098,18 @@ def _create_system_router() -> APIRouter:
 def _build_trade_csp(nonce: str) -> str:
     """SPA 的 CSP（审计 P1-E / O-17 第一步）。
 
-    - `script-src-elem` 用 nonce 管住内联 <script> 元素（注入脚本需带 nonce）；
-    - `script-src`/`script-src-attr` 仍保留 unsafe-inline，供大量内联事件
-      属性使用；迁移完 handler 后再移除，避免一次性改坏 UI。
+    - 内联 <script> 元素必须带 per-request nonce；
+    - 内联事件属性已全部迁移到 data-* 委托（O-17），script-src /
+      script-src-attr 不再放行 unsafe-inline；
     - style-src 仍为 unsafe-inline（内联样式另行处理）。
-    不支持 script-src-elem/attr 的旧浏览器回退到 script-src（行为不变）。
     """
     return (
         "default-src 'self'; "
         "img-src 'self' data: blob:; "
         "connect-src 'self'; "
-        f"script-src 'self' 'unsafe-inline'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
         f"script-src-elem 'self' 'nonce-{nonce}'; "
-        "script-src-attr 'unsafe-inline'; "
+        "script-src-attr 'none'; "
         "style-src 'self' 'unsafe-inline'; "
         "font-src 'self' data:; "
         "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"

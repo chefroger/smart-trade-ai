@@ -18,12 +18,12 @@ async function renderCustomersViewInto(container) {
                 <div id="cust-summary-bar" class="cust-summary"></div>
                 <div class="cust-head-actions">
                     <button class="btn" id="cust-import-btn">${typeof iconHtml==='function'?iconHtml('download',15):''} ${currentLang==='en'?'Import CSV':'导入 CSV'}</button>
-                    <input type="file" id="cust-bulk-file" accept=".csv" style="display:none;" onchange="bulkImportCustomers()">
-                    <button class="btn primary" onclick="showCustomerEditModal()">＋ ${currentLang==='en'?'New customer':'新建客户'}</button>
+                    <input type="file" id="cust-bulk-file" accept=".csv" style="display:none;" data-onchange="bulkImportCustomers">
+                    <button class="btn primary" data-act="showCustomerEditModal">＋ ${currentLang==='en'?'New customer':'新建客户'}</button>
                 </div>
             </div>
             <div class="cust-filters">
-                <input class="cust-search" id="cust-search" aria-label="搜索客户" placeholder="${t('customer.search')}" oninput="filterCustomers()">
+                <input class="cust-search" id="cust-search" aria-label="搜索客户" placeholder="${t('customer.search')}" data-oninput="filterCustomers">
                 <div class="cust-seg" id="cust-tier-seg" role="group" aria-label="分级">
                     <span class="seg-lbl">分级</span>
                     <button type="button" data-tier="" class="on">全部</button>
@@ -33,18 +33,18 @@ async function renderCustomersViewInto(container) {
                     <button type="button" data-tier="none">${t('cust.field.tier_none')}</button>
                 </div>
                 <span class="flt-lbl">${currentLang==='en'?'Country':'国家'}</span>
-                <select id="cust-country-filter" aria-label="国家" onchange="filterCustomers()">
+                <select id="cust-country-filter" aria-label="国家" data-onchange="filterCustomers">
                     <option value="">${currentLang==='en'?'All Countries':'全部国家'}</option>
                 </select>
                 <span class="flt-lbl">${currentLang==='en'?'Buyer type':'买家类型'}</span>
-                <select id="cust-buyer-filter" aria-label="买家类型" onchange="filterCustomers()">
+                <select id="cust-buyer-filter" aria-label="买家类型" data-onchange="filterCustomers">
                     <option value="">${currentLang==='en'?'All Buyer Types':'全部类型'}</option>
                 </select>
                 <div class="cust-seg" id="cust-stage-seg" role="group" aria-label="商机阶段"></div>
-                <button type="button" class="cust-star-toggle" id="cust-starred-toggle" onclick="toggleStarredFilter()">${btnIcon('star')} ${currentLang==='en'?'Starred only':'只看星标'}</button>
-                <button type="button" class="cust-star-toggle" id="cust-overdue-toggle" onclick="toggleOverdueFilter()">${btnIcon('triangle-exclamation-point')} ${currentLang==='en'?'Overdue only':'只看逾期'}</button>
+                <button type="button" class="cust-star-toggle" id="cust-starred-toggle" data-act="toggleStarredFilter">${btnIcon('star')} ${currentLang==='en'?'Starred only':'只看星标'}</button>
+                <button type="button" class="cust-star-toggle" id="cust-overdue-toggle" data-act="toggleOverdueFilter">${btnIcon('triangle-exclamation-point')} ${currentLang==='en'?'Overdue only':'只看逾期'}</button>
                 <span class="flt-lbl">${currentLang==='en'?'Sort':'排序'}</span>
-                <select id="cust-sort" aria-label="排序" onchange="filterCustomers()">
+                <select id="cust-sort" aria-label="排序" data-onchange="filterCustomers">
                     <option value="follow_up">${currentLang==='en'?'Follow-up first':'待跟进优先'}</option>
                     <option value="name">${currentLang==='en'?'By name':'按名称排序'}</option>
                     <option value="updated_at">${currentLang==='en'?'Recently updated':'按最近跟进'}</option>
@@ -372,7 +372,7 @@ function renderCustomersTable(data) {
         if (overdue) followHtml = '<span class="od">⚠ ' + (currentLang === 'en' ? 'Overdue ' : '逾期 ') + od + (currentLang === 'en' ? 'd' : ' 天') + '</span>';
         else if (follow) followHtml = '<span>' + esc(follow === today ? (currentLang === 'en' ? 'Today' : '今天') : _custShortDate(follow)) + '</span>';
         const processBtn = overdue
-            ? (' <button type="button" class="cust-process" onclick="event.stopPropagation();openFollowUpModal(' + c.id + ')">' +
+            ? (' <button type="button" class="cust-process" data-act="openFollowUpModal" data-stop="1" data-arg="' + c.id + '">' +
                 (currentLang === 'en' ? 'Resolve' : '处理') + '</button>')
             : '';
         let dots = '';
@@ -380,8 +380,8 @@ function renderCustomersTable(data) {
         const tagHtml = tags.length
             ? tags.slice(0, 3).map(function (tg) { return '<span class="rtag">' + esc(tg) + '</span>'; }).join('')
             : '<span class="muted">—</span>';
-        return '<tr class="cust-row' + (overdue ? ' overdue' : '') + '" onclick="openCustomerWall(' + c.id + ')">' +
-            '<td class="c-star" onclick="event.stopPropagation()"><button type="button" class="star-btn' + (starred ? ' on' : '') + '" onclick="toggleCustomerStar(event,' + c.id + ')" aria-label="星标">★</button></td>' +
+        return '<tr class="cust-row' + (overdue ? ' overdue' : '') + '" data-act="openCustomerWall" data-arg="' + c.id + '">' +
+            '<td class="c-star" data-stop="1"><button type="button" class="star-btn' + (starred ? ' on' : '') + '" data-act="toggleCustomerStar" data-event="1" data-arg="' + c.id + '" aria-label="星标">★</button></td>' +
             '<td class="c-customer"><div class="rname">' + esc(c.name) + '</div>' +
             '<div class="rsub">' + esc([contact, title].filter(Boolean).join(' · ') || '—') + '</div></td>' +
             '<td class="c-tier">' + (tier
@@ -413,7 +413,7 @@ function _custRenderFoot(start, end, total, pages, sortBy) {
     };
     let pager = '';
     for (let p = 1; p <= pages; p++) {
-        pager += '<button type="button" class="pg' + (p === _custPage ? ' on' : '') + '" onclick="_custGoPage(' + p + ')">' + p + '</button>';
+        pager += '<button type="button" class="pg' + (p === _custPage ? ' on' : '') + '" data-act="_custGoPage" data-arg="' + p + '">' + p + '</button>';
     }
     f.innerHTML = '<span class="foot-range">' + (currentLang === 'en' ? ('Showing ' + start + '–' + end + ' / ' + total) : ('显示 ' + start + '–' + end + ' / ' + total)) + '</span>' +
         '<span class="foot-note">' + esc(noteMap[sortBy] || '') + '</span>' +
@@ -920,7 +920,7 @@ async function openCustomerWall(cid) {
     const stageChip = '<span class="chip k">' + (currentLang === 'en' ? 'Stage · ' : '商机阶段 · ') + esc(stage) + '</span>';
     const starred = Number(c.is_starred) === 1;
     const starHtml = '<span class="star' + (starred ? ' on' : '') + '" role="button" title="' +
-        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" style="cursor:pointer;" onclick="toggleWallStar(event,' + cid + ')">' +
+        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" style="cursor:pointer;" data-act="toggleWallStar" data-event="1" data-arg="' + cid + '">' +
         (typeof iconHtml === 'function' ? iconHtml('star', 18) : '★') + '</span>';
     const threatHtml = overdue
         ? ('<span class="tri-d"></span>' + (currentLang === 'en' ? 'OVERDUE ' : '已逾期 ') + overdueDays + (currentLang === 'en' ? ' D' : ' 天'))
@@ -1241,7 +1241,7 @@ async function showCustomerDetail(cid) {
     <div class="slide-panel">
         <div class="slide-panel-header">
             <h3>👤 ${esc(c.name)}</h3>
-            <button class="slide-panel-close" onclick="closeCustomerDetail()">×</button>
+            <button class="slide-panel-close" data-act="closeCustomerDetail">×</button>
         </div>
         <div class="slide-panel-content">
         <div class="slide-panel-main">
@@ -1288,7 +1288,7 @@ async function showCustomerDetail(cid) {
             </div>
             <div class="panel-field"><label for="detail-note">${t('cust.field.note')}</label><textarea id="detail-note">${esc(c.note||'')}</textarea></div>
             <div class="panel-field"><label for="detail-follow-up-note">${t('cust.field.follow')}</label><textarea id="detail-follow-up-note">${esc(followUpNote)}</textarea></div>
-            <button class="btn btn-primary" onclick="saveCustomerDetail(${c.id})" style="width:100%;">${t('customer.detail.save')}</button>
+            <button class="btn btn-primary" data-act="saveCustomerDetail" data-arg="${c.id}" style="width:100%;">${t('customer.detail.save')}</button>
         </div>
         </div>
         <div class="slide-panel-side">
@@ -1298,25 +1298,25 @@ async function showCustomerDetail(cid) {
                 ${libs.map(l => `
                 <div class="panel-linked-lib">
                     📄 ${esc(l.name)}
-                    <span class="unlink-btn" onclick="unlinkCustomerLib(${c.id},${l.id})" title="${currentLang==='en'?'Unlink':'取消关联'}">×</span>
+                    <span class="unlink-btn" data-act="unlinkCustomerLib" data-arg="${c.id}" data-arg2="${l.id}" title="${currentLang==='en'?'Unlink':'取消关联'}">×</span>
                 </div>`).join('')}
             </div>
             <div style="margin-top:8px;display:flex;gap:6px;">
                 <select id="detail-link-lib" aria-label="关联文档库" style="flex:1;padding:7px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;">
                     <option value="">${t('customer.detail.link_lib')}</option>
                 </select>
-                <button class="btn-xs primary" onclick="linkCustomerLib(${c.id})">${t('customer.detail.link_btn')}</button>
+                <button class="btn-xs primary" data-act="linkCustomerLib" data-arg="${c.id}">${t('customer.detail.link_btn')}</button>
             </div>
         </div>
         <div class="panel-section panel-orders">
-            <div class="panel-section-title">${t('customer.detail.orders')} (<span id="detail-order-count">-</span>) <button class="btn-xs" style="margin-left:8px;" onclick="showOrderModal(${c.id})">${t('customer.detail.add_order')}</button></div>
+            <div class="panel-section-title">${t('customer.detail.orders')} (<span id="detail-order-count">-</span>) <button class="btn-xs" style="margin-left:8px;" data-act="showOrderModal" data-arg="${c.id}">${t('customer.detail.add_order')}</button></div>
             <div id="detail-orders"><div class="loading-row"><div class="spinner"></div>${t('misc.loading_orders')}</div></div>
         </div>
         <div class="panel-section panel-convs">
             <div class="panel-section-title">${t('customer.detail.convs')} (${recentConvs.length})</div>
             <div id="detail-convs">
                 ${recentConvs.length ? recentConvs.map(conv => `
-                <div class="panel-conv-item" onclick="closeCustomerDetail();showConversationDetail(${conv.id})">
+                <div class="panel-conv-item" data-act="showConversationDetail" data-pre="closeCustomerDetail" data-arg="${conv.id}">
                     <div class="conv-time">${esc((conv.created_at||'').slice(0,16))}</div>
                     <div class="conv-query">${esc((conv.query||'').slice(0,80))}</div>
                 </div>`).join('') : '<p style="color:var(--text-muted);font-size:12px;">'+t('customer.detail.no_convs')+'</p>'}
@@ -1427,7 +1427,7 @@ async function loadOrdersForCustomer(cid) {
                 ? t('order.price_per_line')
                 : _orderPriceText(items.length === 1 ? items[0] : o);
             const pendingTotal = o.total_amount == null && items.length > 0;
-            return `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px;cursor:pointer;" onclick="showOrderEditModal(${o.id})">
+            return `<div style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px;cursor:pointer;" data-act="showOrderEditModal" data-arg="${o.id}">
                 <span style="color:${stColor};font-weight:500;">● ${esc(o.status)}</span>
                 <b>${
                     items.length > 1
@@ -1463,7 +1463,7 @@ function showOrderEditModal(oid, presetCid) {
     var stOptions = stValues.map(function(v, i) {
         return '<option value="' + v + '">' + t('order.status_' + stKeys[i]) + '</option>';
     }).join('');
-    backdrop.innerHTML = '<div class="modal" style="max-width:660px;width:95%;" onclick="event.stopPropagation()">' +
+    backdrop.innerHTML = '<div class="modal" style="max-width:660px;width:95%;" data-stop="1">' +
         '<h3>' + (isEdit ? t('order.edit_title') : t('order.title')) + '</h3>' +
         '<input type="hidden" id="order-edit-id" value="'+(oid||'')+'">' +
         '<input type="hidden" id="order-cust-id" value="'+(presetCid||'')+'">' +
@@ -1493,13 +1493,13 @@ function showOrderEditModal(oid, presetCid) {
         '<div class="form-group">' +
             '<label>'+t('order.items')+'</label>' +
             '<div id="order-items"></div>' +
-            '<button type="button" class="btn-xs" style="margin-top:6px;" onclick="addOrderItemRow()">'+t('order.add_line')+'</button>' +
+            '<button type="button" class="btn-xs" style="margin-top:6px;" data-act="addOrderItemRow">'+t('order.add_line')+'</button>' +
         '</div>' +
         '<div class="form-group"><label for="order-notes">'+t('order.notes')+'</label><textarea id="order-notes" style="min-height:50px;" placeholder="Notes"></textarea></div>' +
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
-            (isEdit?'<button class="btn btn-danger" onclick="deleteOrder('+oid+')">'+t('order.btn_delete')+'</button>':'') +
-            '<button class="btn" onclick="this.closest(\'.modal-backdrop\').remove()">'+t('btn.cancel')+'</button>' +
-            '<button class="btn btn-primary" onclick="saveOrder()">'+t('btn.save')+'</button>' +
+            (isEdit?'<button class="btn btn-danger" data-act="deleteOrder" data-arg="'+oid+'">'+t('order.btn_delete')+'</button>':'') +
+            '<button class="btn" data-act="closeBackdrop">'+t('btn.cancel')+'</button>' +
+            '<button class="btn btn-primary" data-act="saveOrder">'+t('btn.save')+'</button>' +
         '</div>' +
     '</div>';
     document.body.appendChild(backdrop);
@@ -1567,7 +1567,7 @@ function addOrderItemRow(item) {
         '<input type="text" class="oi-unit" placeholder="'+t('order.unit')+'">' +
         '<input type="number" class="oi-price" step="any" min="0" placeholder="'+t('order.price')+'">' +
         '<input type="number" class="oi-total" step="any" min="0" placeholder="'+t('order.line_total')+'">' +
-        '<button type="button" class="btn-xs" title="'+t('order.remove_line')+'" onclick="removeOrderItemRow(this)">×</button>';
+        '<button type="button" class="btn-xs" title="'+t('order.remove_line')+'" data-act="removeOrderItemRow" data-from="this">×</button>';
     row.querySelector('.oi-name').value = it.product_name || '';
     row.querySelector('.oi-qty').value = it.quantity == null ? '' : it.quantity;
     row.querySelector('.oi-unit').value = it.unit || '';
@@ -2718,7 +2718,7 @@ async function openCustomerProfile(cid) {
         return '<span class="chip k">' + esc(tag) + '</span>';
     }).join('');
     const pfStar = '<span class="star' + (c.is_starred ? ' on' : '') + '" role="button" style="cursor:pointer;" title="' +
-        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" onclick="toggleWallStar(event,' + cid + ')">★</span>';
+        (currentLang === 'en' ? 'Toggle star' : '切换星标') + '" data-act="toggleWallStar" data-event="1" data-arg="' + cid + '">★</span>';
 
     panel.innerHTML =
         '<div class="det">' +
@@ -2910,7 +2910,7 @@ function _renderVisitChips() {
     el.innerHTML = _visitPlans.length
         ? _visitPlans.map(function (p) {
             return '<button type="button" class="visit-chip' + (_visitCurrent && _visitCurrent.id === p.id ? ' on' : '') +
-                '" onclick="_visitSelect(' + p.id + ')">#' + p.id + ' ' + esc(p.visit_date || '') + '</button>';
+                '" data-act="_visitSelect" data-arg="' + p.id + '">#' + p.id + ' ' + esc(p.visit_date || '') + '</button>';
         }).join('')
         : '<span class="muted">暂无来访计划</span>';
 }

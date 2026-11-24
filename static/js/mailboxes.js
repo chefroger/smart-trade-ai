@@ -118,7 +118,7 @@ async function renderMailboxesViewInto(container) {
                 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 16px;">
                     <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
                         ${esc(t('mailbox.preset'))}
-                        <select id="mb-preset" onchange="onMailboxPresetChange()">
+                        <select id="mb-preset" data-onchange="onMailboxPresetChange">
                             <option value="126">126</option>
                             <option value="163">163</option>
                             <option value="qq">QQ</option>
@@ -128,11 +128,11 @@ async function renderMailboxesViewInto(container) {
                     </label>
                     <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
                         ${esc(t('mailbox.email'))}
-                        <input type="email" id="mb-email" placeholder="name@example.com" oninput="onMailboxFormDirty()">
+                        <input type="email" id="mb-email" placeholder="name@example.com" data-oninput="onMailboxFormDirty">
                     </label>
                     <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
                         ${esc(t('mailbox.secret'))}
-                        <input type="password" id="mb-secret" autocomplete="off" placeholder="${esc(t('mailbox.secret_ph'))}" oninput="onMailboxFormDirty()">
+                        <input type="password" id="mb-secret" autocomplete="off" placeholder="${esc(t('mailbox.secret_ph'))}" data-oninput="onMailboxFormDirty">
                     </label>
                     <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
                         ${esc(t('mailbox.display_name'))}
@@ -140,20 +140,20 @@ async function renderMailboxesViewInto(container) {
                     </label>
                     <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
                         ${esc(t('mailbox.host'))}
-                        <input type="text" id="mb-host" oninput="onMailboxFormDirty()">
+                        <input type="text" id="mb-host" data-oninput="onMailboxFormDirty">
                     </label>
                     <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
                         ${esc(t('mailbox.port'))}
-                        <input type="number" id="mb-port" min="1" max="65535" oninput="onMailboxFormDirty()">
+                        <input type="number" id="mb-port" min="1" max="65535" data-oninput="onMailboxFormDirty">
                     </label>
                     <label id="mb-username-wrap" style="display:none;flex-direction:column;gap:4px;font-size:12px;">
                         ${esc(t('mailbox.username'))}
-                        <input type="text" id="mb-username" placeholder="${esc(t('mailbox.username_ph'))}" oninput="onMailboxFormDirty()">
+                        <input type="text" id="mb-username" placeholder="${esc(t('mailbox.username_ph'))}" data-oninput="onMailboxFormDirty">
                     </label>
                 </div>
                 <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;align-items:center;">
-                    <button type="button" class="btn" id="mb-test-btn" onclick="testMailboxConnection()">${esc(t('mailbox.test'))}</button>
-                    <button type="button" class="btn btn-primary" id="mb-bind-btn" disabled onclick="bindMailbox()">${esc(t('mailbox.bind'))}</button>
+                    <button type="button" class="btn" id="mb-test-btn" data-act="testMailboxConnection">${esc(t('mailbox.test'))}</button>
+                    <button type="button" class="btn btn-primary" id="mb-bind-btn" disabled data-act="bindMailbox">${esc(t('mailbox.bind'))}</button>
                     <span id="mb-test-status" style="font-size:12px;color:var(--text-muted);"></span>
                 </div>
             </div>
@@ -343,9 +343,9 @@ function _renderMailboxRow(m) {
         + '</td>'
         + '<td>' + sync + '</td>'
         + '<td style="white-space:nowrap;">'
-        + '<button type="button" class="btn-xs"' + (pulling ? ' disabled' : '') + ' onclick="pullMailbox(' + m.id + ')">' + pullLabel + '</button> '
-        + '<button type="button" class="btn-xs" onclick="updateMailboxSecret(' + m.id + ')">' + esc(t('mailbox.update_secret')) + '</button> '
-        + '<button type="button" class="btn-xs" style="color:var(--accent-red);" onclick="unbindMailbox(' + m.id + ')">' + esc(t('mailbox.unbind')) + '</button>'
+        + '<button type="button" class="btn-xs"' + (pulling ? ' disabled' : '') + ' data-act="pullMailbox" data-arg="' + m.id + '">' + pullLabel + '</button> '
+        + '<button type="button" class="btn-xs" data-act="updateMailboxSecret" data-arg="' + m.id + '">' + esc(t('mailbox.update_secret')) + '</button> '
+        + '<button type="button" class="btn-xs" style="color:var(--accent-red);" data-act="unbindMailbox" data-arg="' + m.id + '">' + esc(t('mailbox.unbind')) + '</button>'
         + '</td>'
         + '</tr>';
 }

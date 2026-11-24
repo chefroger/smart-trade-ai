@@ -2142,3 +2142,6 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 .osint-status { font-size: 11px; opacity: .75; }
 .osint-status.st-done { color: #2e7d32; }
 .osint-status.st-failed, .osint-status.st-cancelled { color: #c62828; }
+
+/* O-17：技能帮助行的悬停高亮（原内联 onmouseover/onmouseout） */
+.skill-copy-row:hover { background: var(--bg-input); }

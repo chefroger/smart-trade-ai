@@ -20,7 +20,7 @@ function load() {
 
 function clickEvent(el) {
   return {
-    target: { closest: (sel) => (sel === '[data-act]' ? el : null) },
+    target: { closest: (sel) => (sel.indexOf('[data-act]') >= 0 ? el : null) },
     preventDefault() {},
   };
 }
@@ -62,4 +62,25 @@ test('未知动作只告警，不抛错', () => {
   const { handlers } = load();
   const el = { dataset: { act: '__missing__' }, value: '' };
   assert.doesNotThrow(() => handlers.click(clickEvent(el)));
+});
+
+test('所有 data-act 目标都有全局函数实现', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { readFrontendJs } = require('./_extract');
+  const src = readFrontendJs() + fs.readFileSync(
+    path.join(__dirname, '..', 'static', 'trade_chat.html'), 'utf8',
+  );
+  const names = new Set();
+  const re = /data-(?:act|pre|onchange|oninput|enter|keydown)="([A-Za-z_$][\w$]*)"/g;
+  let m;
+  while ((m = re.exec(src))) names.add(m[1]);
+  const special = new Set(['closeBackdrop', 'copySelf', 'removeById', 'toastArg']);
+  const missing = [];
+  for (const name of names) {
+    if (special.has(name)) continue;
+    const def = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
+    if (!def.test(src)) missing.push(name);
+  }
+  assert.deepStrictEqual(missing, [], 'data-act 指向了不存在的函数');
 });

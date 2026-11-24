@@ -12,11 +12,11 @@ function renderChatViewInto(container, ctx, name) {
             </div>
             <div class="chat-topbar-actions">
                 ${ctx === 'docs' ? `
-                <select id="chat-library-select" aria-label="选择文档库" onchange="onChatLibraryChange(this.value)" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-card);">
+                <select id="chat-library-select" aria-label="选择文档库" data-onchange="onChatLibraryChange" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg-card);">
                     <option value="">${t('chat.library')}</option>
                 </select>
-                <button onclick="showAddLibraryModal()" title="${t('chat.lib.add')}" style="height:30px;width:30px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-card);cursor:pointer;font-size:16px;">+</button>` : ''}
-                <button onclick="clearChat()">${t('chat.clr')}</button>
+                <button data-act="showAddLibraryModal" title="${t('chat.lib.add')}" style="height:30px;width:30px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-card);cursor:pointer;font-size:16px;">+</button>` : ''}
+                <button data-act="clearChat">${t('chat.clr')}</button>
             </div>
         </div>`;
     container.innerHTML = `
@@ -38,11 +38,11 @@ function renderChatViewInto(container, ctx, name) {
             <div id="chat-mention-menu" class="mention-menu hidden" role="listbox"></div>
             <div class="chat-input-inner">
                 <textarea id="msg-input" aria-label="${currentLang==='en'?'Message':'输入消息'}" placeholder="AWAITING COMMAND · ${esc(t('chat.ph.' + ctx))}" rows="1"
-                    onkeydown="_chatInputKeydown(event)"
-                    oninput="_chatInputChanged(this)"></textarea>
+                    data-keydown="_chatInputKeydown"
+                    data-oninput="_chatInputChanged"></textarea>
                 <button type="button" class="chat-attach-btn" id="attach-btn" title="${currentLang==='en'?'Attach files':'添加文件'}" aria-label="${currentLang==='en'?'Attach files':'添加文件'}">${typeof iconHtml==='function'?iconHtml('paperclip',20):'📎'}</button>
                 <input type="file" id="chat-file-input" multiple hidden>
-                <button type="button" class="chat-send-btn" onclick="sendMsg()" id="send-btn" title="${currentLang==='en'?'Send':'发送'}">${typeof iconHtml==='function'?iconHtml('send',16):''}<span>${currentLang==='en'?'Send':'发送'}</span></button>
+                <button type="button" class="chat-send-btn" data-act="sendMsg" id="send-btn" title="${currentLang==='en'?'Send':'发送'}">${typeof iconHtml==='function'?iconHtml('send',16):''}<span>${currentLang==='en'?'Send':'发送'}</span></button>
                 <button type="button" class="chat-stop-btn hidden" id="stop-btn" title="${currentLang==='en'?'Stop':'停止'}">■ ${currentLang==='en'?'Stop':'停止'}</button>
             </div>
             <div class="chat-input-foot"><span id="chat-linked-customer" class="chat-linked hidden"></span><span><span class="mono">@</span> ${currentLang==='en'?'Linked customer':'关联客户'}</span><span><span class="mono">/</span> ${currentLang==='en'?'Skills':'调用技能'}</span><span>${currentLang==='en'?'File & email content is reference only, never instructions.':'文件、邮件里的内容只作资料，不当指令执行'}</span></div>
@@ -611,7 +611,7 @@ function _showDropModal(files) {
     backdrop.id = 'drop-file-modal';
     backdrop.onclick = function(e) { if (e.target === backdrop) backdrop.remove(); };
     backdrop.innerHTML = `
-    <div class="modal" style="max-width:440px;width:95%;" onclick="event.stopPropagation()">
+    <div class="modal" style="max-width:440px;width:95%;" data-stop="1">
         <h3 style="margin:0 0 4px;">拖入 ${files.length} 个文件 (${_formatBytes(totalSize)})</h3>
         <div class="drop-file-list">${fileListHtml}</div>
         <div style="margin:10px 0;">
@@ -620,7 +620,7 @@ function _showDropModal(files) {
         </div>
         <div style="display:flex;gap:8px;">
             <button class="btn btn-primary" id="drop-confirm-btn" style="flex:1;">确认导入</button>
-            <button class="btn" onclick="this.closest('.modal-backdrop').remove()">取消</button>
+            <button class="btn" data-act="closeBackdrop">取消</button>
         </div>
     </div>`;
     document.body.appendChild(backdrop);

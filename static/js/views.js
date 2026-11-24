@@ -57,7 +57,7 @@ function renderTasksViewInto(container) {
         const displayTime = (hasEdit && hasEdit.time) || t.time;
         return `
         <div class="task-card" style="position:relative;">
-            ${isCustom ? `<button onclick="deleteCustomTemplate('${t.id}')" style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;font-size:14px;color:var(--accent-red);">×</button>` : ''}
+            ${isCustom ? `<button data-act="deleteCustomTemplate" data-arg="${t.id}" style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;font-size:14px;color:var(--accent-red);">×</button>` : ''}
             <div class="task-card-header">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                     <input type="checkbox" class="task-template-check" data-id="${t.id}" ${t.required ? 'checked disabled' : ''}>
@@ -68,13 +68,13 @@ function renderTasksViewInto(container) {
             </div>
             <div style="display:flex;align-items:center;gap:6px;margin:6px 0;">
                 <span style="font-size:11px;color:var(--text-muted);">🕐</span>
-                <input type="text" class="task-time-input" data-id="${t.id}" value="${esc(displayTime)}" style="width:100px;padding:2px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:11px;font-family:monospace;" onchange="onTemplateTimeChange('${t.id}', this.value)">
+                <input type="text" class="task-time-input" data-id="${t.id}" value="${esc(displayTime)}" style="width:100px;padding:2px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:11px;font-family:monospace;" data-onchange="onTemplateTimeChange" data-arg="${t.id}" data-append-value="1">
                 ${t.cron ? `<span style="font-size:10px;color:var(--text-muted);font-family:monospace;">${esc(t.cron)}</span>` : ''}
             </div>
             <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;">${esc(t.desc || '')}</div>
             <div class="task-card-actions">
-                <button onclick="editTemplatePrompt('${t.id}')" style="font-size:11px;">${btnIcon('pencil')} 编辑 Prompt</button>
-                <button onclick="runSingleTemplate('${t.id}')" style="font-size:11px;">▶ 执行一次</button>
+                <button data-act="editTemplatePrompt" data-arg="${t.id}" style="font-size:11px;">${btnIcon('pencil')} 编辑 Prompt</button>
+                <button data-act="runSingleTemplate" data-arg="${t.id}" style="font-size:11px;">▶ 执行一次</button>
             </div>
         </div>`;
     };
@@ -84,8 +84,8 @@ function renderTasksViewInto(container) {
         <div class="panel-topbar">
             <h2>⏰ 定时任务${coName ? `<span style="margin-left:10px;padding:3px 10px;background:rgba(59,130,246,0.08);color:var(--primary);border-radius:999px;font-size:12px;font-weight:500;">🏢 ${esc(coName)}</span>` : ''}</h2>
             <div class="panel-topbar-actions">
-                <button class="btn btn-primary" onclick="batchCreateCronTasks()">${btnIcon('refresh-cw')} 批量生成选中任务</button>
-                <button class="btn btn-danger" onclick="clearAllCronTasks()">${btnIcon('trash')} 清空全部任务</button>
+                <button class="btn btn-primary" data-act="batchCreateCronTasks">${btnIcon('refresh-cw')} 批量生成选中任务</button>
+                <button class="btn btn-danger" data-act="clearAllCronTasks">${btnIcon('trash')} 清空全部任务</button>
             </div>
         </div>
         <div class="panel-body" style="overflow-y:auto;padding:16px 20px;">
@@ -208,7 +208,7 @@ function renderTasksViewInto(container) {
             <!-- 模板库 -->
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
                 <div style="font-size:13px;font-weight:600;color:var(--text-secondary);">📋 任务模板库（钩选 → 编辑时间 → 批量生成）</div>
-                <button class="btn btn-xs" onclick="showAddCustomTemplateModal()" style="color:var(--primary);">${btnIcon('plus')} 自定义模板</button>
+                <button class="btn btn-xs" data-act="showAddCustomTemplateModal" style="color:var(--primary);">${btnIcon('plus')} 自定义模板</button>
             </div>
             <div class="task-grid" id="task-templates-grid">
                 ${allTemplates.map(renderCard).join('')}
@@ -220,7 +220,7 @@ function renderTasksViewInto(container) {
             <!-- 已激活任务 -->
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
                 <div style="font-size:13px;font-weight:600;color:var(--text-secondary);">📡 已激活的定时任务</div>
-                <button class="btn btn-xs" onclick="loadActiveCronJobs()">${btnIcon('refresh-cw')} 刷新</button>
+                <button class="btn btn-xs" data-act="loadActiveCronJobs">${btnIcon('refresh-cw')} 刷新</button>
             </div>
             <div class="task-grid" id="active-tasks-grid">
                 <div style="color:var(--text-muted);font-size:12px;padding:12px;">加载中...</div>
@@ -264,19 +264,15 @@ function showPromptEditorModal(title, currentText, onSave) {
     <div class="modal" style="max-width:640px;width:95%;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
             <h3>✏️ 编辑：${esc(title)}</h3>
-            <button class="slide-panel-close" onclick="document.getElementById('prompt-editor-modal').remove()">×</button>
+            <button class="slide-panel-close" data-act="removeById" data-arg="prompt-editor-modal">×</button>
         </div>
         <div class="form-group">
             <label for="prompt-editor-text">任务 Prompt（Agent 将按此指令执行）</label>
             <textarea id="prompt-editor-text" style="width:100%;min-height:200px;font-family:monospace;font-size:13px;padding:10px;">${esc(currentText)}</textarea>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
-            <button class="btn" onclick="document.getElementById('prompt-editor-modal').remove()">取消</button>
-            <button class="btn btn-primary" onclick="(function(){
-                const text = document.getElementById('prompt-editor-text').value;
-                document.getElementById('prompt-editor-modal').remove();
-                arguments[0](text);
-            })(arguments[0])">${btnIcon('check')} 保存</button>
+            <button class="btn" data-act="removeById" data-arg="prompt-editor-modal">取消</button>
+            <button class="btn btn-primary">${btnIcon('check')} 保存</button>
         </div>
     </div>`;
     // 保存回调绑定
@@ -303,7 +299,7 @@ function showAddCustomTemplateModal() {
     <div class="modal" style="max-width:600px;width:95%;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
             <h3>➕ 自定义任务模板</h3>
-            <button class="slide-panel-close" onclick="document.getElementById('custom-template-modal').remove()">×</button>
+            <button class="slide-panel-close" data-act="removeById" data-arg="custom-template-modal">×</button>
         </div>
         <div class="form-group"><label for="custom-tmpl-name">任务名称 *</label><input type="text" id="custom-tmpl-name" placeholder="例如：海关数据每日监控"></div>
         <div class="form-row">
@@ -313,8 +309,8 @@ function showAddCustomTemplateModal() {
         <div class="form-group"><label for="custom-tmpl-desc">任务描述</label><input type="text" id="custom-tmpl-desc" placeholder="简要描述任务内容"></div>
         <div class="form-group"><label for="custom-tmpl-prompt">执行 Prompt *</label><textarea id="custom-tmpl-prompt" style="width:100%;min-height:150px;font-family:monospace;font-size:13px;padding:10px;" placeholder="Agent 将按此指令执行..."></textarea></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
-            <button class="btn" onclick="document.getElementById('custom-template-modal').remove()">取消</button>
-            <button class="btn btn-primary" onclick="saveCustomTemplate()">${btnIcon('check')} 保存模板</button>
+            <button class="btn" data-act="removeById" data-arg="custom-template-modal">取消</button>
+            <button class="btn btn-primary" data-act="saveCustomTemplate">${btnIcon('check')} 保存模板</button>
         </div>
     </div>`;
     document.body.appendChild(backdrop);
@@ -422,7 +418,7 @@ async function loadActiveCronJobs() {
             <div class="task-card-schedule">🕐 ${esc(j.schedule)}</div>
             ${j.next_run ? `<div style="font-size:11px;color:var(--accent-green);margin-bottom:6px;">▶ 下次执行：${esc(j.next_run)}</div>` : ''}
             <div class="task-card-actions">
-                <button onclick="runActiveJob(${escJs(j.id)})">▶ 立即执行</button>
+                <button data-act="runActiveJob" data-arg="${esc(j.id)}">▶ 立即执行</button>
             </div>
         </div>
     `).join('');
@@ -457,7 +453,7 @@ function renderDirectoryViewInto(container) {
         <div class="panel-topbar">
             <h2>📂 数据目录${coName ? `<span style="margin-left:10px;padding:3px 10px;background:rgba(59,130,246,0.08);color:var(--primary);border-radius:999px;font-size:12px;font-weight:500;">🏢 ${esc(coName)}</span>` : ''}</h2>
             <div class="panel-topbar-actions">
-                <button class="btn" onclick="toast('功能开发中：将在文件管理器中打开')">${btnIcon('folder-open')} 打开目录</button>
+                <button class="btn" data-act="toastArg" data-arg="功能开发中：将在文件管理器中打开">${btnIcon('folder-open')} 打开目录</button>
             </div>
         </div>
         <div class="panel-body" style="display:flex;gap:16px;">
@@ -553,7 +549,7 @@ async function renderHistoryViewInto(container) {
         <div class="panel-topbar">
             <h2>💬 ${t('history.title')}${coName ? '<span style="margin-left:10px;padding:3px 10px;background:rgba(59,130,246,0.08);color:var(--primary);border-radius:999px;font-size:12px;font-weight:500;">🏢 '+esc(coName)+'</span>' : ''}</h2>
             <div class="panel-topbar-actions">
-                <input class="panel-search" id="conv-search" aria-label="搜索对话" placeholder="${currentLang==='en'?'Search conversations...':'搜索对话...'}" oninput="filterConversations()">
+                <input class="panel-search" id="conv-search" aria-label="搜索对话" placeholder="${currentLang==='en'?'Search conversations...':'搜索对话...'}" data-oninput="filterConversations">
             </div>
         </div>
         <div class="panel-body">
@@ -597,7 +593,7 @@ function renderConversationsList(data) {
     }
     container.innerHTML = data.map(c => `
         <div class="conv-list-item" style="display:flex;align-items:flex-start;gap:8px;">
-            <div style="flex:1;min-width:0;" onclick="showConversationDetail(${c.id})">
+            <div style="flex:1;min-width:0;" data-act="showConversationDetail" data-arg="${c.id}">
                 <div class="conv-meta">
                     <span>${esc((c.created_at||'').slice(0,16))}</span>
                     ${c.library_id ? '<span style="background:#EFF6FF;color:var(--primary);padding:2px 6px;border-radius:4px;">📁 '+t('nav.docs')+'</span>' : ''}
@@ -606,7 +602,7 @@ function renderConversationsList(data) {
                 <div class="conv-a">${esc(c.response||'').slice(0,150)}</div>
             </div>
             <button class="btn-xs" style="color:var(--accent-red);border-color:var(--accent-red);flex-shrink:0;margin-top:2px;"
-                onclick="event.stopPropagation();deleteConversation(${c.id})" title="${t('hist.delete_title')}">${btnIcon('trash')}</button>
+                data-act="deleteConversation" data-stop="1" data-arg="${c.id}" title="${t('hist.delete_title')}">${btnIcon('trash')}</button>
         </div>
     `).join('');
 }
@@ -686,11 +682,11 @@ function showOnboardingGuide() {
 }
 
 function renderOnboardingStep1HTML() {
-    return `<div id="onboarding-step1"><div class="onboarding-icon">🎉</div><h2 class="onboarding-title">欢迎使用 Trade AI</h2><p class="onboarding-subtitle">Trade 可以帮你<strong>自动搜索客户背景信息（OSINT）</strong>，并基于你的产品定位<strong>撰写专业 B2B 开发信</strong>。</p><div class="onboarding-features"><div class="onb-feature"><span>🔍</span> 海关数据 · 社媒分析 · 官网诊断</div><div class="onb-feature"><span>📧</span> AI 写开发信 · 跟进序列 · 报价单</div><div class="onb-feature"><span>🤖</span> 7x24 自动获客 · 定时任务调度</div></div><button class="btn btn-primary btn-lg" onclick="onboardingGoToStep2()">${btnIcon('target')} 开发第一个客户</button><div class="onboarding-skip"><a href="#" onclick="onboardingSkip(event)">跳过引导，直接开始</a></div></div>`;
+    return `<div id="onboarding-step1"><div class="onboarding-icon">🎉</div><h2 class="onboarding-title">欢迎使用 Trade AI</h2><p class="onboarding-subtitle">Trade 可以帮你<strong>自动搜索客户背景信息（OSINT）</strong>，并基于你的产品定位<strong>撰写专业 B2B 开发信</strong>。</p><div class="onboarding-features"><div class="onb-feature"><span>🔍</span> 海关数据 · 社媒分析 · 官网诊断</div><div class="onb-feature"><span>📧</span> AI 写开发信 · 跟进序列 · 报价单</div><div class="onb-feature"><span>🤖</span> 7x24 自动获客 · 定时任务调度</div></div><button class="btn btn-primary btn-lg" data-act="onboardingGoToStep2">${btnIcon('target')} 开发第一个客户</button><div class="onboarding-skip"><a href="#" data-act="onboardingSkip" data-event="1">跳过引导，直接开始</a></div></div>`;
 }
 
 function renderOnboardingStep2HTML() {
-    return `<div id="onboarding-step2"><div class="onboarding-step-indicator"><span class="onb-step done">✓ 了解 Trade</span><span class="onb-step-arrow">→</span><span class="onb-step active">● 开发客户</span></div><h3 class="onboarding-title" style="font-size:18px;margin-bottom:6px;">试试对目标客户做背调</h3><p style="color:var(--text-secondary);font-size:13px;margin-bottom:16px;">输入客户公司名或官网，AI 将自动搜索公开信息并生成开发信</p><div class="onboarding-input-row"><input type="text" id="onboarding-osint-input" placeholder="粘贴客户公司名或网址，如：acme-corp.com" class="onboarding-text-input" onkeydown="if(event.key==='Enter')onboardingStartOSINT()" autofocus /><button class="btn btn-primary" id="onboarding-send-btn" onclick="onboardingStartOSINT()">开始分析</button><button id="onboarding-stop-btn" class="hidden" style="background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:var(--radius-sm);cursor:pointer;" onclick="onboardingStopOSINT()">${btnIcon('x')} 停止</button></div><div id="onboarding-results-area"></div><div id="onboarding-actions" class="hidden"></div><div class="onboarding-skip"><a href="#" onclick="onboardingSkip(event)">跳过引导，直接开始</a></div></div>`;
+    return `<div id="onboarding-step2"><div class="onboarding-step-indicator"><span class="onb-step done">✓ 了解 Trade</span><span class="onb-step-arrow">→</span><span class="onb-step active">● 开发客户</span></div><h3 class="onboarding-title" style="font-size:18px;margin-bottom:6px;">试试对目标客户做背调</h3><p style="color:var(--text-secondary);font-size:13px;margin-bottom:16px;">输入客户公司名或官网，AI 将自动搜索公开信息并生成开发信</p><div class="onboarding-input-row"><input type="text" id="onboarding-osint-input" placeholder="粘贴客户公司名或网址，如：acme-corp.com" class="onboarding-text-input" data-enter="onboardingStartOSINT" autofocus /><button class="btn btn-primary" id="onboarding-send-btn" data-act="onboardingStartOSINT">开始分析</button><button id="onboarding-stop-btn" class="hidden" style="background:var(--accent-red);color:#fff;border:none;padding:8px 16px;border-radius:var(--radius-sm);cursor:pointer;" data-act="onboardingStopOSINT">${btnIcon('x')} 停止</button></div><div id="onboarding-results-area"></div><div id="onboarding-actions" class="hidden"></div><div class="onboarding-skip"><a href="#" data-act="onboardingSkip" data-event="1">跳过引导，直接开始</a></div></div>`;
 }
 
 function onboardingGoToStep2() {
@@ -877,7 +873,7 @@ function onboardingStopOSINT() {
 function showOnboardingActions() {
     var actionsDiv = $('onboarding-actions');
     actionsDiv.classList.remove('hidden');
-    actionsDiv.innerHTML = '<button class="btn btn-primary" onclick="onboardingSaveAndContinue()">' + btnIcon('check') + ' 保存到客户库</button><button class="btn" onclick="onboardingFinish()">进入主界面</button>';
+    actionsDiv.innerHTML = '<button class="btn btn-primary" data-act="onboardingSaveAndContinue">' + btnIcon('check') + ' 保存到客户库</button><button class="btn" data-act="onboardingFinish">进入主界面</button>';
 }
 
 async function onboardingSaveAndContinue() {
@@ -952,8 +948,8 @@ function loadCompanyListUI() {
         <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light);">
             <div style="flex:1;"><div style="font-weight:600;font-size:13px;">${esc(c.name)}</div>
             <div style="font-size:11px;color:var(--text-muted);">${esc(c.slug)} · ${c.contact_email ? ' · ' + esc(c.contact_email) : ''}</div></div>
-            ${_licenseGateAllowsPaid() ? `<button class="btn btn-xs" onclick="exportCompany(${c.id})">导出</button>` : ''}
-            <button class="btn btn-danger btn-xs" onclick="deleteCompany(${c.id})">删除</button>
+            ${_licenseGateAllowsPaid() ? `<button class="btn btn-xs" data-act="exportCompany" data-arg="${c.id}">导出</button>` : ''}
+            <button class="btn btn-danger btn-xs" data-act="deleteCompany" data-arg="${c.id}">删除</button>
         </div>`).join('');
 }
 
@@ -975,7 +971,9 @@ function _downloadBlob(blob, filename) {
 
 async function exportCompany(cid) {
     if (!confirm('导出包包含客户资料、对话、记忆和 Agent 身份，不包含桌面资料库文件（需自行拷贝），且未加密。请妥善保管。继续导出？')) return;
-    const expBtn = document.querySelector('button[onclick="exportCompany(' + cid + ')"]');
+    const expBtn = document.querySelector(
+        'button[data-act="exportCompany"][data-arg="' + cid + '"]',
+    );
     const restoreExp = (expBtn && typeof TradeWait !== 'undefined')
         ? TradeWait.inline(expBtn, {en: 'EXPORTING', zh: '打包中'}) : null;
     try {
@@ -1046,7 +1044,7 @@ function showImportCompanyDialog() {
             <input type="file" id="imp-file" accept=".zip" style="width:100%;margin:10px 0;">
             <div id="imp-status" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;line-height:1.6;min-height:40px;"></div>
             <div class="form-actions">
-                <button class="btn" onclick="this.closest('.modal-backdrop').remove()">关闭</button>
+                <button class="btn" data-act="closeBackdrop">关闭</button>
             </div>
         </div>`;
     document.body.appendChild(backdrop);
