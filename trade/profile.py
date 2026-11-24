@@ -52,20 +52,34 @@ _EXTRACT_LOCK = threading.Lock()
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# 「客户索要」的常见说法（W14）：「客户要了两盒茶叶」应提示改记礼物表。
-# 末尾必须是具体索取物/动作，避免「客户要求提供报价」这类正常业务被误判。
+# 「客户索要」的常见说法（W14 / S6）：「客户要了两盒茶叶」应提示改记礼物表。
+# 宾语必须是礼品/利益类名词，不再靠「件/台/瓶/送/寄」这类通用量词和动词——
+# 否则「客户要求 1000 件起订」「客户要样品 5 件」会被误判成索要。
+_GIFT_NOUNS = (
+    "回扣", "佣金", "好处费", "红包", "购物卡", "礼品卡", "礼物", "礼品",
+    "手机", "iPhone", "名表", "手表", "Rolex", "劳力士",
+    "茅台", "烟酒", "香烟", "茶叶", "特产", "旅游",
+)
 _GIFT_REQUEST_RE = re.compile(
     r"(?:客户|买家|对方|客人|他|她)\s*"
-    r"(?:要了|想要|索要|要求|希望|提出要|问我们要)"
-    r".{0,16}"
-    r"(?:送|寄|带|拿|礼物|礼品|样品|茶叶|酒|烟|特产|红包|购物卡|"
-    r"瓶|盒|箱|条|斤|包|件|台|部|套)",
+    r"(?:要了|想要|想|索要|要求|希望|提出要|问我们要|让我|叫我|帮忙买|帮买|代买)"
+    r".{0,20}"
+    r"(?:" + "|".join(_GIFT_NOUNS) + r")",
+    re.IGNORECASE,
+)
+# 英文：Ask for a gift card / he wants a commission of 5%（S6）
+_GIFT_REQUEST_RE_EN = re.compile(
+    r"\b(?:asks?|asked|wants?|wanted|requests?|requested|demands?|demanded)\s+"
+    r"(?:(?:us\s+)?for\s+)?(?:a\s+|an\s+|the\s+)?"
+    r"(?:gift\s?cards?|gifts?|kickbacks?|commissions?|bribes?|iphones?|rolex|watches?)\b",
+    re.IGNORECASE,
 )
 
 
 def looks_like_gift(text: Any) -> bool:
-    """内容是否像「客户索要」（W14：提示改记礼物表，而不是普通事实）。"""
-    return bool(_GIFT_REQUEST_RE.search(str(text or "")))
+    """内容是否像「客户索要」（W14 / S6：提示改记礼物表，而不是普通事实）。"""
+    value = str(text or "")
+    return bool(_GIFT_REQUEST_RE.search(value) or _GIFT_REQUEST_RE_EN.search(value))
 
 
 # ── 工具 ────────────────────────────────────────────────────────────────────

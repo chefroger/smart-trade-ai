@@ -967,6 +967,27 @@ class TestGiftRequestHint:
         assert p.looks_like_gift("客户要求提供报价单") is False
         assert p.looks_like_gift("客户喜欢手冲咖啡") is False
 
+    def test_s6_gift_nouns_and_english_patterns(self):
+        """S6：宾语改为礼品/利益类词；通用量词不再算。"""
+        from trade import profile as p
+
+        for text in (
+            "客户索要回扣 3%",
+            "Ask for a gift card",
+            "他让我帮忙买 Rolex",
+            "he wants a commission of 5%",
+            "他想要我们送两瓶茅台",
+        ):
+            assert p.looks_like_gift(text) is True, f"未判 GIFT：{text}"
+        for text in (
+            "客户要求寄样品到汉堡",
+            "客户要求 1000 件起订",
+            "买家希望下周送货",
+            "他要求每箱装 24 件",
+            "客户要样品 5 件",
+        ):
+            assert p.looks_like_gift(text) is False, f"误判 GIFT：{text}"
+
     def test_fact_with_gift_content_gets_hint(self, api_client, customer_id):
         client, token, cid = api_client
         r = client.post(
