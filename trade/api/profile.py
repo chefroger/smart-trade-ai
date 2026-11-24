@@ -96,7 +96,7 @@ def post_fact(
             detail="客户画像功能需要重启 Trade 后才能使用",
         )
     try:
-        return profile_mod.create_fact_manual(
+        result = profile_mod.create_fact_manual(
             customer_id,
             company_id=cid,
             category=body.category,
@@ -108,6 +108,15 @@ def post_fact(
     except Exception as exc:
         _map_err(exc)
         raise
+    # W13：内容像家庭成员信息时提示改记「家庭」类（不阻断写入）
+    from trade.privacy_terms import contains_family_terms
+
+    if (body.category or "") != "家庭" and contains_family_terms(
+        f"{body.subject or ''} {body.content or ''}"
+    ):
+        if isinstance(result, dict):
+            result = {**result, "hint": "内容包含家庭成员信息，建议把分类改为「家庭」"}
+    return result
 
 
 @router.put("/customers/{customer_id}/facts/{fact_id}")
@@ -368,12 +377,39 @@ class MemoPassBody(BaseModel):
     passphrase: str = ""
 
 
+class MemoPrefsBody(BaseModel):
+    unlock_mode: str = "always"
+
+
 @router.get("/profile/memo/status")
 def memo_status(cid: int = Depends(require_company)):
-    """密语是否已设置（不返回任何哈希/盐）。"""
+    """密语是否已设置（不返回任何哈希/盐）；附带解锁策略。"""
     from trade import memo as memo_mod
 
-    return {"configured": memo_mod.is_configured()}
+    return {
+        "configured": memo_mod.is_configured(),
+        "unlock_mode": memo_mod.unlock_mode(),
+    }
+
+
+@router.post("/profile/memo/prefs")
+def memo_prefs(body: MemoPrefsBody, cid: int = Depends(require_company)):
+    """设置密语策略：每次输入 / 本会话内有效（W13）。"""
+    from trade import memo as memo_mod
+
+    try:
+        mode = memo_mod.set_unlock_mode(body.unlock_mode)
+    except memo_mod.MemoError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"unlock_mode": mode}
+
+
+@router.get("/profile/privacy-terms")
+def privacy_terms(cid: int = Depends(require_company)):
+    """家庭/私密称谓词表（前端打印、长图使用同一份，W13）。"""
+    from trade.privacy_terms import family_terms_payload
+
+    return family_terms_payload()
 
 
 @router.post("/profile/memo/passphrase")

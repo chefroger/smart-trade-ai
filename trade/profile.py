@@ -14,6 +14,7 @@ from datetime import date, datetime
 from typing import Any
 
 from trade.database import get_connection
+from trade.privacy_terms import contains_family_terms
 
 _log = logging.getLogger(__name__)
 
@@ -30,31 +31,9 @@ _DEFAULT_AI_VISIBLE_CATEGORIES = frozenset({
 
 GIFT_DIRECTIONS = frozenset({"我方赠送", "客户赠送", "客户索要"})
 
-# 家庭成员称谓（2026-11-23 审计 P1-F）：分类由用户/模型决定，但内容只要
-# 命中这些称谓，即使写在「重要日期/喜好」里也不能进打印、长图、导出、AI。
-FAMILY_TERMS_CJK = (
-    "太太", "妻子", "老婆", "丈夫", "老公", "儿子", "女儿", "孩子",
-    "父母", "爸爸", "妈妈", "父亲", "母亲", "兄弟", "姐妹",
-)
-_FAMILY_TERMS_EN_RE = re.compile(
-    r"\b(?:wife|husband|son|daughter|kids|children|father|mother)\b",
-    re.IGNORECASE,
-)
+# 家庭成员称谓统一在 trade/privacy_terms.py（W13），memo/exporter/visit_plan
+# 继续通过 trade.profile.contains_family_terms 引用，行为不变。
 
-
-def contains_family_terms(text: Any) -> bool:
-    """内容里是否出现家庭成员称谓（宁可多滤，不把家庭信息带出去）。"""
-    value = str(text or "")
-    if any(term in value for term in FAMILY_TERMS_CJK):
-        return True
-    return bool(_FAMILY_TERMS_EN_RE.search(value))
-
-
-def strip_family_lines(text: Any) -> str:
-    """按行滤掉含家庭称谓的内容（打印/长图/导出前的最后一道）。"""
-    lines = str(text or "").splitlines()
-    kept = [line for line in lines if not contains_family_terms(line)]
-    return "\n".join(kept)
 ATTACH_TO_VALUES = frozenset({"none", "primary", "contact"})
 SOURCE_TYPES = frozenset({"chat", "email", "manual"})
 STATUSES = frozenset({"待确认", "已确认", "已作废"})
@@ -1306,6 +1285,8 @@ def extract_from_sources(
 
         obj = _parse_json_object(raw) or {}
         added_facts = added_gifts = skipped = dropped = 0
+        # W13：内容命中家庭称谓但分类不是「家庭」的条数（只在成功入库时计）
+        family_misclassified = 0
 
         for item in obj.get("facts") or []:
             if not isinstance(item, dict):
@@ -1338,6 +1319,8 @@ def extract_from_sources(
             )
             if ok:
                 added_facts += 1
+                if cat != "家庭" and contains_family_terms(f"{subj} {cont}"):
+                    family_misclassified += 1
             else:
                 skipped += 1
 
@@ -1388,13 +1371,19 @@ def extract_from_sources(
             else:
                 skipped += 1
 
-        return {
+        result = {
             "added_facts": added_facts,
             "added_gifts": added_gifts,
             "skipped_duplicate": skipped,
             "dropped_invalid": dropped,
             "scanned": scanned,
         }
+        if family_misclassified:
+            result["family_hint"] = (
+                f"有 {family_misclassified} 条内容像家庭成员信息，"
+                "建议把分类改为「家庭」（这类内容不会注入 AI/打印/导出）"
+            )
+        return result
     finally:
         with _EXTRACT_LOCK:
             _EXTRACT_LOCKS.discard(customer_id)

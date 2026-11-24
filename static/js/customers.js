@@ -2971,10 +2971,32 @@ async function saveVisitPlan() {
     _renderVisitChips();
 }
 
-// 家庭成员称谓过滤（审计 P1-F）：分类不可靠，打印/长图前按内容再滤一次
-const _V_FAMILY_CJK = ['太太', '妻子', '老婆', '丈夫', '老公', '儿子', '女儿',
-    '孩子', '父母', '爸爸', '妈妈', '父亲', '母亲', '兄弟', '姐妹'];
-const _V_FAMILY_EN = /\b(?:wife|husband|son|daughter|kids|children|father|mother)\b/i;
+// 家庭成员称谓过滤（审计 P1-F / W13）：分类不可靠，打印/长图前按内容再滤一次。
+// 词表与后端 trade/privacy_terms.py 相同；优先从 API 取，失败用内置兜底。
+let _V_FAMILY_CJK = ['太太', '妻子', '老婆', '夫人', '爱人', '先生', '丈夫', '老公', '配偶',
+    '儿子', '女儿', '孩子', '宝宝', '小孩', '孙子', '孙女', '孙辈',
+    '父母', '爸爸', '妈妈', '父亲', '母亲', '岳父', '岳母', '公公', '婆婆',
+    '兄弟', '姐妹', '哥哥', '弟弟', '姐姐', '妹妹', '家人', '家属'];
+let _V_FAMILY_EN = /\b(?:spouse|partner|kid|kids|child|children|wife|husband|son|daughter|father|mother|brother|sister|family|esposa|esposo|hijo|hija|frau|sohn|tochter|жена|муж|сын|дочь)\b/i;
+let _vPrivacyTermsPromise = null;
+
+function _ensurePrivacyTerms() {
+    /** 从前端同源 API 取词表（与后端同一份）；失败静默用内置兜底。 */
+    if (_vPrivacyTermsPromise) return _vPrivacyTermsPromise;
+    _vPrivacyTermsPromise = api('GET', '/api/trade/profile/privacy-terms', null, null, {silent: true})
+        .then(function (data) {
+            if (!data) return;
+            if (Array.isArray(data.cjk) && data.cjk.length) _V_FAMILY_CJK = data.cjk;
+            if (Array.isArray(data.latin) && data.latin.length) {
+                const words = data.latin.map(function (w) {
+                    return String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                });
+                _V_FAMILY_EN = new RegExp('\\b(?:' + words.join('|') + ')\\b', 'i');
+            }
+        })
+        .catch(function () { /* 兜底词表已足够，不打扰用户 */ });
+    return _vPrivacyTermsPromise;
+}
 
 function _vPrivateFilter(text) {
     return String(text || '').split('\n').filter(function (line) {
@@ -2988,28 +3010,100 @@ function _vsheetSec(title, text) {
     return safe ? '<h2>' + esc(title) + '</h2><p style="white-space:pre-wrap;">' + esc(safe) + '</p>' : '';
 }
 
-/** 私密备忘录：本机密语校验后只读查看；不进 AI/打印/长图/导出（P1-F）。 */
+// W13：密语弹窗（替代 prompt()）+ 连续 5 次失败锁定 60 秒 + 解锁策略
+let _memoFailCount = 0;
+let _memoFailUntil = 0;
+let _memoSessionPass = '';
+let _memoUnlockMode = 'always';
+
+function _memoLockedLeft() {
+    return Math.max(0, Math.ceil((_memoFailUntil - Date.now()) / 1000));
+}
+
+function _memoNoteFailure() {
+    _memoFailCount += 1;
+    if (_memoFailCount >= 5) {
+        _memoFailUntil = Date.now() + 60000;
+        _memoFailCount = 0;
+    }
+}
+
+function _memoPromptPassword(title, withConfirm) {
+    return new Promise(function (resolve) {
+        const left = _memoLockedLeft();
+        if (left > 0) { toast('密语已锁定，请 ' + left + ' 秒后再试'); resolve(null); return; }
+        const ov = document.createElement('div');
+        ov.className = 'memo-modal';
+        ov.innerHTML = '<div class="memo-box" style="max-width:380px;">' +
+            '<div class="memo-head"><strong>' + esc(title) + '</strong></div>' +
+            '<input type="password" id="memo-pass" autocomplete="current-password" ' +
+            'placeholder="密语" style="width:100%;margin:10px 0;padding:8px;box-sizing:border-box;">' +
+            (withConfirm
+                ? '<input type="password" id="memo-pass2" autocomplete="new-password" ' +
+                  'placeholder="再输入一次" style="width:100%;margin:0 0 10px;padding:8px;box-sizing:border-box;">'
+                : '') +
+            '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+            '<button type="button" class="btn" id="memo-cancel">取消</button>' +
+            '<button type="button" class="btn primary" id="memo-ok">确定</button></div></div>';
+        document.body.appendChild(ov);
+        const pass = ov.querySelector('#memo-pass');
+        const pass2 = ov.querySelector('#memo-pass2');
+        setTimeout(function () { pass.focus(); }, 0);
+        function close(value) { ov.remove(); resolve(value); }
+        function submit() {
+            const value = pass.value || '';
+            if (!value) { toast('请输入密语'); return; }
+            if (withConfirm && value !== (pass2.value || '')) {
+                toast('两次输入不一致');
+                return;
+            }
+            close(value);
+        }
+        ov.querySelector('#memo-cancel').onclick = function () { close(null); };
+        ov.querySelector('#memo-ok').onclick = submit;
+        ov.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+    });
+}
+
+/** 私密备忘录：本机密语校验后只读查看；不进 AI/打印/长图/导出（P1-F/W13）。 */
 async function openCustomerMemo() {
     const sel = $('vp-customer');
     const cid = sel && sel.value ? Number(sel.value) : 0;
     if (!cid) { toast(currentLang === 'en' ? 'Select a customer first' : '请先选择客户'); return; }
-    let pass = '';
+    const locked = _memoLockedLeft();
+    if (locked > 0) { toast('密语已锁定，请 ' + locked + ' 秒后再试'); return; }
     try {
         const st = await api('GET', '/api/trade/profile/memo/status');
-        if (!st || !st.configured) {
-            const first = prompt('首次使用：设置私密备忘录密语（至少 4 位）');
+        if (!st) return;
+        _memoUnlockMode = st.unlock_mode === 'session' ? 'session' : 'always';
+        let pass = '';
+        if (!st.configured) {
+            const first = await _memoPromptPassword('首次使用：设置私密备忘录密语（至少 4 位）', true);
             if (!first) return;
-            const again = prompt('再输入一次密语');
-            if (again !== first) { toast('两次输入不一致'); return; }
+            if (first.length < 4) { toast('密语至少 4 位'); return; }
             const saved = await api('POST', '/api/trade/profile/memo/passphrase', {passphrase: first});
             if (!saved) return;
             pass = first;
+        } else if (_memoUnlockMode === 'session' && _memoSessionPass) {
+            pass = _memoSessionPass;
         } else {
-            pass = prompt('输入私密备忘录密语');
+            pass = await _memoPromptPassword('输入私密备忘录密语', false);
             if (!pass) return;
         }
-        const data = await api('POST', '/api/trade/customers/' + cid + '/memo', {passphrase: pass});
-        if (!data) return;
+        let data = await api('POST', '/api/trade/customers/' + cid + '/memo', {passphrase: pass});
+        if (!data && _memoUnlockMode === 'session' && _memoSessionPass) {
+            // 会话缓存的密语已失效：清掉并让用户重输一次
+            _memoSessionPass = '';
+            pass = await _memoPromptPassword('密语已失效，请重新输入', false);
+            if (!pass) return;
+            data = await api('POST', '/api/trade/customers/' + cid + '/memo', {passphrase: pass});
+        }
+        if (!data) {
+            _memoNoteFailure();
+            return;
+        }
+        _memoFailCount = 0;
+        if (_memoUnlockMode === 'session') _memoSessionPass = pass;
         document.querySelectorAll('#memo-modal').forEach(function (el) { el.remove(); });
         const ov = document.createElement('div');
         ov.id = 'memo-modal';
@@ -3024,11 +3118,24 @@ async function openCustomerMemo() {
         ov.className = 'memo-modal';
         ov.innerHTML = '<div class="memo-box">' +
             '<div class="memo-head"><strong>私密备忘录</strong>' +
+            '<select id="memo-mode" title="密语策略" style="margin:0 8px;padding:4px;">' +
+            '<option value="always">每次输入密语</option>' +
+            '<option value="session">本会话内有效</option></select>' +
             '<button type="button" class="btn" id="memo-close">关闭</button></div>' +
             '<h4>家庭 / 私密档案</h4><ul>' + (facts || '<li>无</li>') + '</ul>' +
             '<h4>客户索要</h4><ul>' + (gifts || '<li>无</li>') + '</ul>' +
             '<p class="muted">仅本机查看；不会进入 AI、打印、长图或导出。</p></div>';
         document.body.appendChild(ov);
+        const modeSel = $('memo-mode');
+        modeSel.value = _memoUnlockMode;
+        modeSel.onchange = async function () {
+            const mode = modeSel.value === 'session' ? 'session' : 'always';
+            const saved = await api('POST', '/api/trade/profile/memo/prefs', {unlock_mode: mode});
+            if (!saved) { modeSel.value = _memoUnlockMode; return; }
+            _memoUnlockMode = mode;
+            if (mode === 'always') _memoSessionPass = '';
+            toast('密语策略已更新');
+        };
         $('memo-close').onclick = function () { ov.remove(); };
     } catch (e) {
         toast('读取私密备忘录失败');
@@ -3037,6 +3144,7 @@ async function openCustomerMemo() {
 
 function printVisitPlan() {
     /** s6：A4 打印预览（公开页 / 内部页可选），再调用系统打印。 */
+    _ensurePrivacyTerms(); // W13：拿到与后端同一份词表（失败用内置兜底）
     const p = _collectVisitPlan();
     const pay = p.payload || {};
     const meta = [p.visit_date, (p.days || 1) + ' 天', p.location].filter(Boolean).join(' · ');
@@ -3104,6 +3212,7 @@ function _vWrap(ctx, text, maxW) {
 
 function _vBuildLongImage(plan, includeInternal) {
     /** 手机长图：默认只画公开内容（来访人/日程/对外说明），勾选后才含内部四段。 */
+    _ensurePrivacyTerms(); // W13：拿到与后端同一份词表（失败用内置兜底）
     const W = 1080, PAD = 72, LH = 44;
     const pay = plan.payload || {};
     // 长图同样按内容过滤家庭称谓（分类不可靠，P1-F）

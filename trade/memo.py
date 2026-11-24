@@ -18,6 +18,10 @@ PBKDF2_ITERATIONS = 200_000
 _MIN_PASSPHRASE = 4
 _MAX_PASSPHRASE = 128
 
+# 密语策略（W13）：每次输入（默认）或本会话内有效
+UNLOCK_MODES = frozenset({"always", "session"})
+DEFAULT_UNLOCK_MODE = "always"
+
 
 class MemoError(ValueError):
     """密语缺失/过短/不正确。"""
@@ -50,6 +54,27 @@ def is_configured() -> bool:
     return bool(data.get("salt") and data.get("hash"))
 
 
+def unlock_mode() -> str:
+    """当前密语策略：always（每次输入，默认）/ session（本会话内有效）。"""
+    mode = str(_load_config().get("unlock_mode") or DEFAULT_UNLOCK_MODE)
+    return mode if mode in UNLOCK_MODES else DEFAULT_UNLOCK_MODE
+
+
+def set_unlock_mode(mode: str) -> str:
+    """更新策略（写 memo.json，保留已有密语盐/哈希）。"""
+    value = str(mode or "").strip().lower()
+    if value not in UNLOCK_MODES:
+        raise MemoError("策略只能是 always 或 session")
+    data = _load_config()
+    data["unlock_mode"] = value
+    path = memo_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    if os.name != "nt":
+        path.chmod(0o600)
+    return value
+
+
 def _hash(passphrase: str, salt_hex: str, iterations: int) -> str:
     digest = hashlib.pbkdf2_hmac(
         "sha256", passphrase.encode("utf-8"), bytes.fromhex(salt_hex), iterations,
@@ -71,6 +96,8 @@ def configure(passphrase: str) -> None:
         "salt": salt,
         "hash": _hash(value, salt, PBKDF2_ITERATIONS),
         "iterations": PBKDF2_ITERATIONS,
+        # 保留用户已选的策略（配置密语不应重置为默认）
+        "unlock_mode": unlock_mode(),
     }
     path = memo_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)

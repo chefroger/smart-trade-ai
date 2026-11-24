@@ -907,3 +907,49 @@ class TestSensitiveCategories:
         upd = p.update_fact(fact["id"], customer_id=customer_id, company_id=company_id,
                             updates={"category": "喜好"})
         assert upd["ai_visible"] == 1
+
+
+class TestPrivacyHintsAndTerms:
+    """W13：facts 写入提示 + 前端词表 + 密语策略端点。"""
+
+    def test_family_content_in_non_family_category_gets_hint(
+        self, api_client, customer_id,
+    ):
+        client, token, cid = api_client
+        r = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "subject": "太太", "content": "喜欢红茶"},
+        )
+        assert r.status_code == 200, r.text
+        assert "家庭" in (r.json().get("hint") or "")
+
+        normal = client.post(
+            f"/api/trade/customers/{customer_id}/facts",
+            headers=_h(token, cid),
+            json={"category": "喜好", "subject": "咖啡", "content": "喜欢手冲"},
+        )
+        assert normal.status_code == 200
+        assert "hint" not in normal.json()
+
+    def test_privacy_terms_endpoint(self, api_client):
+        client, token, cid = api_client
+        r = client.get("/api/trade/profile/privacy-terms", headers=_h(token, cid))
+        assert r.status_code == 200
+        data = r.json()
+        assert "太太" in data["cjk"] and "esposa" in data["latin"]
+
+    def test_memo_prefs_roundtrip(self, api_client):
+        client, token, cid = api_client
+        r = client.post(
+            "/api/trade/profile/memo/prefs", headers=_h(token, cid),
+            json={"unlock_mode": "session"},
+        )
+        assert r.status_code == 200 and r.json()["unlock_mode"] == "session"
+        st = client.get("/api/trade/profile/memo/status", headers=_h(token, cid))
+        assert st.json()["unlock_mode"] == "session"
+        bad = client.post(
+            "/api/trade/profile/memo/prefs", headers=_h(token, cid),
+            json={"unlock_mode": "forever"},
+        )
+        assert bad.status_code == 400

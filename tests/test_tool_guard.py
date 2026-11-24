@@ -587,3 +587,45 @@ class TestMainDbNarrowRule:
             "read_file", {"path": "C:\\TradeHome\\data\\customers.json"},
         )
         assert blocked and blocked["action"] == "block"
+
+    def test_default_data_dir_blocked_without_trade_home(self, monkeypatch):
+        """W13：不依赖 TRADE_HOME，四种拆分写法都要拦住。"""
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.delenv("TRADE_HOME", raising=False)
+        probes = [
+            # glob
+            {"command": "python -c \"import glob; print(glob.glob('~/.trade/data/*.db'))\""},
+            # split
+            {"command": "python -c \"p='~/.trade/data/trade' + '.db'; open(p)\""},
+            # find
+            {"command": "find ~/.trade/data -name '*.db'"},
+            # python pathlib
+            {"command": "python -c \"from pathlib import Path; "
+                        "print(Path.home()/'.trade'/'data'/'trade.db')\""},
+        ]
+        for args in probes:
+            assert g._mentions_main_db(args) is True, args
+            blocked = g.check_tool_call("terminal", args)
+            assert blocked and blocked["action"] == "block", args
+
+    def test_windows_localappdata_default_dir_blocked(self, monkeypatch):
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.delenv("TRADE_HOME", raising=False)
+        blocked = g.check_tool_call(
+            "terminal",
+            {"command": "python -c \"p='%LOCALAPPDATA%\\\\trade\\\\data\\\\customers.json'\""},
+        )
+        assert blocked and blocked["action"] == "block"
+
+    def test_desktop_db_still_allowed_without_trade_home(self, monkeypatch):
+        monkeypatch.setenv("TRADE_HOST", "1")
+        monkeypatch.delenv("TRADE_TOOL_GUARD", raising=False)
+        monkeypatch.delenv("TRADE_HOME", raising=False)
+        assert g.check_tool_call(
+            "read_file", {"path": "/Users/someone/Desktop/report.db"},
+        ) is None
+        assert g.check_tool_call(
+            "terminal", {"command": "sqlite3 /Users/someone/Desktop/report.db '.tables'"},
+        ) is None

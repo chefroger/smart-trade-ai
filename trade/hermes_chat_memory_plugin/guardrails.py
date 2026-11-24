@@ -321,9 +321,12 @@ def _check_terminal(args: dict) -> dict | None:
 
 
 def _mentions_main_db(args: dict | None) -> bool:
-    """工具参数里是否出现 Trade 主库路径（trade.db / TRADE_HOME/data）。
+    """工具参数里是否出现 Trade 主库路径（W13 窄规则）。
 
     P1-F 窄规则：只挡主库，不挡用户的桌面文件；不改 10-29「守卫默认关闭」。
+    **不依赖 TRADE_HOME**：真实部署里该变量可能未设置，改为直接识别默认数据
+    目录（`~/.trade/data`、`%LOCALAPPDATA%\\trade\\data`，大小写/斜杠兼容），
+    并覆盖 `*.db` 通配与 `sqlite3` + trade 目录的组合写法。
     """
     # JSON 在 Windows 上把 \ 转义成 \\：先折叠任意斜杠串，再统一小写比较
     text = re.sub(r"[/\\]+", "/", json.dumps(
@@ -331,6 +334,10 @@ def _mentions_main_db(args: dict | None) -> bool:
     )).casefold()
     if "trade.db" in text:
         return True
+    # 默认数据目录（POSIX / Windows）：glob / split / find 都绕不开这个前缀
+    for marker in ("/.trade/data", "/appdata/local/trade/data", "%localappdata%/trade/data"):
+        if marker in text:
+            return True
     base = os.environ.get("TRADE_HOME", "").strip()
     if base:
         # 与 args 同样规范化：Windows 的 TRADE_HOME 是反斜杠
@@ -338,6 +345,11 @@ def _mentions_main_db(args: dict | None) -> bool:
         data_dir = (normalized_base + "/data").casefold()
         if data_dir and data_dir in text:
             return True
+    # sqlite3 + trade 目录 + .db（含 *.db 通配）：堵拆开写的组合
+    if ".db" in text and "sqlite" in text and (
+        ".trade" in text or "appdata/local/trade" in text
+    ):
+        return True
     return False
 
 

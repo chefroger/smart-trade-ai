@@ -69,6 +69,33 @@ class TestPassphrase:
         assert memo.verify("anything") is False
 
 
+class TestUnlockMode:
+    """W13：密语策略（每次输入 / 本会话内有效），默认每次输入。"""
+
+    def test_default_is_always(self, env, monkeypatch, tmp_path):
+        from trade import memo
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        assert memo.unlock_mode() == "always"
+
+    def test_set_session_persists_and_survives_reconfigure(self, env, monkeypatch, tmp_path):
+        from trade import memo
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        assert memo.set_unlock_mode("session") == "session"
+        assert memo.unlock_mode() == "session"
+        memo.configure("open sesame")
+        assert memo.unlock_mode() == "session", "配置密语不能重置策略"
+        assert memo.verify("open sesame") is True
+
+    def test_rejects_unknown_mode(self, env, monkeypatch, tmp_path):
+        from trade import memo
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        with pytest.raises(memo.MemoError):
+            memo.set_unlock_mode("forever")
+
+
 class TestMemoItems:
     def _add_fact(self, company_id, customer_id, category, subject, content):
         from trade import profile
