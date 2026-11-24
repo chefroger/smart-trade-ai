@@ -34,7 +34,7 @@ triggers:
   - import history
   - import shipments
   - bill of lading
-  - importer
+  - importer of record
   - who imports
   - importyeti
 category: 数据分析

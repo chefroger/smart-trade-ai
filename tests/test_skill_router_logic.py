@@ -654,3 +654,62 @@ def test_w6_optional_customer_intel_phrasings(query):
     result = match_skill(query)
     assert result is not None, f"{query!r} 没有匹配任何技能"
     assert result["name"] == "b2b-customer-intel", f"{query!r} 被判给了 {result['name']}"
+
+
+# ── S7：路由新误判（2026-11-24）────────────────────────────────────────────
+
+
+def test_s7_credit_risk_with_sanctions_goes_to_osint():
+    """「credit risk」不再是裸触发词；带 sanctions 的问法归背调。"""
+    from trade.skill_router import match_skills
+
+    results = match_skills("does this buyer have credit risk, check sanctions too")
+    assert results, "应至少命中 b2b-osint"
+    assert results[0]["skill_name"] == "b2b-osint"
+
+
+@pytest.mark.parametrize("query", [
+    "sanctions",
+    "is this company sanctioned",
+    "check sanctions for Acme",
+    "sanction check on Rosneft",
+    "帮我查一下这家公司的制裁情况",
+])
+def test_s7_sanctions_triggers_route_to_osint(query):
+    from trade.skill_router import match_skill
+
+    result = match_skill(query)
+    assert result is not None, f"{query!r} 没有匹配任何技能"
+    assert result["name"] == "b2b-osint", f"{query!r} 被判给了 {result['name']}"
+
+
+def test_s7_nationality_plural_is_not_a_person_name():
+    """German importers / Chinese suppliers 不是人名，不能兜底成背调。"""
+    from trade.skill_router import extract_osint_name, match_skill
+
+    for query in (
+        "what is the ranking of German importers",
+        "list Chinese suppliers of led lights",
+    ):
+        assert extract_osint_name(query) is None, query
+        result = match_skill(query)
+        assert result is None or result["name"] != "b2b-osint", query
+
+
+def test_s7_importer_of_record_goes_to_customs_data():
+    """裸 importer 收窄为 importer of record，海关数据仍排第一。"""
+    from trade.skill_router import match_skills
+
+    results = match_skills("who is the importer of record")
+    assert results
+    assert results[0]["skill_name"] == "b2b-customs-data"
+
+
+def test_s7_generic_single_words_are_not_router_triggers():
+    """audit / setup / deploy / ranking / tracking / claim / importer / credit risk
+    这些泛词不再单独触发对应技能。"""
+    from trade.skill_router import match_skill
+
+    for query in ("audit", "setup", "deploy", "tracking", "claim", "importer", "credit risk"):
+        result = match_skill(query)
+        assert result is None, f"{query!r} 不该再触发 {result and result['name']}"

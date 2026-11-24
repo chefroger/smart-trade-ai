@@ -18,8 +18,6 @@ triggers:
   # ... (see skill_registry.py for full list)
   # English（2026-11-24 W6：与注册表同步补全）
   - new company
-  - deploy
-  - setup
   - marketing plan
   - product introduction
   - marketing positioning

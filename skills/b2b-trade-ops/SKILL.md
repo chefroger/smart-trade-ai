@@ -41,12 +41,9 @@ triggers:
   - 货到哪里了
   - 交期确认
   # English（2026-11-24 W6：与注册表同步补全）
-  - audit
-  - tracking
   - payment reminder
   - overdue
   - chase payment
-  - claim
   - complaint
   - refund
   - compensation

@@ -41,7 +41,6 @@ triggers:
   - is this buyer legit
   - customer credit risk
   - customer's credit risk
-  - credit risk
   - purchasing habits
   - procurement habits
   - buying habits

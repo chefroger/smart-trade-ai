@@ -437,6 +437,27 @@ _NAME_STOPWORDS = frozenset({
 
 _NAME_FALLBACK_SCORE = 6  # 高于常见裸关键词（3 分），低于显式调用（9999）
 
+# S7：国家/民族形容词 + 复数名词不是人名（German importers / Chinese suppliers），
+# 否则「what is the ranking of German importers」会被兜底成 b2b-osint 个人背调。
+_NATIONALITY_ADJ = frozenset({
+    "german", "chinese", "american", "british", "french", "japanese",
+    "korean", "indian", "italian", "spanish", "russian", "brazilian",
+    "vietnamese", "turkish", "dutch", "polish", "mexican", "canadian",
+    "australian", "european", "african", "asian", "thai", "indonesian",
+    "malaysian", "singaporean", "filipino", "arab", "saudi",
+})
+_PLURAL_NOUN_TAIL_RE = re.compile(r"^\s+[A-Za-z]+(?:s|es)(?![A-Za-z])")
+
+
+def _nationality_with_plural(query: str, token: str) -> bool:
+    """token 是国家形容词且紧跟着复数名词（German importers）→ 不是名字。"""
+    if token.casefold() not in _NATIONALITY_ADJ:
+        return False
+    idx = query.find(token)
+    if idx < 0:
+        return False
+    return bool(_PLURAL_NOUN_TAIL_RE.match(query[idx + len(token):]))
+
 # 「X 的资料/背景」是查 X；「X 的苹果」是查苹果（W6）
 _INQUIRY_NOUNS = (
     "资料", "背景", "信息", "情况", "简历", "介绍", "官网", "联系方式",
@@ -481,6 +502,9 @@ def extract_osint_name(query: str) -> str | None:
             if token.casefold() in _NAME_STOPWORDS:
                 continue
             if token.isupper() and len(token) <= 4:
+                continue
+            # S7：German importers / Chinese suppliers 是品类描述，不是人名
+            if _nationality_with_plural(query, token):
                 continue
             return token
     return None
