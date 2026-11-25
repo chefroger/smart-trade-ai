@@ -150,7 +150,13 @@ def _extract_latin_proper(text: str, stopwords: frozenset[str]) -> str | None:
 
 
 def _extract_cjk_candidate(text: str) -> str | None:
-    """剥掉查询动词与疑问/泛用词后，剩下的中文串（2-20 字）才是目标。"""
+    """剥掉查询动词与疑问/泛用词后，剩下的中文串（2-20 字）才是目标。
+
+    O-新29（已知局限，2026-11-25 记）：多目标句子（「华为和中兴有没有被
+    制裁」）不按「和/与/及」拆分 —— 「和」是合法公司名用字（和记黄埔、
+    仁和药业），硬拆会误伤真实名称。当前把整串当一个目标；无命中时只写
+    「未执行（中文名）」，不会产生假绿字。多目标逐个比对单独立项。
+    """
     stripped = _LEAD_VERB_RE.sub("", text)
     stripped = _CJK_STRIP_RE.sub("", stripped)
     match = re.search(r"[\u4e00-\u9fff]{2,20}", stripped)
