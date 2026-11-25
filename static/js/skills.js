@@ -60,9 +60,12 @@ function showUpgradeHelp() {
 }
 
 function copySkillTrigger(name, trigger) {
-    /** O-17：技能帮助行点击复制（替代内联 onclick）。 */
-    navigator.clipboard.writeText(name || '');
-    toast(t('skills.copied') + (trigger || ''));
+    /** O-17：技能帮助行点击复制（替代内联 onclick）。
+     * P2-新2：复制的是触发词（data-arg2），不是技能名（data-arg）；
+     * 剪贴板内容与 toast 必须一致，缺触发词时才退回技能名。 */
+    var value = trigger || name || '';
+    navigator.clipboard.writeText(value);
+    toast(t('skills.copied') + value);
 }
 
 function showSkillsHelp() {
