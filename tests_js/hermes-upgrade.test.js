@@ -61,6 +61,8 @@ test('每个状态都有文案（缺一个就会出现空白面板）', () => {
         // rebuild_needed 不是"升级 Hermes"的进度态，而是「Trade 自己需要重建」——
         // 2026-10-15 客户机实测时这一档根本不存在，界面只能显示别的态把人引错方向
         'rebuild_needed',
+        // S11/R12：没装 Hermes 是「安装」，不是「升级」，必须有独立文案
+        'install_needed',
     ]) {
         const text = api.HERMES_UPGRADE_TEXT[status];
         assert.ok(text, `状态 ${status} 缺文案`);
@@ -355,4 +357,26 @@ test('折叠的原始日志框也写脱敏后的文本', () => {
     const box = nodes['hermes-upgrade-log'];
     assert.ok(box.textContent.includes('[token]'));
     assert.ok(!box.textContent.includes(key), '原始日志框里仍能看到密钥原文');
+});
+
+// S11/R12：本机没装 Hermes —— 面板必须显示「未安装」与安装步骤，且不能开进度流
+test('install_hermes 场景显示安装引导，不启动进度流', () => {
+    const { api, nodes, calls } = loadPanel();
+
+    api.showHermesUpgradePanel({
+        fix: 'install_hermes',
+        reason: '未找到 Hermes（已检查 HERMES_HOME 与 ~/.hermes/hermes-agent）',
+        steps: [
+            { title: '安装 Hermes（AI 引擎）', detail: '', command: 'curl -fsSL .../install.sh | bash' },
+            { title: '配置模型', detail: '', command: 'hermes setup' },
+            { title: '重新打开 Trade', detail: '', command: 'trade' },
+        ],
+        upgrade: { status: 'idle', running: false },
+    });
+
+    assert.strictEqual(nodes['hermes-upgrade-title'].textContent, '未安装 Hermes（AI 引擎）');
+    // 安装场景后端没有升级任务：开流会被首个 idle 事件盖掉文案
+    assert.deepStrictEqual(calls, [], `安装场景不该开进度流，却请求了 ${calls}`);
+    // 安装步骤必须渲染出来（照着做就能恢复）
+    assert.strictEqual(nodes['hermes-upgrade-steps'].children.length, 3);
 });

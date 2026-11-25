@@ -188,13 +188,16 @@ def hermes_compat_state() -> dict:
 def hermes_is_usable() -> bool:
     """Hermes 当前是否可用于 agent 功能。
 
-    两种明确不可用：
+    三种明确不可用：
+      - `not_installed`  —— 本机没装 Hermes（去安装；S11/R12 的安装引导）
       - `too_old`        —— Hermes 版本低于共存下限（去升级 Hermes）
       - `python_too_old` —— Hermes 够新但它需要 3.14，而 Trade 的解释器更老
                             （去重装 Trade；升级 Hermes 在这里毫无用处）
     「未知」按可用处理（识别失败不等于不兼容，与既有门禁口径一致，避免误拦可用环境）。
     """
-    return hermes_compat_state().get("verdict") not in ("too_old", "python_too_old")
+    return hermes_compat_state().get("verdict") not in (
+        "not_installed", "too_old", "python_too_old",
+    )
 
 
 def check_hermes_version() -> bool:
@@ -228,6 +231,16 @@ def check_hermes_version() -> bool:
         print(f"  ✗ Trade 的运行环境需要重建：{state.get('reason')}")
         print(f"    Hermes: {state.get('version') or '未知'}    Trade 的 Python: {state.get('python')}")
         for line in incompatible_rebuild_steps():
+            print(f"    {line}")
+        return False
+
+    if verdict == "not_installed":
+        # S11/R12：桌面端用户看不到终端，界面会由 /system/hermes-compat 拉出安装面板；
+        # 这里仍打印一份，方便在终端直接操作。
+        from trade.hermes_compat import incompatible_install_steps
+
+        print(f"  ✗ 未检测到 Hermes（AI 引擎）：{state.get('reason')}")
+        for line in incompatible_install_steps():
             print(f"    {line}")
         return False
 
@@ -1289,6 +1302,8 @@ def setup():
         _fix = hermes_compat_state().get("fix")
         if _fix == "rebuild_trade_venv":
             print("  ⚠️ Trade 的运行环境过旧，本次以降级模式启动：界面会给出重建步骤。")
+        elif _fix == "install_hermes":
+            print("  ⚠️ 未检测到 Hermes，本次以降级模式启动：界面会给出安装步骤。")
         else:
             print("  ⚠️ Hermes 不可用，本次以降级模式启动：界面会引导你升级 Hermes。")
         # 剩下这几步本意是「不碰 Hermes、照常跑以保持功能完整」，但它们**间接**仍会

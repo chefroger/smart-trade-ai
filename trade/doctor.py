@@ -105,6 +105,15 @@ def check_hermes_runtime(*, agent_factory=None) -> list[CheckResult]:
                 fatal=True,
             ))
             return out
+        if verdict == "not_installed":
+            # S11/R12：没装 Hermes 时给出可照做的安装指引（不能只说「未加载」）
+            out.append(CheckResult(
+                "Hermes 版本", STATUS_FAIL,
+                f"未检测到 Hermes（{state.get('reason')}）；"
+                "请先运行官方安装器安装 Hermes（见 README 第五步），再运行 hermes setup",
+                fatal=True,
+            ))
+            return out
         if verdict == "unknown":
             out.append(CheckResult(
                 "Hermes 版本", STATUS_WARN,

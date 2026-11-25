@@ -1464,6 +1464,9 @@ const HERMES_UPGRADE_TEXT = {
     // 用独立文案，否则会显示「正在准备升级 Hermes」把用户引到一条没结果的路上去
     // （2026-10-15 客户机实测：那一版就是这么卡住的）。
     rebuild_needed:   {icon:'🧰', title:'Trade 需要重建运行环境', message:'你的 Hermes 已经是新版，但 Trade 的运行环境还是旧的。点下面的按钮重建一次即可，数据不会丢。'},
+    // S11/R12：本机根本没装 Hermes。独立文案 + 安装步骤（后端 fix=install_hermes），
+    // 不能落回「准备升级 Hermes」——那是升级，不是安装。
+    install_needed:   {icon:'⬇️', title:'未安装 Hermes（AI 引擎）', message:'Trade 需要 Hermes 才能聊天。按下面的步骤安装并配置模型，然后重新打开 Trade。'},
     // 重建进行中：服务已经被停掉（否则换不了 venv），所以这一段界面是「最后一屏」——
     // 用户接下来看到的是轮询等待，不是进度条。文案必须说清「会自己回来」，否则他会以为卡死。
     rebuilding:       {icon:'🧰', title:'正在重建运行环境', message:'正在重装 Trade 的运行环境（约 5~10 分钟），期间 Trade 会暂时打不开。完成后页面会自动刷新，请不要关闭。'},
@@ -1565,6 +1568,10 @@ function showHermesUpgradePanel(compat) {
     // 我们要消灭的那种误导（2026-10-15 用户截图实证）。重建没有进度可看，也不需要流。
     if (compat.fix === 'rebuild_trade_venv' && !upgrade.running) {
         applyHermesUpgradeState({status:'rebuild_needed', message: compat.reason});
+    } else if (compat.fix === 'install_hermes') {
+        // S11/R12：没有 Hermes 时后端不会有升级任务，状态恒为 idle —— 同样不能启动
+        // 进度流，否则首个 idle 事件会把「未安装」标题盖回「准备升级 Hermes」。
+        applyHermesUpgradeState({status:'install_needed', message: compat.reason});
     } else {
         applyHermesUpgradeState(upgrade);
         _mountHermesWait();
