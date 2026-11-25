@@ -958,3 +958,54 @@ class TestTimezoneAndReadFailures:
         )
         state, message = license_mod.ensure_license_state(1)
         assert state == "tampered" and message
+
+
+class TestCorruptLicenseFileDefense:
+    """O-新24：非 UTF-8 的 license.json 不能从剩余 5 处调用点把接口打成 500。"""
+
+    @staticmethod
+    def _write_corrupt(tmp_path):
+        # 不合法 UTF-8 → _get_license_data 内部只兜底 JSONDecodeError/OSError，
+        # 会抛 UnicodeDecodeError（ValueError 子类）
+        (tmp_path / "license.json").write_bytes(b"\xff\xfe\x00broken")
+
+    def test_machine_id_survives_corrupt_file(self, tmp_path):
+        self._write_corrupt(tmp_path)
+        from trade.license import _machine_id
+
+        assert _machine_id()
+
+    def test_activate_attempts_helpers_survive_corrupt_file(self, tmp_path):
+        self._write_corrupt(tmp_path)
+        from trade.license import _get_activate_attempts, _save_activate_attempts
+
+        assert _get_activate_attempts() == []
+        _save_activate_attempts([1.0])  # 不抛
+        # 读失败时跳过写入，损坏文件保持原样（不会被「只有 attempts」覆盖）
+        assert (tmp_path / "license.json").read_bytes() == b"\xff\xfe\x00broken"
+
+    def test_days_remaining_survives_corrupt_file(self, tmp_path):
+        self._write_corrupt(tmp_path)
+        from trade.license import days_remaining
+
+        assert days_remaining() == 0
+
+    def test_activate_survives_corrupt_file(self, tmp_path, monkeypatch):
+        self._write_corrupt(tmp_path)
+        import hashlib
+
+        from trade import license as license_mod
+
+        # 固定机器码，避免 _machine_id() 在进入第 871 行前顺手修好损坏文件
+        monkeypatch.setattr(license_mod, "_machine_id", lambda: "hw:test")
+        mh = hashlib.sha256(b"hw:test").hexdigest().upper()
+        monkeypatch.setattr(license_mod, "_check_activate_rate_limit", lambda: True)
+        monkeypatch.setattr(
+            license_mod, "_decode_activation_code",
+            lambda code: {"machine_hash": mh, "expires_at": "2999-01-01",
+                          "signature": b"\x00"},
+        )
+
+        ok, msg = license_mod.activate("TRADE-VALIDFORMAT")
+        assert ok is False
+        assert "读取" in msg

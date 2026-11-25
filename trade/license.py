@@ -202,7 +202,13 @@ def _machine_id() -> str:
     import platform as _plat
 
     hardware = _read_hardware_machine_id()
-    data = _get_license_data()
+    try:
+        data = _get_license_data()
+    except Exception:
+        # O-新24：非 UTF-8 的 license.json 会抛 UnicodeDecodeError（ValueError），
+        # 不能把启动/激活链路打成 500；按空数据继续（硬件路径仍可用）。
+        _log.exception("读取许可证数据失败")
+        data = {}
     cached = _binding_id(data)
 
     if hardware:
@@ -232,14 +238,24 @@ _MAX_ACTIVATE_ATTEMPTS = 10  # 每 60 秒最多 10 次激活尝试
 
 
 def _get_activate_attempts(company_id: int | None = None) -> list[float]:
-    """从 license_data 读取激活尝试时间戳列表。"""
-    data = _get_license_data(company_id)
+    """从 license_data 读取激活尝试时间戳列表（读取异常按空列表）。"""
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # O-新24：损坏的 license.json 不能阻断激活流程
+        _log.exception("读取许可证数据失败")
+        return []
     return data.get("_activate_attempts", [])
 
 
 def _save_activate_attempts(attempts: list[float], company_id: int | None = None) -> None:
-    """将激活尝试时间戳持久化到 license_data。"""
-    data = _get_license_data(company_id)
+    """将激活尝试时间戳持久化到 license_data（读取失败则跳过写入）。"""
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # O-新24：读不到现有数据时不要用「只有 attempts」覆盖整份文件
+        _log.exception("读取许可证数据失败")
+        return
     data["_activate_attempts"] = attempts
     _save_license_data(data, company_id)
 
@@ -599,7 +615,12 @@ def is_read_only(company_id: int | None = None) -> bool:
 
 def days_remaining(company_id: int | None = None) -> int:
     """返回剩余可用天数（到期日当天仍有效，返回 0 而非 -1）。"""
-    data = _get_license_data(company_id)
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # O-新24：读取异常按「无剩余天数」处理（fail-closed），不 500
+        _log.exception("读取许可证数据失败")
+        return 0
     now = datetime.now(UTC)
 
     if (data.get("activated") and data.get("expires_at")
@@ -868,7 +889,12 @@ def activate(code: str, company_id: int | None = None) -> tuple[bool, str]:
 
     # 写入激活信息（含 Ed25519 签名用于运行时防篡改验签）
     # 签名直接从激活码中提取，无需作者私钥（用户端无私钥）
-    data = _get_license_data(company_id)
+    try:
+        data = _get_license_data(company_id)
+    except Exception:
+        # O-新24：读取异常时不能把激活接口打成 500，也不能覆盖用户数据
+        _log.exception("读取许可证数据失败")
+        return False, "许可证数据读取异常，请检查 license.json 后重试。"
     data["activated"] = True
     data["code"] = code
     data["expires_at"] = expires_at
