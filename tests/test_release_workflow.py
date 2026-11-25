@@ -62,17 +62,55 @@ class TestPostBuildArchCheck:
         assert "head -n1" not in RELEASE
 
 
-class TestManualDispatchCreatesDraftRelease:
-    """W8：手动触发也要产出 Release（draft），不能只有 tag 触发才挂产物。"""
+class TestManualDispatchPublishesFormalRelease:
+    """W8（2026-11-25）：手动触发直接产出正式 Release，发布作业串行且只 Attach 一次。"""
 
-    def test_attach_runs_for_manual_dispatch(self):
-        assert "github.event_name == 'workflow_dispatch'" in RELEASE
-        # tag 触发的原条件仍须保留
-        assert "startsWith(github.ref, 'refs/tags/v')" in RELEASE
+    @staticmethod
+    def _workflow() -> dict:
+        import yaml
 
-    def test_manual_release_is_draft_and_has_tag(self):
-        assert "draft: ${{ github.event_name == 'workflow_dispatch' }}" in RELEASE
-        assert "tag_name: ${{ steps.version.outputs.tag }}" in RELEASE
+        return yaml.safe_load(RELEASE)
+
+    def test_only_manual_dispatch_trigger(self):
+        """不恢复 tag 触发：任何标签推送都不能绕过人工确认自动发布。"""
+        wf = self._workflow()
+        # PyYAML 会把裸 on 解析成 True，两种键名都接受
+        triggers = wf.get("on", wf.get(True))
+        assert triggers == "workflow_dispatch" or set(triggers or {}) == {"workflow_dispatch"}
+        assert "push:" not in RELEASE and "refs/tags" not in RELEASE
+
+    def test_publish_job_runs_after_build(self):
+        wf = self._workflow()
+        assert wf["jobs"]["publish"]["needs"] == "build"
+
+    def test_only_one_release_attach(self):
+        """矩阵分支不再各自 Attach（消灭同标签重复建 Release 的竞态）。"""
+        assert RELEASE.count("softprops/action-gh-release@v2") == 1
+        attach = [
+            step for step in self._workflow()["jobs"]["publish"]["steps"]
+            if step.get("uses", "").startswith("softprops/action-gh-release")
+        ]
+        assert len(attach) == 1
+
+    def test_release_is_formal_not_draft(self):
+        wf = self._workflow()
+        attach = [
+            step for step in wf["jobs"]["publish"]["steps"]
+            if step.get("uses", "").startswith("softprops/action-gh-release")
+        ][0]
+        assert attach["with"]["draft"] is False
+        assert "draft: ${{ github.event_name == 'workflow_dispatch' }}" not in RELEASE
+
+    def test_publish_collects_all_artifacts(self):
+        wf = self._workflow()
+        uses = [s.get("uses", "") for s in wf["jobs"]["publish"]["steps"]]
+        assert "actions/download-artifact@v5" in uses
+        dl = next(
+            s for s in wf["jobs"]["publish"]["steps"]
+            if s.get("uses", "").startswith("actions/download-artifact")
+        )
+        assert dl["with"]["merge-multiple"] is True
+        assert "files: dist/*.zip" in RELEASE
 
     def test_version_step_emits_release_tag(self):
         # 手动触发时 ref_name 是分支名，Release 必须用 v<版本号>
