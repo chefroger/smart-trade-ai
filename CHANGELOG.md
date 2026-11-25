@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v0.9.56 — 2026-11-25
+
+- 20261124 审计剩余项：S1–S10、P2-新1/2、O-新15～24
+- `77142a4` test(memo): 修复重启用例在全量套件下的顺序依赖（S8 补）
+- `95ff1aa` fix(ui): 技能行复制触发词而不是技能名（P2-新2）
+- `0711108` fix(license): 剩余 5 处 _get_license_data 调用补 try（O-新24）
+- `39d6986` fix(ui): 备忘录前端锁只统计 403（O-新22）
+- `630879b` docs(app): 修正过期的 CSP 注释（O-新18）
+- `76101fd` fix(ui): 合成事件的 preventDefault 转发真实事件（O-新17）
+- `c7335f7` test(skills): 恢复 SKILL.md→注册表可路由守卫（O-新16）
+- `3b5f018` test(sanctions): 种子改回生产依赖的真实两行（O-新15）
+- `1283d5c` ci(sanctions): 冒烟覆盖全部六份名单（S10）
+- `657d35d` fix(osint): 只有登记命中时改用「已查到公司登记」措辞（S9）
+- `d7a5bf2` fix(memo): 锁定状态持久化且密语框关闭自动填充（S8）
+- `bb657d9` fix(router): 补制裁触发词并收紧泛词与国籍复数（S7）
+- `94952ca` fix(profile): 收紧「客户索要」判定词表（S6）
+- `8019e06` fix(guard): 备份目录与扫描命令按主库处理（S5）
+- `f5bf73a` fix(privacy): 补全家庭称谓并收敛日常英文词（S4 / O-新21）
+- `d7f46e9` fix(osint): 名单不全时仍报出已确认命中（S3）
+- `1ad9daa` fix(osint): 交付兜底区分中文目标与专名优先（S2）
+- `cc69d94` fix(ui): 模型输出禁用 data-* 且委托层改白名单（S1）
+
 ## v0.9.55 — 2026-11-24
 
 - 修复向导动态 <style> 与 style-src-elem 的冲突（O-17 补漏）
