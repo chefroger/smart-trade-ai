@@ -201,15 +201,16 @@ def test_config_write_is_atomic(env, monkeypatch, tmp_path):
 class TestBackendThrottle:
     """O-新6：后端锁定，刷新前端页面不能绕过。"""
 
-    def test_five_failures_lock_then_expire(self):
+    def test_five_failures_lock_then_expire(self, monkeypatch):
         from trade import memo
 
         memo.reset_throttle()
+        base = memo.time.monotonic()
         for _ in range(memo.MAX_FAILURES):
             memo.register_failure()
         assert memo.lock_remaining() > 0
-        # 模拟时间过去：把锁定截止写回过去，剩余应为 0
-        memo._save_throttle(0, 0.0)
+        # O-新28：运行中的锁走 monotonic —— 墙钟怎么跳都不影响；过 61 秒后解锁
+        monkeypatch.setattr(memo.time, "monotonic", lambda: base + memo.LOCK_SECONDS + 1)
         assert memo.lock_remaining() == 0
         memo.reset_throttle()
 
@@ -224,8 +225,35 @@ class TestBackendThrottle:
         assert memo.lock_remaining() == 0
         memo.reset_throttle()
 
+    def test_wall_clock_jump_does_not_change_lock(self, monkeypatch):
+        """O-新28：锁定期内墙钟前拨/回拨，剩余秒数按 monotonic 走。"""
+        from trade import memo
+
+        memo.reset_throttle()
+        for _ in range(memo.MAX_FAILURES):
+            memo.register_failure()
+        before = memo.lock_remaining()
+
+        real_time = memo.time.time
+        monkeypatch.setattr(memo.time, "time", lambda: real_time() + 3600)
+        assert memo.lock_remaining() == before
+        monkeypatch.setattr(memo.time, "time", lambda: real_time() - 3600)
+        assert memo.lock_remaining() == before
+        memo.reset_throttle()
+
+    def test_lock_is_per_company(self):
+        """O-新28：A 公司锁住不影响 B 公司。"""
+        from trade import memo
+
+        memo.reset_throttle()
+        for _ in range(memo.MAX_FAILURES):
+            memo.register_failure(company_id=1)
+        assert memo.lock_remaining(1) > 0
+        assert memo.lock_remaining(2) == 0
+        memo.reset_throttle()
+
     def test_throttle_survives_restart(self, monkeypatch, tmp_path):
-        """S8：失败计数与锁定截止写进 memo.json，重启不清零。"""
+        """S8/O-新28：状态写进 memo_throttle.json，重启不清零。"""
         import importlib
         import json
 
@@ -237,9 +265,9 @@ class TestBackendThrottle:
             memo.register_failure()
         assert memo.lock_remaining() > 0
 
-        data = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
-        assert data["throttle_until"] > 0
-        assert "throttle_failures" in data
+        data = json.loads(memo.throttle_path().read_text(encoding="utf-8"))
+        assert data["global"]["until"] > 0
+        assert "failures" in data["global"]
 
         # 模拟应用重启：重新加载模块，状态只能来自磁盘。
         # 其他测试可能把 trade.memo 从 sys.modules 里移除过（test_isolation），
@@ -249,4 +277,6 @@ class TestBackendThrottle:
         monkeypatch.setitem(sys.modules, "trade.memo", memo)
         reloaded = importlib.reload(memo)
         assert reloaded.lock_remaining() > 0
+        # 重启水合把剩余夹到 ≤ LOCK_SECONDS（时钟回拨不会锁一年）
+        assert reloaded.lock_remaining() <= reloaded.LOCK_SECONDS
         reloaded.reset_throttle()
