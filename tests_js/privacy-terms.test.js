@@ -53,6 +53,8 @@ test('S4 不应拦的 8 条在前端放行', () => {
         'S. C. Johnson & Son 询盘',
         'family business since 1980',
         '我们的 partner 工厂',
+        'our son company',
+        'our brother company',
         'Son Heung-min 签名球衣',
         '王先生是采购经理',
         '王夫人是采购总监',

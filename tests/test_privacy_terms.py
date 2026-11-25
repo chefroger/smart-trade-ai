@@ -146,6 +146,8 @@ S4_PASS = [
     "S. C. Johnson & Son 询盘",
     "family business since 1980",
     "我们的 partner 工厂",
+    "our son company",          # O-新27：子公司直译
+    "our brother company",      # O-新27：兄弟公司
     "Son Heung-min 签名球衣",
     "王先生是采购经理",
     "王夫人是采购总监",
@@ -187,6 +189,9 @@ def test_context_dependent_english_terms():
         # 「我们的 partner 工厂」是商业合作方，不是家庭成员（S4 验收）
         "我们的 partner 工厂",
         "our partner factory in Shenzhen",
+        # O-新27：son/brother + 业务名词 = 子公司/兄弟公司
+        "our son company",
+        "our brother company",
     ):
         assert contains_family_terms(text) is False, f"误伤：{text}"
 
