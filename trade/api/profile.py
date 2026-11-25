@@ -427,15 +427,15 @@ def memo_configure(body: MemoPassBody, cid: int = Depends(require_company)):
         except memo_mod.MemoError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"configured": True, "created": True}
-    remaining = memo_mod.lock_remaining()
+    remaining = memo_mod.lock_remaining(cid)
     if remaining:
         raise HTTPException(
             status_code=429, detail=f"密语已锁定，请 {remaining} 秒后重试",
         )
     if not memo_mod.verify(body.passphrase):
-        memo_mod.register_failure()
+        memo_mod.register_failure(cid)
         raise HTTPException(status_code=403, detail="密语不正确")
-    memo_mod.register_success()
+    memo_mod.register_success(cid)
     return {"configured": True, "created": False}
 
 
@@ -450,13 +450,14 @@ def customer_memo(
     if not memo_mod.is_configured():
         raise HTTPException(status_code=409, detail="尚未设置密语")
     # O-新6：后端节流，刷新页面不能绕过前端锁定
-    remaining = memo_mod.lock_remaining()
+    # O-新28：按公司分桶 —— A 公司锁住不影响 B 公司
+    remaining = memo_mod.lock_remaining(cid)
     if remaining:
         raise HTTPException(
             status_code=429, detail=f"密语已锁定，请 {remaining} 秒后重试",
         )
     if not memo_mod.verify(body.passphrase):
-        memo_mod.register_failure()
+        memo_mod.register_failure(cid)
         raise HTTPException(status_code=403, detail="密语不正确")
-    memo_mod.register_success()
+    memo_mod.register_success(cid)
     return memo_mod.memo_items(cid, customer_id)

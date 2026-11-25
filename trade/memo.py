@@ -24,66 +24,134 @@ _MAX_PASSPHRASE = 128
 UNLOCK_MODES = frozenset({"always", "session"})
 DEFAULT_UNLOCK_MODE = "always"
 
-# 后端节流（O-新6 / S8）：前端锁定刷新即清零，这里补一层后端保护。
-# S8：失败计数与锁定截止写进 memo.json（原子写），重启应用不能清零。
+# 后端节流（O-新6 / S8 / O-新28）：前端锁定刷新即清零，这里补一层后端保护。
+# S8：状态持久化，重启不清零。
+# O-新28：① 计时用 monotonic 缓存，磁盘只存墙钟截止时间 —— 系统时钟跳变
+# 不拉长/缩短正在进行的 60 秒锁；② 状态按公司分桶，A 公司锁住不影响 B 公司。
 MAX_FAILURES = 5
 LOCK_SECONDS = 60
 _throttle_lock = threading.Lock()
+# (磁盘路径, 公司键) → (失败计数, monotonic 截止时间)；命中后不再读盘，
+# 因此运行中的锁不受墙钟跳变影响。
+_throttle_cache: dict[tuple[str, str], tuple[int, float]] = {}
 
 
-def _throttle_state() -> tuple[int, float]:
-    """从 memo.json 读失败计数与锁定截止（epoch 秒）。"""
-    data = _load_config()
+def throttle_path() -> Path:
+    """节流状态文件（独立于 memo.json，避免改密语策略时覆盖锁定）。"""
+    return _trade_home() / "data" / "memo_throttle.json"
+
+
+def _throttle_key(company_id: int | None) -> str:
+    return str(company_id) if company_id is not None else "global"
+
+
+def _cache_key(company_id: int | None) -> tuple[str, str]:
+    return str(throttle_path()), _throttle_key(company_id)
+
+
+def _load_throttle_file() -> dict:
     try:
-        count = max(0, int(data.get("throttle_failures") or 0))
-    except (TypeError, ValueError):
-        count = 0
-    try:
-        until = float(data.get("throttle_until") or 0)
-    except (TypeError, ValueError):
-        until = 0.0
-    return count, until
+        data = json.loads(throttle_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def _save_throttle(count: int, until: float) -> None:
-    """把节流状态写回 memo.json；写失败不阻断请求（可用性优先）。"""
+def _write_throttle_file(data: dict) -> None:
+    """原子写 memo_throttle.json；写失败不阻断请求（可用性优先）。"""
     try:
-        data = _load_config()
-        data["throttle_failures"] = int(count)
-        data["throttle_until"] = round(float(until), 3)
-        _write_config(data)
+        path = throttle_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, path)
+        if os.name != "nt":
+            path.chmod(0o600)
     except OSError:
         pass
 
 
-def lock_remaining() -> int:
-    """密语锁定剩余秒数（0 = 未锁定）。"""
+def _throttle_state(company_id: int | None = None) -> tuple[int, float]:
+    """返回 (失败计数, monotonic 截止时间)；首次访问从磁盘水合。
+
+    水合时把墙钟剩余夹到 [0, LOCK_SECONDS]：时钟回拨最多锁 60 秒，
+    时钟前拨直接解锁，不会出现「重启后锁一年」。
+    """
+    ckey = _cache_key(company_id)
+    cached = _throttle_cache.get(ckey)
+    if cached is not None:
+        return cached
+    entry = _load_throttle_file().get(_throttle_key(company_id)) or {}
+    try:
+        failures = max(0, int(entry.get("failures") or 0))
+    except (TypeError, ValueError):
+        failures = 0
+    try:
+        until_epoch = float(entry.get("until") or 0)
+    except (TypeError, ValueError):
+        until_epoch = 0.0
+    remaining = max(0.0, min(float(LOCK_SECONDS), until_epoch - time.time()))
+    mono_until = (time.monotonic() + remaining) if remaining > 0 else 0.0
+    state = (failures, mono_until)
+    _throttle_cache[ckey] = state
+    return state
+
+
+def _persist_throttle(
+    failures: int, mono_until: float, company_id: int | None = None,
+) -> None:
+    remaining = max(0.0, mono_until - time.monotonic()) if mono_until else 0.0
+    data = _load_throttle_file()
+    data[_throttle_key(company_id)] = {
+        "failures": int(failures),
+        "until": round(time.time() + remaining, 3) if remaining > 0 else 0.0,
+    }
+    _write_throttle_file(data)
+
+
+def lock_remaining(company_id: int | None = None) -> int:
+    """密语锁定剩余秒数（0 = 未锁定；按公司独立）。"""
     with _throttle_lock:
-        _, until = _throttle_state()
-        return max(0, int(until - time.time()))
+        _, mono_until = _throttle_state(company_id)
+        if not mono_until:
+            return 0
+        return max(0, int(round(mono_until - time.monotonic())))
 
 
-def register_failure() -> None:
+def register_failure(company_id: int | None = None) -> None:
     """记录一次密语失败；连续 MAX_FAILURES 次后锁定 LOCK_SECONDS。"""
     with _throttle_lock:
-        count, until = _throttle_state()
-        count += 1
-        if count >= MAX_FAILURES:
-            until = time.time() + LOCK_SECONDS
-            count = 0
-        _save_throttle(count, until)
+        failures, mono_until = _throttle_state(company_id)
+        failures += 1
+        if failures >= MAX_FAILURES:
+            mono_until = time.monotonic() + LOCK_SECONDS
+            failures = 0
+        _throttle_cache[_cache_key(company_id)] = (failures, mono_until)
+        _persist_throttle(failures, mono_until, company_id)
 
 
-def register_success() -> None:
+def register_success(company_id: int | None = None) -> None:
     """成功校验后清零失败计数（锁定期内不允许调用，由端点先拦截）。"""
     with _throttle_lock:
-        _save_throttle(0, 0.0)
+        _throttle_cache[_cache_key(company_id)] = (0, 0.0)
+        _persist_throttle(0, 0.0, company_id)
 
 
-def reset_throttle() -> None:
-    """测试/维护用：清空锁定状态。"""
+def reset_throttle(company_id: int | None = None) -> None:
+    """测试/维护用：清空锁定状态。
+
+    `company_id=None` 清空**全部公司**（兼容既有测试与维护脚本的调用习惯）；
+    指定公司时只清那一桶。
+    """
     with _throttle_lock:
-        _save_throttle(0, 0.0)
+        path_key = str(throttle_path())
+        if company_id is None:
+            for ckey in [k for k in _throttle_cache if k[0] == path_key]:
+                del _throttle_cache[ckey]
+            _write_throttle_file({})
+            return
+        _throttle_cache[_cache_key(company_id)] = (0, 0.0)
+        _persist_throttle(0, 0.0, company_id)
 
 
 class MemoError(ValueError):
