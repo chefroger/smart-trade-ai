@@ -468,13 +468,46 @@ _WHO_ACTION_RE = re.compile(r"是谁(写|做|发|出|设计|制定|提供|告诉
 # 只靠这些通用指代触发词命中的 osint 结果，可以被上一条规则剔除
 _IDENTITY_TRIGGERS = frozenset({"这个人是谁", "是谁", "谁", "这个人", "那个人"})
 
+# O-新26：英文疑问句句首的助动词不是人名的一部分。
+# 「Is Huawei sanctioned?」会被二词大写规则取成 "Is Huawei"，后续拿它比对名单
+# 只会得到假的「未命中」。这里先把句首助动词剥掉，再走专名提取。
+_LEAD_EN_AUX_RE = re.compile(
+    r"^\s*(?:is|are|was|were|do|does|did|can|could|has|have|had|will|would|should)\b\s*",
+    re.IGNORECASE,
+)
+# 祈使动词（Check / Verify / Investigate / Tell / Look up / Find）只在后面
+# 是「单个大写专名 + 小写词」时才剥 —— 保护 "Check Point Software" 这类公司名。
+_LEAD_EN_VERB_RE = re.compile(
+    r"^\s*(?:check|verify|investigate|tell|look\s+up|find)\b\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_lead_english(query: str) -> str:
+    """剥掉英文句首的助动词/祈使动词（O-新26）。剥完为空返回空串。"""
+    text = _LEAD_EN_AUX_RE.sub("", query, count=1).strip()
+    match = _LEAD_EN_VERB_RE.match(text)
+    if match:
+        rest = text[match.end():]
+        tokens = re.findall(r"[A-Za-z][A-Za-z'’\-]*", rest)
+        if tokens and tokens[0][:1].isupper():
+            # 后面跟的第二个词若是大写，说明可能是公司名（Check Point Software）
+            second_is_capital = len(tokens) > 1 and tokens[1][:1].isupper()
+            if not second_is_capital:
+                text = rest.strip()
+    return text
+
 
 def extract_osint_name(query: str) -> str | None:
     """从自然语言里取一个像人名/公司名的片段（取不到返回 None）。
 
     顺序：中文「张三是谁/这个人/的资料」→ 2–4 个首字母大写词 →
     连写人名（JaneDoe）→ 单个大写专名（排除疑问词）。
+    O-新26：英文句首疑问/祈使词先剥掉（Is/Can/Does/Was/Check…）。
     """
+    if not query:
+        return None
+    query = _strip_lead_english(query)
     if not query:
         return None
     cjk = _CJK_PERSON_RE.search(query)
