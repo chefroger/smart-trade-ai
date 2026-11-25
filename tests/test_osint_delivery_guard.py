@@ -337,3 +337,35 @@ def test_verb_prefix_is_stripped_but_pronouns_still_blocked():
     assert chat._osint_target_from_query("查一下 Huawei") == "Huawei"
     assert chat._osint_target_from_query("帮我查下这个客户靠谱吗") is None
     assert chat._osint_target_from_query("这个买家是不是骗子") is None
+
+
+class TestO26EnglishQuestionTargets:
+    """O-新26：英文问句不能再把 Is/Can/Does/Was/Check 混进目标。"""
+
+    def _complete(self, monkeypatch):
+        monkeypatch.setattr(
+            "trade.osint.sanctions.check_sanctions",
+            lambda name, country=None: {
+                "hits": [], "is_sanctioned": False,
+                "coverage": {"degraded": False, "total_entries": 10, "lists": {"OFAC": {}}},
+            },
+        )
+
+    @pytest.mark.parametrize("query", [
+        "Is Huawei sanctioned?",
+        "Can Huawei be sanctioned?",
+        "Does Huawei have sanctions?",
+        "Was Huawei sanctioned?",
+        "Check Huawei for sanctions",
+    ])
+    def test_english_questions_use_bare_target(self, monkeypatch, query):
+        self._complete(monkeypatch)
+        assert chat._osint_target_info(query) == ("Huawei", "")
+        text = chat._sanctions_fallback_text(query)
+        # 现在比对的是 Huawei 本身：可以如实写未命中，但不能再出现 "Is Huawei"
+        assert "Is Huawei" not in text and "Can Huawei" not in text
+        assert "未命中" in text
+
+    def test_chinese_cases_unchanged(self):
+        assert chat._osint_target_info("帮我查一下华为有没有被制裁") == ("华为", "cjk")
+        assert chat._osint_target_info("这个买家是不是骗子") == (None, "ambiguous")

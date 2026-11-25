@@ -713,3 +713,27 @@ def test_s7_generic_single_words_are_not_router_triggers():
     for query in ("audit", "setup", "deploy", "tracking", "claim", "importer", "credit risk"):
         result = match_skill(query)
         assert result is None, f"{query!r} 不该再触发 {result and result['name']}"
+
+
+# ── O-新26：英文疑问句目标清洗（2026-11-25）─────────────────────────────────
+
+
+@pytest.mark.parametrize("query", [
+    "Is Huawei sanctioned?",
+    "Can Huawei be sanctioned?",
+    "Does Huawei have sanctions?",
+    "Was Huawei sanctioned?",
+    "Check Huawei for sanctions",
+])
+def test_o26_english_questions_yield_bare_name(query):
+    from trade.skill_router import extract_osint_name
+
+    assert extract_osint_name(query) == "Huawei"
+
+
+def test_o26_check_point_company_name_is_not_stripped():
+    """祈使动词剥离不能吃掉以 Check 开头的公司名。"""
+    from trade.skill_router import extract_osint_name
+
+    assert extract_osint_name("Check Point Software") == "Check Point Software"
+    assert extract_osint_name("Is Check Point Software sanctioned?") == "Check Point Software"
