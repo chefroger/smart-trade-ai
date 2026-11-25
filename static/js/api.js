@@ -74,6 +74,9 @@ function _buildApiOpts(method, body, token, companyId, extraHeaders) {
 async function api(method, path, body, extraHeaders, options) {
     // options.silent：轮询等后台刷新失败时不弹 toast（仍返回 null，调用方自己决定）
     const silent = !!(options && options.silent);
+    // options.onStatus(status)：把 HTTP 状态码交给调用方（如备忘录只在 403
+    // 时计失败，网络错/500/429 不计）
+    const onStatus = options && options.onStatus;
     const opts = _buildApiOpts(method, body, TOKEN, currentCompanyId, extraHeaders);
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 120000);
@@ -82,6 +85,7 @@ async function api(method, path, body, extraHeaders, options) {
         const r = await fetch(path, opts);
         clearTimeout(tid);
         if (!r.ok) {
+            if (onStatus) onStatus(r.status);
             const err = await r.json().catch(() => ({}));
             const msg = err.detail || `请求失败 (${r.status})`;
             if (r.status === 401) {
