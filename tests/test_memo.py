@@ -241,7 +241,12 @@ class TestBackendThrottle:
         assert data["throttle_until"] > 0
         assert "throttle_failures" in data
 
-        # 模拟应用重启：重新加载模块，状态只能来自磁盘
+        # 模拟应用重启：重新加载模块，状态只能来自磁盘。
+        # 其他测试可能把 trade.memo 从 sys.modules 里移除过（test_isolation），
+        # reload 前先确保它已注册。
+        import sys
+
+        monkeypatch.setitem(sys.modules, "trade.memo", memo)
         reloaded = importlib.reload(memo)
         assert reloaded.lock_remaining() > 0
         reloaded.reset_throttle()
