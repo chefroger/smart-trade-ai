@@ -218,10 +218,26 @@ class TestHermesPythonCompat:
     def test_unreadable_metadata_is_unknown_not_incompatible(
         self, monkeypatch, compat_module
     ):
-        """识别不到一律按「未知」放行 —— 识别失败不等于不兼容。"""
+        """装机存在但元数据读不出 → 仍按「未知」放行（识别失败不等于不兼容）。"""
         self._stub(monkeypatch, compat_module, version=None, requires=None)
+        # checkout 存在（装过 Hermes，只是印章/元数据坏了）——不能误报未安装
+        monkeypatch.setattr(
+            "trade.bootstrap._resolve_hermes_checkout", lambda: "/fake/hermes-agent",
+        )
 
         assert compat_module.hermes_python_compat()["verdict"] == "unknown"
+
+    def test_no_checkout_is_not_installed(self, monkeypatch, compat_module):
+        """S11/R12：连 checkout 都找不到 → not_installed + 安装引导，不是「未知放行」。"""
+        self._stub(monkeypatch, compat_module, version=None, requires=None)
+        monkeypatch.setattr("trade.bootstrap._resolve_hermes_checkout", lambda: "")
+
+        result = compat_module.hermes_python_compat()
+
+        assert result["verdict"] == "not_installed"
+        assert result["fix"] == "install_hermes"
+        steps = compat_module.compat_steps(result)
+        assert steps and any("install" in (s.get("command") or "") for s in steps)
 
     def test_detection_never_imports_hermes(self, monkeypatch, compat_module):
         """命门：判定过程不得把任何 Hermes 模块拉进 sys.modules。"""
@@ -267,6 +283,22 @@ class TestHermesVersionGate:
 
         assert bootstrap.check_hermes_version() is True
         assert "无法确定" in capsys.readouterr().out
+
+    def test_not_installed_is_rejected_with_install_steps(self, monkeypatch, capsys):
+        """S11/R12：没装 Hermes → 返回 False，并给出可照做的安装命令。"""
+        from trade import bootstrap
+
+        monkeypatch.setattr(bootstrap, "_hermes_compat_state", None)
+        monkeypatch.setattr(
+            bootstrap, "hermes_compat_state",
+            lambda: {"verdict": "not_installed", "reason": "未找到 Hermes",
+                     "version": None, "python": "3.14.7", "fix": "install_hermes"},
+        )
+
+        assert bootstrap.check_hermes_version() is False
+        out = capsys.readouterr().out
+        assert "未检测到 Hermes" in out
+        assert "install.sh" in out or "install.ps1" in out
 
     def test_ok_is_accepted(self, monkeypatch, capsys):
         """可共存时正常通过。"""

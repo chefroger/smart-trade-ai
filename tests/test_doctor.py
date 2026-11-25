@@ -82,6 +82,29 @@ class TestHermesRuntimeCheck:
         assert "重建" in item.detail or "安装脚本" in item.detail
         assert "不要只升级 Hermes" in item.detail
 
+    def test_not_installed_is_fail_with_install_hint(self, monkeypatch):
+        """S11/R12：没装 Hermes → FAIL + 安装指引（不能只说「未加载」）。"""
+        import trade.hermes_compat as compat
+
+        monkeypatch.setattr(compat, "hermes_python_compat", lambda: {
+            "verdict": "not_installed",
+            "version": None,
+            "python": "3.14.7",
+            "reason": "未找到 Hermes（已检查 HERMES_HOME 与 ~/.hermes/hermes-agent）",
+            "checkout": None,
+            "fix": "install_hermes",
+        })
+
+        results = doctor.check_hermes_runtime(
+            agent_factory=lambda: pytest.fail("not_installed 时不应构造 agent")
+        )
+
+        item = next(r for r in results if r.name == "Hermes 版本")
+        assert item.status == doctor.STATUS_FAIL
+        assert item.fatal is True
+        assert "未检测到 Hermes" in item.detail
+        assert "安装" in item.detail and "hermes setup" in item.detail
+
     def test_base_exception_is_caught(self):
         """RelaunchExit 继承 SystemExit —— 自检必须能报出它，而不是自己崩掉。"""
         def boom():

@@ -295,6 +295,26 @@ def hermes_python_compat() -> dict[str, Any]:
         result["verdict"] = "ok"
         result["reason"] = f"Hermes 支持当前解释器 {python_version}"
         return result
+
+    # S11/R12：元数据完全读不到，且连 checkout 都找不到 —— 这是「没装 Hermes」，
+    # 不是「装了但元数据读不出」。后者按未知放行；前者必须给安装引导，否则桌面端
+    # 用户只看得到「AI Agent 模块未加载」，完全无从下手（2026-10-14 事故症状）。
+    if version is None and requires_python is None:
+        try:
+            from trade.bootstrap import _resolve_hermes_checkout
+
+            has_checkout = bool(_resolve_hermes_checkout())
+        except Exception:
+            # 判定失败不误报「未安装」——宁可少给引导，也不要吓到已装好的用户
+            has_checkout = True
+        if not has_checkout:
+            result["verdict"] = "not_installed"
+            result["fix"] = "install_hermes"
+            result["reason"] = (
+                "未找到 Hermes（已检查 HERMES_HOME 与 ~/.hermes/hermes-agent）"
+            )
+            return result
+
     result["reason"] = "无法确定 Hermes 版本或 Python 区间，按未知放行"
     return result
 
@@ -358,14 +378,59 @@ def rebuild_trade_steps() -> list[dict[str, str]]:
     ]
 
 
+def install_hermes_steps() -> list[dict[str, str]]:
+    """「本机没装 Hermes」时给用户的安装步骤（S11/R12，与其它步骤同构）。
+
+    命令取自 README/docs 的官方安装器（它会自带 Python 3.14 与托管环境）。
+    Trade 的安装脚本只确认 `hermes` 命令存在，不代装 Hermes —— 所以缺 Hermes
+    时必须把这条命令直接摆到用户面前，不能只说「未加载」。
+    """
+    install = (
+        "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"
+        if os.name == "nt"
+        else "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
+    )
+    return [
+        {
+            "title": "安装 Hermes（AI 引擎）",
+            "detail": "复制下面这一行，粘贴到终端后回车，等它跑完（需要能访问 GitHub）。",
+            "command": install,
+        },
+        {
+            "title": "配置模型",
+            "detail": "装完后在终端运行下面这一行，按提示选择并登录大模型。",
+            "command": "hermes setup",
+        },
+        {
+            "title": "重新打开 Trade",
+            "detail": "关掉 Trade 窗口，再重新打开，即可开始聊天。",
+            "command": "trade",
+        },
+    ]
+
+
+def incompatible_install_steps() -> list[str]:
+    """把 install_hermes_steps() 渲染成终端可读的行。"""
+    lines = ["", "【现在照着做】", ""]
+    for index, step in enumerate(install_hermes_steps(), start=1):
+        lines.append(f"{index}) {step['title']}")
+        lines.append(f"   {step['detail']}")
+        lines.append(f"       {step['command']}")
+        lines.append("")
+    return lines
+
+
 def compat_steps(compat: dict[str, Any]) -> list[dict[str, str]]:
     """按判定给出的补救方向返回对应步骤（界面与终端共用同一份）。
 
-    `fix` 的两个方向对应**完全不同的用户动作**，给错会让人白折腾：
+    `fix` 的三个方向对应**完全不同的用户动作**，给错会让人白折腾：
+      - install_hermes     → 去安装 Hermes
       - upgrade_hermes     → 去升级 Hermes
       - rebuild_trade_venv → 重跑 Trade 的安装脚本
     """
     fix = compat.get("fix")
+    if fix == "install_hermes":
+        return install_hermes_steps()
     if fix == "upgrade_hermes":
         return upgrade_steps()
     if fix == "rebuild_trade_venv":
