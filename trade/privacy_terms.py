@@ -81,7 +81,11 @@ _FAMILY_LATIN_RE = re.compile(
 _CONTEXT_EN_RE = re.compile(
     r"(?:\b(?:my|his|her|their|our|your)\s+partner\b"
     r"(?!\s+(?:factory|company|firm|plant|supplier))"
-    r"|\b(?:my|his|her|their|our|your)\s+(?:brother|son|family)\b"
+    # O-新27：「our son company」（子公司直译）/「our brother company」
+    # 是商业实体，不是家庭成员；family 不加此排除（family business 仍是家事）。
+    r"|\b(?:my|his|her|their|our|your)\s+(?:brother|son)\b"
+    r"(?!\s+(?:company|firm|business|factory|plant|subsidiary|brand))"
+    r"|\b(?:my|his|her|their|our|your)\s+family\b"
     r"|[A-Za-z]+(?:'s|’s)\s+(?:partner|brother|son|family)\b"
     r"|的\s*partner\b"
     r"(?!\s*(?:工厂|公司|企业|集团|供应商|客户|经销商|渠道|厂家))"

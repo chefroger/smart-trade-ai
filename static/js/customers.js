@@ -2989,7 +2989,8 @@ let _V_CJK_KIN = /(?:^|[私僕俺彼女我他她前的和与跟陪])\s*(?:夫|�
 // 符号的词在 \b 下边界判定不到（S4）。
 let _V_FAMILY_EN = /(?:^|[^A-Za-z])(?:spouse|kid|kids|child|children|wife|husband|daughter|father|mother|sister|mom|mum|dad|grandson|granddaughter|grandmother|grandfather|girlfriend|boyfriend|fiancé|fiancée|fiance|fiancee|niece|nephew|in-law|in-laws|in law|esposa|esposo|hijo|hija|frau|sohn|tochter|жена|муж|сын|дочь|femme|mari|fils|fille|filho|filha|mujer|marido)(?![A-Za-z])/i;
 // S4：partner/brother/son/family 只有所属语境才算；「我们的 partner 工厂」不算
-let _V_CONTEXT_EN = /(?:\b(?:my|his|her|their|our|your)\s+partner\b(?!\s+(?:factory|company|firm|plant|supplier))|\b(?:my|his|her|their|our|your)\s+(?:brother|son|family)\b|[A-Za-z]+(?:'s|’s)\s+(?:partner|brother|son|family)\b|的\s*partner\b(?!\s*(?:工厂|公司|企业|集团|供应商|客户|经销商|渠道|厂家))|的\s*(?:brother|son|family)\b)/i;
+// O-新27：「our son company / our brother company」是子公司，不是家庭成员
+let _V_CONTEXT_EN = /(?:\b(?:my|his|her|their|our|your)\s+partner\b(?!\s+(?:factory|company|firm|plant|supplier))|\b(?:my|his|her|their|our|your)\s+(?:brother|son)\b(?!\s+(?:company|firm|business|factory|plant|subsidiary|brand))|\b(?:my|his|her|their|our|your)\s+family\b|[A-Za-z]+(?:'s|’s)\s+(?:partner|brother|son|family)\b|的\s*partner\b(?!\s*(?:工厂|公司|企业|集团|供应商|客户|经销商|渠道|厂家))|的\s*(?:brother|son|family)\b)/i;
 let _vPrivacyTermsPromise = null;
 
 function _ensurePrivacyTerms() {
@@ -3013,7 +3014,9 @@ function _ensurePrivacyTerms() {
                 _V_CONTEXT_EN = new RegExp(
                     '(?:\\b(?:my|his|her|their|our|your)\\s+partner\\b'
                     + '(?!\\s+(?:factory|company|firm|plant|supplier))'
-                    + '|\\b(?:my|his|her|their|our|your)\\s+(?:brother|son|family)\\b'
+                    + '|\\b(?:my|his|her|their|our|your)\\s+(?:brother|son)\\b'
+                    + '(?!\\s+(?:company|firm|business|factory|plant|subsidiary|brand))'
+                    + '|\\b(?:my|his|her|their|our|your)\\s+family\\b'
                     + "|[A-Za-z]+(?:'s|’s)\\s+(?:" + ctx.join('|') + ')\\b'
                     + '|的\\s*partner\\b(?!\\s*(?:工厂|公司|企业|集团|供应商|客户|经销商|渠道|厂家))'
                     + '|的\\s*(?:brother|son|family)\\b)', 'i');
