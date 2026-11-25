@@ -3120,16 +3120,27 @@ async function openCustomerMemo() {
             pass = await _memoPromptPassword('输入私密备忘录密语', false);
             if (!pass) return;
         }
-        let data = await api('POST', '/api/trade/customers/' + cid + '/memo', {passphrase: pass});
+        // O-新22：只有 403（密语错误）才计前端口令锁；网络错 / 500 / 429
+        // 不计 —— 后端已是真正的防线，网络抖动不该把用户锁 60 秒。
+        let memoStatus = 0;
+        const memoStatusCb = function (s) { memoStatus = s; };
+        let data = await api(
+            'POST', '/api/trade/customers/' + cid + '/memo',
+            {passphrase: pass}, null, {onStatus: memoStatusCb},
+        );
         if (!data && _memoUnlockMode === 'session' && _memoSessionPass) {
             // 会话缓存的密语已失效：清掉并让用户重输一次
             _memoSessionPass = '';
             pass = await _memoPromptPassword('密语已失效，请重新输入', false);
             if (!pass) return;
-            data = await api('POST', '/api/trade/customers/' + cid + '/memo', {passphrase: pass});
+            memoStatus = 0;
+            data = await api(
+                'POST', '/api/trade/customers/' + cid + '/memo',
+                {passphrase: pass}, null, {onStatus: memoStatusCb},
+            );
         }
         if (!data) {
-            _memoNoteFailure();
+            if (memoStatus === 403) _memoNoteFailure();
             return;
         }
         _memoFailCount = 0;
