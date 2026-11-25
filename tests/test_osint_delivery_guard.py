@@ -369,3 +369,19 @@ class TestO26EnglishQuestionTargets:
     def test_chinese_cases_unchanged(self):
         assert chat._osint_target_info("帮我查一下华为有没有被制裁") == ("华为", "cjk")
         assert chat._osint_target_info("这个买家是不是骗子") == (None, "ambiguous")
+
+
+def test_o29_known_limitation_multi_target_not_split(monkeypatch):
+    """O-新29 已知局限：多目标不拆分，但方向安全（不会给假绿字）。"""
+    monkeypatch.setattr(
+        "trade.osint.sanctions.check_sanctions",
+        lambda name, country=None: {
+            "hits": [], "is_sanctioned": False,
+            "coverage": {"degraded": False, "total_entries": 10, "lists": {"OFAC": {}}},
+        },
+    )
+    # 现状：整串当一个中文目标（「和」不拆，避免误伤和记黄埔这类名称）
+    assert chat._osint_target_info("华为和中兴有没有被制裁") == ("华为和中兴", "cjk")
+    text = chat._sanctions_fallback_text("华为和中兴有没有被制裁")
+    assert "未执行" in text and "中文名称无法比对" in text
+    assert "未命中" not in text
