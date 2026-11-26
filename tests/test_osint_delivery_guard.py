@@ -209,7 +209,8 @@ async def test_sync_route_appends_sanctions_section(company, monkeypatch):
          patch.object(chat, "create_agent", side_effect=lambda **kw: _Agent("她是采购负责人。")), \
          patch.object(chat.chat_memory, "save_with_context",
                       side_effect=lambda **kw: saved.append(kw) or {"id": 1}), \
-         patch("trade.license.check_license", return_value=(True, "")):
+         patch("trade.license.check_license", return_value=(True, "")), \
+         patch("trade.license.license_state", return_value=("active", "")):
         result = await chat.trade_chat(ChatRequest(query="Jane Doe 是谁"), company["id"])
 
     assert "【制裁名单筛查】" in result["response"]
@@ -231,7 +232,8 @@ async def test_stream_route_appends_sanctions_section(company, monkeypatch):
          patch.object(chat, "create_agent", side_effect=lambda **kw: _Agent("她是采购负责人。")), \
          patch.object(chat.chat_memory, "save_with_context",
                       side_effect=lambda **kw: saved.append(kw) or {"id": 2}), \
-         patch("trade.license.check_license", return_value=(True, "")):
+         patch("trade.license.check_license", return_value=(True, "")), \
+         patch("trade.license.license_state", return_value=("active", "")):
         resp = await chat.trade_chat_stream(
             ChatRequest(query="Jane Doe 是谁"), company["id"]
         )
