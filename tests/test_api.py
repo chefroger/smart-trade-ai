@@ -947,3 +947,53 @@ class TestPaidFeatureGate:
             files={"file": ("x.zip", b"not-a-zip", "application/zip")},
         )
         assert resp.status_code == 402
+
+
+class TestPaidChatSkillGate:
+    """统一对话后，osint（客户背调）与 docgen（文档生成）的试用期门控在后端强制拦截。"""
+
+    def test_trial_user_blocked_on_osint_skill(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import chat as chat_api
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        with pytest.raises(HTTPException) as exc:
+            chat_api._require_paid_chat_skill("帮我背调一下 ACME Corp 公司背景")
+        assert exc.value.status_code == 402
+        assert "客户背调" in exc.value.detail
+
+    def test_trial_user_blocked_on_docgen_skill(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import chat as chat_api
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        with pytest.raises(HTTPException) as exc:
+            chat_api._require_paid_chat_skill("帮我生成一份产品报价单 PPT")
+        assert exc.value.status_code == 402
+        assert "文档生成" in exc.value.detail
+
+    def test_trial_user_blocked_on_explicit_paid_context(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from trade.api import chat as chat_api
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        with pytest.raises(HTTPException) as exc:
+            chat_api._require_paid_chat_skill("hello", context="osint")
+        assert exc.value.status_code == 402
+        assert "客户背调" in exc.value.detail
+
+    def test_trial_user_allowed_on_free_chat_skills(self, monkeypatch):
+        from trade.api import chat as chat_api
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("trial", ""))
+        chat_api._require_paid_chat_skill("帮我写一封开发信给欧洲客户", context="daily")
+
+    def test_active_user_allowed_on_osint_and_docgen(self, monkeypatch):
+        from trade.api import chat as chat_api
+
+        monkeypatch.setattr("trade.license.license_state", lambda cid=None: ("active", ""))
+        chat_api._require_paid_chat_skill("帮我背调 ACME Corp", context="osint")
+        chat_api._require_paid_chat_skill("帮我生成报价单 PPT", context="docgen")

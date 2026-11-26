@@ -285,9 +285,15 @@ function navToView(view, chatCtx, chatName) {
         return;
     }
 
+    // 侧边栏合并：除文档库（docs）外，原 8 个聊天入口统一收口到「对话」（daily）
+    if (view === 'chat' && chatCtx !== 'docs') {
+        chatCtx = 'daily';
+        if (!chatName || chatName === '今日简报') chatName = t('nav.daily');
+    }
+
     currentView = view;
     if (chatCtx) { currentChatContext = chatCtx; currentChatName = chatName || ''; }
-    // 今日简报用右栏承载待办，顶部横幅隐藏（zip s1 版式）
+    // 统一对话页使用右栏承载简报/待办/定时任务，顶部横幅隐藏（zip s1 版式）
     document.body.classList.toggle('view-daily', view === 'chat' && chatCtx === 'daily');
     saveState();
 
@@ -299,19 +305,12 @@ function navToView(view, chatCtx, chatName) {
 
     // 顶栏标题（zip s1–s4 统一外壳）
     const topMeta = {
-        'chat-daily': ['今日简报', '/ DAILY BRIEF'],
-        'chat-lead': ['客户开发', '/ LEAD GEN'],
-        'chat-platform': ['网站诊断', '/ SITE AUDIT'],
-        'chat-social': ['社媒营销', '/ SOCIAL'],
-        'chat-linkedin': ['LinkedIn', '/ LINKEDIN'],
-        'chat-customs': ['海关数据', '/ CUSTOMS'],
-        'chat-docs': ['文档库', '/ LIBRARY'],
-        'chat-docgen': ['文档生成', '/ DOC GEN'],
-        'chat-osint': ['客户背调', '/ OSINT'],
-        'customers': ['客户管理', '/ CUSTOMERS'],
-        'mailboxes': ['邮箱', '/ MAILBOXES'],
-        'tasks': ['定时任务', '/ CRON'],
-        'history': ['对话记录', '/ HISTORY'],
+        'chat-daily': [t('nav.daily'), '/ CHAT'],
+        'chat-docs': [t('nav.docs'), '/ LIBRARY'],
+        'customers': [t('nav.customers'), '/ CUSTOMERS'],
+        'mailboxes': [t('nav.mailboxes'), '/ MAILBOXES'],
+        'tasks': [t('nav.tasks'), '/ CRON'],
+        'history': [t('nav.history'), '/ HISTORY'],
         'visit': ['验厂计划', '/ SITE VISIT'],
     };
     const topInfo = topMeta[view + (chatCtx ? '-' + chatCtx : '')] || [chatName || '', ''];

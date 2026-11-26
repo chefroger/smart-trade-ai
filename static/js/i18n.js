@@ -2,16 +2,17 @@
 const I18N = {
     zh: {
         // nav
-        'nav.daily':'今日简报','nav.lead':'客户开发','nav.platform':'网站诊断',
+        'nav.daily':'对话','nav.lead':'客户开发','nav.platform':'网站诊断',
         'nav.social':'社媒营销','nav.linkedin':'LinkedIn','nav.customs':'海关数据',
         'nav.customers':'客户管理','nav.mailboxes':'邮箱','nav.docs':'文档库','nav.docgen':'文档生成',
         'nav.osint':'客户背调','nav.tasks':'定时任务','nav.history':'对话记录',
-        'nav.workbench':'📊 工作台','nav.outreach':'🔍 获客引流',
-        'nav.sales':'👤 销售转化','nav.tools':'🛠️ 工具','nav.hist':'💬 历史',
+        'nav.workbench':'工作台 · DESK','nav.outreach':'获客引流 · LEADS',
+        'nav.sales':'业务 · BUSINESS','nav.tools':'工具 · TOOLS','nav.hist':'历史 · LOG',
+        'scene.brief':'早安简报',
         // company
         'company.select':'— 选择公司 —','company.add':'添加公司',
         // chat placeholders
-        'chat.ph.daily':'输入任何问题，或说「早安简报」开始今天的工作...',
+        'chat.ph.daily':'输入任何外贸需求：早安简报、客户开发、网站诊断、社媒/LinkedIn、海关数据、文档生成或客户背调...',
         'chat.ph.lead':'说三个信息：卖什么？卖到哪？找什么客户？',
         'chat.ph.platform':'粘贴任何网站链接（B2B平台/公司官网/独立站），我来全面诊断优化...',
         'chat.ph.social':'描述社媒需求，如「帮我规划本周 Facebook 内容日历」...',
@@ -354,14 +355,15 @@ const I18N = {
         'inquiry.deleted':'询盘已删除',
     },
     en: {
-        'nav.daily':'Daily Briefing','nav.lead':'Lead Gen','nav.platform':'Site Audit',
+        'nav.daily':'Chat','nav.lead':'Lead Gen','nav.platform':'Site Audit',
         'nav.social':'Social','nav.linkedin':'LinkedIn','nav.customs':'Customs',
         'nav.customers':'Customers','nav.mailboxes':'Mailboxes','nav.docs':'Documents','nav.docgen':'Doc Gen',
         'nav.osint':'Due Diligence','nav.tasks':'Tasks','nav.history':'History',
-        'nav.workbench':'📊 Workspace','nav.outreach':'🔍 Outreach',
-        'nav.sales':'👤 Sales','nav.tools':'🛠️ Tools','nav.hist':'💬 History',
+        'nav.workbench':'WORKSPACE · DESK','nav.outreach':'OUTREACH · LEADS',
+        'nav.sales':'BUSINESS','nav.tools':'TOOLS','nav.hist':'HISTORY · LOG',
+        'scene.brief':'Morning Brief',
         'company.select':'— Select Company —','company.add':'Add',
-        'chat.ph.daily':'Ask anything, or say "Morning briefing" to start...',
+        'chat.ph.daily':'Ask anything: briefing, lead gen, site audit, social/LinkedIn, customs, doc gen, or due diligence...',
         'chat.ph.lead':'What do you sell? Where? Who are you looking for?',
         'chat.ph.platform':'Paste any website URL for a full audit...',
         'chat.ph.social':'Describe your social media needs...',
@@ -721,7 +723,8 @@ function _applyLanguage() {
     }
     // 4. 静态 modal 文本更新
     _updateStaticModals();
-    // 5. 重新渲染当前视图
+    // 5. 重新渲染当前视图并刷新统一对话页的快捷胶囊与占位符文案（中英文实时切换）
+    if (typeof _refreshQuickSceneLabels === 'function') _refreshQuickSceneLabels();
     if (currentView === 'chat') {
         navToView('chat', currentChatContext, t('nav.' + currentChatContext));
     } else {
@@ -734,7 +737,7 @@ function _applyLanguage() {
 }
 
 function _updateSidebarLabels() {
-    var sectionKeys = ['nav.workbench', 'nav.outreach', 'nav.sales', 'nav.tools', 'nav.hist'];
+    var sectionKeys = ['nav.workbench', 'nav.sales', 'nav.tools', 'nav.hist'];
     document.querySelectorAll('.nav-section-title').forEach(function(el, i) {
         if (i < sectionKeys.length) el.textContent = t(sectionKeys[i]);
     });

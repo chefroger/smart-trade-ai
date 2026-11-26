@@ -688,6 +688,57 @@ def usage_today(response: Response, cid: int = Depends(require_company)):
 
 # ── 同步聊天 ──────────────────────────────────────────────────────────────
 
+# ── 付费技能门控（侧边栏合并为统一「对话」后，osint / docgen 边界下沉到后端） ──
+_PAID_CHAT_SKILLS: dict[str, str] = {
+    "b2b-osint": "客户背调",
+    "b2b-email-intel": "客户背调",
+    "b2b-doc-generation": "文档生成",
+}
+_PAID_CHAT_CONTEXTS: dict[str, str] = {
+    "osint": "客户背调",
+    "docgen": "文档生成",
+}
+
+
+def _require_paid_chat_skill(query: str, context: str = "") -> None:
+    """拦截试用用户通过统一对话触发客户背调（osint）或文档生成（docgen）。
+
+    与 transfer._require_paid_feature 保持一致：仅当许可证状态明确非 active
+    时返回 402；许可证读取异常时 fail-open 放行（可用性优先）。
+    """
+    from trade import skill_router as _sr
+
+    feature_label = ""
+    matched = _sr.match_skill_routed(query)
+    matched_name = matched.get("name", "") if isinstance(matched, dict) else ""
+    # 命中付费技能时按技能名判定
+    if matched_name in _PAID_CHAT_SKILLS:
+        feature_label = _PAID_CHAT_SKILLS[matched_name]
+    else:
+        ctx_key = (context or "").strip().lower()
+        # 显式传入付费 context（如历史旧客户端或直接调接口）同样拦截
+        if ctx_key in _PAID_CHAT_CONTEXTS:
+            feature_label = _PAID_CHAT_CONTEXTS[ctx_key]
+
+    # 普通对话 / 免费技能不触发付费门控
+    if not feature_label:
+        return
+
+    try:
+        from trade.license import license_state
+
+        state, _message = license_state()
+    except Exception:  # noqa: BLE001 — 读不到许可证状态时不阻断付费用户
+        return
+
+    # 试用或未激活状态统一返回 402，由前端弹窗引导激活
+    if state != "active":
+        raise HTTPException(
+            status_code=402,
+            detail=f"{feature_label}为付费功能，激活后可用。",
+        )
+
+
 @router.post("/chat")
 async def trade_chat(
     payload: ChatRequest,
@@ -706,6 +757,7 @@ async def trade_chat(
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
     _validate_scope(payload, cid)
+    _require_paid_chat_skill(query, payload.context or "")
 
     # 读取上次使用的 skill 名称（用于跳过重复注入）
     with _skill_cache_lock:
@@ -1043,6 +1095,7 @@ async def trade_chat_stream(
     if not _check_chat_rate_limit(cid):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试。")
     _validate_scope(payload, cid)
+    _require_paid_chat_skill(query, payload.context or "")
 
     # 读取上次使用的 skill 名称（用于跳过重复注入）
     with _skill_cache_lock:

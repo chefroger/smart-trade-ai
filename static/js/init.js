@@ -169,6 +169,7 @@ function renderNoCompanyPage() {
         '_custGoPage',
         '_visitSelect',
         'addOrderItemRow',
+        'applyChatScenePreset',
         'autoSlug',
         'batchCreateCronTasks',
         'bindMailbox',

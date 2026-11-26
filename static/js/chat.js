@@ -1,8 +1,68 @@
+// 统一「对话」页的场景快捷胶囊（保留原 8 项能力的可发现性；osint/docgen 带 data-paid）
+const _CHAT_SCENE_PRESETS = [
+    { key: 'brief',    labelKey: 'scene.brief',    promptZh: '生成今日早安简报：实时汇率、大宗商品行情、目标市场新闻和今日待跟进客户。', promptEn: 'Generate today\'s morning briefing with exchange rates, commodity prices, target market news, and follow-ups.' },
+    { key: 'lead',     labelKey: 'nav.lead',       promptZh: '帮我做客户开发：我的产品是【产品】，目标市场是【国家/地区】，请制定找客户渠道和开发信。', promptEn: 'Help with lead generation: product is [product], target market is [region]. Suggest channels and cold outreach.' },
+    { key: 'platform', labelKey: 'nav.platform',   promptZh: '帮我做网站诊断优化，目标网址：https://', promptEn: 'Audit and optimize this website: https://' },
+    { key: 'social',   labelKey: 'nav.social',     promptZh: '帮我规划本周社媒营销内容日历（Facebook/Instagram/YouTube）并生成首条帖文：', promptEn: 'Plan this week\'s social media content calendar and draft the first post for: ' },
+    { key: 'linkedin', labelKey: 'nav.linkedin',   promptZh: '帮我写一条高互动 LinkedIn 专业帖文，主题围绕：', promptEn: 'Write an engaging LinkedIn post about: ' },
+    { key: 'customs',  labelKey: 'nav.customs',    promptZh: '请分析这份海关数据，筛选高潜力采购商并给出开发优先级：', promptEn: 'Analyze this customs data, shortlist high-potential buyers, and prioritize outreach: ' },
+    { key: 'docgen',   labelKey: 'nav.docgen',     paid: true, promptZh: '帮我生成一份外贸文档（报价单/PI/产品介绍 PPT），具体需求：', promptEn: 'Generate a trade document (quotation / PI / product deck) with these details: ' },
+    { key: 'osint',    labelKey: 'nav.osint',      paid: true, promptZh: '请对以下客户做全面背景调查（含公司工商、官网、社媒与制裁筛查）：', promptEn: 'Run full B2B background due diligence (company registry, website, social, sanctions) on: ' },
+];
+
+function _buildQuickScenesInnerHtml() {
+    /** 生成场景快捷胶囊按钮列表 HTML（供首次渲染与语言切换复用）。 */
+    let html = '';
+    _CHAT_SCENE_PRESETS.forEach(function (item) {
+        const paidAttr = item.paid ? ' class="scene-pill hidden" data-paid' : ' class="scene-pill"';
+        html += '<button type="button"' + paidAttr +
+            ' data-act="applyChatScenePreset" data-arg="' + esc(item.key) + '">' +
+            esc(t(item.labelKey)) + '</button>';
+    });
+    return html;
+}
+
+function _refreshQuickSceneLabels() {
+    /** 中英文切换时同步刷新已缓存对话页中的快捷胶囊、输入框占位符与副标题。 */
+    document.querySelectorAll('#chat-quick-scenes').forEach(function (el) {
+        el.innerHTML = _buildQuickScenesInnerHtml();
+    });
+    if (typeof _applyLicenseGates === 'function') _applyLicenseGates();
+    const dailyView = document.getElementById('view-chat-daily');
+    if (dailyView) {
+        const inp = dailyView.querySelector('#msg-input');
+        if (inp) inp.placeholder = 'AWAITING COMMAND · ' + t('chat.ph.daily');
+        const sub = dailyView.querySelector('.cmd-sub');
+        if (sub) sub.textContent = t('chat.cmd.sub');
+        const emptyH2 = dailyView.querySelector('#chat-empty h2');
+        if (emptyH2) emptyH2.textContent = t('nav.daily');
+        const emptyP = dailyView.querySelector('#chat-empty p');
+        if (emptyP) emptyP.textContent = t('chat.ph.daily');
+    }
+}
+
+function applyChatScenePreset(sceneKey) {
+    /** 点击场景快捷胶囊：预填对应指令并聚焦输入框。 */
+    const item = _CHAT_SCENE_PRESETS.find(function (x) { return x.key === sceneKey; });
+    if (!item) return;
+    if (item.paid && !_licenseGateAllowsPaid()) {
+        toast(t('license.paid_only'));
+        return;
+    }
+    const text = currentLang === 'en' ? item.promptEn : item.promptZh;
+    const ct = currentChatContainer;
+    const input = ct ? ct.querySelector('#msg-input') : null;
+    if (!input) return;
+    input.value = text;
+    input.focus();
+    if (typeof _chatInputChanged === 'function') _chatInputChanged(input);
+}
+
 // ═════════════════════ CHAT VIEW ═════════════════════
 function renderChatViewInto(container, ctx, name) {
     const coName = currentCompanyId ? (companies.find(c => c.id === currentCompanyId)?.name || '') : '';
     const isDaily = ctx === 'daily';
-    // 今日简报：zip s1 两栏（对话 + 右侧简报/待办/定时任务），不再用页内标题条
+    // 统一对话：zip s1 两栏（对话 + 右侧简报/待办/定时任务），不再用页内标题条
     const topbarHtml = isDaily ? '' : `
         <div class="chat-topbar">
             <div style="display:flex;align-items:center;gap:8px;">
@@ -35,6 +95,7 @@ function renderChatViewInto(container, ctx, name) {
             </div>
         </div>
         <div class="chat-input-area">
+            ${isDaily ? '<div class="chat-quick-scenes" id="chat-quick-scenes"></div>' : ''}
             <div id="chat-mention-menu" class="mention-menu hidden" role="listbox"></div>
             <div class="chat-input-inner">
                 <textarea id="msg-input" aria-label="${currentLang==='en'?'Message':'输入消息'}" placeholder="AWAITING COMMAND · ${esc(t('chat.ph.' + ctx))}" rows="1"
@@ -72,8 +133,11 @@ function renderChatViewInto(container, ctx, name) {
     if (ctx === 'lead' && !isOnboardingCompleted()) {
         setTimeout(function() { showWizardInLeadView(); }, 300);
     }
-    // 每日简报视图：额外拉取一次 cron 状态（全局轮询已覆盖）+ 今日 KPI
+    // 统一对话视图：填充场景快捷胶囊 + 同步付费可见性 + 拉取 cron/待办/今日简报
     if (ctx === 'daily') {
+        const scenesSlot = container.querySelector('#chat-quick-scenes');
+        if (scenesSlot) scenesSlot.innerHTML = _buildQuickScenesInnerHtml();
+        if (typeof _applyLicenseGates === 'function') _applyLicenseGates();
         _shownCronOutputs = new Set();
         loadCronStatus(false);
         loadTodos(false);
@@ -1316,13 +1380,19 @@ async function loadChatHistory() {
     if (!currentCompanyId) return;
     const ct = currentChatContainer;
     if (!ct) return;
-    // 按 context 过滤，避免不同主题的对话混在一起
+    // 文档库视图按 library_id 过滤；统一对话（daily）按时间流汇总原 8 个入口历史
+    const isUnified = currentChatContext === 'daily';
     const ctx = encodeURIComponent(currentChatContext || '');
     const params = currentLibraryId
         ? `?library_id=${currentLibraryId}&limit=30`
-        : `?context=${ctx}&limit=30`;
-    const data = await api('GET', `/api/trade/conversations${params}`);
-    if (!data || !data.length) return;
+        : (isUnified ? '?limit=30' : `?context=${ctx}&limit=30`);
+    const rawData = await api('GET', `/api/trade/conversations${params}`);
+    if (!rawData || !rawData.length) return;
+    // 统一对话流剔除绑定了文档库的纯文档库问答，避免与「文档库」入口重复
+    const data = isUnified
+        ? rawData.filter(function (c) { return !(c.context === 'docs' && c.library_id); })
+        : rawData;
+    if (!data.length) return;
     const container = ct.querySelector('#chat-messages');
     if (!container) return;
     // Remove empty state
