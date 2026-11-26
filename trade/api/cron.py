@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -47,8 +48,10 @@ def get_today_cron(cid: int = Depends(require_company)):
     now = datetime.now()
     current_time = now.strftime("%H:%M")
 
-    # 从 jobs.json 读取实际激活的任务
+    # 从 jobs.json 读取实际已启用（enabled=True）的任务
     active_jobs = _load_active_jobs(cid)
+    # 汇总用户已设置并激活的 Hermes cron 任务及其最新产出，供前端右栏直接渲染
+    active_items = _build_active_cron_items(active_jobs, today)
     if active_jobs:
         tasks = active_jobs
     else:
@@ -84,11 +87,13 @@ def get_today_cron(cid: int = Depends(require_company)):
             if _is_silent_cron_output(output):
                 completed.append({
                     "name": task_name, "time": task["time"],
+                    "job_id": task.get("job_id", ""),
                     "output": None, "has_output": False, "silent": True,
                 })
             else:
                 completed.append({
                     "name": task_name, "time": task["time"],
+                    "job_id": task.get("job_id", ""),
                     "output": output, "has_output": True,
                 })
             continue
@@ -97,7 +102,7 @@ def get_today_cron(cid: int = Depends(require_company)):
         # `*/5 * * * *`、`0 9 1 * *` 这类返回空串。此前用 bool(task_time) 把它
         # 归进"未到点"，于是界面显示「待执行」—— 真相是"不知道几点跑"，
         # 一个从没执行过的任务会被用户一直当成还没到时间。
-        # （bool 守卫本身是为了修 "空串 <= '14:30' 恒 True" 那个 bug，不能退回去。）
+        # （bool 守卫本身是为了修 "空串 <= '14:30' 那个 bug，不能退回去。）
         if not task_time:
             pending.append({
                 "name": task_name, "time": task["time"],
@@ -117,7 +122,13 @@ def get_today_cron(cid: int = Depends(require_company)):
                 "scheduled": task_time, "missed": False,
             })
 
-    return {"today": today, "current_time": current_time, "completed": completed, "pending": pending}
+    return {
+        "today": today,
+        "current_time": current_time,
+        "completed": completed,
+        "pending": pending,
+        "active_items": active_items,
+    }
 
 
 def _company_count() -> int:
@@ -137,8 +148,20 @@ def _company_count() -> int:
         return 0
 
 
+def _extract_schedule_raw(job: dict) -> str:
+    """提取任务原始 cron 表达式或可读调度串。"""
+    sched = job.get("schedule", {})
+    # 新版 Hermes schedule 为字典，优先读 display，回退 expr
+    if isinstance(sched, dict):
+        return str(sched.get("display") or sched.get("expr") or job.get("schedule_display") or "")
+    # 旧格式中 schedule 直接是字符串
+    if isinstance(sched, str) and sched:
+        return sched
+    return str(job.get("schedule_display") or "")
+
+
 def _load_active_jobs(company_id: int | None = None):
-    """从 jobs.json 读取已激活的定时任务，按公司过滤后提取 name/time/job_id。"""
+    """从 jobs.json 读取已启用（enabled=True）的定时任务，按公司过滤后提取元信息。"""
     if not _JOBS_FILE.is_file():
         return []
     try:
@@ -153,33 +176,75 @@ def _load_active_jobs(company_id: int | None = None):
         for job in job_list:
             if not isinstance(job, dict):
                 continue
+            # 已暂停（enabled=False）的任务不计入已激活列表
+            if not job.get("enabled", True):
+                continue
             name = job.get("name", job.get("task_name", ""))
             job_id = str(job.get("id", "") or "")
-            # 从 cron 或调度信息中提取人类可读的时间
             schedule_display = _extract_time_display(job)
-            if name and _job_visible(job_id, company_id):
-                tasks.append({"name": name, "time": schedule_display, "job_id": job_id})
+            if name and _job_visible(job_id, company_id, job=job):
+                tasks.append({
+                    "name": name,
+                    "time": schedule_display,
+                    "job_id": job_id,
+                    "schedule": _extract_schedule_raw(job),
+                    "next_run": str(job.get("next_run_at") or ""),
+                    "last_run": str(job.get("last_run_at") or ""),
+                })
     elif isinstance(job_list, dict):
         for job_id, job in job_list.items():
             if not isinstance(job, dict):
                 continue
+            # 已暂停（enabled=False）的任务不计入已激活列表
+            if not job.get("enabled", True):
+                continue
             name = job.get("task_name", job.get("name", ""))
             schedule_display = _extract_time_display(job)
-            if name and _job_visible(str(job_id), company_id):
-                tasks.append({"name": name, "time": schedule_display, "job_id": str(job_id)})
+            jid = str(job_id)
+            if name and _job_visible(jid, company_id, job={**job, "id": jid}):
+                tasks.append({
+                    "name": name,
+                    "time": schedule_display,
+                    "job_id": jid,
+                    "schedule": _extract_schedule_raw(job),
+                    "next_run": str(job.get("next_run_at") or ""),
+                    "last_run": str(job.get("last_run_at") or ""),
+                })
     return tasks
+
+
+def _build_active_cron_items(active_jobs: list[dict], today: str) -> list[dict]:
+    """为当前公司所有已启用定时任务组装最新 Hermes cron 输出摘要。"""
+    items: list[dict] = []
+    for task in active_jobs:
+        job_id = str(task.get("job_id") or "")
+        output, run_at, is_silent = _find_latest_cron_output(job_id)
+        is_today = bool(run_at and run_at[:10] == today)
+        items.append({
+            "job_id": job_id,
+            "name": task.get("name") or "",
+            "time": task.get("time") or task.get("schedule") or "",
+            "schedule": task.get("schedule") or "",
+            "next_run": task.get("next_run") or "",
+            "output": output,
+            "has_output": bool(output),
+            "run_at": run_at,
+            "is_today": is_today,
+            "silent": is_silent,
+        })
+    return items
 
 
 def _extract_time_display(job: dict) -> str:
     """从 cron job 中提取人类可读的时间显示。
 
-    优先级: schedule.display → schedule_display → 从 next_run_at 提取时分 → 空串
+    优先级: schedule.display/expr → schedule_display → 从 next_run_at 提取时分 → 空串
     将 cron 表达式 "0 9 * * 1-5" 转换为 "09:00"。
     """
-    # 尝试从 schedule.dict 或 schedule_display 中获取
+    # 尝试从 schedule 字典（display 或 expr）中获取
     sched = job.get("schedule", {})
     if isinstance(sched, dict):
-        display = sched.get("display", "")
+        display = sched.get("display") or sched.get("expr") or ""
         if display:
             time_str = _cron_to_time(display)
             if time_str:
@@ -206,12 +271,11 @@ def _cron_to_time(expr: str) -> str:
     只处理简单的 "M H * * *" 或 "M H * * D" 格式。
     其他格式返回空串。
     """
-    import re
     parts = expr.strip().split()
     if len(parts) >= 2:
         m, h = parts[0], parts[1]
         # 验证小时和分钟是数字
-        if re.match(r'^\d+$', h) and re.match(r'^\d+$', m):
+        if re.match(r"^\d+$", h) and re.match(r"^\d+$", m):
             return f"{int(h):02d}:{int(m):02d}"
     return ""
 
@@ -239,13 +303,17 @@ def get_active_jobs(cid: int = Depends(require_company)):
             if not isinstance(job, dict):
                 continue
             job_id = str(job.get("id", "") or "")
-            if not _job_visible(job_id, cid):
+            if not _job_visible(job_id, cid, job=job):
                 continue
+            latest_out, run_at, _silent = _find_latest_cron_output(job_id)
             jobs.append({
                 "id": job_id,
                 "name": job.get("name", job.get("task_name", "")),
-                "schedule": job.get("schedule", {}).get("display", job.get("schedule_display", "")),
+                "schedule": _extract_schedule_raw(job),
                 "next_run": job.get("next_run_at", ""),
+                "last_run": job.get("last_run_at", ""),
+                "run_at": run_at,
+                "has_output": bool(latest_out),
                 "enabled": job.get("enabled", True),
                 "deliver": job.get("deliver", "local"),
             })
@@ -254,18 +322,65 @@ def get_active_jobs(cid: int = Depends(require_company)):
         for job_id, job in job_list.items() if isinstance(job_list, dict) else []:
             if not isinstance(job, dict):
                 continue
-            if not _job_visible(str(job_id), cid):
+            jid = str(job_id)
+            if not _job_visible(jid, cid, job={**job, "id": jid}):
                 continue
+            latest_out, run_at, _silent = _find_latest_cron_output(jid)
             jobs.append({
                 "id": job_id,
                 "name": job.get("task_name", job.get("name", job_id)),
-                "schedule": job.get("schedule", {}).get("display", "") if isinstance(job.get("schedule"), dict) else job.get("schedule", ""),
+                "schedule": _extract_schedule_raw(job),
                 "next_run": job.get("next_run_at", ""),
+                "last_run": job.get("last_run_at", ""),
+                "run_at": run_at,
+                "has_output": bool(latest_out),
                 "enabled": job.get("enabled", True),
                 "deliver": job.get("deliver", "local"),
             })
 
     return jobs
+
+
+@router.get("/cron/jobs/{job_id}/output")
+def get_cron_job_output(job_id: str, cid: int = Depends(require_company)):
+    """返回指定 Hermes cron 任务最近一次执行的完整输出正文。"""
+    # 校验 job_id 格式，禁止路径穿越字符
+    clean_id = (job_id or "").strip()
+    if not clean_id or "/" in clean_id or "\\" in clean_id or ".." in clean_id:
+        raise HTTPException(status_code=400, detail="非法任务 ID")
+
+    matched_job: dict | None = None
+    if _JOBS_FILE.is_file():
+        try:
+            with open(_JOBS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            job_list = data.get("jobs", [])
+            if isinstance(job_list, list):
+                for j in job_list:
+                    if isinstance(j, dict) and str(j.get("id") or "") == clean_id:
+                        matched_job = j
+                        break
+            elif isinstance(job_list, dict) and isinstance(job_list.get(clean_id), dict):
+                matched_job = {**job_list[clean_id], "id": clean_id}
+        except Exception:
+            matched_job = None
+
+    # 任务不存在或不属于当前公司时统一返回 404，避免探测其它公司任务
+    if matched_job is None or not _job_visible(clean_id, cid, job=matched_job):
+        raise HTTPException(status_code=404, detail="未找到该定时任务")
+
+    output, run_at, is_silent = _find_latest_cron_output(clean_id)
+    today = date.today().isoformat()
+    return {
+        "job_id": clean_id,
+        "name": matched_job.get("name", matched_job.get("task_name", clean_id)),
+        "schedule": _extract_schedule_raw(matched_job),
+        "run_at": run_at,
+        "is_today": bool(run_at and run_at[:10] == today),
+        "output": output,
+        "has_output": bool(output),
+        "silent": is_silent,
+    }
 
 
 _capture_lock = threading.Lock()
@@ -348,16 +463,60 @@ def get_customer_health_audit(cid: int = Depends(require_company)):
     return customer_module.health_audit(cid)
 
 
-def _job_visible(job_id: str, company_id: int | None) -> bool:
+def _job_visible(
+    job_id: str,
+    company_id: int | None,
+    *,
+    job: dict | None = None,
+) -> bool:
     """按公司过滤 job；无约定公司上下文时不过滤（internal 调用兼容）。"""
     if not company_id:
         return True
     try:
         from trade.cron_binding import visible_for_company
 
-        return visible_for_company(job_id, company_id, company_count=_company_count())
+        return visible_for_company(
+            job_id,
+            company_id,
+            company_count=_company_count(),
+            job=job,
+        )
     except Exception:
         return False
+
+
+_HERMES_RESPONSE_SPLIT_RE = re.compile(
+    r"(?:^|\n)(?:\*\*Response Characters:\*\*\s*\d+\s*\n)?## Response\s*\n"
+)
+_OUTPUT_STEM_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})(?:-(\d{2}))?")
+
+
+def _extract_cron_response(raw: str) -> str:
+    """剥离 Hermes 落盘包装头（# Cron Job / ## Prompt），只提取真实 ## Response 正文。
+
+    若文件不含 Hermes 标准包装头（如手工写入或单元测试样本），原样返回。
+    """
+    if not raw:
+        return ""
+    stripped = raw.lstrip()
+    # 仅在文件具备 Hermes Cron 包装头特征时才切分 ## Response，避免误切普通 Markdown
+    if stripped.startswith("# Cron Job:") or "**Job ID:**" in stripped[:400]:
+        m = _HERMES_RESPONSE_SPLIT_RE.search(raw)
+        if m:
+            return raw[m.end():].strip()
+    return raw
+
+
+def _parse_output_run_at(stem: str) -> str:
+    """从产出文件名（如 2026-11-26_09-04-14）提取可读执行时间 'YYYY-MM-DD HH:MM'。"""
+    m = _OUTPUT_STEM_TS_RE.match(stem or "")
+    # 标准文件名提取到分钟级时间戳
+    if m:
+        return f"{m.group(1)} {m.group(2)}:{m.group(3)}"
+    # 非标准文件名仅在具备日期前缀时回退返回日期
+    if len(stem or "") >= 10 and re.match(r"^\d{4}-\d{2}-\d{2}$", stem[:10]):
+        return stem[:10]
+    return ""
 
 
 def _is_silent_cron_output(text: str) -> bool:
@@ -368,13 +527,14 @@ def _is_silent_cron_output(text: str) -> bool:
     """
     if not text:
         return False
+    cleaned = _extract_cron_response(text)
     # 去掉空白后只剩标记本身
-    compact = "".join(text.split()).upper()
+    compact = "".join(cleaned.split()).upper()
     return compact in {"[SILENT]", "SILENT", "[NO_CHANGE]", "NO_CHANGE"}
 
 
 def _find_cron_output(task_name: str, today: str, job_id: str = "") -> str | None:
-    """只读任务自己的产出：cron/output/<job_id>/<YYYY-MM-DD_HH-MM-SS>.md。
+    """只读任务自己的今日产出：cron/output/<job_id>/<YYYY-MM-DD_HH-MM-SS>.md。
 
     任务身份用 job 目录（job_id）精确判定，日期取文件名前 10 位并精确相等。
     旧实现按「任务名出现在正文里」匹配 —— 别家任务的输出提到这个名字就会
@@ -390,7 +550,32 @@ def _find_cron_output(task_name: str, today: str, job_id: str = "") -> str | Non
         if output_file.stem[:10] != today:
             continue
         try:
-            return output_file.read_text(encoding="utf-8")
+            raw = output_file.read_text(encoding="utf-8")
+            return _extract_cron_response(raw)
         except Exception:
             continue
     return None
+
+
+def _find_latest_cron_output(job_id: str) -> tuple[str | None, str | None, bool]:
+    """读取指定任务最近一次执行的产出，返回 (正文或None, 运行时刻, 是否静默)。"""
+    if not job_id or not _CRON_OUTPUT.is_dir():
+        return None, None, False
+    job_dir = _CRON_OUTPUT / job_id
+    if not job_dir.is_dir():
+        return None, None, False
+    for output_file in sorted(job_dir.glob("*.md"), reverse=True):
+        try:
+            raw = output_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        run_at = _parse_output_run_at(output_file.stem)
+        resp = _extract_cron_response(raw)
+        # 空文件继续向前找或视作无产出
+        if not resp or not resp.strip():
+            continue
+        # 最近一次为静默标记时，不返回 [SILENT] 文本，仅标记 silent=True
+        if _is_silent_cron_output(resp):
+            return None, run_at or None, True
+        return resp, run_at or None, False
+    return None, None, False

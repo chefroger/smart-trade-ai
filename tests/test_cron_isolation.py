@@ -187,3 +187,100 @@ class TestHooks:
             result="{}",
         )
         assert cb.job_company("job-a") is None
+
+    def test_remove_by_name_unbinds_via_result_id(self, env, monkeypatch):
+        """按任务名删除时从返回 JSON 的 removed_job.id 解绑真实 ID。"""
+        import trade.cron_binding as cb
+
+        cb.bind_job("job-a", env["a"]["id"])
+        monkeypatch.setattr(cb, "_current_company_id", lambda: env["a"]["id"])
+        cb.on_post_tool_call(
+            tool_name="cronjob_manage",
+            args={"action": "remove", "job_id": "A 的任务"},
+            result=json.dumps({"success": True, "removed_job": {"id": "job-a"}}),
+        )
+        assert cb.job_company("job-a") is None
+
+
+class TestHermesCronOutputAndInference:
+    """验证 Prompt 归属推断、已启用过滤、Hermes 包装头剥离及历史产出回显。"""
+
+    def test_infer_company_from_prompt_and_filter_disabled(self, env):
+        import trade.cron_binding as cb
+
+        cid_a = env["a"]["id"]
+        cid_b = env["b"]["id"]
+        env["jobs_file"].write_text(json.dumps({"jobs": [
+            {
+                "id": "job-morning",
+                "name": "🌅 早安简报",
+                "enabled": True,
+                "schedule": {"expr": "0 9 * * 1-5", "display": "0 9 * * 1-5"},
+                "prompt": f"当前公司：公司A（company_id={cid_a}）。生成今日简报。",
+            },
+            {
+                "id": "job-linkedin",
+                "name": "🔍 精准加人",
+                "enabled": True,
+                "schedule": {"expr": "0 10 * * 1-5", "display": "0 10 * * 1-5"},
+                "prompt": f"当前公司：公司A（company_id={cid_a}）。生成加人计划。",
+            },
+            {
+                "id": "job-paused",
+                "name": "📋 每周复盘",
+                "enabled": False,
+                "schedule": {"expr": "30 17 * * 5", "display": "30 17 * * 5"},
+                "prompt": f"当前公司：公司A（company_id={cid_a}）。生成周报。",
+            },
+        ]}, ensure_ascii=False), encoding="utf-8")
+
+        from datetime import date
+
+        today = date.today().isoformat()
+        # job-morning 今日已产出（带 Hermes 标准包装头）
+        d1 = env["output_dir"] / "job-morning"
+        d1.mkdir()
+        (d1 / f"{today}_09-04-14.md").write_text(
+            "# Cron Job: 🌅 早安简报\n\n"
+            "**Job ID:** job-morning\n"
+            f"**Run Time:** {today} 09:04:13\n\n"
+            "**Prompt Characters:** 120\n"
+            "## Prompt\n\n[IMPORTANT: system header]\n\n"
+            "**Response Characters:** 42\n"
+            "## Response\n\n"
+            "# 🌅 早安简报\n\n美元 USD **6.7088**\n",
+            encoding="utf-8",
+        )
+        # job-linkedin 只有历史产出，今日尚未到点
+        d2 = env["output_dir"] / "job-linkedin"
+        d2.mkdir()
+        (d2 / "2026-11-25_10-07-03.md").write_text(
+            "# Cron Job: 🔍 精准加人\n\n**Job ID:** job-linkedin\n\n"
+            "## Prompt\n\nprompt body\n\n## Response\n\nLinkedIn 今日搜索方案\n",
+            encoding="utf-8",
+        )
+
+        # 公司 A 能看到自己激活的 2 个任务（已暂停的不进入 active_items）
+        res_a = env["cron"].get_today_cron(cid_a)
+        active_a = res_a["active_items"]
+        assert [x["job_id"] for x in active_a] == ["job-morning", "job-linkedin"]
+        assert active_a[0]["is_today"] is True
+        assert "美元 USD" in active_a[0]["output"]
+        assert "[IMPORTANT:" not in active_a[0]["output"]
+        assert active_a[1]["is_today"] is False
+        assert active_a[1]["run_at"] == "2026-11-25 10:07"
+        assert "LinkedIn 今日搜索方案" in active_a[1]["output"]
+
+        # 归属已自动回填至 cron_job_companies，公司 B 看不到公司 A 的任务和产出
+        assert cb.job_company("job-morning") == cid_a
+        res_b = env["cron"].get_today_cron(cid_b)
+        assert res_b["active_items"] == []
+
+        # 单任务输出详情端点：公司 A 可读，公司 B 返回 404
+        detail = env["cron"].get_cron_job_output("job-linkedin", cid_a)
+        assert detail["output"] == "LinkedIn 今日搜索方案"
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            env["cron"].get_cron_job_output("job-linkedin", cid_b)
+        assert exc.value.status_code == 404

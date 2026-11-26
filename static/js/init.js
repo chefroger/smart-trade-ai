@@ -44,6 +44,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 首个公司 + 引导未完成 → 显示新手引导
         if (companies.length === 1 && !isOnboardingCompleted()) {
             showOnboardingGuide();
+            if (typeof loadCronStatus === 'function') loadCronStatus(true);
+            if (typeof loadTodos === 'function') loadTodos(true);
             startCronPolling();
             startVersionCheck();
             return;
@@ -95,6 +97,8 @@ function renderNoCompanyPage() {
         + '<button data-act="showAddCompanyModal">' + btnIcon('plus') + ' 创建公司</button>'
         + importBtn
         + '</div></div>');
+    // 未选公司时右栏也渲染标题与空态提示，避免定时任务面板空白
+    if (typeof _renderRailCron === 'function') _renderRailCron(null);
 }
 
 // #region delegated-actions —— 内联事件迁移（O-17 第二步），勿删标记
@@ -173,6 +177,7 @@ function renderNoCompanyPage() {
         'clearChat',
         'closeBackdrop',
         'closeCustomerDetail',
+        'copyCronOutput',
         'copySelf',
         'copySkillTrigger',
         'createCompany',
@@ -204,6 +209,7 @@ function renderNoCompanyPage() {
         'onboardingSkip',
         'onboardingStartOSINT',
         'onboardingStopOSINT',
+        'openCronOutputModal',
         'openCustomerWall',
         'openFollowUpModal',
         'pullMailbox',

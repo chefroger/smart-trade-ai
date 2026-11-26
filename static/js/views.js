@@ -372,6 +372,7 @@ function batchCreateCronTasks() {
     const checks = document.querySelectorAll('.task-template-check:checked');
     if (!checks.length) { toast('请至少选择一个任务模板'); return; }
 
+    const coName = (companies.find(c => c.id === currentCompanyId)?.name || '').trim();
     const allTemplates = getAllTemplates();
     const selected = [];
     checks.forEach(cb => {
@@ -381,7 +382,10 @@ function batchCreateCronTasks() {
         const editedTime = templateEdits[id] && templateEdits[id].time;
         const time = editedTime || t.time;
         const cronExpr = editedTime ? cronFromTime(editedTime) : (t.cron || cronFromTime(time));
-        const prompt = (templateEdits[id] && templateEdits[id].prompt) || t.prompt;
+        const rawPrompt = (templateEdits[id] && templateEdits[id].prompt) || t.prompt;
+        const prompt = (!/company_id\s*[:=]/.test(rawPrompt) && coName)
+            ? ('当前公司：' + coName + '（company_id=' + currentCompanyId + '）。所有数据查询必须限定在该公司范围内。 ' + rawPrompt)
+            : rawPrompt;
         selected.push(`任务名: ${t.name} | schedule: ${cronExpr} | Prompt: ${prompt}`);
     });
 
@@ -427,19 +431,22 @@ async function loadActiveCronJobs() {
         grid.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px;">暂无已激活的定时任务。请从上方模板库钩选后点击「批量生成」。</div>';
         return;
     }
-    grid.innerHTML = data.map(j => `
-        <div class="task-card">
-            <div class="task-card-header">
-                <span class="task-card-name">${esc(j.name)}</span>
-                <span style="font-size:10px;color:${j.enabled ? 'var(--accent-green)' : 'var(--text-muted)'};">${j.enabled ? '● 运行中' : '○ 已暂停'}</span>
-            </div>
-            <div class="task-card-schedule">🕐 ${esc(j.schedule)}</div>
-            ${j.next_run ? `<div style="font-size:11px;color:var(--accent-green);margin-bottom:6px;">▶ 下次执行：${esc(j.next_run)}</div>` : ''}
-            <div class="task-card-actions">
-                <button data-act="runActiveJob" data-arg="${esc(j.id)}">▶ 立即执行</button>
-            </div>
-        </div>
-    `).join('');
+    grid.innerHTML = data.map(function (j) {
+        const statusColor = j.enabled ? 'var(--accent-green)' : 'var(--text-muted)';
+        const statusLabel = j.enabled ? '● 运行中' : '○ 已暂停';
+        return '<div class="task-card">' +
+            '<div class="task-card-header">' +
+            '<span class="task-card-name">' + esc(j.name) + '</span>' +
+            '<span style="font-size:10px;color:' + statusColor + ';">' + statusLabel + '</span>' +
+            '</div>' +
+            '<div class="task-card-schedule">🕐 ' + esc(j.schedule) + '</div>' +
+            (j.next_run ? '<div style="font-size:11px;color:var(--accent-green);margin-bottom:4px;">▶ 下次执行：' + esc(j.next_run) + '</div>' : '') +
+            (j.run_at ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">📄 最近产出：' + esc(j.run_at) + '</div>' : '') +
+            '<div class="task-card-actions">' +
+            (j.has_output ? '<button data-act="openCronOutputModal" data-arg="' + esc(j.id) + '">' + btnIcon('book-open') + ' 查看输出</button>' : '') +
+            '<button data-act="runActiveJob" data-arg="' + esc(j.id) + '">▶ 立即执行</button>' +
+            '</div></div>';
+    }).join('');
 }
 
 function runActiveJob(jobId) {
@@ -1416,6 +1423,7 @@ async function onCompanyChange(cid) {
     _abortChatStream();
     // 清空 cron 输出记录，防止跨公司污染
     _shownCronOutputs = new Set();
+    if (typeof _cronOutputsByJob !== 'undefined') _cronOutputsByJob = {};
     // 清空"当前选中的库/客户"——它们是**上一家公司**的 id。留着会让下一次
     // 发消息把旧库塞进请求体：后端按新公司过滤后查不到（不会串数据），
     // 但 build_query 仍会走文档库分支注入 doc_context → 每次对话多付
@@ -1444,6 +1452,8 @@ async function onCompanyChange(cid) {
         // 首个公司 + 引导未完成 → 显示新手引导
         if (companies.length === 1 && !isOnboardingCompleted()) {
             showOnboardingGuide();
+            if (typeof loadCronStatus === 'function') loadCronStatus(true);
+            if (typeof loadTodos === 'function') loadTodos(true);
             return;
         }
         navToView('chat', 'daily', '今日简报');

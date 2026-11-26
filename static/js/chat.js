@@ -160,6 +160,7 @@ function _updateDailyBriefBadge(overdue) {
 // ═════════════════════ 全局 cron 轮询与工作台横幅 ═════════════════════
 let _cronPollTimer = null;
 let _shownCronOutputs = new Set();  // 已展示过的 cron 输出任务名
+let _cronOutputsByJob = {};         // 当前公司已激活定时任务最新产出缓存（jobKey -> item）
 
 // 标准任务时间表（与后端 standard_tasks 对应）
 const TASK_SCHEDULE = [
@@ -221,33 +222,167 @@ function stopVersionCheck() {
     if (_versionPollTimer) { clearInterval(_versionPollTimer); _versionPollTimer = null; }
 }
 
+// #region cron-rail-render
+function _cronOutputPreview(raw) {
+    /** 将 Hermes cron Markdown 正文压缩为干净可读的单段摘要。 */
+    const cleaned = String(raw || '')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/^\s*\|[-:\s|]+\|\s*$/gm, ' ')
+        .replace(/^\s*[-━═—]{3,}\s*$/gm, ' ')
+        .replace(/[|>`*_~]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return cleaned.length > 120 ? (cleaned.slice(0, 120) + '…') : cleaned;
+}
+
+function _formatCronRunBadge(task) {
+    /** 生成右栏定时任务条目的右侧时间/状态角标。 */
+    const runAt = String((task && task.run_at) || '');
+    const timeStr = String((task && task.time) || '');
+    if (task && task.output) {
+        if (task.is_today) {
+            const hm = runAt.length >= 16 ? runAt.slice(11, 16) : timeStr;
+            return t('brief.cron_today_tag') + (hm ? ' ' + hm : '');
+        }
+        if (runAt.length >= 16) return runAt.slice(5, 16);
+        return runAt || timeStr;
+    }
+    if (task && task.silent) {
+        const prefix = runAt.length >= 16 ? (runAt.slice(5, 16) + ' · ') : '';
+        return prefix + t('brief.cron_silent');
+    }
+    return (timeStr ? (timeStr + ' · ') : '') + t('brief.cron_waiting');
+}
+
+function _renderRailCron(data) {
+    /** 渲染常驻右栏「定时任务输出」：展示当前公司所有已设置并激活的 Hermes cron 任务及产出。 */
+    const railCron = document.getElementById('rail-cron');
+    if (!railCron) return;
+
+    const activeItems = (data && Array.isArray(data.active_items)) ? data.active_items : [];
+    const fallbackOuts = (data && Array.isArray(data.completed))
+        ? data.completed.filter(function (x) { return x && x.output; })
+        : [];
+    const items = activeItems.length ? activeItems : fallbackOuts;
+
+    _cronOutputsByJob = {};
+    items.forEach(function (item, idx) {
+        const key = String(item.job_id || ('idx-' + idx));
+        _cronOutputsByJob[key] = item;
+    });
+
+    const lblText = 'CRON' + (items.length ? (' · ' + String(items.length)) : '');
+    let cronHtml = '<div class="rail-bh"><span class="t">' +
+        (typeof iconHtml === 'function' ? iconHtml('calendar-clock', 16) : '') +
+        esc(t('brief.cron')) +
+        '</span><span class="lbl">' + esc(lblText) + '</span></div>';
+
+    if (!data) {
+        cronHtml += '<p class="rail-line">' + esc(t('brief.cron_no_jobs')) + '</p>';
+        railCron.innerHTML = cronHtml;
+        return;
+    }
+
+    if (!items.length) {
+        cronHtml += '<p class="rail-line">' + esc(t('brief.cron_no_jobs')) + '</p>' +
+            '<button type="button" class="rail-cron-setup-btn" data-act="navToView" data-args=\'["tasks"]\'>' +
+            esc(t('brief.cron_setup')) + '</button>';
+        railCron.innerHTML = cronHtml;
+        return;
+    }
+
+    items.forEach(function (task, idx) {
+        const key = String(task.job_id || ('idx-' + idx));
+        const badge = _formatCronRunBadge(task);
+        const nameText = task.name || task.time || key;
+        if (task.output) {
+            const preview = _cronOutputPreview(task.output);
+            cronHtml += '<div class="rail-cron-item clickable" data-act="openCronOutputModal" data-arg="' +
+                esc(key) + '" title="' + esc(t('brief.cron_view_full')) + '">' +
+                '<div class="rail-cron-head"><span class="rail-cron-name">' + esc(nameText) + '</span>' +
+                '<span class="mono' + (task.is_today ? ' today' : '') + '">' + esc(badge) + '</span></div>' +
+                '<div class="rail-cron-preview">' + esc(preview) + '</div>' +
+                '</div>';
+        } else {
+            cronHtml += '<div class="rail-cron-item pending">' +
+                '<div class="rail-cron-head"><span class="rail-cron-name">' + esc(nameText) + '</span>' +
+                '<span class="mono">' + esc(badge) + '</span></div>' +
+                (task.schedule ? '<div class="rail-cron-sub">' + esc(task.schedule) + '</div>' : '') +
+                '</div>';
+        }
+    });
+    railCron.innerHTML = cronHtml;
+}
+// #endregion cron-rail-render
+
+async function openCronOutputModal(jobKey) {
+    /** 打开弹窗展示指定 Hermes cron 任务的完整 Markdown 输出。 */
+    const key = String(jobKey || '');
+    if (!key) return;
+    let item = _cronOutputsByJob[key] || null;
+    if ((!item || !item.output) && key.indexOf('idx-') !== 0) {
+        const fetched = await api('GET', '/api/trade/cron/jobs/' + encodeURIComponent(key) + '/output');
+        if (fetched) {
+            item = fetched;
+            _cronOutputsByJob[key] = fetched;
+        }
+    }
+    if (!item || !item.output) {
+        toast(item && item.silent ? t('brief.cron_silent') : t('brief.cron_waiting'));
+        return;
+    }
+
+    const old = document.getElementById('cron-output-modal');
+    if (old) old.remove();
+
+    const metaParts = [];
+    if (item.run_at) metaParts.push(item.run_at);
+    if (item.schedule) metaParts.push('Cron: ' + item.schedule);
+    const metaText = metaParts.join(' · ');
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.id = 'cron-output-modal';
+    backdrop.onclick = function (e) { if (e.target === backdrop) backdrop.remove(); };
+    backdrop.innerHTML =
+        '<div class="modal" style="max-width:760px;width:95%;">' +
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px;">' +
+        '<div><h3 style="margin:0;">' + esc(item.name || t('brief.cron')) + '</h3>' +
+        (metaText ? '<div style="font-size:11.5px;color:var(--text-muted);font-family:var(--mono);margin-top:3px;">' + esc(metaText) + '</div>' : '') +
+        '</div>' +
+        '<button type="button" class="slide-panel-close" data-act="removeById" data-arg="cron-output-modal">×</button>' +
+        '</div>' +
+        '<div class="cron-output-modal-body msg-body" id="cron-output-modal-md"></div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
+        '<button type="button" class="btn" data-act="copyCronOutput" data-arg="' + esc(key) + '">' + btnIcon('copy') + ' 复制内容</button>' +
+        '<button type="button" class="btn btn-primary" data-act="removeById" data-arg="cron-output-modal">关闭</button>' +
+        '</div></div>';
+
+    document.body.appendChild(backdrop);
+    const mdBody = backdrop.querySelector('#cron-output-modal-md');
+    if (mdBody) _renderSafeMarkdownInto(mdBody, item.output);
+}
+
+function copyCronOutput(jobKey) {
+    /** 复制指定定时任务输出的 Markdown 原文到剪贴板。 */
+    const item = _cronOutputsByJob[String(jobKey || '')];
+    if (!item || !item.output) return;
+    navigator.clipboard.writeText(String(item.output));
+    toast(t('toast.copied'));
+}
+
 async function loadCronStatus(isPoll = false) {
-    if (!currentCompanyId) return;
+    if (!currentCompanyId) {
+        _renderRailCron(null);
+        return;
+    }
     const data = await api('GET', '/api/trade/cron/today', null, undefined, {
         silent: isPoll,
     });
     if (!data) return;
-    const {completed, pending, current_time} = data;
 
-    // 定时任务输出（待办已迁到独立 /todos，由 loadTodos 渲染）
-    const railCron = document.getElementById('rail-cron');
-    if (railCron) {
-        let cronHtml = '<div class="rail-bh"><span class="t">' +
-            (typeof iconHtml === 'function' ? iconHtml('calendar-clock', 16) : '') +
-            esc(t('brief.cron')) +
-            '</span><span class="lbl">CRON</span></div>';
-        const outs = completed.filter(function (x) { return x.output; }).slice(0, 4);
-        // 今天没有定时任务产出：给一行说明，而不是留空白
-        if (!outs.length) {
-            cronHtml += '<p class="rail-line">' + esc(t('brief.cron_empty')) + '</p>';
-        }
-        outs.forEach(function (task) {
-            const line = String(task.output || '').replace(/\s+/g, ' ').slice(0, 90);
-            cronHtml += '<div class="rail-cron-item"><span class="mono">' +
-                esc(task.time || '') + '</span><span>' + esc(line) + '</span></div>';
-        });
-        railCron.innerHTML = cronHtml;
-    }
+    // 定时任务输出（展示当前公司已设置并激活的 Hermes cron 任务及其最新产出）
+    _renderRailCron(data);
     loadTodayBrief(isPoll).catch(function () {});
 
     // 顶部进度横幅已下线：其功能（今日简报/待办/定时任务）由常驻右栏承载。
@@ -752,6 +887,21 @@ function _msgHHMM(ts) {
     return pad(now.getHours()) + ':' + pad(now.getMinutes());
 }
 
+function _renderSafeMarkdownInto(targetEl, content) {
+    /** 将 Markdown 安全渲染进目标节点（禁止 data-* 属性并中和外链图片）。 */
+    const raw = marked.parse(content || '');
+    targetEl.innerHTML = DOMPurify.sanitize(raw, {
+        ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6',
+            'blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'],
+        // 不放行 style/id：模型输出不该带自定义样式与可覆盖的 DOM id（审计 P1-E）
+        ALLOWED_ATTR: ['href','target','class','src','alt','width','height'],
+        // S1：模型输出不得携带 data-*（可被委托层当成动作执行）
+        ALLOW_DATA_ATTR: false,
+    });
+    // 跨源图片改为点击加载，防提示注入零点击外带数据
+    if (typeof neutralizeRemoteImages === 'function') neutralizeRemoteImages(targetEl);
+}
+
 function addMsg(role, content, files, save, convId, blocks, timeStr) {
     const ct = currentChatContainer;
     if (!ct) return;
@@ -764,17 +914,7 @@ function addMsg(role, content, files, save, convId, blocks, timeStr) {
     div.className = `message ${role}`;
     const body = document.createElement('div');
     body.className = 'msg-body';
-    const raw = marked.parse(content || '');
-    body.innerHTML = DOMPurify.sanitize(raw, {
-        ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6',
-            'blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'],
-        // 不放行 style/id：模型输出不该带自定义样式与可覆盖的 DOM id（审计 P1-E）
-        ALLOWED_ATTR: ['href','target','class','src','alt','width','height'],
-        // S1：模型输出不得携带 data-*（可被委托层当成动作执行）
-        ALLOW_DATA_ATTR: false,
-    });
-    // 跨源图片改为点击加载，防提示注入零点击外带数据
-    if (typeof neutralizeRemoteImages === 'function') neutralizeRemoteImages(body);
+    _renderSafeMarkdownInto(body, content);
     // 附件 chip：气泡下方单独一行（mockup .att），不再塞进消息正文
     let attachEl = null;
     if (files && files.length) {
