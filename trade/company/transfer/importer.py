@@ -1073,7 +1073,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         conn.commit()
         committed = True
 
-        # Hermes MEMORY.md
+        # 公司专属 MEMORY.md（写入目标公司的物理隔离目录，不再混入全局文件）
         memory_file = staging / "memory" / "hermes_memory.md"
         if memory_file.is_file():
             blocks = [
@@ -1081,8 +1081,11 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 if block.strip()
             ]
             target_name = target.get("name") or source_name
+            target_slug = str(target.get("slug") or "")
             rewritten = [merge_mod.rewrite_company_tag(block.strip(), target_name) for block in blocks]
-            report["memory"] = merge_mod.append_memory_blocks(rewritten)
+            report["memory"] = merge_mod.append_memory_blocks(
+                rewritten, company_slug=target_slug
+            )
 
         # Hindsight best-effort
         report["hindsight"] = replay_hindsight_async(

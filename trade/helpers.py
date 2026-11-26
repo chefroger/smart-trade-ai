@@ -874,9 +874,10 @@ def build_query(
         # 再拼 [SKILL AUGMENTATION] 块。用原始 query 替代。
         augmented_query = query
 
-    # 7. History block — OSINT 类 skill 不注入历史，每次背调目标是独立的
-    #    非 OSINT 场景注入最近对话历史，帮助 AI 保持上下文连续
+    # 7. History & Company Memory block — OSINT 类 skill 不注入历史/内部记忆，每次背调目标独立
+    #    非 OSINT 场景注入最近对话历史 + 公司专属 MEMORY.md（跳过与最近历史重复的轮次）
     history_block = ""
+    company_memory_block = ""
     if matched_name not in _OSINT_SKILL_NAMES:
         # 估算已有 prompt 长度，动态决定注入多少条历史
         pre_history_chars = (
@@ -886,9 +887,32 @@ def build_query(
         history_block, _ = _get_history_block(
             company_id, pre_history_chars, customer_id=customer_id
         )
+        if company_slug:
+            # 收集最近历史中已出现的提问前缀，避免同一轮问答重复注入两遍
+            recent_q_prefixes: set[str] = set()
+            if company_id and history_block:
+                for r in _cm.get_recent(company_id, limit=20, customer_id=customer_id) or []:
+                    q_txt = (r.get("query") or "").strip()
+                    if q_txt:
+                        recent_q_prefixes.add(q_txt[:120])
+            active_customer_name = ""
+            if customer_id and company_id:
+                cust_obj = _cust.get(customer_id, company_id=company_id)
+                if cust_obj:
+                    active_customer_name = str(cust_obj.get("name") or "")
+            from trade import memory as _mem_mod
 
-    # 8. Assemble final user message：system → 客户 → 订单 → 文档库 → 历史 → 查询
+            company_memory_block = _mem_mod.read_company_hermes_memory(
+                company_slug,
+                customer_name=active_customer_name,
+                exclude_queries=recent_q_prefixes,
+            )
+
+    # 8. Assemble final user message：system → 客户 → 订单 → 文档库 → 公司记忆 → 历史 → 查询
     final_prompt = system_prompt + customer_context + order_context + doc_context
+    if company_memory_block:
+        # 注入公司专属 MEMORY.md 中未与最近历史重复的跨会话/导入记忆
+        final_prompt = f"{final_prompt}\n\n{company_memory_block}"
     if history_block:
         # 有历史时才注入，避免多余空行
         final_prompt = f"{final_prompt}\n\n{history_block}"

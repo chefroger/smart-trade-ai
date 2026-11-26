@@ -737,8 +737,11 @@ def test_memory_blocks_are_appended_once(desktop, tmp_path, monkeypatch):
 
     report = import_company(package, target_company_id=target["id"])
     assert report["memory"]["added"] == 1
-    text = memory_file.read_text(encoding="utf-8")
+    target_mem_path = Path(report["memory"]["path"])
+    assert target_mem_path != memory_file
+    text = target_mem_path.read_text(encoding="utf-8")
     assert f"[公司: {target_name}]" in text
+    assert f"[公司: {target_name}]" not in memory_file.read_text(encoding="utf-8")
 
     again = import_company(package, target_company_id=target["id"])
     assert again["memory"]["added"] == 0

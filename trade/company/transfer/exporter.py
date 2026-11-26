@@ -455,15 +455,34 @@ def export_company(company_id: int, dest_zip: Path | None = None,
             manual_paths=manual_paths,
         )
 
+        collected_blocks: list[str] = []
+        seen_hashes: set[str] = set()
+        # 1) 优先读取当前公司物理隔离的专属 MEMORY.md（P2-新1 闭环）
+        company_mem = merge_mod._company_memory_file(str(company.get("slug") or ""))
+        if company_mem is not None and company_mem.is_file() and not company_mem.is_symlink():
+            for blk in merge_mod.extract_isolated_memory_blocks(
+                company_mem.read_text(encoding="utf-8-sig")
+            ):
+                digest = merge_mod.block_hash(blk)
+                if digest not in seen_hashes:
+                    seen_hashes.add(digest)
+                    collected_blocks.append(blk)
+        # 2) 兼容合并历史遗留在全局 ~/.hermes/memories/MEMORY.md 中带本公司标签的条目
         memory_path = merge_mod._memory_file()
         if memory_path.is_file():
-            blocks = merge_mod.extract_memory_blocks(
+            for blk in merge_mod.extract_memory_blocks(
                 memory_path.read_text(encoding="utf-8-sig"), company.get("name") or ""
-            )
+            ):
+                digest = merge_mod.block_hash(blk)
+                if digest not in seen_hashes:
+                    seen_hashes.add(digest)
+                    collected_blocks.append(blk)
+        if collected_blocks or (company_mem and company_mem.is_file()) or memory_path.is_file():
             memory_dir = staging / "memory"
             memory_dir.mkdir(parents=True, exist_ok=True)
             (memory_dir / "hermes_memory.md").write_text(
-                "\n\n".join(blocks) + ("\n" if blocks else ""), encoding="utf-8"
+                "\n\n".join(collected_blocks) + ("\n" if collected_blocks else ""),
+                encoding="utf-8",
             )
 
         (staging / "manifest.json").write_text(

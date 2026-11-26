@@ -11,10 +11,17 @@ Trade AI Assistant — 记忆桥接层（Hindsight 集成）。
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# 公司专属 MEMORY.md 段落标题与滚动容量上限（防止长期运行无限膨胀 Prompt）
+_MEMORY_SECTION_HEADER = "## Foreign Trade Assistant — B2B Trade Memory\n"
+_MAX_COMPANY_MEMORY_BLOCKS = 30
+_MEMORY_ENTRY_TS_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\](?P<ctx>.*)$")
+_MEMORY_CUSTOMER_TAG_RE = re.compile(r"(?:^|\[|,\s*)客户:\s*([^,\]]+)")
 
 # ── Hindsight 可用性检测 ─────────────────────────────────────────────────────
 
@@ -358,26 +365,41 @@ def _is_safe_slug(slug: str) -> bool:
     return True
 
 
+def _resolve_trade_home() -> Path:
+    """解析 Trade 数据根目录（优先 TRADE_HOME 环境变量）。"""
+    trade_home = os.environ.get("TRADE_HOME", "").strip()
+    if not trade_home:
+        # Windows 与 POSIX 默认路径保持与 database._get_db_path 一致
+        if os.name == "nt":
+            local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+            trade_home = str(Path(local) / "trade")
+        else:
+            trade_home = str(Path.home() / ".trade")
+    return Path(trade_home)
+
+
 def _resolve_hermes_memory_paths(company_slug: str = "") -> tuple[Path, Path] | None:
     """解析 Hermes 原生记忆文件与锁文件路径（优先按公司物理隔离）。
 
     - 传入合法 `company_slug` 时，落盘到 `TRADE_HOME/{slug}/memories/MEMORY.md`，
       彻底杜绝多公司共享 `~/.hermes/memories/MEMORY.md` 导致的上下文串味。
-    - 未传 `company_slug` 时，仅当活跃公司数 <= 1 才回退全局 `~/.hermes/memories/MEMORY.md`；
-      多公司场景下未指定归属公司一律返回 None（fail-closed）。
+    - 未传 `company_slug` 时，仅当数据库确认活跃公司数 <= 1 才回退全局 `~/.hermes/memories/MEMORY.md`；
+      多公司场景或数据库查询异常时一律返回 None（fail-closed，修复 O-新33）。
     """
     # 有合法公司标识：写入该公司专属目录
     if _is_safe_slug(company_slug):
-        trade_home = os.environ.get("TRADE_HOME", "").strip()
-        if not trade_home:
-            # Windows 与 POSIX 默认路径保持与 database._get_db_path 一致
-            if os.name == "nt":
-                local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-                trade_home = str(Path(local) / "trade")
-            else:
-                trade_home = str(Path.home() / ".trade")
-        mem_dir = Path(trade_home) / company_slug.strip() / "memories"
+        slug_dir = _resolve_trade_home() / company_slug.strip()
+        # 拒绝跟随公司目录或 memories 目录层级的符号链接
+        if slug_dir.is_symlink():
+            return None
+        mem_dir = slug_dir / "memories"
+        if mem_dir.is_symlink():
+            return None
         return mem_dir / "MEMORY.md", mem_dir / "MEMORY.md.lock"
+
+    # 未传入合法公司 slug 时，若入参非空说明是不安全路径（如 ../），直接拒绝
+    if company_slug and company_slug.strip():
+        return None
 
     # 未传入公司 slug 时检查当前实例是否为多公司环境
     try:
@@ -391,12 +413,13 @@ def _resolve_hermes_memory_paths(company_slug: str = "") -> tuple[Path, Path] | 
             active_count = int(row["c"] or 0) if row else 0
         finally:
             conn.close()
-        # 多公司并存但缺少归属公司标识：拒绝写入全局共享记忆文件
-        if active_count > 1:
-            return None
     except Exception:
-        # 数据库尚未初始化或单测脱离主库时允许回退单机路径
-        pass
+        # O-新33：数据库故障窗口下无法排除多公司并存，按 fail-closed 拒绝写全局共享文件
+        return None
+
+    # 多公司并存但缺少归属公司标识：拒绝写入全局共享记忆文件
+    if active_count > 1:
+        return None
 
     hermes_env = os.environ.get("HERMES_HOME", "").strip()
     if hermes_env and Path(hermes_env).is_absolute():
@@ -409,6 +432,22 @@ def _resolve_hermes_memory_paths(company_slug: str = "") -> tuple[Path, Path] | 
         hermes_root = Path.home() / ".hermes"
     mem_dir = hermes_root / "memories"
     return mem_dir / "MEMORY.md", mem_dir / "MEMORY.md.lock"
+
+
+def _split_section_entries(body: str) -> list[str]:
+    """按空行切分 B2B 记忆段落内的条目块。"""
+    blocks: list[str] = []
+    cur: list[str] = []
+    for line in (body or "").splitlines():
+        if not line.strip():
+            if cur:
+                blocks.append("\n".join(cur).strip())
+                cur = []
+        else:
+            cur.append(line)
+    if cur:
+        blocks.append("\n".join(cur).strip())
+    return blocks
 
 
 def retain_to_hermes_memory(
@@ -502,15 +541,27 @@ def retain_to_hermes_memory(
             existing = ""
             # 如果记忆文件已存在，读取其现有内容
             if MEMORY_FILE.exists():
-                existing = MEMORY_FILE.read_text(encoding="utf-8")
-            SECTION = "## Foreign Trade Assistant — B2B Trade Memory\n"
+                existing = MEMORY_FILE.read_text(encoding="utf-8-sig")
+            SECTION = _MEMORY_SECTION_HEADER
             # 如果文件中还没有 B2B 记忆段落，则在文件开头创建
             if SECTION not in existing:
                 content_str = SECTION + entry + "\n\n" + existing if existing else SECTION + entry
             else:
-                # 如果已有段落，将新条目插入到段落标题之后（最新在最前）
+                # 已有段落时：把新条目置顶并对历史条目按上限滚动裁剪，防止文件无限膨胀
                 idx_s = existing.find(SECTION) + len(SECTION)
-                content_str = existing[:idx_s] + entry + "\n\n" + existing[idx_s:]
+                prefix = existing[:idx_s]
+                rest = existing[idx_s:]
+                # 若后面还有其它二级标题段落，保留后续段落不误裁
+                next_sec_idx = rest.find("\n## ")
+                if next_sec_idx >= 0:
+                    b2b_body = rest[:next_sec_idx]
+                    tail_sections = rest[next_sec_idx:]
+                else:
+                    b2b_body = rest
+                    tail_sections = ""
+                old_blocks = _split_section_entries(b2b_body)
+                kept_blocks = [entry.strip(), *old_blocks][:_MAX_COMPANY_MEMORY_BLOCKS]
+                content_str = prefix + "\n\n".join(kept_blocks) + "\n" + tail_sections
             MEMORY_FILE.write_text(content_str, encoding="utf-8")
         finally:
             # 释放文件锁，确保即使写入失败也会解锁
@@ -529,3 +580,84 @@ def retain_to_hermes_memory(
         return True
     except Exception:
         return False
+
+
+def read_company_hermes_memory(
+    company_slug: str,
+    *,
+    customer_name: str = "",
+    exclude_queries: set[str] | None = None,
+    max_chars: int = 2400,
+) -> str:
+    """读取当前公司物理隔离的 MEMORY.md，返回可注入 Prompt 的记忆摘要块。
+
+    - 仅读取 `TRADE_HOME/{slug}/memories/MEMORY.md`（不读全局共享文件）；
+    - 用户关闭长期记忆开关时返回空串；
+    - 传入 `customer_name` 时过滤掉明确归属其它客户的条目，防跨客户泄漏报价；
+    - 传入 `exclude_queries` 时跳过已在「最近对话历史」中注入的同轮问答，省 Token。
+    """
+    # 开关关闭或缺少合法公司 slug 时不注入任何记忆
+    if not is_enabled() or not _is_safe_slug(company_slug):
+        return ""
+
+    resolved = _resolve_hermes_memory_paths(company_slug)
+    if resolved is None:
+        return ""
+    memory_file, _ = resolved
+    # 拒绝符号链接或不存在的文件
+    if memory_file.is_symlink() or not memory_file.is_file():
+        return ""
+
+    try:
+        raw = memory_file.read_text(encoding="utf-8-sig")
+    except Exception:
+        return ""
+    if not raw.strip():
+        return ""
+
+    # 剥离段落头，提取全部条目块
+    body = raw
+    if _MEMORY_SECTION_HEADER.strip() in body:
+        idx = body.find(_MEMORY_SECTION_HEADER.strip()) + len(_MEMORY_SECTION_HEADER.strip())
+        body = body[idx:]
+    blocks = _split_section_entries(body)
+    if not blocks:
+        return ""
+
+    norm_customer = customer_name.strip().casefold() if customer_name else ""
+    seen_queries = exclude_queries or set()
+    selected: list[str] = []
+    used_chars = 0
+
+    for block in blocks:
+        lines = block.splitlines()
+        if not lines:
+            continue
+        first_line = lines[0].strip()
+        m_ts = _MEMORY_ENTRY_TS_RE.match(first_line)
+
+        # 指定了当前客户时，剔除带有其它客户标签的条目（无客户标签的公司级条目保留）
+        if norm_customer and m_ts:
+            m_cust = _MEMORY_CUSTOMER_TAG_RE.search(m_ts.group("ctx") or "")
+            if m_cust and m_cust.group(1).strip().casefold() != norm_customer:
+                continue
+
+        # 跳过已由 SQLite 最近历史块注入过的同一条提问，避免同轮重复消耗 Token
+        if seen_queries:
+            q_line = next(
+                (ln.strip()[3:].strip() for ln in lines[1:] if ln.strip().startswith("Q: ")),
+                "",
+            )
+            if q_line and q_line[:120] in seen_queries:
+                continue
+
+        # 预算裁剪：至少保证不超出 max_chars
+        addition = len(block) + 2
+        if used_chars + addition > max_chars:
+            break
+        selected.append(block)
+        used_chars += addition
+
+    if not selected:
+        return ""
+    return "## 公司对话记忆（MEMORY.md）\n" + "\n\n".join(selected) + "\n"

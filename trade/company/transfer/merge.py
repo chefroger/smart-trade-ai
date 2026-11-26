@@ -84,17 +84,40 @@ def _memory_file() -> Path:
     return Path(hermes_root) / "memories" / "MEMORY.md"
 
 
-def append_memory_blocks(blocks: list[str]) -> dict:
-    """把公司记忆块追加到 MEMORY.md 的 B2B 段；按块 hash 去重。
+def _company_memory_file(company_slug: str) -> Path | None:
+    """解析公司专属 MEMORY.md 路径；slug 非法时返回 None。"""
+    try:
+        from trade.memory import _is_safe_slug, _resolve_hermes_memory_paths
+
+        if not _is_safe_slug(company_slug):
+            return None
+        resolved = _resolve_hermes_memory_paths(company_slug)
+        return resolved[0] if resolved else None
+    except Exception:
+        return None
+
+
+def extract_isolated_memory_blocks(text: str) -> list[str]:
+    """提取公司专属 MEMORY.md 中的全部有效条目块（无需按全局公司名标签过滤）。"""
+    if not text:
+        return []
+    return _split_all_blocks(text)
+
+
+def append_memory_blocks(blocks: list[str], *, company_slug: str = "") -> dict:
+    """把公司记忆块追加到目标公司专属 MEMORY.md（无 slug 时回退全局路径）；按块 hash 去重。
 
     返回 {"added": n, "skipped": n, "path": str}。
     """
+    isolated = _company_memory_file(company_slug) if company_slug else None
+    memory_file = isolated if isolated is not None else _memory_file()
     if not blocks:
-        return {"added": 0, "skipped": 0, "path": str(_memory_file())}
+        return {"added": 0, "skipped": 0, "path": str(memory_file)}
 
-    memory_file = _memory_file()
     memory_file.parent.mkdir(parents=True, exist_ok=True)
     lock_file = memory_file.with_suffix(memory_file.suffix + ".lock")
+    if memory_file.is_symlink() or lock_file.is_symlink():
+        raise RuntimeError("refusing to write symlinked MEMORY.md")
     section = "## Foreign Trade Assistant — B2B Trade Memory\n"
     added = skipped = 0
 

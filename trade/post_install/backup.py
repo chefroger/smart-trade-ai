@@ -151,6 +151,22 @@ def backup_trade(output_dir: str | None = None) -> str:
                         rel = str(f.relative_to(trade_home))
                         sources.append((f, f".trade/{rel}"))
 
+    # 2.5) 公司级物理隔离记忆目录（~/.trade/{slug}/memories/，P2-新1 闭环）
+    _reserved_top = {
+        "data", "companies", "prompts", "backups",
+        "venv", "venv.new", "foreign-trade-assistant",
+    }
+    if trade_home.is_dir():
+        for entry in trade_home.iterdir():
+            if not entry.is_dir() or entry.is_symlink() or entry.name in _reserved_top:
+                continue
+            co_mem_dir = entry / "memories"
+            if co_mem_dir.is_dir() and not co_mem_dir.is_symlink():
+                for f in co_mem_dir.rglob("*"):
+                    if f.is_file() and not f.is_symlink() and f.suffix in (".md", ".json", ".txt"):
+                        rel = f.relative_to(trade_home).as_posix()
+                        sources.append((f, f".trade/{rel}"))
+
     # 3) 系统提示词（prompts/system.md 等）
     prompts_dir = trade_home / "prompts"
     if prompts_dir.is_dir():
@@ -314,6 +330,24 @@ def restore_trade(backup_file: str = "") -> str:
         dst_dir.mkdir(parents=True, exist_ok=True)
         shutil.copytree(str(src_dir), str(dst_dir), dirs_exist_ok=True)
         restored.append(label)
+
+    # 还原公司级物理隔离记忆目录（.trade/{slug}/memories/）
+    _reserved_restore = {
+        "data", "companies", "prompts", "memories", "skills", ".hermes",
+    }
+    restored_co_mem = False
+    if root.is_dir():
+        for sub in root.iterdir():
+            if not sub.is_dir() or sub.is_symlink() or sub.name in _reserved_restore:
+                continue
+            src_co_mem = sub / "memories"
+            if src_co_mem.is_dir() and not src_co_mem.is_symlink():
+                dst_co_mem = trade_home / sub.name / "memories"
+                dst_co_mem.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(str(src_co_mem), str(dst_co_mem), dirs_exist_ok=True)
+                restored_co_mem = True
+    if restored_co_mem:
+        restored.append("company_memories")
 
     shutil.rmtree(tmp_dir, ignore_errors=True)
 

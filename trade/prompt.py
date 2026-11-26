@@ -64,7 +64,7 @@ COMPANY_ISOLATION_BLOCK = """# Data Isolation — READ BEFORE ANY DATA ACCESS
 You are working for a specific company. **NEVER mix data across companies.**
 
 When using `read_file`, `memory`, or any tool that returns stored data:
-- **Always filter to the current company only.** Memory entries (Hermes MEMORY.md) are tagged with `[公司: XXX]` — only use entries tagged with your current company name.
+- **Always filter to the current company only.** Company-isolated memory (`TRADE_HOME/<slug>/memories/MEMORY.md`) is automatically scoped and injected for the active company; if any global Hermes `MEMORY.md` entries appear, only use entries tagged with `[公司: XXX]` matching your current company name.
 - If you see data tagged with other company names, **ignore them completely**. Do not mention them. Do not list them.
 - **Ask for the current company name** if you're unsure — the user started this conversation within a company context, and all tools should operate within that context.
 - SQL database queries (from `database` tool) are automatically scoped to the current company — trust the results as company-isolated.
