@@ -218,14 +218,19 @@ _COUNTRY_ALIASES = {
 
 
 def _match_country_tips(country: str) -> list[str]:
+    """根据国家名称匹配商务礼仪提示，英文别名按词边界匹配以防缩写子串误判。"""
+    import re as _re
+
     s = str(country or "")
     lower = s.lower()
     normalized = s
-    for en, zh in _COUNTRY_ALIASES.items():
-        if en in lower:
+    # 长别名优先匹配，且要求前后非英文字母（防止 "uk" 误命中 "Ukraine"）
+    for en, zh in sorted(_COUNTRY_ALIASES.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if _re.search(rf"(?<![a-z]){_re.escape(en)}(?![a-z])", lower):
             normalized = zh
             break
     for key, tips in _COUNTRY_TIPS.items():
+        # 命中已知中文国家名则返回对应礼仪清单
         if key in normalized:
             return tips
     return _GENERIC_TIPS

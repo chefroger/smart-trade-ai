@@ -104,20 +104,26 @@ def list_events(job_id: int, after_seq: int = 0, limit: int = 500) -> list[dict]
 
 
 def append_event(job_id: int, event_type: str, payload: dict | None = None) -> int:
-    """追加一条事件，返回新 seq（同一任务只有 runner 写入，天然串行）。"""
+    """追加一条事件，返回新 seq（写事务串行化，防止工作线程与取消线程并发撞键）。"""
     conn = get_connection()
     try:
-        cur = conn.execute(
-            "INSERT INTO osint_job_events(job_id, seq, type, payload_json) "
-            "SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ? "
-            "FROM osint_job_events WHERE job_id = ?",
-            (job_id, event_type, json.dumps(payload or {}, ensure_ascii=False), job_id),
-        )
-        conn.commit()
-        row = conn.execute(
-            "SELECT seq FROM osint_job_events WHERE rowid = ?", (cur.lastrowid,)
-        ).fetchone()
-        return int(row["seq"]) if row else 0
+        # BEGIN IMMEDIATE 保证并发追加事件时 MAX(seq)+1 分配互斥
+        begin_immediate(conn)
+        try:
+            cur = conn.execute(
+                "INSERT INTO osint_job_events(job_id, seq, type, payload_json) "
+                "SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ? "
+                "FROM osint_job_events WHERE job_id = ?",
+                (job_id, event_type, json.dumps(payload or {}, ensure_ascii=False), job_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT seq FROM osint_job_events WHERE rowid = ?", (cur.lastrowid,)
+            ).fetchone()
+            return int(row["seq"]) if row else 0
+        except Exception:
+            conn.rollback()
+            raise
     finally:
         conn.close()
 

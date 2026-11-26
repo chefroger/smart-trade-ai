@@ -118,10 +118,11 @@ async function loadCustomersData() {
     if (typeof _updateDailyBriefBadge === 'function') {
         _updateDailyBriefBadge(_customerSummary && _customerSummary.overdue);
     }
-    // Enrich with library associations
-    for (let c of allCustomers) {
-        const libs = await api('GET', `/api/trade/customers/${c.id}/libraries`) || [];
-        c._libraries = libs;
+    // 直接复用列表聚合返回的 libraries，消除逐客户 N+1 串行请求
+    for (const c of allCustomers) {
+        if (Array.isArray(c.libraries)) {
+            c._libraries = c.libraries;
+        }
     }
     $('customers-loading').classList.add('hidden');
     _refreshCustomerFilterOptions();

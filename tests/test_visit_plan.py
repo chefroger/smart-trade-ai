@@ -119,6 +119,14 @@ class TestSuggestDraft:
         assert d["checklist"].strip()
         assert d["summary"].strip()
 
+    def test_ukraine_does_not_mis_match_uk(self, test_db, company_id, customer_id):
+        """Ukraine 含子串 uk，不得误命中英国礼仪（如北爱尔兰禁忌）。"""
+        from trade import visit_plan as vp
+
+        self._set_country(test_db, customer_id, "Ukraine")
+        d = vp.suggest_draft(company_id, customer_id)
+        assert "北爱尔兰" not in d["risks"]
+
     def test_profile_notes_keep_subject_and_pending(self, test_db, company_id, customer_id):
         from trade import visit_plan as vp
 

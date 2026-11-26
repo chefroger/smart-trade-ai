@@ -7,6 +7,7 @@ B2B 客户 CRUD，支持可选的文档库关联。
 
 import json
 import os
+import re
 
 from trade.database import begin_immediate, get_connection
 
@@ -30,6 +31,15 @@ def _normalize_crm_stage(stage: str | None, *, default: str = "询盘") -> str:
     """非法阶段回落到 default，避免脏值进库。"""
     s = (stage or "").strip()
     return s if s in CRM_STAGES else default
+
+
+def _normalize_website(url: str | None) -> str:
+    """标准化公司官网用于查重：转小写并剥离协议头、www 前缀与尾部斜杠。"""
+    s = (url or "").strip().lower()
+    # 空串直接返回，避免无意义正则处理
+    if not s:
+        return ""
+    return re.sub(r"^https?://(www\.)?", "", s).rstrip("/")
 
 
 def _normalize_is_starred(v) -> int:
@@ -119,7 +129,7 @@ def create(
         dedup_mode = os.environ.get("TRADE_DEDUP_MODE", "warn").strip().lower()
         if not _skip_dedup and (email or company_website):
             _email_check = (email or "").strip().lower()
-            _site_check = (company_website or "").strip().lower()
+            _site_check = _normalize_website(company_website)
             if _email_check:
                 dup = conn.execute(
                     "SELECT id FROM customers WHERE company_id = ? "
@@ -131,15 +141,16 @@ def create(
                     _warn = "email_already_exists"
                     _dup_id = dup[0]
             if not _warn and _site_check:
-                dup = conn.execute(
-                    "SELECT id FROM customers WHERE company_id = ? "
-                    "AND LOWER(COALESCE(json_extract(extra1, '$.company_website'), '')) = ? "
-                    "LIMIT 1",
-                    (company_id, _site_check),
-                ).fetchone()
-                if dup:
-                    _warn = "website_already_exists"
-                    _dup_id = dup[0]
+                # 与 bulk_save / find_duplicates 共用同一域名归一化口径
+                for srow in conn.execute(
+                    "SELECT id, json_extract(extra1, '$.company_website') AS ws "
+                    "FROM customers WHERE company_id = ?",
+                    (company_id,),
+                ).fetchall():
+                    if _normalize_website(srow["ws"]) == _site_check:
+                        _warn = "website_already_exists"
+                        _dup_id = srow["id"]
+                        break
 
         if _warn and dedup_mode == "block":
             # 拒绝写入：返回错误结构而非抛异常，保持返回 dict 的契约
@@ -286,8 +297,9 @@ def get_company_summary(company_id: int) -> dict:
         order_totals_by_currency: dict[str, float] = {}
         for r in conn.execute(
             "SELECT COALESCE(NULLIF(TRIM(currency), ''), 'USD') AS currency, "
-            "COALESCE(SUM(total_amount), 0) AS total "
-            "FROM orders WHERE company_id = ? GROUP BY currency",
+            "SUM(total_amount) AS total "
+            "FROM orders WHERE company_id = ? AND total_amount IS NOT NULL "
+            "GROUP BY currency",
             (company_id,),
         ).fetchall():
             order_totals_by_currency[r["currency"]] = float(r["total"] or 0)
@@ -332,19 +344,30 @@ def _totals_from_currency_rows(rows) -> tuple[int, float | None, str | None, dic
     """把按币种聚合的行收成 (count, single_total|None, single_currency|None, by_currency)。
 
     多币种时不把金额硬加在一起（审计 P2：混币种 SUM 会错），
-    order_total_amount 只在单一币种时有值。
+    order_total_amount 只在单一币种时有值；仅含「单价待谈」(total_amount IS NULL)
+    的币种行只计入总单数 count，不生成 0.0 币种桶（与 get_overview 口径一致）。
     """
     by_currency: dict[str, float] = {}
     count = 0
     for r in rows:
         count += int(r["order_count"] or 0)
+        keys = r.keys() if hasattr(r, "keys") else ()
+        priced = (
+            int(r["priced_count"] or 0)
+            if "priced_count" in keys
+            else int(r["order_count"] or 0)
+        )
+        # 该币种全部为待谈（total_amount IS NULL）时不污染已定价币种桶
+        if priced <= 0:
+            continue
         cur = (r["currency"] or "USD").strip() or "USD"
         by_currency[cur] = by_currency.get(cur, 0.0) + float(r["order_total_amount"] or 0)
     if len(by_currency) == 1:
         currency, total = next(iter(by_currency.items()))
         return count, total, currency, by_currency
     if not by_currency:
-        return 0, 0.0, None, {}
+        # 无任何订单保持 (0, 0.0, None, {})；仅有待谈订单则总额为 None
+        return (0, 0.0, None, {}) if count == 0 else (count, None, None, {})
     return count, None, None, by_currency
 
 
@@ -358,11 +381,12 @@ def _attach_list_aggregates(
     """
     if not customers:
         return
-    # customer_id -> list of currency rows
+    # customer_id -> list of currency rows（同时统计总单数与已定价单数）
     order_rows: dict[int, list] = {}
     for r in conn.execute(
         "SELECT customer_id, COALESCE(NULLIF(TRIM(currency), ''), 'USD') AS currency, "
         "COUNT(*) AS order_count, "
+        "COUNT(total_amount) AS priced_count, "
         "COALESCE(SUM(total_amount), 0) AS order_total_amount "
         "FROM orders WHERE company_id = ? GROUP BY customer_id, currency",
         (company_id,),
@@ -413,6 +437,26 @@ def _attach_list_aggregates(
         # contacts 表缺失时列表仍可用
         pass
 
+    # 关联文档库一次 JOIN 批量查询，消除前端客户列表 N+1 串行请求
+    libs_by_cust: dict[int, list[dict]] = {int(c["id"]): [] for c in customers}
+    try:
+        ids = list(libs_by_cust.keys())
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                f"SELECT cl.customer_id, l.* FROM customer_libraries cl "
+                f"JOIN libraries l ON l.id = cl.library_id "
+                f"WHERE l.company_id = ? AND cl.customer_id IN ({placeholders}) "
+                f"ORDER BY l.id DESC",
+                (company_id, *chunk),
+            ).fetchall():
+                cid = int(r["customer_id"])
+                libs_by_cust.setdefault(cid, []).append(_library_row_to_dict(r))
+    except Exception:
+        # customer_libraries / libraries 缺表时列表仍可用
+        pass
+
     for c in customers:
         cid = int(c["id"])
         count, total, currency, by_cur = _totals_from_currency_rows(
@@ -433,6 +477,7 @@ def _attach_list_aggregates(
         c["last_email_at"] = email_at
         c["last_contact_at"] = contact_at
         c["extra_contacts"] = extra_by_cust.get(cid, [])
+        c["libraries"] = libs_by_cust.get(cid, [])
 
 
 def get_overview(customer_id: int, *, company_id: int) -> dict | None:
@@ -1237,7 +1282,7 @@ def bulk_save(
         ex1 = _json_load(c.get("extra1", "{}"))
         ex2 = _json_load(c.get("extra2", "{}"))
         em = (ex2.get("email", "") or "").strip().lower()
-        ws = (ex1.get("company_website", "") or "").strip().lower()
+        ws = _normalize_website(ex1.get("company_website", ""))
         if em:
             existing_emails.add(em)
         if ws:
@@ -1260,8 +1305,8 @@ def bulk_save(
         if cust_email and cust_email in existing_emails:
             skipped += 1
             continue
-        # website-based 去重
-        cust_website = (cust.get("company_website") or "").strip().lower()
+        # website-based 去重（按标准化域名比对）
+        cust_website = _normalize_website(cust.get("company_website"))
         if cust_website and cust_website in existing_websites:
             skipped += 1
             continue
@@ -1394,8 +1439,6 @@ def find_duplicates(company_id: int) -> list[dict]:
     Returns:
         重复组列表 [{reason, detail, customers:[{id,name,contact,extra1,extra2}]}, ...]
     """
-    import re as _re
-
     all_custs = list_by_company(company_id)
     if len(all_custs) < 2:
         return []
@@ -1425,11 +1468,9 @@ def find_duplicates(company_id: int) -> list[dict]:
     site_map: dict[str, list[int]] = {}
     for c in all_custs:
         extra1 = _json_load(c.get("extra1", "{}"))
-        site = (extra1.get("company_website", "") or "").strip().lower()
+        site = _normalize_website(extra1.get("company_website", ""))
         if site:
-            site = _re.sub(r'^https?://(www\.)?', '', site).rstrip('/')
-            if site:
-                site_map.setdefault(site, []).append(c["id"])
+            site_map.setdefault(site, []).append(c["id"])
 
     for site, ids in site_map.items():
         if len(ids) > 1:
@@ -1493,7 +1534,17 @@ def health_audit(company_id: int) -> dict:
         extra1 = _json_load(cust.get("extra1", "{}"))
         extra2 = _json_load(cust.get("extra2", "{}"))
 
-        last_contact = (extra2.get("last_contact_at") or cust.get("updated_at") or "").strip()
+        agg_contact = (cust.get("last_contact_at") or "").strip()
+        manual_contact = (extra2.get("last_contact_at") or "").strip()
+        # 综合对话/邮件沟通时间与手填联系时间，取较新者；均为空时才回退 updated_at
+        if agg_contact and manual_contact:
+            last_contact = (
+                agg_contact
+                if _ts_key(agg_contact) >= _ts_key(manual_contact)
+                else manual_contact
+            )
+        else:
+            last_contact = agg_contact or manual_contact or (cust.get("updated_at") or "").strip()
 
         # 解析 last_contact 为 datetime 对象（前10位为 YYYY-MM-DD）
         last_contact_dt = None

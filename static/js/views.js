@@ -245,13 +245,23 @@ function onTemplateTimeChange(id, value) {
 }
 
 function editTemplatePrompt(id) {
-    const t = TASK_TEMPLATES.find(x => x.id === id);
-    if (!t) return;
-    const currentPrompt = (templateEdits[id] && templateEdits[id].prompt) || t.prompt;
-    showPromptEditorModal(t.name, currentPrompt, (newPrompt) => {
+    const tpl = getAllTemplates().find(x => x.id === id);
+    if (!tpl) return;
+    const currentPrompt = (templateEdits[id] && templateEdits[id].prompt) || tpl.prompt;
+    showPromptEditorModal(tpl.name, currentPrompt, (newPrompt) => {
         if (!templateEdits[id]) templateEdits[id] = {};
         templateEdits[id].prompt = newPrompt;
-        toast(`"${t.name}" Prompt 已更新`);
+        if (tpl.custom) {
+            try {
+                const customs = JSON.parse(localStorage.getItem('trade_custom_templates') || '[]');
+                const hit = customs.find(x => x.id === id);
+                if (hit) {
+                    hit.prompt = newPrompt;
+                    localStorage.setItem('trade_custom_templates', JSON.stringify(customs));
+                }
+            } catch (e) {}
+        }
+        toast('"' + tpl.name + '" Prompt 已更新');
     });
 }
 
@@ -368,8 +378,9 @@ function batchCreateCronTasks() {
         const id = cb.dataset.id;
         const t = allTemplates.find(x => x.id === id);
         if (!t) return;
-        const time = (templateEdits[id] && templateEdits[id].time) || t.time;
-        const cronExpr = t.cron || cronFromTime(time);
+        const editedTime = templateEdits[id] && templateEdits[id].time;
+        const time = editedTime || t.time;
+        const cronExpr = editedTime ? cronFromTime(editedTime) : (t.cron || cronFromTime(time));
         const prompt = (templateEdits[id] && templateEdits[id].prompt) || t.prompt;
         selected.push(`任务名: ${t.name} | schedule: ${cronExpr} | Prompt: ${prompt}`);
     });
@@ -386,13 +397,20 @@ function batchCreateCronTasks() {
 }
 
 async function clearAllCronTasks() {
-    if (!confirm('确定删除所有已激活的定时任务？此操作不可恢复。')) return;
+    if (!currentCompanyId) { toast('请先选择公司'); return; }
+    const jobs = await api('GET', '/api/trade/cron/jobs');
+    if (!jobs || !jobs.length) {
+        toast('当前公司暂无已激活的定时任务');
+        return;
+    }
+    if (!confirm('确定删除当前公司已激活的 ' + jobs.length + ' 个定时任务？此操作不可恢复。')) return;
+    const jobIds = jobs.map(j => j.id).filter(Boolean).join(', ');
     navToView('chat', 'daily', '清空定时任务');
     setTimeout(() => {
         const ct = currentChatContainer;
         const input = ct ? ct.querySelector('#msg-input') : null;
         if (input) {
-            input.value = '请使用 cronjob 工具列出并删除所有现有的 cron 定时任务。逐一删除，完成后告知结果。';
+            input.value = '请使用 cronjob 工具仅删除当前公司的以下定时任务（按 job_id 逐一执行 remove，不要列出或操作其它任务）：' + jobIds + '。完成后告知结果。';
             sendMsg();
             // 刷新列表
             setTimeout(loadActiveCronJobs, 5000);
@@ -438,12 +456,16 @@ function runActiveJob(jobId) {
 }
 
 function cronFromTime(timeStr) {
-    // 将 "09:00" 或 "09:00-10:30" 转换为 cron 表达式
-    const first = timeStr.split('-')[0].trim(); // "09:00"
+    // 将 "09:00" 或 "09:00-10:30" 转换为 cron 表达式，非法输入回退默认 09:00
+    const first = String(timeStr || '').split('-')[0].trim();
     const parts = first.split(':');
     if (parts.length !== 2) return '0 9 * * 1-5';
-    const h = parseInt(parts[0]), m = parseInt(parts[1]);
-    return `${m} ${h} * * 1-5`;
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    if (!Number.isInteger(h) || h < 0 || h > 23 || !Number.isInteger(m) || m < 0 || m > 59) {
+        return '0 9 * * 1-5';
+    }
+    return m + ' ' + h + ' * * 1-5';
 }
 
 // ═════════════════════ DIRECTORY VIEW ═════════════════════

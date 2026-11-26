@@ -186,15 +186,17 @@ def write_agent_identity(company_slug: str, content: str) -> None:
                 target.unlink()
             except FileNotFoundError:
                 pass
-        for target in (path, legacy):
-            _FILE_CACHE.pop(str(target.resolve()), None)
+        with _cache_lock:
+            for target in (path, legacy):
+                _FILE_CACHE.pop(str(target.resolve()), None)
         return
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    # 失效缓存 — 确保下次读取时重新从磁盘加载最新内容
+    # 失效缓存 — 加锁操作确保并发请求读取时不会触发字典竞态
     cache_key = str(path.resolve())
-    _FILE_CACHE.pop(cache_key, None)
+    with _cache_lock:
+        _FILE_CACHE.pop(cache_key, None)
 
 
 def write_system_prompt(content: str) -> None:
@@ -206,7 +208,8 @@ def write_system_prompt(content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     cache_key = str(path.resolve())
-    _FILE_CACHE.pop(cache_key, None)
+    with _cache_lock:
+        _FILE_CACHE.pop(cache_key, None)
 
 
 def _brand_safety_path(slug: str) -> Path:

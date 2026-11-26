@@ -163,7 +163,7 @@ def main():
     setup()
 
     # 2. 创建 FastAPI app
-    from trade.app import create_app, serve_trade_chat
+    from trade.app import _install_cors, create_app, serve_trade_chat
 
     host = "127.0.0.1"
 
@@ -187,6 +187,7 @@ def main():
     _write_lock_port(lock_path, port)
 
     app = create_app()
+    _install_cors(app, port)
     serve_trade_chat(app)
     # 让重启 watchdog 知道本进程的真实端口（桌面端可能顺延到 9120+）
     from trade import app as _app_module

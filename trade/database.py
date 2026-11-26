@@ -781,7 +781,7 @@ _EXPECTED_TABLES = frozenset({
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
-_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3})
+_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5})
 
 
 def _needs_schema_work(conn: sqlite3.Connection) -> bool:

@@ -136,3 +136,30 @@ class TestHealthCheckUsesResolvedUrl:
         monkeypatch.setattr(socket, "create_connection", _conn)
         assert memory.health_check(timeout=0.1) is False
         assert seen["addr"] == ("127.0.0.1", 9), f"探错了地址：{seen['addr']}"
+
+
+class TestHermesMemoryCompanyIsolation:
+    def test_retains_into_company_isolated_dir_not_global(self, monkeypatch, tmp_path):
+        """多公司下 retain_to_hermes_memory 必须按 company_slug 隔离，不写共享 MEMORY.md。"""
+        from trade import memory
+
+        trade_home = tmp_path / "trade_home"
+        hermes_home = tmp_path / "hermes_home"
+        monkeypatch.setenv("TRADE_HOME", str(trade_home))
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+        ok_a = memory.retain_to_hermes_memory(
+            "Q-A", "R-A", company_name="Alpha", company_slug="alpha"
+        )
+        ok_b = memory.retain_to_hermes_memory(
+            "Q-B", "R-B", company_name="Beta", company_slug="beta"
+        )
+        assert ok_a is True
+        assert ok_b is True
+
+        file_a = trade_home / "alpha" / "memories" / "MEMORY.md"
+        file_b = trade_home / "beta" / "memories" / "MEMORY.md"
+        assert file_a.is_file() and "Q-A" in file_a.read_text(encoding="utf-8")
+        assert "Q-B" not in file_a.read_text(encoding="utf-8")
+        assert file_b.is_file() and "Q-B" in file_b.read_text(encoding="utf-8")
+        assert not (hermes_home / "memories" / "MEMORY.md").exists()

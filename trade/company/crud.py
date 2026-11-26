@@ -336,9 +336,10 @@ def update(
 
 
 def delete(company_id: int) -> bool:
-    """软删除公司：设置 is_active=0 + 记录 deleted_at 时间戳。
+    """软删除公司：将 companies 与 trade_companies 的 is_active 置 0。
 
-    数据保留 30 天后由 purge() 执行物理清理。
+    软删除保留数据库与磁盘文件以防误删；如需彻底物理清理，由管理员执行
+    `trade company purge <slug|id> --yes`（调用下方 purge()）。
     返回 True 表示软删除成功，False 表示公司不存在或已删除。
     """
     conn = get_connection()
@@ -357,8 +358,8 @@ def delete(company_id: int) -> bool:
         )
         conn.commit()
         if n > 0:
-            # 写入审计日志（用于后续 30 天倒计时清理）
-            _write_audit_log(company_id, "soft_delete", "公司已软删除，数据保留 30 天")
+            # 写入审计日志留痕（物理清理需管理员显式执行 purge）
+            _write_audit_log(company_id, "soft_delete", "公司已软删除（保留历史数据）")
         return n > 0
     finally:
         conn.close()
@@ -399,6 +400,19 @@ def purge(company_id: int) -> bool:
         n = conn.execute(
             "DELETE FROM companies WHERE id = ?", (company_id,)
         ).rowcount
+        if n > 0:
+            # 清理无外键级联的公司作用域表（缺表老库单表降级，不中断主流程）
+            for cleanup_sql in (
+                "DELETE FROM visit_plans WHERE company_id = ?",
+                "DELETE FROM cron_job_companies WHERE company_id = ?",
+                "DELETE FROM usage_ledger WHERE company_id = ?",
+                "DELETE FROM trial_events WHERE company_id = ?",
+                "UPDATE emails SET company_id = NULL, customer_id = NULL WHERE company_id = ?",
+            ):
+                try:
+                    conn.execute(cleanup_sql, (company_id,))
+                except Exception:
+                    pass
         conn.commit()
         if n > 0:
             # 提取缓存按公司清理：不整表清空，别的公司的行必须保留。

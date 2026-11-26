@@ -11,6 +11,7 @@ Trade AI Assistant — 记忆桥接层（Hindsight 集成）。
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -348,37 +349,93 @@ def retain_conversation(
     return retain(content, context=context, bank_id=bid)
 
 
+def _is_safe_slug(slug: str) -> bool:
+    """校验 company_slug 是否可安全拼入本地目录名，防止路径穿越。"""
+    s = (slug or "").strip()
+    # 空串、当前/上级目录或包含路径分隔符均视为不安全
+    if not s or s in {".", ".."} or "/" in s or "\\" in s:
+        return False
+    return True
+
+
+def _resolve_hermes_memory_paths(company_slug: str = "") -> tuple[Path, Path] | None:
+    """解析 Hermes 原生记忆文件与锁文件路径（优先按公司物理隔离）。
+
+    - 传入合法 `company_slug` 时，落盘到 `TRADE_HOME/{slug}/memories/MEMORY.md`，
+      彻底杜绝多公司共享 `~/.hermes/memories/MEMORY.md` 导致的上下文串味。
+    - 未传 `company_slug` 时，仅当活跃公司数 <= 1 才回退全局 `~/.hermes/memories/MEMORY.md`；
+      多公司场景下未指定归属公司一律返回 None（fail-closed）。
+    """
+    # 有合法公司标识：写入该公司专属目录
+    if _is_safe_slug(company_slug):
+        trade_home = os.environ.get("TRADE_HOME", "").strip()
+        if not trade_home:
+            # Windows 与 POSIX 默认路径保持与 database._get_db_path 一致
+            if os.name == "nt":
+                local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+                trade_home = str(Path(local) / "trade")
+            else:
+                trade_home = str(Path.home() / ".trade")
+        mem_dir = Path(trade_home) / company_slug.strip() / "memories"
+        return mem_dir / "MEMORY.md", mem_dir / "MEMORY.md.lock"
+
+    # 未传入公司 slug 时检查当前实例是否为多公司环境
+    try:
+        from trade.database import get_connection
+
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM companies WHERE is_active = 1"
+            ).fetchone()
+            active_count = int(row["c"] or 0) if row else 0
+        finally:
+            conn.close()
+        # 多公司并存但缺少归属公司标识：拒绝写入全局共享记忆文件
+        if active_count > 1:
+            return None
+    except Exception:
+        # 数据库尚未初始化或单测脱离主库时允许回退单机路径
+        pass
+
+    hermes_env = os.environ.get("HERMES_HOME", "").strip()
+    if hermes_env and Path(hermes_env).is_absolute():
+        # 显式配置了绝对路径 HERMES_HOME 时优先采用
+        hermes_root = Path(hermes_env)
+    elif os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        hermes_root = Path(local) / "hermes"
+    else:
+        hermes_root = Path.home() / ".hermes"
+    mem_dir = hermes_root / "memories"
+    return mem_dir / "MEMORY.md", mem_dir / "MEMORY.md.lock"
+
+
 def retain_to_hermes_memory(
     query: str,
     response: str,
     *,
     company_name: str = "",
+    company_slug: str = "",
     library_name: str = "",
     customer_name: str = "",
     limit: int = 200,
 ) -> bool:
-    """将对话摘要追加到 ~/.hermes/memories/MEMORY.md。
+    """将对话摘要追加到本地 MEMORY.md（支持按 company_slug 物理隔离）。
 
-    这样可以让 Hermes Agent 的原生记忆系统学习到 B2B 贸易对话，
-    而无需任何 API 密钥。
+    这样可以让本地记忆系统学习到 B2B 贸易对话，同时避免跨公司上下文泄漏。
     """
     import datetime as _dt
-    from pathlib import Path as _Path
-
-    _hermes_root = _Path(os.environ.get("HERMES_HOME", ""))
-    if not _hermes_root.is_absolute() or not str(_hermes_root).strip():
-        # 跨平台解析 Hermes 根目录
-        if os.name == "nt":
-            _local = os.environ.get("LOCALAPPDATA", str(_Path.home() / "AppData" / "Local"))
-            _hermes_root = _Path(_local) / "hermes"
-        else:
-            _hermes_root = _Path.home() / ".hermes"
-    MEMORY_FILE = _hermes_root / "memories" / "MEMORY.md"
-    LOCK_FILE = _hermes_root / "memories" / "MEMORY.md.lock"
 
     # 如果查询内容为空或只有空白字符，不执行写入操作
     if not query or not query.strip():
         return False
+
+    resolved_paths = _resolve_hermes_memory_paths(company_slug)
+    # 多公司环境下若无法确定归属路径，安全跳过写入
+    if resolved_paths is None:
+        return False
+    MEMORY_FILE, LOCK_FILE = resolved_paths
 
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     q_preview = query.strip()[:limit]
@@ -418,18 +475,10 @@ def retain_to_hermes_memory(
         if os.name != "nt":
             import fcntl as _fcntl_module
 
-        _hermes_env = os.environ.get("HERMES_HOME", "")
-        if _hermes_env:
-            _hermes_root = _Path(_hermes_env)
-        elif os.name == "nt":
-            _local = os.environ.get("LOCALAPPDATA", str(_Path.home() / "AppData" / "Local"))
-            _hermes_root = _Path(_local) / "hermes"
-        else:
-            _hermes_root = _Path.home() / ".hermes"
-        lock_dir = _hermes_root / "memories"
+        lock_dir = MEMORY_FILE.parent
         lock_dir.mkdir(parents=True, exist_ok=True)
-        # 防御符号链接攻击：如果锁文件已是 symlink，拒绝跟随
-        if LOCK_FILE.is_symlink():
+        # 防御符号链接攻击：如果锁文件或目标文件已是 symlink，拒绝跟随
+        if LOCK_FILE.is_symlink() or MEMORY_FILE.is_symlink():
             return False
         lock_fd = open(str(LOCK_FILE), "w")
         # 最多重试 5 次获取文件锁，避免死锁

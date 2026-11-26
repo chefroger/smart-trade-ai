@@ -25,7 +25,7 @@ import io
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from trade import customer as customer_module
 from trade import mailbox_store
@@ -71,7 +71,7 @@ def create_customer(
     cid: int = Depends(require_company),
 ):
     """创建新客户（归属于当前公司）。"""
-    return customer_module.create(
+    res = customer_module.create(
         payload.name, payload.contact, payload.note, company_id=cid,
         country=payload.country, city=payload.city, tier=payload.tier,
         linkedin_url=payload.linkedin_url,
@@ -86,6 +86,10 @@ def create_customer(
         next_follow_up_date=payload.next_follow_up_date,
         is_starred=payload.is_starred,
     )
+    # 严格去重模式（TRADE_DEDUP_MODE=block）命中重复客户时返回 409 Conflict
+    if isinstance(res, dict) and res.get("error") == "duplicate":
+        return JSONResponse(status_code=409, content=res)
+    return res
 
 
 # ── CSV 列名 → customer 字段映射（批量导入）──────────────────────────────

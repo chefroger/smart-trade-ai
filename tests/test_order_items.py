@@ -245,6 +245,20 @@ class TestMultiItemCreate:
         with pytest.raises(ValueError):
             order.create(company_id=co["id"], customer_id=cust["id"], items=[])
 
+    def test_mixed_currency_items_rejected(self, db):
+        """同一张订单不支持混用多种币种明细，防止跨币种金额被硬加。"""
+        from trade import order
+
+        co, cust = _mk(db)
+        with pytest.raises(ValueError, match="币种"):
+            order.create(
+                company_id=co["id"], customer_id=cust["id"], currency="USD",
+                items=[
+                    {"product_name": "A", "quantity": 1, "unit_price": 10, "currency": "USD"},
+                    {"product_name": "B", "quantity": 1, "unit_price": 10, "currency": "EUR"},
+                ],
+            )
+
     def test_legacy_flat_create_equals_single_item(self, db):
         from trade import order
 

@@ -173,10 +173,10 @@ class TestCreateDedupWarning:
         assert result.get("duplicate_warning") == "email_already_exists"
 
     def test_warns_on_website_duplicate(self, test_db, company_id):
-        """相同 website 创建第二个客户时应返回 duplicate_warning（精确匹配）。"""
+        """相同 website（含协议/www 差异）创建第二个客户时应返回 duplicate_warning。"""
         from trade.customer import create
-        create("First", company_website="dup.com", company_id=company_id)
-        result = create("Second", company_website="dup.com", company_id=company_id)
+        create("First", company_website="https://www.dup.com/", company_id=company_id)
+        result = create("Second", company_website="http://dup.com", company_id=company_id)
         assert result.get("duplicate_warning") == "website_already_exists"
 
     def test_no_warning_unique(self, test_db, company_id):
@@ -239,3 +239,27 @@ class TestHealthAudit:
         create("VIP", tier="A", country="US", company_id=company_id)
         result = health_audit(company_id)
         assert result["summary"]["high_value_unconverted_count"] >= 1
+
+    def test_recent_conversation_prevents_stale_false_positive(self, test_db, company_id):
+        """老客户只要近期有对话/邮件沟通，不应被误判为 90 天僵尸客户。"""
+        from trade import chat_memory
+        from trade.customer import create, health_audit
+
+        cust = create("Active Old Co", company_id=company_id)
+        conn = sqlite3.connect(str(test_db))
+        conn.execute(
+            "UPDATE customers SET updated_at = '2020-01-01 00:00:00' WHERE id = ?",
+            (cust["id"],),
+        )
+        conn.commit()
+        conn.close()
+        chat_memory.save_with_context(
+            company_id=company_id,
+            query="最新报价咨询",
+            response="已回复",
+            customer_id=cust["id"],
+            retain_to_memory=False,
+        )
+        result = health_audit(company_id)
+        stale_ids = [c["id"] for c in result["stale_customers"]]
+        assert cust["id"] not in stale_ids

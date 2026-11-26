@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import threading
@@ -110,12 +111,14 @@ def _persist_throttle(
 
 
 def lock_remaining(company_id: int | None = None) -> int:
-    """密语锁定剩余秒数（0 = 未锁定；按公司独立）。"""
+    """密语锁定剩余秒数（0 = 未锁定；按公司独立，向上取整防提前归零）。"""
     with _throttle_lock:
         _, mono_until = _throttle_state(company_id)
         if not mono_until:
             return 0
-        return max(0, int(round(mono_until - time.monotonic())))
+        diff = mono_until - time.monotonic()
+        # 只要未到达解锁截止时刻就至少返回 1 秒，防止剩余不足 0.5s 时 round 提前解锁
+        return math.ceil(diff) if diff > 0 else 0
 
 
 def register_failure(company_id: int | None = None) -> None:

@@ -227,28 +227,29 @@ async def import_company_package(
     # 越权判断先于付费判断：跨公司请求应先得到 403，不暴露「这是付费功能」
     # 导入是显式指定目标公司的写操作，不能被用来绕过 session 的公司绑定
     # （2026-11-11 审计 P2-3）。未绑定时（新公司/首次导入）照常放行。
-    if target_company_id is not None:
-        from trade.api.deps import _ACTIVE_COMPANY, _company_bind_lock
+    from trade.api.deps import _ACTIVE_COMPANY, _company_bind_lock
 
-        token = request.headers.get("X-Hermes-Session-Token", "")
-        with _company_bind_lock:
-            bound = _ACTIVE_COMPANY.get(token)
-        if bound is not None and bound != target_company_id:
-            raise HTTPException(
-                status_code=403,
-                detail="只能导入到当前绑定的公司，请先切换到目标公司再导入。",
-            )
+    token = request.headers.get("X-Hermes-Session-Token", "")
+    with _company_bind_lock:
+        bound = _ACTIVE_COMPANY.get(token)
+    if target_company_id is not None and bound is not None and bound != target_company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="只能导入到当前绑定的公司，请先切换到目标公司再导入。",
+        )
     _require_paid_feature()
-    if not _rate_ok("import", 1, 300):
-        raise HTTPException(status_code=429, detail="导入过于频繁，请稍后再试")
     if not preflight:
         # 旧的一步导入会在同名客户上静默按名字合并，用户没有任何选择机会。
-        # 强制走预检 + 逐对决定（2026-11-23 审计 P2 残留）。
+        # 先于限流拦截，避免错误调用消耗导入配额（2026-11-23 审计 P2 残留）。
         await file.close()
         raise HTTPException(
             status_code=409,
             detail="请先上传预检（preflight=true），确认同名客户处置后再导入",
         )
+    # 预检只读分析使用独立宽松限流，避免预检或包校验失败锁死后续 5 分钟正式导入
+    if not _rate_ok("import_preflight", 10, 60):
+        await file.close()
+        raise HTTPException(status_code=429, detail="预检请求过于频繁，请稍后再试")
     fd, temp_name = mkstemp(prefix="trade-company-upload-", suffix=".zip")
     total = 0
     try:
@@ -301,6 +302,17 @@ async def import_company_package(
             raise HTTPException(
                 status_code=500, detail="预检失败，请稍后重试"
             ) from exc
+
+        # 未显式传 target_company_id 时，analyze_package 可能按名称/slug 自动匹配已有公司；
+        # 若当前会话已绑定其它公司，同样必须拦截跨公司合并导入。
+        auto_target = ((result.get("company") or {}).get("target") or {})
+        auto_target_id = auto_target.get("id") if isinstance(auto_target, dict) else None
+        if bound is not None and auto_target_id is not None and int(auto_target_id) != bound:
+            _cleanup(temp_name)
+            raise HTTPException(
+                status_code=403,
+                detail="只能导入到当前绑定的公司，请先切换到目标公司再导入。",
+            )
 
         upload_id = uuid.uuid4().hex
         now = time.time()
@@ -403,6 +415,10 @@ def confirm_import_package(upload_id: str, body: ConfirmImportBody,
                     "missing": missing,
                 },
             )
+
+        # 校验全部通过准备真正启动后台写库前检查正式导入配额（不消耗在缺决定/400 上）
+        if not _rate_ok("import", 1, 300):
+            raise HTTPException(status_code=429, detail="导入过于频繁，请稍后再试")
 
         # 校验通过：认领并移出登记表，重复确认一律 410
         entry["claimed"] = True

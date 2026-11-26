@@ -395,18 +395,7 @@ def list_facts(
                 (company_id, customer_id),
             ).fetchall()
         items = [_fact_row(r) for r in rows]
-        items.sort(key=lambda x: (
-            _FACT_SORT_CAT.get(x.get("category") or "", 99),
-            0 if x.get("status") == "已确认" else 1,
-            x.get("updated_at") or "",
-        ), reverse=False)
-        # 组内已确认在前已由 SQL 保证；按 category 序再排
-        items.sort(key=lambda x: (
-            _FACT_SORT_CAT.get(x.get("category") or "", 99),
-            0 if x.get("status") == "已确认" else 1,
-            -(0),  # placeholder
-        ))
-        # 稳定：同组内按 updated_at 降序
+        # 稳定排序：按分类顺序 -> 已确认优先 -> 同组内按 updated_at 降序
         from functools import cmp_to_key
 
         def _cmp(a, b):
@@ -592,12 +581,20 @@ def update_fact(
     try:
         begin_immediate(conn)
         clash = conn.execute(
-            "SELECT id FROM customer_facts WHERE customer_id=? AND fingerprint=? AND id!=?",
+            "SELECT id, status FROM customer_facts "
+            "WHERE customer_id=? AND fingerprint=? AND id!=?",
             (customer_id, fp, fact_id),
         ).fetchone()
         if clash:
-            conn.rollback()
-            raise ProfileConflictError("已有相同条目")
+            # 同指纹记录若已作废，清理该作废行以释放唯一索引，不阻塞正常修改
+            if clash["status"] == "已作废":
+                conn.execute(
+                    "DELETE FROM customer_facts WHERE id=? AND company_id=? AND customer_id=?",
+                    (clash["id"], company_id, customer_id),
+                )
+            else:
+                conn.rollback()
+                raise ProfileConflictError("已有相同条目")
         conn.execute(
             "UPDATE customer_facts SET category=?, subject=?, content=?, "
             "attach_to=?, contact_id=?, ai_visible=?, fingerprint=?, updated_at=? "

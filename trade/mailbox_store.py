@@ -255,42 +255,62 @@ def _ingest_message(
     return is_new, matched
 
 
-def rematch_unmatched_emails(mailbox_id: int | None = None) -> int:
+def rematch_unmatched_emails(
+    mailbox_id: int | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> int:
     """对尚未挂客户的已入库邮件重新跑匹配（改客户邮箱后无需等新信）。
 
     只填 ``customer_id IS NULL`` 的行，不覆盖已有关联。返回新挂上的封数。
+    支持传入调用方已打开的 ``conn``（如 pull_one 事务内），避免跨连接写锁自死锁与连接泄漏。
     """
-    conn = get_connection()
-    if mailbox_id is not None:
-        rows = conn.execute(
-            """
-            SELECT id, from_addr, to_addrs FROM emails
-            WHERE mailbox_id = ? AND customer_id IS NULL
-            """,
-            (mailbox_id,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT id, from_addr, to_addrs FROM emails
-            WHERE customer_id IS NULL
-            """
-        ).fetchall()
-    fixed = 0
-    for row in rows:
-        try:
-            tos = json.loads(row["to_addrs"] or "[]")
-        except json.JSONDecodeError:
-            tos = []
-        if not isinstance(tos, list):
-            tos = []
-        pairs = find_customer_matches(row["from_addr"] or "", tos)
-        if not pairs:
-            continue
-        if attach_matches(conn, int(row["id"]), pairs):
-            fixed += 1
-    conn.commit()
-    return fixed
+    own_conn = conn is None
+    if own_conn:
+        # 调用方未传入连接时自行开启，并在 finally 中关闭
+        conn = get_connection()
+    try:
+        if mailbox_id is not None:
+            # 仅重匹配指定邮箱下未归属客户的邮件
+            rows = conn.execute(
+                """
+                SELECT id, from_addr, to_addrs FROM emails
+                WHERE mailbox_id = ? AND customer_id IS NULL
+                """,
+                (mailbox_id,),
+            ).fetchall()
+        else:
+            # 全局重匹配所有未归属客户的邮件
+            rows = conn.execute(
+                """
+                SELECT id, from_addr, to_addrs FROM emails
+                WHERE customer_id IS NULL
+                """
+            ).fetchall()
+        fixed = 0
+        for row in rows:
+            try:
+                tos = json.loads(row["to_addrs"] or "[]")
+            except json.JSONDecodeError:
+                tos = []
+            # 非列表脏数据降级为空列表
+            if not isinstance(tos, list):
+                tos = []
+            pairs = find_customer_matches(row["from_addr"] or "", tos)
+            # 无匹配客户则跳过
+            if not pairs:
+                continue
+            # 挂接成功后累计计数
+            if attach_matches(conn, int(row["id"]), pairs):
+                fixed += 1
+        # 仅当本函数自管连接时提交事务；外部传入连接由外层统一提交
+        if own_conn:
+            conn.commit()
+        return fixed
+    finally:
+        # 自建连接必须确保关闭，防止句柄泄漏
+        if own_conn and conn is not None:
+            conn.close()
 
 
 # ==== Mailbox CRUD ====
@@ -335,36 +355,42 @@ def create_mailbox(
 
     conn = get_connection()
     try:
-        cur = conn.execute(
-            """
-            INSERT INTO mailboxes
-            (provider, preset, display_name, email_address, host, port, use_ssl, username)
-            VALUES ('imap', ?, ?, ?, ?, ?, 1, ?)
-            """,
-            (preset, display_name, email_address, host, port, username),
-        )
-        mailbox_id = int(cur.lastrowid)
-        conn.commit()
-    except sqlite3.IntegrityError as exc:
-        raise ValueError("该邮箱地址已绑定") from exc
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO mailboxes
+                (provider, preset, display_name, email_address, host, port, use_ssl, username)
+                VALUES ('imap', ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (preset, display_name, email_address, host, port, username),
+            )
+            mailbox_id = int(cur.lastrowid)
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("该邮箱地址已绑定") from exc
 
-    set_secret(mailbox_id, secret)
-    row = conn.execute("SELECT * FROM mailboxes WHERE id = ?", (mailbox_id,)).fetchone()
-    return _mailbox_row_to_dict(row)
+        set_secret(mailbox_id, secret)
+        row = conn.execute("SELECT * FROM mailboxes WHERE id = ?", (mailbox_id,)).fetchone()
+        return _mailbox_row_to_dict(row)
+    finally:
+        conn.close()
 
 
 def list_mailboxes() -> list[dict[str, Any]]:
     """列表含 has_secret、email_count，不返回 secret。"""
     conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT m.*, COUNT(e.id) AS email_count
-        FROM mailboxes m
-        LEFT JOIN emails e ON e.mailbox_id = m.id
-        GROUP BY m.id
-        ORDER BY m.id
-        """
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.*, COUNT(e.id) AS email_count
+            FROM mailboxes m
+            LEFT JOIN emails e ON e.mailbox_id = m.id
+            GROUP BY m.id
+            ORDER BY m.id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
     out: list[dict[str, Any]] = []
     for row in rows:
         item = _mailbox_row_to_dict(row)
@@ -390,17 +416,21 @@ def delete_mailbox(mailbox_id: int) -> None:
 def update_secret(mailbox_id: int, secret: str) -> None:
     """更新凭证：先测通，失败则保留旧凭证。"""
     conn = get_connection()
-    row = conn.execute("SELECT * FROM mailboxes WHERE id = ?", (mailbox_id,)).fetchone()
-    if row is None:
-        raise ValueError("邮箱不存在")
+    try:
+        row = conn.execute("SELECT * FROM mailboxes WHERE id = ?", (mailbox_id,)).fetchone()
+        # 邮箱不存在时立即抛错，不继续执行网络测通
+        if row is None:
+            raise ValueError("邮箱不存在")
+        host = row["host"]
+        port = int(row["port"] or 993)
+        username = row["username"] or row["email_address"]
+    finally:
+        conn.close()
     old_secret = get_secret(mailbox_id)
-    host = row["host"]
-    port = int(row["port"] or 993)
-    username = row["username"] or row["email_address"]
     try:
         test_connection(host, port, username, secret)
     except MailboxError:
-        # 测通失败：不写新 secret
+        # 测通失败：保留原凭证不覆盖
         if old_secret is not None:
             set_secret(mailbox_id, old_secret)
         raise
@@ -423,21 +453,30 @@ def pull_one(mailbox_id: int) -> dict[str, Any]:
         return {"pulled": 0, "matched": 0, "error": "未配置邮箱凭证"}
 
     conn = get_connection()
-    row = conn.execute("SELECT * FROM mailboxes WHERE id = ?", (mailbox_id,)).fetchone()
-    if row is None:
-        return {"pulled": 0, "matched": 0, "error": "邮箱不存在"}
+    try:
+        row = conn.execute("SELECT * FROM mailboxes WHERE id = ?", (mailbox_id,)).fetchone()
+        # 邮箱记录不存在时直接返回错误描述
+        if row is None:
+            return {"pulled": 0, "matched": 0, "error": "邮箱不存在"}
+        mailbox_dict = _mailbox_row_to_dict(row)
+        prev_last_uid = row["last_uid"]
+        prev_last_v = row["last_uidvalidity"]
+    finally:
+        # 网络拉取前先释放读连接，避免慢速 IMAP 长期占用句柄
+        conn.close()
 
-    mailbox_dict = _mailbox_row_to_dict(row)
-    prev_last_uid = row["last_uid"]
-    prev_last_v = row["last_uidvalidity"]
     try:
         messages, cursor_update = fetch_new(mailbox_dict, secret)
     except MailboxError as exc:
-        conn.execute(
-            "UPDATE mailboxes SET last_error = ? WHERE id = ?",
-            (str(exc), mailbox_id),
-        )
-        conn.commit()
+        err_conn = get_connection()
+        try:
+            err_conn.execute(
+                "UPDATE mailboxes SET last_error = ? WHERE id = ?",
+                (str(exc), mailbox_id),
+            )
+            err_conn.commit()
+        finally:
+            err_conn.close()
         return {"pulled": 0, "matched": 0, "error": str(exc)}
 
     deadline = time.monotonic() + PULL_TIMEOUT_SEC
@@ -449,88 +488,92 @@ def pull_one(mailbox_id: int) -> dict[str, Any]:
     is_first_pull = bool(cursor_update.get("is_first_pull"))
     truncated = bool(cursor_update.get("truncated"))
 
-    for msg in messages:
-        if time.monotonic() >= deadline:
-            # 超时：停拉但不回滚已写入
-            timed_out = True
-            break
-        is_new, matched_n = _ingest_message(conn, mailbox_id, msg)
-        # O-6：去重跳过的不计入 pulled
-        if is_new:
-            pulled += 1
-        matched_total += matched_n
-        uid = msg.get("uid")
-        if uid is not None:
-            try:
-                uid_i = int(uid)
-            except (TypeError, ValueError):
-                uid_i = None
-            if uid_i is not None:
-                if max_ingested_uid is None or uid_i > max_ingested_uid:
-                    max_ingested_uid = uid_i
+    conn = get_connection()
+    try:
+        for msg in messages:
+            if time.monotonic() >= deadline:
+                # 超时：停拉但不回滚已写入
+                timed_out = True
+                break
+            is_new, matched_n = _ingest_message(conn, mailbox_id, msg)
+            # O-6：去重跳过的不计入 pulled
+            if is_new:
+                pulled += 1
+            matched_total += matched_n
+            uid = msg.get("uid")
+            if uid is not None:
+                try:
+                    uid_i = int(uid)
+                except (TypeError, ValueError):
+                    uid_i = None
+                if uid_i is not None:
+                    if max_ingested_uid is None or uid_i > max_ingested_uid:
+                        max_ingested_uid = uid_i
 
-    # 改客户邮箱后：增量拉取可能 0 封新信，仍需回填未挂客户的已入库邮件
-    matched_total += rematch_unmatched_emails(mailbox_id)
+        # 复用当前事务连接回填未挂客户邮件，避免新开连接撞上本连接未提交的写锁
+        matched_total += rematch_unmatched_emails(mailbox_id, conn=conn)
 
-    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+        now = datetime.now().astimezone().replace(microsecond=0).isoformat()
 
-    # 首拉超时或截断：游标不推进到最新端，否则窗口内更旧邮件永久丢失
-    hold_cursor = (timed_out and is_first_pull) or (not timed_out and truncated)
+        # 首拉超时或截断：游标不推进到最新端，否则窗口内更旧邮件永久丢失
+        hold_cursor = (timed_out and is_first_pull) or (not timed_out and truncated)
 
-    if timed_out:
-        if hold_cursor:
-            last_uid = prev_last_uid
-            last_v_write = prev_last_v
-        else:
-            # 增量超时：推进到已入库最大 UID
-            last_uid = (
-                max_ingested_uid
-                if max_ingested_uid is not None
-                else prev_last_uid
+        if timed_out:
+            if hold_cursor:
+                last_uid = prev_last_uid
+                last_v_write = prev_last_v
+            else:
+                # 增量超时：推进到已入库最大 UID
+                last_uid = (
+                    max_ingested_uid
+                    if max_ingested_uid is not None
+                    else prev_last_uid
+                )
+                last_v_write = last_uidvalidity
+            last_error = f"超时已拉 {pulled}"
+            conn.execute(
+                """
+                UPDATE mailboxes
+                SET last_uid = ?, last_uidvalidity = ?, last_sync_at = ?, last_error = ?
+                WHERE id = ?
+                """,
+                (last_uid, last_v_write, now, last_error, mailbox_id),
             )
-            last_v_write = last_uidvalidity
-        last_error = f"超时已拉 {pulled}"
+            conn.commit()
+            return {"pulled": pulled, "matched": matched_total, "error": last_error}
+
+        if hold_cursor:
+            # 首拉截断完成：邮件已入库，但 last_uid 保持原值以便下次仍走首拉
+            conn.execute(
+                """
+                UPDATE mailboxes
+                SET last_uidvalidity = ?, last_sync_at = ?, last_error = NULL
+                WHERE id = ?
+                """,
+                (last_uidvalidity, now, mailbox_id),
+            )
+            # 刻意不改 last_uid（保持 NULL/原值）
+            conn.commit()
+            return {"pulled": pulled, "matched": matched_total, "truncated": True}
+
+        # 全量完成且未截断：游标与 fetch_new 一致
         conn.execute(
             """
             UPDATE mailboxes
-            SET last_uid = ?, last_uidvalidity = ?, last_sync_at = ?, last_error = ?
+            SET last_uid = ?, last_uidvalidity = ?, last_sync_at = ?, last_error = NULL
             WHERE id = ?
             """,
-            (last_uid, last_v_write, now, last_error, mailbox_id),
+            (
+                cursor_update.get("last_uid"),
+                cursor_update.get("last_uidvalidity"),
+                now,
+                mailbox_id,
+            ),
         )
         conn.commit()
-        return {"pulled": pulled, "matched": matched_total, "error": last_error}
-
-    if hold_cursor:
-        # 首拉截断完成：邮件已入库，但 last_uid 保持原值以便下次仍走首拉
-        conn.execute(
-            """
-            UPDATE mailboxes
-            SET last_uidvalidity = ?, last_sync_at = ?, last_error = NULL
-            WHERE id = ?
-            """,
-            (last_uidvalidity, now, mailbox_id),
-        )
-        # 刻意不改 last_uid（保持 NULL/原值）
-        conn.commit()
-        return {"pulled": pulled, "matched": matched_total, "truncated": True}
-
-    # 全量完成且未截断：游标与 fetch_new 一致
-    conn.execute(
-        """
-        UPDATE mailboxes
-        SET last_uid = ?, last_uidvalidity = ?, last_sync_at = ?, last_error = NULL
-        WHERE id = ?
-        """,
-        (
-            cursor_update.get("last_uid"),
-            cursor_update.get("last_uidvalidity"),
-            now,
-            mailbox_id,
-        ),
-    )
-    conn.commit()
-    return {"pulled": pulled, "matched": matched_total}
+        return {"pulled": pulled, "matched": matched_total}
+    finally:
+        conn.close()
 
 
 def pull_all() -> dict[str, Any]:
@@ -544,12 +587,15 @@ def pull_all() -> dict[str, Any]:
             # 意外异常也隔离，避免一个邮箱卡住整次 pull-all
             one = {"pulled": 0, "matched": 0, "error": str(exc)}
             try:
-                conn = get_connection()
-                conn.execute(
-                    "UPDATE mailboxes SET last_error = ? WHERE id = ?",
-                    (str(exc)[:500], mid),
-                )
-                conn.commit()
+                err_conn = get_connection()
+                try:
+                    err_conn.execute(
+                        "UPDATE mailboxes SET last_error = ? WHERE id = ?",
+                        (str(exc)[:500], mid),
+                    )
+                    err_conn.commit()
+                finally:
+                    err_conn.close()
             except Exception:
                 pass
         one["mailbox_id"] = mid
@@ -565,16 +611,19 @@ def list_customer_emails(
     """客户关联邮件：按 emails.company_id / customer_id 过滤，received_at 降序。"""
     lim = max(1, min(int(limit), 50))
     conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT e.*
-        FROM emails e
-        WHERE e.company_id = ? AND e.customer_id = ?
-        ORDER BY e.received_at DESC
-        LIMIT ?
-        """,
-        (company_id, customer_id, lim),
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """
+            SELECT e.*
+            FROM emails e
+            WHERE e.company_id = ? AND e.customer_id = ?
+            ORDER BY e.received_at DESC
+            LIMIT ?
+            """,
+            (company_id, customer_id, lim),
+        ).fetchall()
+    finally:
+        conn.close()
     out: list[dict[str, Any]] = []
     for row in rows:
         item = _mailbox_row_to_dict(row)

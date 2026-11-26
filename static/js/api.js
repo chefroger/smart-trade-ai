@@ -301,7 +301,7 @@ async function showActivateModal() {
         '<h3>🔑 ' + (currentLang==='en'?'Activate Trade Assistant':'激活 Trade Assistant') + '</h3>' +
         '<p style="margin:8px 0;color:var(--text-secondary);">' + (currentLang==='en'?'Send the code below to the author to get an activation code':'请将下方申请码发送给作者获取激活码') + '</p>' +
         (reqCode ? '<div style="background:var(--bg-secondary);padding:10px 14px;border-radius:var(--radius-sm);font-family:monospace;font-size:16px;letter-spacing:2px;margin:8px 0;cursor:pointer;user-select:all;" data-act="copySelf" title="' + (currentLang==='en'?'Click to copy':'点击复制') + '">' + reqCode + '</div>' : '') +
-        '<input type="text" id="activate-code-input" aria-label="Activation code" placeholder="' + (currentLang==='en'?'Paste activation code':'粘贴作者提供的激活码') + '" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:monospace;font-size:14px;text-align:center;text-transform:uppercase;margin:12px 0;">' +
+        '<input type="text" id="activate-code-input" aria-label="Activation code" placeholder="' + (currentLang==='en'?'Paste activation code':'粘贴作者提供的激活码') + '" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:monospace;font-size:14px;text-align:center;margin:12px 0;">' +
         '<button class="btn btn-primary" data-act="doActivate" style="margin-top:8px;">' + btnIcon('check') + ' ' + (currentLang==='en'?'Activate':'激活') + '</button>' +
         '<button class="btn" data-act="closeBackdrop">' + t('btn.cancel') + '</button>' +
         '<p id="activate-msg" style="margin-top:10px;font-size:12px;"></p>' +

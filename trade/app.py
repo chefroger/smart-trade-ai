@@ -6,6 +6,7 @@ Trade AI Assistant — FastAPI application factory.
 
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -59,14 +60,14 @@ def _mark_hermes_restart_required() -> None:
 
 
 def _install_cors(app: FastAPI, port: int) -> None:
-    """根据实际监听端口注册 CORS 中间件（仅本机）。"""
+    """根据实际监听端口注册 CORS 中间件（仅本机，放行 PATCH 待办等接口）。"""
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
             f"http://127.0.0.1:{port}",
             f"http://localhost:{port}",
         ],
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["X-Hermes-Session-Token", "X-Company-ID", "Content-Type"],
     )
 
@@ -634,7 +635,7 @@ def _perform_restart() -> None:
             f"sleep 1; "
             f"kill -KILL {old_pid} 2>/dev/null; "
             f"sleep 0.5; "
-            f"cd {repr(str(Path.cwd()))}; "
+            f"cd {shlex.quote(str(Path.cwd()))}; "
             f"exec {_cmd_str}"
         )
         _sp.Popen(
@@ -730,10 +731,10 @@ def _venv_rebuild_script() -> tuple[list[str], str] | None:
         f"kill -TERM {old_pid} 2>/dev/null; sleep 1; kill -KILL {old_pid} 2>/dev/null; "
         f"echo \"[rebuild] 开始重建运行环境\"; "
         # 重建失败不阻止启动 —— 安装脚本是原子的，失败时旧 venv 原样可用
-        f"if /bin/bash {sh!r}; then echo \"[rebuild] 重建成功\"; "
+        f"if /bin/bash {shlex.quote(str(sh))}; then echo \"[rebuild] 重建成功\"; "
         f"else echo \"[rebuild] 重建失败（退出码 $?），将用原环境启动\"; fi; "
         f"echo \"[rebuild] 启动 Trade\"; "
-        f"exec {launcher!r} --no-browser"
+        f"exec {shlex.quote(str(launcher))} --no-browser"
     )
     return (["/bin/sh", "-c", script], str(log_file))
 
@@ -1189,10 +1190,12 @@ def create_app() -> FastAPI:
         "/api/trade/system/",
     )
 
+    _COMPANY_SWITCH_RE = re.compile(r"^/api/trade/companies/\d+/switch$")
+
     def _write_allowed_when_read_only(path: str) -> bool:
         if path.startswith(_READ_ONLY_EXEMPT_PREFIXES):
             return True
-        if path.endswith("/switch"):  # 切公司是 POST，但只影响浏览
+        if path.endswith("/switch") and _COMPANY_SWITCH_RE.match(path):  # 仅精确放行切公司 POST
             return True
         if path == "/api/trade/skills/update":  # 维护动作，不产生业务价值
             return True

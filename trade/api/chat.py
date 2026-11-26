@@ -1380,6 +1380,7 @@ async def trade_chat_stream(
                     tool_complete_callback=_tool_complete,
                     ephemeral_system_prompt=skill_hint,
                     skill_name=current_skill,
+                    run_budget_seconds=_sync_run_budget(),
                 )
                 agent_holder.clear()
                 agent_holder.append(agent)

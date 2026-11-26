@@ -167,10 +167,18 @@ class TestW7OrderLogistics:
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (2, 'order_logistics_and_events')"
         )
-        # v3 与订单物流无关，但「已是最新」的判定要求它也在册
+        # v3~v5 与订单物流无关，但「已是最新」的判定要求已知迁移均已在册
         conn.execute(
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (3, 'scrub_visit_plan_profile_reminders')"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (4, 'osint_facts_verified')"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (5, 'todos_reason')"
         )
         conn.commit()
 

@@ -139,6 +139,7 @@ def _prepare_items(items, currency: str = "USD") -> list[dict]:
     行级规则与订单头一致：数量/单价/总额可为 NULL；任一行无法校验就整体拒绝，
     不落半张订单。
     """
+    header_currency = str(currency or "USD").strip() or "USD"
     prepared: list[dict] = []
     for idx, raw in enumerate(items or []):
         if not isinstance(raw, dict):
@@ -146,6 +147,13 @@ def _prepare_items(items, currency: str = "USD") -> list[dict]:
         name = str(raw.get("product_name") or "").strip()
         if not name:
             raise ValueError(f"第 {idx + 1} 行商品缺少品名。")
+        raw_cur = str(raw.get("currency") or "").strip()
+        # 单笔订单不支持混用多种币种，防止跨币种金额被直接累加到订单头
+        if raw_cur and raw_cur.upper() != header_currency.upper():
+            raise ValueError(
+                f"第 {idx + 1} 行商品币种（{raw_cur}）与订单币种（{header_currency}）不一致，"
+                "同一张订单不支持混用多种币种。"
+            )
         qty, price, total = reconcile_amounts(
             raw.get("quantity"), raw.get("unit_price"), raw.get("total_amount"),
         )
@@ -155,7 +163,7 @@ def _prepare_items(items, currency: str = "USD") -> list[dict]:
             "quantity": qty,
             "unit": str(raw.get("unit") or ""),
             "unit_price": price,
-            "currency": str(raw.get("currency") or currency or "USD"),
+            "currency": header_currency,
             "total_amount": total,
             "notes": str(raw.get("notes") or ""),
         })
@@ -238,11 +246,16 @@ def _sync_order_summary(conn, order_id: int) -> None:
             unit = units.pop()
         else:
             qty, unit = None, ""
+        currencies = {
+            (str(it["currency"] or "").strip().upper() or "USD")
+            for it in rows
+        }
         totals = [it["total_amount"] for it in rows]
-        total = (
-            sum(float(t) for t in totals)
-            if all(t is not None for t in totals) else None
-        )
+        # 仅当所有明细行币种一致且都有确定总额时求和，防止历史数据跨币种直接相加
+        if len(currencies) == 1 and all(t is not None for t in totals):
+            total: float | None = sum(float(t) for t in totals)
+        else:
+            total = None
         summary = (name, qty, unit, None, total)
 
     conn.execute(

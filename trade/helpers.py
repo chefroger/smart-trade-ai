@@ -654,21 +654,13 @@ def build_query(
     matched_skill = _skill_router.match_skill_routed(query)
     matched_name = matched_skill["name"] if matched_skill else None
 
-    # 连续同 skill 时跳过完整注入，大幅节约 token（injection_prompt 通常 1000-2000 tokens）
-    same_skill_repeat = bool(last_skill_name and matched_name == last_skill_name)
-
-    if same_skill_repeat and matched_name and matched_name not in _OSINT_SKILL_NAMES:
-        # 非 OSINT 且连续同 skill → augmented_query 仅含简短提示，不重复注入完整规则
-        augmented_query = (
-            f"[SKILL AUGMENTATION]\n"
-            f"继续使用 {matched_name} 技能，规则同上一次。\n\n"
-            f"## 用户原始问题\n{query}\n"
-            f"[SKILL AUGMENTATION]"
-        )
-    else:
-        augmented_query = _skill_router.augment_query(
-            query, company_id=company_id
-        )
+    # 每次请求均创建独立无状态的 AIAgent，且历史对话块只注入原始问答摘要（不含上次
+    # SKILL AUGMENTATION 正文）。因此每轮命中技能都必须完整注入规则，避免第 2 轮起
+    # 或同公司切换不同客户时模型丢失技能约束。
+    _ = last_skill_name  # 保留参数签名以兼容既有调用方与测试
+    augmented_query = _skill_router.augment_query(
+        query, company_id=company_id
+    )
 
     # 1. Company identity — 根据场景选择不同深度的 system prompt
     company_slug = _company.slug_from_id(company_id) if company_id else None

@@ -480,18 +480,21 @@ def save_with_context(
             except Exception as exc:
                 logger.debug("Hindsight retain skipped: %s", exc)
 
-            # Hermes 原生记忆（始终可用 —— 即发即忘，失败不影响主流程）
+            # Hermes 原生记忆（按公司 slug 物理隔离写入 —— 即发即忘，失败不影响主流程）
             try:
                 company_name = ""
+                company_slug = ""
                 if company_id:
-                    # 根据公司 ID 查询公司名称，用于在记忆上下文中标识来源
+                    # 根据公司 ID 查询公司名称与 slug，用于标识来源并隔离落盘目录
                     co = _company.get(company_id)
                     if co:
                         company_name = co.get("name", "")
+                        company_slug = co.get("slug", "")
                 retain_to_hermes_memory(
                     query=query,
                     response=response,
                     company_name=company_name,
+                    company_slug=company_slug,
                     library_name=library_name,
                     customer_name=customer_name,
                 )

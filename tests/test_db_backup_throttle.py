@@ -33,10 +33,12 @@ def _fresh_db(tmp_path: Path) -> Path:
                   "osint_jobs", "osint_job_events", "osint_facts"):
         conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, extra1 TEXT, extra2 TEXT, extra3 TEXT)")
     conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)")
-    # 迁移 1/2/3 已应用 —— 否则 init_db 会写入，理应备份
+    # 迁移 1~5 已应用 —— 否则 init_db 会写入，理应备份
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'backfill_order_items')")
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (2, 'order_logistics_and_events')")
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (3, 'scrub_visit_plan_profile_reminders')")
+    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (4, 'osint_facts_verified')")
+    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (5, 'todos_reason')")
     conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")
     conn.execute("ALTER TABLE conversations ADD COLUMN customer_id INTEGER")
     # 与 _needs_schema_work / _add_context_column 对齐：缺 is_important 也会触发备份
@@ -138,6 +140,19 @@ class TestNeedsSchemaWork:
         bad = tmp_path / "bad.db"
         bad.write_text("这不是 sqlite 文件", encoding="utf-8")
         conn = sqlite3.connect(bad)
+        try:
+            assert _needs_schema_work(conn) is True
+        finally:
+            conn.close()
+
+    def test_missing_v4_or_v5_migration_needs_work(self, tmp_path):
+        """仅跑过 v1~v3 的旧库升级 v4/v5 前必须判为需要备份。"""
+        from trade.database import _needs_schema_work
+
+        db = _fresh_db(tmp_path)
+        conn = sqlite3.connect(db)
+        conn.execute("DELETE FROM schema_migrations WHERE version IN (4, 5)")
+        conn.commit()
         try:
             assert _needs_schema_work(conn) is True
         finally:
