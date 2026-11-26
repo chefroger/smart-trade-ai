@@ -72,6 +72,65 @@ def _write_throttle_file(data: dict) -> None:
         pass
 
 
+# 旧版 memo.json 遗留节流字段（O-新30：升级后一次性迁移到 memo_throttle.json 的 global 桶并清理）
+_LEGACY_THROTTLE_KEYS = ("throttle_failures", "throttle_until")
+
+
+def _migrate_legacy_throttle_unlocked() -> None:
+    """将旧版 memo.json 中的节流字段一次性迁移到 memo_throttle.json 的 global 桶并清理死字段。
+
+    调用方必须持有 `_throttle_lock`。若 memo.json 不含旧字段则直接返回（无写盘开销）；
+    若包含有效锁定或失败计数，合并写入 `memo_throttle.json["global"]`（截止时间夹紧到
+    LOCK_SECONDS 内，防止时钟异常拉长锁定），再原子写回不含旧字段的 memo.json。
+    """
+    cfg = _load_config()
+    # 绝大多数场景已无旧字段，直接返回避免无谓磁盘写入
+    if not any(k in cfg for k in _LEGACY_THROTTLE_KEYS):
+        return
+
+    try:
+        legacy_failures = max(0, int(cfg.get("throttle_failures") or 0))
+    except (TypeError, ValueError):
+        legacy_failures = 0
+    try:
+        legacy_until = float(cfg.get("throttle_until") or 0.0)
+    except (TypeError, ValueError):
+        legacy_until = 0.0
+
+    now = time.time()
+    # 墙钟剩余夹紧到 [0, LOCK_SECONDS]，与重启水合口径保持一致
+    remaining = max(0.0, min(float(LOCK_SECONDS), legacy_until - now))
+    effective_until = round(now + remaining, 3) if remaining > 0 else 0.0
+
+    if legacy_failures > 0 or effective_until > 0:
+        data = _load_throttle_file()
+        existing = data.get("global") if isinstance(data.get("global"), dict) else {}
+        try:
+            cur_failures = max(0, int(existing.get("failures") or 0))
+        except (TypeError, ValueError):
+            cur_failures = 0
+        try:
+            cur_until = float(existing.get("until") or 0.0)
+        except (TypeError, ValueError):
+            cur_until = 0.0
+        # 保留较强的一侧状态，避免覆盖升级后已产生的新节流记录
+        data["global"] = {
+            "failures": max(cur_failures, legacy_failures),
+            "until": round(max(cur_until, effective_until), 3),
+        }
+        _write_throttle_file(data)
+        # 使已缓存的 global 桶失效，确保紧接着的水合能读到迁移结果
+        _throttle_cache.pop(_cache_key(None), None)
+
+    for key in _LEGACY_THROTTLE_KEYS:
+        cfg.pop(key, None)
+    try:
+        _write_config(cfg)
+    except OSError:
+        # 清理失败不阻断正常请求（可用性优先）
+        pass
+
+
 def _throttle_state(company_id: int | None = None) -> tuple[int, float]:
     """返回 (失败计数, monotonic 截止时间)；首次访问从磁盘水合。
 
@@ -82,6 +141,8 @@ def _throttle_state(company_id: int | None = None) -> tuple[int, float]:
     cached = _throttle_cache.get(ckey)
     if cached is not None:
         return cached
+    # 首次从磁盘水合前先检查并迁移旧版 memo.json 遗留的节流字段（O-新30）
+    _migrate_legacy_throttle_unlocked()
     entry = _load_throttle_file().get(_throttle_key(company_id)) or {}
     try:
         failures = max(0, int(entry.get("failures") or 0))
@@ -110,15 +171,25 @@ def _persist_throttle(
     _write_throttle_file(data)
 
 
+def _remaining_seconds(mono_until: float) -> int:
+    """将 monotonic 截止时间换算为向上取整的剩余锁定秒数。"""
+    if not mono_until:
+        return 0
+    diff = mono_until - time.monotonic()
+    # 只要未到达解锁截止时刻就至少返回 1 秒，防止剩余不足 0.5s 时 round 提前解锁
+    return math.ceil(diff) if diff > 0 else 0
+
+
 def lock_remaining(company_id: int | None = None) -> int:
-    """密语锁定剩余秒数（0 = 未锁定；按公司独立，向上取整防提前归零）。"""
+    """密语锁定剩余秒数（0 = 未锁定；按公司独立，兼顾旧版 global 迁移锁）。"""
     with _throttle_lock:
         _, mono_until = _throttle_state(company_id)
-        if not mono_until:
-            return 0
-        diff = mono_until - time.monotonic()
-        # 只要未到达解锁截止时刻就至少返回 1 秒，防止剩余不足 0.5s 时 round 提前解锁
-        return math.ceil(diff) if diff > 0 else 0
+        rem = _remaining_seconds(mono_until)
+        # 若刚从旧版 memo.json 迁入 global 桶且尚未过期，带 company_id 的端点也须生效
+        if company_id is not None:
+            _, global_until = _throttle_state(None)
+            rem = max(rem, _remaining_seconds(global_until))
+        return rem
 
 
 def register_failure(company_id: int | None = None) -> None:
@@ -195,10 +266,12 @@ def unlock_mode() -> str:
 
 
 def set_unlock_mode(mode: str) -> str:
-    """更新策略（写 memo.json，保留已有密语盐/哈希）。"""
+    """更新策略（写 memo.json，保留已有密语盐/哈希，同时顺手清理旧节流死字段）。"""
     value = str(mode or "").strip().lower()
     if value not in UNLOCK_MODES:
         raise MemoError("策略只能是 always 或 session")
+    with _throttle_lock:
+        _migrate_legacy_throttle_unlocked()
     data = _load_config()
     data["unlock_mode"] = value
     _write_config(data)

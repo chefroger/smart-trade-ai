@@ -280,3 +280,120 @@ class TestBackendThrottle:
         # 重启水合把剩余夹到 ≤ LOCK_SECONDS（时钟回拨不会锁一年）
         assert reloaded.lock_remaining() <= reloaded.LOCK_SECONDS
         reloaded.reset_throttle()
+
+
+class TestLegacyMemoThrottleMigration:
+    """O-新30：旧版 memo.json 中的 throttle_failures / throttle_until 迁移到 memo_throttle.json。"""
+
+    def test_legacy_active_lock_migrates_to_global_bucket_and_cleans_memo_json(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+        import time
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        from trade import memo
+
+        memo.configure("pass1234")
+        cfg = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        cfg["throttle_failures"] = 0
+        cfg["throttle_until"] = time.time() + 45
+        memo.memo_config_path().write_text(json.dumps(cfg), encoding="utf-8")
+
+        # 升级后首次查询锁定状态：有效锁不静默清零（含带 company_id 的端点调用）
+        rem_global = memo.lock_remaining()
+        assert 0 < rem_global <= memo.LOCK_SECONDS
+        assert memo.lock_remaining(company_id=7) > 0
+
+        # 旧字段已搬入 memo_throttle.json 的 global 桶
+        throttle_data = json.loads(memo.throttle_path().read_text(encoding="utf-8"))
+        assert throttle_data["global"]["until"] > time.time()
+
+        # memo.json 不再残留死字段，原有密语配置完整保留
+        cleaned = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        assert "throttle_failures" not in cleaned
+        assert "throttle_until" not in cleaned
+        assert cleaned["salt"] == cfg["salt"]
+        assert cleaned["hash"] == cfg["hash"]
+        assert memo.verify("pass1234") is True
+        memo.reset_throttle()
+
+    def test_legacy_failure_count_migrates_and_continues_counting(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        from trade import memo
+
+        memo.configure("pass1234")
+        cfg = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        cfg["throttle_failures"] = memo.MAX_FAILURES - 1
+        cfg["throttle_until"] = 0
+        memo.memo_config_path().write_text(json.dumps(cfg), encoding="utf-8")
+
+        # 再错 1 次即达到 MAX_FAILURES 并触发锁定
+        memo.register_failure()
+        assert memo.lock_remaining() > 0
+
+        cleaned = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        assert "throttle_failures" not in cleaned
+        assert "throttle_until" not in cleaned
+        memo.reset_throttle()
+
+    def test_legacy_expired_lock_is_cleaned_without_locking(self, monkeypatch, tmp_path):
+        import json
+        import time
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        from trade import memo
+
+        memo.configure("pass1234")
+        cfg = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        cfg["throttle_failures"] = 0
+        cfg["throttle_until"] = time.time() - 120
+        memo.memo_config_path().write_text(json.dumps(cfg), encoding="utf-8")
+
+        assert memo.lock_remaining() == 0
+        cleaned = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        assert "throttle_failures" not in cleaned
+        assert "throttle_until" not in cleaned
+        memo.reset_throttle()
+
+    def test_legacy_far_future_lock_is_clamped_to_lock_seconds(self, monkeypatch, tmp_path):
+        import json
+        import time
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        from trade import memo
+
+        memo.configure("pass1234")
+        cfg = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        cfg["throttle_failures"] = 0
+        cfg["throttle_until"] = time.time() + 999_999
+        memo.memo_config_path().write_text(json.dumps(cfg), encoding="utf-8")
+
+        rem = memo.lock_remaining()
+        assert 0 < rem <= memo.LOCK_SECONDS
+        memo.reset_throttle()
+
+    def test_set_unlock_mode_also_cleans_legacy_throttle_keys(self, monkeypatch, tmp_path):
+        import json
+        import time
+
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        from trade import memo
+
+        memo.configure("pass1234")
+        cfg = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        cfg["throttle_failures"] = 2
+        cfg["throttle_until"] = time.time() + 30
+        memo.memo_config_path().write_text(json.dumps(cfg), encoding="utf-8")
+
+        assert memo.set_unlock_mode("session") == "session"
+        cleaned = json.loads(memo.memo_config_path().read_text(encoding="utf-8"))
+        assert cleaned["unlock_mode"] == "session"
+        assert "throttle_failures" not in cleaned
+        assert "throttle_until" not in cleaned
+        assert memo.lock_remaining() > 0
+        memo.reset_throttle()
