@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.9.61 — 2026-11-26
+
+- `1f412a1` fix(memo): 迁移旧版 memo.json 节流字段至 memo_throttle.json 并清理死字段（O-新30）
+- `853c1e5` test(osint): 路由集成测试补齐 license_state 激活桩以适配后端付费技能门控
+- `b162e55` feat(ui): 合并侧边栏 8 个聊天入口为统一「对话」，下沉 osint/docgen 付费门控至后端
+
 ## v0.9.60 — 2026-11-26
 
 - `5bfb439` fix(memory): 补齐公司级隔离记忆消费、迁移与备份闭环（P2-新1/O-新33）
