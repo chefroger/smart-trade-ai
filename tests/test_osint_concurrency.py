@@ -320,3 +320,56 @@ async def test_cancelled_job_stops_waiting_for_layers():
     results = await _await_layers(tasks, _should_cancel)
     assert time.time() - started < 3, "取消后仍在等慢层跑完"
     assert all(res.get("error", "").startswith("已取消") for res in results.values())
+
+
+class TestShouldCancelRealPath:
+    """P0 回归：真实 osint_full_check 传入 should_cancel 时不能把裸协程传给 asyncio.wait。"""
+
+    @pytest.mark.asyncio
+    async def test_full_check_with_should_cancel_false_succeeds(self, monkeypatch):
+        """should_cancel 恒 False：不抛 TypeError，各层正常产出结果。"""
+        monkeypatch.setattr(orch, "domain_whois", _whois_ok)
+        monkeypatch.setattr(orch, "detect_tech_stack", _tech_ok)
+
+        report = await orch.osint_full_check(
+            "acme.com",
+            include_sanctions=False,
+            include_tech_stack=True,
+            include_linkedin=False,
+            should_cancel=lambda: False,
+        )
+
+        assert report["layers"]["domain_intel"]["registered"] is True
+        assert report["layers"]["tech_stack"]["technologies"] == ["nginx"]
+        assert not report["layers"]["domain_intel"].get("error")
+
+    @pytest.mark.asyncio
+    async def test_full_check_with_should_cancel_midway_cancels_cleanly(self, monkeypatch):
+        """should_cancel 中途变 True：在预算内收尾，未完成层标已取消，且无未 await 协程告警。"""
+        def _slow_whois(domain):  # noqa: ARG001
+            time.sleep(10)
+            return _whois_ok()
+
+        monkeypatch.setattr(orch, "domain_whois", _slow_whois)
+        monkeypatch.setattr(orch, "detect_tech_stack", _tech_ok)
+
+        checks = {"n": 0}
+
+        def _cancel_later():
+            checks["n"] += 1
+            return checks["n"] > 1
+
+        started = time.monotonic()
+        report = await orch.osint_full_check(
+            "acme.com",
+            include_sanctions=False,
+            include_tech_stack=True,
+            include_linkedin=False,
+            budget=15.0,
+            should_cancel=_cancel_later,
+        )
+
+        assert time.monotonic() - started < 3.0, "取消后仍在等慢层跑完"
+        assert report["layers"]["domain_intel"]["error"].startswith("已取消")
+        assert report["layers"]["tech_stack"]["technologies"] == ["nginx"]
+

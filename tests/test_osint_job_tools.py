@@ -233,3 +233,73 @@ def test_source_url_verified_is_exact_not_substring(monkeypatch):
     monkeypatch.setattr(ac, "current_tool_evidence", lambda: (nested,))
     assert tools._source_url_verified("https://cr.example/acme") is False
     assert tools._source_url_verified(nested) is True
+
+
+class TestStartJobRealOrchestrator:
+    """P0 回归：start_job 走真实 osint_full_check，不因 asyncio.wait 收协程而失败，且运行中同目标复用。"""
+
+    def test_start_job_real_orchestrator_and_reuses_running_job(self, companies, monkeypatch):
+        """真实 osint_full_check 跑通；仍在 running 时第二次同目标 start 返回 reused。"""
+        import threading
+
+        import trade.osint.orchestrator as orch
+
+        monkeypatch.setenv("TRADE_OSINT_SOURCES", "off")
+        gate = threading.Event()
+        entered = threading.Event()
+
+        def _slow_whois(domain):  # noqa: ARG001
+            entered.set()
+            gate.wait(timeout=5.0)
+            return {
+                "domain": "acme.com",
+                "registered": True,
+                "creation_date": "2015-01-01T00:00:00Z",
+                "days_old": 4000,
+                "age_category": "old",
+                "error": None,
+            }
+
+        monkeypatch.setattr(orch, "domain_whois", _slow_whois)
+        monkeypatch.setattr(
+            orch,
+            "detect_tech_stack",
+            lambda url: {"technologies": ["nginx"], "is_free_platform": False, "is_enterprise": True, "error": None},
+        )
+        monkeypatch.setattr(
+            orch,
+            "check_sanctions",
+            lambda name, country=None: {
+                "is_sanctioned": False,
+                "risk_level": "none",
+                "hits": [],
+                "coverage": {"degraded": False, "total_entries": 30000},
+            },
+        )
+        monkeypatch.setattr(orch, "_resolve_entity_name", lambda domain, **kw: None)
+
+        with bind_company(companies["first"]):
+            first = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
+            assert first["reused"] is False
+            assert entered.wait(timeout=3.0), "后台任务未真正进入采集层（可能已提前崩溃）"
+
+            second = json.loads(tools.handle_osint_job_start({"target": "acme.com"}))
+            assert second["reused"] is True
+            assert second["job_id"] == first["job_id"]
+
+            gate.set()
+
+            deadline = time.time() + 10
+            payload = {}
+            while time.time() < deadline:
+                payload = json.loads(tools.handle_osint_job_result({"job_id": first["job_id"]}))
+                if payload["job"]["status"] in osint_jobs.TERMINAL:
+                    break
+                time.sleep(0.02)
+
+        assert payload["job"]["status"] in ("done", "partial"), payload
+        assert not any(
+            "Passing coroutines is forbidden" in json.dumps(ev, ensure_ascii=False)
+            for ev in payload["events"]
+        )
+

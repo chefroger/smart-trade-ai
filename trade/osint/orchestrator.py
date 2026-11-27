@@ -18,8 +18,9 @@ import functools
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
+from typing import Any
 
 from trade import email_intel
 from trade.osint.email_verify import verify_corporate_email
@@ -284,25 +285,29 @@ async def osint_full_check(
             )
 
     deadline = time.monotonic() + max(0.0, budget)
-    tasks = {
-        source: _run_layer(
-            source,
-            fn,
-            *args,
-            timeout=min(_LAYER_TIMEOUTS[source], max(0.0, deadline - time.monotonic())),
-            on_event=on_event,
+    tasks: dict[str, asyncio.Task[dict]] = {
+        source: asyncio.create_task(
+            _run_layer(
+                source,
+                fn,
+                *args,
+                timeout=min(_LAYER_TIMEOUTS[source], max(0.0, deadline - time.monotonic())),
+                on_event=on_event,
+            )
         )
         for source, (fn, args) in planned.items()
     }
     for name, fn in public_planned.items():
-        tasks[name] = _run_layer(
-            name,
-            fn,
-            timeout=min(
-                _LAYER_TIMEOUTS.get(name, 15.0),
-                max(0.0, deadline - time.monotonic()),
-            ),
-            on_event=on_event,
+        tasks[name] = asyncio.create_task(
+            _run_layer(
+                name,
+                fn,
+                timeout=min(
+                    _LAYER_TIMEOUTS.get(name, 15.0),
+                    max(0.0, deadline - time.monotonic()),
+                ),
+                on_event=on_event,
+            )
         )
     results = await _await_layers(tasks, should_cancel)
     report["sources"] = {name: results[name] for name in public_planned}
@@ -481,7 +486,8 @@ def _spawn_blocking(fn: Callable, *args) -> asyncio.Future:
 
 
 async def _await_layers(
-    tasks: dict[str, asyncio.Task], should_cancel: Callable[[], bool] | None = None,
+    tasks: dict[str, asyncio.Task[dict] | Coroutine[Any, Any, dict]],
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, dict]:
     """等待各层完成；提供 should_cancel 时每 0.5s 检查并取消未完成的层。
 
@@ -489,28 +495,45 @@ async def _await_layers(
     但其结果会被丢弃，任务立即收尾）。
     """
     if should_cancel is None:
+        # 未提供取消检查时直接 gather（兼容 Task 与协程）
         values = await asyncio.gather(*tasks.values())
         return dict(zip(tasks, values, strict=True))
 
-    finished: dict[asyncio.Task, object] = {}
-    pending = set(tasks.values())
-    while pending:
-        if should_cancel():
+    # Python 3.11+ 的 asyncio.wait 禁止传入裸协程；统一归一化为 Task，
+    # 已是 Task 的对象保持原样，避免重复包装。
+    normalized: dict[str, asyncio.Task[dict]] = {
+        name: (t if isinstance(t, asyncio.Task) else asyncio.create_task(t))
+        for name, t in tasks.items()
+    }
+    finished: dict[asyncio.Task[dict], object] = {}
+    pending: set[asyncio.Task[dict]] = set(normalized.values())
+    try:
+        while pending:
+            if should_cancel():
+                # 命中取消信号：取消并收割未完成 Task，避免留下未 await 协程告警
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                pending.clear()
+                break
+            done, pending = await asyncio.wait(
+                pending, timeout=0.5, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                finished[task] = exc if exc is not None else task.result()
+    except BaseException:
+        # 中途抛错或外层取消时，收割所有仍在运行的子任务，避免孤儿任务/告警
+        if pending:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
-            break
-        done, pending = await asyncio.wait(
-            pending, timeout=0.5, return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in done:
-            if task.cancelled():
-                continue
-            exc = task.exception()
-            finished[task] = exc if exc is not None else task.result()
+        raise
 
     results: dict[str, dict] = {}
-    for name, task in tasks.items():
+    for name, task in normalized.items():
         if task in finished:
             value = finished[task]
             if isinstance(value, BaseException):
