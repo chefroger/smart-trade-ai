@@ -134,9 +134,10 @@ injection_prompt: |
   **禁止用 terminal 跑 `python -m trade.osint` 做长时间背调**：terminal 属于当前
   聊天流，用户切公司/刷新页面会整条流中断（exit 130），任务作废。只有
   `tool_search` 确认这两个工具确实不存在（独立 Hermes 环境）才退回 terminal。
-  **目标前缀必须用对**：公司名用 `company:`（或 `公司:`）、域名用 `domain:`、
-  人名用 `person:`。前缀写错会被当成公司名，**域名层（WHOIS/RDAP/证书透明度）
-  整层静默跳过**，报告却显示「目标不含域名」——看起来查过了其实没查。
+  **一次用户请求只启动一个后台任务**：不要把同一家公司的公司名和官网域名拆成两个
+  `osint_job_start` 调用（例如同时开 `company:Acme` 和 `domain:acme.com`）。已知官网域名时
+  直接传域名（如 `acme.com`），只知道公司名时传公司名，编排器会自动解析域名并并行跑各层；
+  人名目标才需显式加 `person:` 前缀。
 
   **查到的字段立刻登记进事实库**：Trade 还注册了 `osint_fact_save(target, field, value,
   source_url, source_name)` 与 `osint_fact_list(target)`（同样先 `tool_search` 再

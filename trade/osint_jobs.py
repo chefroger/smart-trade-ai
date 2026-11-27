@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -130,9 +131,37 @@ def append_event(job_id: int, event_type: str, payload: dict | None = None) -> i
 
 # ── 创建 / 取消 ─────────────────────────────────────────────────────────────
 
+_REUSE_PREFIX_RE = re.compile(
+    r"^(?:domain|company|公司|person|email|username|user)\s*[:：]\s*",
+    re.IGNORECASE,
+)
+_URL_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def _normalize_reuse_target(target: str) -> str:
+    """将背调目标归一化为去重复用键。
+
+    去掉已知前缀（domain:/company:/person: 等）、首尾引号与多余空白；
+    若像 URL/域名则剥离协议、路径和 www. 前缀，使 domain:Acme.com、
+    acme.com 与 https://www.acme.com/ 命中同一活跃任务。
+    """
+    s = (target or "").strip()
+    if not s:
+        return ""
+    s = _REUSE_PREFIX_RE.sub("", s).strip()
+    s = s.strip("\"'“”‘’").strip()
+    if _URL_SCHEME_RE.match(s):
+        s = _URL_SCHEME_RE.sub("", s)
+        s = s.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    # 合并内部空白并统一小写
+    s = " ".join(s.split()).lower()
+    if " " not in s and "." in s and "@" not in s:
+        s = s.removeprefix("www.").rstrip("/")
+    return s
+
 
 def create_job(company_id: int, target: str) -> tuple[dict, bool]:
-    """创建任务；10 分钟内同公司同目标复用已有任务。
+    """创建任务；10 分钟内同公司同目标（归一化后相同）复用已有排队/运行中任务。
 
     Returns:
         (job, created)；created=False 表示复用。
@@ -140,6 +169,7 @@ def create_job(company_id: int, target: str) -> tuple[dict, bool]:
     target = (target or "").strip()
     if not target:
         raise ValueError("target is required")
+    norm_target = _normalize_reuse_target(target)
     cutoff = (datetime.now() - timedelta(seconds=_REUSE_WINDOW_SECONDS)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
@@ -150,18 +180,18 @@ def create_job(company_id: int, target: str) -> tuple[dict, bool]:
         # BEGIN IMMEDIATE 拿写锁（busy_timeout=30s），跨进程也成立。
         begin_immediate(conn)
         try:
-            # 只复用**还在排队/运行**的任务。复用已完成任务会让用户以为“又背调了一次”，
-            # 实际看到的是几分钟前的旧结果，且大动画不会出现（界面按设计跳过已完成任务）。
-            # 2026-11-22 实机：同目标连点两次，第二次静默复用 done 任务 → 只见报告、无动画。
-            row = conn.execute(
-                "SELECT * FROM osint_jobs WHERE company_id = ? AND lower(target) = lower(?) "
+            # 只复用**还在排队/运行**的任务。按归一化键比对，防止 domain:x.com 与 x.com
+            # 或带 URL/大小写变体被当成两个独立任务重复启动。
+            active_rows = conn.execute(
+                "SELECT * FROM osint_jobs WHERE company_id = ? "
                 "AND created_at >= ? AND status IN ('queued', 'running') "
-                "ORDER BY id DESC LIMIT 1",
-                (company_id, target, cutoff),
-            ).fetchone()
-            if row:
-                conn.commit()
-                return _row_to_job(row), False
+                "ORDER BY id DESC",
+                (company_id, cutoff),
+            ).fetchall()
+            for row in active_rows:
+                if _normalize_reuse_target(row["target"]) == norm_target:
+                    conn.commit()
+                    return _row_to_job(row), False
 
             cur = conn.execute(
                 "INSERT INTO osint_jobs(company_id, target, target_type, status) "

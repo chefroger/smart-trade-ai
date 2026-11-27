@@ -202,13 +202,14 @@ def handle_chat_memory_list(args: dict[str, Any], **_kw) -> str:
 OSINT_JOB_START_SCHEMA = _schema(
     "osint_job_start",
     "启动一个**后台**背调任务（6 层 + 公开来源），立即返回 job_id，不阻塞聊天。"
-    "目标可以是公司名/域名/邮箱/人名；人名用 person: 前缀，域名用 domain: 前缀，"
-    "用户名用 username: 前缀。"
-    "10 分钟内同公司同目标的**排队/运行中**任务会复用；已完成的任务会重新跑"
-    "（否则用户只会看到旧结果、也没有进度动画）。启动后用 osint_job_result 读取进度与结果。"
+    "**一次用户请求只启动一个后台任务**：不要把同一家公司的公司名和官网域名拆成两个 job，"
+    "直接传官网域名（若已知）或公司名即可，编排器会自动解析并并行跑各层。"
+    "仅在需要消歧时加前缀（如人名 person:、用户名 username:）。"
+    "10 分钟内同公司同目标（忽略前缀/大小写差异）的**排队/运行中**任务会自动复用；已完成的任务会重新跑。"
+    "启动后用 osint_job_result 读取进度与结果。"
     "返回里带 known_facts：此前已核实过的事实（同目标），先看它，别重复查。",
     {
-        "target": _str("背调目标，例如 acme.com / domain:acme.com / person:\"Jane Doe\" / username:janedoe"),
+        "target": _str("背调目标（单次只传一个主目标，如 acme.com 或 \"Acme Corp\" 或 person:\"Jane Doe\"）"),
     },
     ["target"],
 )

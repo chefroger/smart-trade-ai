@@ -83,6 +83,15 @@ class TestCreateAndDedupe:
         assert created_again is False
         assert again["id"] == job["id"]
 
+    def test_prefixed_and_url_variants_reuse_same_job(self, companies):
+        """P1 回归：domain:Acme.com、acme.com、https://www.acme.com/ 应复用同一活跃任务。"""
+        job, created = osint_jobs.create_job(companies["first"], "domain:Acme.com")
+        assert created is True
+        for variant in ("acme.com", "https://www.acme.com/about", "company:acme.com"):
+            again, created_again = osint_jobs.create_job(companies["first"], variant)
+            assert created_again is False, f"{variant} 应该复用已有活跃任务"
+            assert again["id"] == job["id"]
+
     def test_done_job_is_not_reused(self, companies):
         """2026-11-22：已完成任务不再被复用。
 
