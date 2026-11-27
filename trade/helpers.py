@@ -163,11 +163,31 @@ def check_provider() -> str | None:
     return None
 
 
+# 已知非 OpenAI Provider 的默认 OpenAI 兼容推理地址（Hermes 不可用或 registry
+# 缺失 inference_base_url 时的兜底，防止 base_url 为空被 OpenAI SDK 误发到 api.openai.com）
+_DEFAULT_PROVIDER_BASE_URLS: dict[str, str] = {
+    "deepseek": "https://api.deepseek.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "moonshot": "https://api.moonshot.cn/v1",
+    "kimi": "https://api.moonshot.cn/v1",
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    "glm": "https://open.bigmodel.cn/api/paas/v4",
+    "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "siliconflow": "https://api.siliconflow.cn/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "mistral": "https://api.mistral.ai/v1",
+    "xai": "https://api.x.ai/v1",
+    "together": "https://api.together.xyz/v1",
+}
+
+
 def get_agent_kwargs() -> dict:
     """从配置文件构建 ``AIAgent.__init__`` 所需的参数。
 
     解析 provider、model、base_url 和 api_key —— 包括环境变量对 base_url
-    的覆盖，以及通过 auth 注册表按 provider 查找对应 API key。
+    的覆盖，缺省时回退到 provider 的默认 inference_base_url，以及通过 auth
+    注册表按 provider 查找对应 API key。
 
     Returns:
         包含 provider、model、base_url、api_key 的字典，所有值均为字符串（可能为空）。
@@ -179,12 +199,13 @@ def get_agent_kwargs() -> dict:
     cfg = load_config()
     provider, model = current_model_config()
     model_cfg = cfg.get("model", {})
-    base_url = model_cfg.get("base_url", "") if isinstance(model_cfg, dict) else ""
+    base_url = (model_cfg.get("base_url", "") if isinstance(model_cfg, dict) else "").strip()
 
     # ── base_url: from PROVIDER_REGISTRY, env var overrides config.yaml ──
     env_url = ""
+    registry_default_url = ""
     if provider:
-        # 从 PROVIDER_REGISTRY 获取该 provider 的 base_url 环境变量名，覆盖 config.yaml 中的值
+        # 从 PROVIDER_REGISTRY 获取该 provider 的 base_url 环境变量名与默认推理地址
         try:
             from hermes_cli.auth import PROVIDER_REGISTRY
             pconfig = PROVIDER_REGISTRY.get(provider)
@@ -192,12 +213,20 @@ def get_agent_kwargs() -> dict:
                 brv = getattr(pconfig, 'base_url_env_var', '')
                 if brv:
                     env_url = os.getenv(brv, "").strip()
+                registry_default_url = (
+                    getattr(pconfig, 'inference_base_url', '') or ''
+                ).strip()
         except Exception:
             # PROVIDER_REGISTRY 可能不存在或导入失败，忽略异常
             pass
     if env_url:
         # 环境变量中找到了 base_url，用它覆盖 config.yaml 中的值
         base_url = env_url
+    elif not base_url and provider:
+        # config 与 env 均未配置 base_url 时，回退到 provider 默认推理地址
+        base_url = registry_default_url or _DEFAULT_PROVIDER_BASE_URLS.get(
+            provider.strip().lower(), ""
+        )
 
     # ── api_key: per-provider via PROVIDER_REGISTRY，严格不跨 provider 兜底 ──
     api_key = ""

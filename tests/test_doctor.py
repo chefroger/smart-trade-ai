@@ -174,6 +174,102 @@ class TestVisionCheck:
 
         assert any(r.name == "vision 读图" for r in results)
 
+    def test_deepseek_without_base_url_falls_back_to_default_endpoint(self, monkeypatch):
+        """P2 回归：provider=deepseek 且 config/env 均无 base_url 时，应解析出 DeepSeek 默认地址。"""
+        import sys
+        import types
+
+        import trade.helpers as helpers
+
+        monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-fake-deepseek-key-12345678")
+
+        fake_cfg_mod = types.ModuleType("hermes_cli.config")
+        fake_cfg_mod.load_config = lambda: {"model": {"provider": "deepseek", "default": "deepseek-chat"}}
+        fake_auth_mod = types.ModuleType("hermes_cli.auth")
+        fake_pconfig = types.SimpleNamespace(
+            auth_type="api_key",
+            api_key_env_vars=["DEEPSEEK_API_KEY"],
+            base_url_env_var="DEEPSEEK_BASE_URL",
+            inference_base_url="https://api.deepseek.com/v1",
+        )
+        fake_auth_mod.PROVIDER_REGISTRY = {"deepseek": fake_pconfig}
+        fake_pkg = types.ModuleType("hermes_cli")
+        monkeypatch.setitem(sys.modules, "hermes_cli", fake_pkg)
+        monkeypatch.setitem(sys.modules, "hermes_cli.config", fake_cfg_mod)
+        monkeypatch.setitem(sys.modules, "hermes_cli.auth", fake_auth_mod)
+        monkeypatch.setattr("trade.hermes_compat.current_model_config", lambda: ("deepseek", "deepseek-chat"))
+
+        kwargs = helpers.get_agent_kwargs()
+        assert kwargs["base_url"] == "https://api.deepseek.com/v1"
+
+    def test_probe_vision_refuses_sending_non_openai_key_to_openai(self, monkeypatch):
+        """P2 回归：非 openai provider 且 base_url 为空或 api.openai.com 时，禁止发 HTTP 请求。"""
+        import sys
+        import types
+
+        called = []
+
+        class _BoomOpenAI:
+            def __init__(self, **kw):
+                called.append(kw)
+                raise AssertionError("不得向 api.openai.com 发起请求")
+
+        fake_openai = types.ModuleType("openai")
+        fake_openai.OpenAI = _BoomOpenAI
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+        for bad_url in ("", "https://api.openai.com/v1"):
+            monkeypatch.setattr(
+                "trade.helpers.get_agent_kwargs",
+                lambda u=bad_url: {
+                    "provider": "deepseek",
+                    "model": "deepseek-chat",
+                    "api_key": "sk-fake-deepseek-99999999",
+                    "base_url": u,
+                },
+            )
+            ok, detail = doctor._probe_vision_live("VISION-OK-1234")
+            assert ok is False
+            assert "OpenAI" in detail
+            assert "sk-fake" not in detail
+        assert called == []
+
+    def test_probe_vision_redacts_api_key_on_error(self, monkeypatch):
+        """P2 回归：探测异常信息不得包含 API Key 原文或截断片段。"""
+        import sys
+        import types
+
+        secret = "sk-testsecretkeyabcdef9876"
+
+        class _FakeOpenAI:
+            def __init__(self, **kw):
+                assert kw["base_url"] == "https://api.deepseek.com/v1"
+                self.chat = types.SimpleNamespace(
+                    completions=types.SimpleNamespace(
+                        create=lambda **_c: (_ for _ in ()).throw(
+                            RuntimeError(f"401 invalid key {secret}")
+                        )
+                    )
+                )
+
+        fake_openai = types.ModuleType("openai")
+        fake_openai.OpenAI = _FakeOpenAI
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+        monkeypatch.setattr(
+            "trade.helpers.get_agent_kwargs",
+            lambda: {
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "api_key": secret,
+                "base_url": "https://api.deepseek.com/v1",
+            },
+        )
+        ok, detail = doctor._probe_vision_live("VISION-OK-1234")
+        assert ok is False
+        assert secret not in detail
+        assert "testse" not in detail
+
 
 class TestTavilyCheck:
     def test_missing_key_is_degraded_not_fatal(self, monkeypatch):

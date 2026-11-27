@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -250,6 +251,32 @@ def _agent_tool_names() -> list[str]:
     return []
 
 
+_KEY_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9_\-]{6,}\b")
+
+
+def _is_openai_default_endpoint(base_url: str | None) -> bool:
+    """判断 base_url 是否为空或指向 OpenAI 官方端点（api.openai.com）。"""
+    raw = (base_url or "").strip()
+    if not raw:
+        return True
+    from urllib.parse import urlparse
+
+    host = (urlparse(raw).hostname or "").strip().lower()
+    return host == "api.openai.com"
+
+
+def _redact_api_key(text: str, api_key: str = "") -> str:
+    """脱敏错误文本中的 API Key（含原串、截断串与 sk-* 形态），绝不写入日志或输出。"""
+    cleaned = str(text or "")
+    key = (api_key or "").strip()
+    if key:
+        cleaned = cleaned.replace(key, "***")
+        # OpenAI 401 报错常回显截断 Key（如 sk-abcd...1234）
+        if len(key) >= 10:
+            cleaned = cleaned.replace(key[:6], "***").replace(key[-4:], "***")
+    return _KEY_TOKEN_RE.sub("sk-***", cleaned)
+
+
 def _probe_vision_live(expected_text: str) -> tuple[bool, str]:
     """直接给配置好的模型发一张含 `expected_text` 的图，看它能否读出来。
 
@@ -263,9 +290,14 @@ def _probe_vision_live(expected_text: str) -> tuple[bool, str]:
     kwargs = get_agent_kwargs()
     provider, model = kwargs.get("provider"), kwargs.get("model")
     api_key = kwargs.get("api_key")
-    base_url = kwargs.get("base_url") or None
+    base_url = (kwargs.get("base_url") or "").strip() or None
     if not (provider and model and api_key):
         return False, "provider/model/api_key 未配置完整，无法探测"
+
+    # 硬护栏（P2）：非 OpenAI Provider 若 base_url 未解析或落到 api.openai.com，
+    # 严禁发请求，防止把 DeepSeek 等第三方 Key 泄露给 OpenAI。
+    if str(provider).strip().lower() != "openai" and _is_openai_default_endpoint(base_url):
+        return False, "base_url 未解析，已拒绝把当前 Key 发到 OpenAI"
 
     png = _make_probe_image(expected_text)
     b64 = base64.b64encode(png).decode()
@@ -273,20 +305,23 @@ def _probe_vision_live(expected_text: str) -> tuple[bool, str]:
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key, base_url=base_url)
-    resp = client.chat.completions.create(
-        model=model,
-        # 400 而不是 60：推理模型（deepseek-flash）会用掉一部分预算做推理，
-        # 给 60 时实测正文为空且 finish_reason=length —— 预算全被推理吃光。
-        max_tokens=400,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "只回复图片里的那行文字，不要任何其它内容。"},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:image/png;base64,{b64}"}},
-            ],
-        }],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            # 400 而不是 60：推理模型（deepseek-flash）会用掉一部分预算做推理，
+            # 给 60 时实测正文为空且 finish_reason=length —— 预算全被推理吃光。
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "只回复图片里的那行文字，不要任何其它内容。"},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            }],
+        )
+    except Exception as exc:
+        return False, f"vision 探测失败：{_redact_api_key(str(exc), api_key)}"
     choice = resp.choices[0]
     return _judge_vision_response(
         expected_text,
