@@ -1503,6 +1503,7 @@ function showOrderEditModal(oid, presetCid) {
             '<button type="button" class="btn-xs" style="margin-top:6px;" data-act="addOrderItemRow">'+t('order.add_line')+'</button>' +
         '</div>' +
         '<div class="form-group"><label for="order-notes">'+t('order.notes')+'</label><textarea id="order-notes" style="min-height:50px;" placeholder="Notes"></textarea></div>' +
+        (isEdit ? '<div class="form-group"><label>关联采购单</label><div id="order-linked-pos"><span style="font-size:12px;color:var(--muted);">加载中...</span></div></div>' : '') +
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
             (isEdit?'<button class="btn btn-danger" data-act="deleteOrder" data-arg="'+oid+'">'+t('order.btn_delete')+'</button>':'') +
             '<button class="btn" data-act="closeBackdrop">'+t('btn.cancel')+'</button>' +
@@ -1539,6 +1540,13 @@ function showOrderEditModal(oid, presetCid) {
                     total_amount: o.total_amount,
                 }];
             setOrderItems(items);
+        });
+        api('GET', `/api/trade/purchase-orders?order_id=${oid}`, null, undefined, { silent: true }).then(pos => {
+            const box = $('order-linked-pos');
+            if (!box) return;
+            if (typeof _spBuildOrderLinkedPosHtml === 'function') {
+                box.innerHTML = _spBuildOrderLinkedPosHtml(Array.isArray(pos) ? pos : []);
+            }
         });
     }
     // 加载客户下拉

@@ -624,6 +624,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "customer_facts", "customer_gifts", "inquiries", "visit_plans",
                 "suppliers", "supplier_contacts", "supplier_products", "supplier_quotes",
                 "rfqs", "rfq_responses",
+                "purchase_orders", "consolidations", "consolidation_items",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -958,8 +959,8 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         items_by_order: dict[int, list[dict]] = {}
         for item in target_items:
             items_by_order.setdefault(item["order_id"], []).append(item)
-        existing_sig = {
-            merge_mod.order_signature(row, items_by_order.get(row["id"], []))
+        existing_sig: dict[tuple, int] = {
+            merge_mod.order_signature(row, items_by_order.get(row["id"], [])): int(row["id"])
             for row in target_orders
         }
         source_items: dict[int, list[dict]] = {}
@@ -975,6 +976,8 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             # 去重键必须用重映射后的 customer_id，否则与目标库已有订单永远对不上
             sig = merge_mod.order_signature(new_row, items)
             if sig in existing_sig:
+                # 合并模式下同样登记旧→新 order_id 映射，供 purchase_orders.order_id 复用
+                order_map[row["id"]] = existing_sig[sig]
                 order_skipped += 1
                 continue
             new_id = _insert(conn, "orders", new_row)
@@ -983,7 +986,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 item_row = _without_id(dict(item))
                 item_row["order_id"] = new_id
                 _insert(conn, "order_items", item_row)
-            existing_sig.add(sig)
+            existing_sig[sig] = int(new_id)
             order_inserted += 1
         for link in source_tables["order_libraries"]:
             order_id = order_map.get(link.get("order_id"))
@@ -1397,6 +1400,134 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             rr_skipped = len(source_tables.get("rfq_responses") or [])
         report["tables"]["rfq_responses"] = {
             "inserted": rr_added, "added": rr_added, "skipped": rr_skipped,
+        }
+
+        # 供应商管理一期 · 第三批：purchase_orders / consolidations / consolidation_items
+        po_map: dict[int, int] = {}
+        po_added = po_skipped = 0
+        if _table_exists(conn, "purchase_orders"):
+            existing_pos: dict[tuple[str, int], int] = {
+                ((r.get("po_no") or "").strip(), int(r["supplier_id"])): int(r["id"])
+                for r in _rows(
+                    conn,
+                    "SELECT id, po_no, supplier_id FROM purchase_orders WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
+            for row in source_tables.get("purchase_orders") or []:
+                old_po_id = row.get("id")
+                mapped_sup = supplier_map.get(row.get("supplier_id"))
+                # 映射不到目标供应商时跳过
+                if not mapped_sup:
+                    po_skipped += 1
+                    continue
+                po_no_val = (row.get("po_no") or "").strip()
+                po_key = (po_no_val, int(mapped_sup))
+                # 去重签名 = (po_no, supplier 映射后)
+                if po_key in existing_pos:
+                    if old_po_id is not None:
+                        po_map[int(old_po_id)] = existing_pos[po_key]
+                    po_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["supplier_id"] = mapped_sup
+                old_ord_id = row.get("order_id")
+                if old_ord_id is not None:
+                    try:
+                        new_row["order_id"] = order_map.get(int(old_ord_id))
+                    except (TypeError, ValueError):
+                        new_row["order_id"] = None
+                else:
+                    new_row["order_id"] = None
+                old_rfq_id = row.get("rfq_id")
+                if old_rfq_id is not None:
+                    try:
+                        new_row["rfq_id"] = rfq_map.get(int(old_rfq_id))
+                    except (TypeError, ValueError):
+                        new_row["rfq_id"] = None
+                else:
+                    new_row["rfq_id"] = None
+                new_po_id = _insert(conn, "purchase_orders", new_row)
+                existing_pos[po_key] = int(new_po_id)
+                if old_po_id is not None:
+                    po_map[int(old_po_id)] = int(new_po_id)
+                po_added += 1
+        else:
+            po_skipped = len(source_tables.get("purchase_orders") or [])
+        report["tables"]["purchase_orders"] = {
+            "inserted": po_added, "added": po_added, "skipped": po_skipped,
+        }
+
+        cons_map: dict[int, int] = {}
+        cons_added = cons_skipped = 0
+        if _table_exists(conn, "consolidations"):
+            existing_cons: dict[tuple[str, str], int] = {
+                ((r.get("code") or "").strip(), (r.get("cutoff_date") or "").strip()): int(r["id"])
+                for r in _rows(
+                    conn,
+                    "SELECT id, code, cutoff_date FROM consolidations WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
+            for row in source_tables.get("consolidations") or []:
+                old_cons_id = row.get("id")
+                cons_key = (
+                    (row.get("code") or "").strip(),
+                    (row.get("cutoff_date") or "").strip(),
+                )
+                # 去重签名 = (code, cutoff_date)
+                if cons_key in existing_cons:
+                    if old_cons_id is not None:
+                        cons_map[int(old_cons_id)] = existing_cons[cons_key]
+                    cons_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_cons_id = _insert(conn, "consolidations", new_row)
+                existing_cons[cons_key] = int(new_cons_id)
+                if old_cons_id is not None:
+                    cons_map[int(old_cons_id)] = int(new_cons_id)
+                cons_added += 1
+        else:
+            cons_skipped = len(source_tables.get("consolidations") or [])
+        report["tables"]["consolidations"] = {
+            "inserted": cons_added, "added": cons_added, "skipped": cons_skipped,
+        }
+
+        ci_added = ci_skipped = 0
+        if _table_exists(conn, "consolidation_items"):
+            existing_ci: set[tuple[int, int]] = {
+                (int(r["consolidation_id"]), int(r["purchase_order_id"]))
+                for r in _rows(
+                    conn,
+                    "SELECT consolidation_id, purchase_order_id FROM consolidation_items WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
+            for row in source_tables.get("consolidation_items") or []:
+                mapped_cons = cons_map.get(row.get("consolidation_id"))
+                mapped_po = po_map.get(row.get("purchase_order_id"))
+                # 映射不到目标拼柜或采购单时跳过
+                if not mapped_cons or not mapped_po:
+                    ci_skipped += 1
+                    continue
+                ci_key = (int(mapped_cons), int(mapped_po))
+                # 去重键 = (consolidation 映射后, purchase_order 映射后)
+                if ci_key in existing_ci:
+                    ci_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["consolidation_id"] = mapped_cons
+                new_row["purchase_order_id"] = mapped_po
+                _insert(conn, "consolidation_items", new_row)
+                existing_ci.add(ci_key)
+                ci_added += 1
+        else:
+            ci_skipped = len(source_tables.get("consolidation_items") or [])
+        report["tables"]["consolidation_items"] = {
+            "inserted": ci_added, "added": ci_added, "skipped": ci_skipped,
         }
 
         # 公司身份 + 工作目录路径

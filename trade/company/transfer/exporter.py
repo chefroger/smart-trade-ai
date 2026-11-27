@@ -403,6 +403,22 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     "SELECT * FROM rfq_responses WHERE company_id = ?",
                     (company_id,),
                 ),
+                # 供应商管理一期 · 第三批（采购单与拼柜三表）
+                "purchase_orders": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM purchase_orders WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "consolidations": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM consolidations WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "consolidation_items": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM consolidation_items WHERE company_id = ?",
+                    (company_id,),
+                ),
             }
             schema_version = _schema_version(conn)
         finally:
