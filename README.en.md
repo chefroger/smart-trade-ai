@@ -20,9 +20,9 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-2.png" alt="Customer & Cron Panel" width="75%">
+  <img src="docs/screenshot-2.png" alt="Customer Management" width="75%">
   <br>
-  <em>Customer management + Cron task panel</em>
+  <em>Customer management — grades, tags, deal stages and overdue alerts, with today's brief, todos and cron tasks in the right rail</em>
 </p>
 
 ---
@@ -41,9 +41,9 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-1.png" alt="AI Chat Interface" width="75%">
+  <img src="docs/screenshot-1.png" alt="Morning Brief" width="75%">
   <br>
-  <em>AI Chat — auto-invokes web_search / read_file / database tools</em>
+  <em>Morning Brief — live FX rates, commodity prices and market news, researched by the AI</em>
 </p>
 
 ---

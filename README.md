@@ -18,9 +18,9 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-1.png" alt="AI Chat Interface" width="75%">
+  <img src="docs/screenshot-1.png" alt="Morning Brief" width="75%">
   <br>
-  <em>AI 对话界面 — 自动调用 web_search / read_file / database 工具</em>
+  <em>早安简报 — 实时汇率、大宗商品行情与市场新闻，由 AI 联网检索后生成</em>
 </p>
 
 ---
@@ -67,9 +67,9 @@ irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/inst
 ---
 
 <p align="center">
-  <img src="docs/screenshot-2.png" alt="Customer & Cron Panel" width="75%">
+  <img src="docs/screenshot-2.png" alt="Customer Management" width="75%">
   <br>
-  <em>客户管理 + 定时任务面板</em>
+  <em>客户管理 — 分级 / 标签 / 商机阶段 / 逾期提醒；右侧常驻今日简报、待办与定时任务</em>
 </p>
 
 ---
