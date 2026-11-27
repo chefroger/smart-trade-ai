@@ -149,3 +149,15 @@ test('D2：订单弹窗关联采购单区块遇 402/失败时静默隐藏', () =
     assert.ok(/!Array\.isArray\(pos\)/.test(block), '返回 null（402/失败）时必须判非数组并隐藏');
     assert.ok(/\.catch\(/.test(block), '网络异常时也必须静默隐藏');
 });
+
+test('D4：今日简报交期提醒复用 /brief/today 数据，不额外请求受门禁的 /purchase-orders/alerts', () => {
+    const { SRC } = require('./_extract');
+    const idx = SRC.indexOf('async function _spInjectBriefDeliveryAlerts()');
+    assert.ok(idx !== -1, '找不到 _spInjectBriefDeliveryAlerts');
+    const body = SRC.slice(idx, idx + 800);
+    assert.ok(
+        !/\/api\/trade\/purchase-orders\/alerts/.test(body),
+        '_spInjectBriefDeliveryAlerts 不得请求 /api/trade/purchase-orders/alerts（试用态会 402）',
+    );
+    assert.ok(/_lastBriefDeliveryAlerts/.test(body), '应直接复用 loadTodayBrief 缓存的 delivery_alerts');
+});

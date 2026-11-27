@@ -1997,12 +1997,14 @@ function _spOpenConsolidationModal(existing) {
     });
 }
 
-// ── 今日简报「交期提醒」联动（不改动 chat.js，挂接 loadTodayBrief 后渲染）────
+// ── 今日简报「交期提醒」联动（复用 /brief/today 返回的 delivery_alerts，不额外请求受门禁接口）────
 
 async function _spInjectBriefDeliveryAlerts() {
     if (typeof currentCompanyId === 'undefined' || !currentCompanyId) return;
-    const alerts = await api('GET', '/api/trade/purchase-orders/alerts', null, undefined, { silent: true });
-    if (!Array.isArray(alerts) || !alerts.length) return;
+    const alerts = (typeof window !== 'undefined' && Array.isArray(window._lastBriefDeliveryAlerts))
+        ? window._lastBriefDeliveryAlerts
+        : [];
+    if (!alerts.length) return;
     const html = _spBuildDeliveryAlertsBriefHtml(alerts.slice(0, 10));
     if (!html) return;
     const railBrief = document.getElementById('rail-brief');

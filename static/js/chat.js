@@ -152,6 +152,8 @@ async function loadTodayBrief(silent) {
         silent: !!silent,
     });
     if (!data) return;
+    // 复用 /brief/today 已返回的交期提醒，避免前端再发被付费门禁拦截的 /purchase-orders/alerts
+    window._lastBriefDeliveryAlerts = Array.isArray(data.delivery_alerts) ? data.delivery_alerts : [];
     _updateDailyBriefBadge(data.overdue_followups);
     const ni = data.new_inquiries;
     const niText = (ni === null || ni === undefined) ? t('brief.dash') : String(ni);
