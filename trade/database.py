@@ -700,6 +700,68 @@ CREATE TABLE IF NOT EXISTS rfq_responses (
 CREATE INDEX IF NOT EXISTS idx_rfq_responses_rfq              ON rfq_responses(rfq_id);
 CREATE INDEX IF NOT EXISTS idx_rfq_responses_company_supplier ON rfq_responses(company_id, supplier_id);
 
+-- 采购单（供应商管理一期 · 第三批；与客户订单 orders 严格分开）
+CREATE TABLE IF NOT EXISTS purchase_orders (
+    id            INTEGER PRIMARY KEY,
+    company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    po_no         TEXT    DEFAULT '',
+    supplier_id   INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    order_id      INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+    rfq_id        INTEGER REFERENCES rfqs(id) ON DELETE SET NULL,
+    product_name  TEXT    NOT NULL,
+    spec_model    TEXT    DEFAULT '',
+    quantity      REAL,
+    unit          TEXT    DEFAULT '',
+    amount        REAL,
+    currency      TEXT    DEFAULT 'CNY',
+    ordered_at    TEXT    DEFAULT '',
+    promised_date TEXT    DEFAULT '',
+    status        TEXT    DEFAULT '已下单',   -- 已下单 / 生产中 / 待出货 / 已出货 / 完成（只此五态）
+    note          TEXT    DEFAULT '',
+    created_at    TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at    TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1        TEXT    DEFAULT '{}',
+    extra2        TEXT    DEFAULT '{}',
+    extra3        TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_po_company_supplier ON purchase_orders(company_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_po_company_order    ON purchase_orders(company_id, order_id);
+CREATE INDEX IF NOT EXISTS idx_po_company_status   ON purchase_orders(company_id, status);
+CREATE INDEX IF NOT EXISTS idx_po_company_promised ON purchase_orders(company_id, promised_date);
+
+-- 拼柜轻表（供应商管理一期 · 第三批）
+CREATE TABLE IF NOT EXISTS consolidations (
+    id               INTEGER PRIMARY KEY,
+    company_id       INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    code             TEXT    DEFAULT '',
+    cutoff_date      TEXT    DEFAULT '',
+    destination_port TEXT    DEFAULT '',
+    carrier          TEXT    DEFAULT '',
+    etd              TEXT    DEFAULT '',
+    status           TEXT    DEFAULT '组货中',   -- 组货中 / 已截关 / 已发运（只此三态）
+    note             TEXT    DEFAULT '',
+    created_at       TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at       TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1           TEXT    DEFAULT '{}',
+    extra2           TEXT    DEFAULT '{}',
+    extra3           TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_cons_company_status ON consolidations(company_id, status);
+
+-- 拼柜明细（同一拼柜内一张采购单只占一行）
+CREATE TABLE IF NOT EXISTS consolidation_items (
+    id                INTEGER PRIMARY KEY,
+    company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    consolidation_id  INTEGER NOT NULL REFERENCES consolidations(id) ON DELETE CASCADE,
+    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+    note              TEXT    DEFAULT '',
+    created_at        TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at        TEXT    DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(consolidation_id, purchase_order_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cons_items_cons ON consolidation_items(consolidation_id);
+CREATE INDEX IF NOT EXISTS idx_cons_items_po   ON consolidation_items(purchase_order_id);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,

@@ -12,7 +12,7 @@ function loadSuppliersUi() {
     const esc = (s) => String(s || '').replace(/[&<>"']/g, (ch) => escMap[ch]);
     return loadRegion(
         'suppliers-ui',
-        '{ _spBuildDirectoryRowsHtml, _spBuildCompareGroupsHtml, _spFormatSelfProduced, _spFormatPriceCell, _spFormatQuotedAt, _spBuildRfqRowsHtml, _spBuildRfqResponsesHtml, _spFormatRfqStatus }',
+        '{ _spBuildDirectoryRowsHtml, _spBuildCompareGroupsHtml, _spFormatSelfProduced, _spFormatPriceCell, _spFormatQuotedAt, _spBuildRfqRowsHtml, _spBuildRfqResponsesHtml, _spFormatRfqStatus, _spBuildPoRowsHtml, _spFormatCutoffBadge, _spBuildConsolidationCardsHtml, _spBuildPoolRowsHtml, _spBuildDeliveryAlertsBriefHtml, _spBuildOrderLinkedPosHtml }',
         { esc },
     );
 }
@@ -212,4 +212,78 @@ test('采购询价页签：列表渲染（空态/进度/选中供应商/两态/X
     assert.match(respHtml, /value="88\.5"/);
     assert.match(respHtml, /未回/);
     assert.match(respHtml, /选定<\/button>/);
+});
+
+test('采购单与拼柜看板：列表/倒计时徽标/待拼池/今日简报交期提醒/订单关联采购单渲染与 XSS 转义', () => {
+    const ui = loadSuppliersUi();
+    assert.match(ui._spBuildPoRowsHtml([]), /暂无采购单/);
+    const poHtml = ui._spBuildPoRowsHtml([
+        {
+            id: 5,
+            po_no: 'PO5',
+            supplier_name: '顺达<script>x</script>厂',
+            product_name: '球阀',
+            spec_model: 'DN50',
+            quantity: 100,
+            unit: '台',
+            order_display_no: 'SO12',
+            customer_name: 'Euro Buyer',
+            amount: 12000,
+            currency: 'CNY',
+            promised_date: '2026-12-01',
+            status: '生产中',
+        },
+    ]);
+    assert.doesNotMatch(poHtml, /<script>/);
+    assert.match(poHtml, /PO5/);
+    assert.match(poHtml, /SO12/);
+    assert.match(poHtml, /CNY 12000/);
+
+    // 截关倒计时徽标：已过红、≤3天橙、>3天普通、无截关日
+    assert.match(ui._spFormatCutoffBadge(-2, '2026-11-25'), /sp-cut over/);
+    assert.match(ui._spFormatCutoffBadge(0, '2026-11-27'), /今日截关/);
+    assert.match(ui._spFormatCutoffBadge(2, '2026-11-29'), /sp-cut warn/);
+    assert.match(ui._spFormatCutoffBadge(7, '2026-12-04'), /sp-cut ok/);
+    assert.match(ui._spFormatCutoffBadge(null, ''), /未设截关日/);
+
+    const consHtml = ui._spBuildConsolidationCardsHtml(
+        [
+            {
+                id: 3,
+                code: 'CG3',
+                status: '组货中',
+                destination_port: '鹿特丹',
+                cutoff_date: '2026-11-29',
+                days_to_cutoff: 2,
+                items: [
+                    { item_id: 9, po_no: 'PO5', supplier_name: '顺达厂', product_name: '球阀', po_status: '生产中', promised_date: '2026-12-01' },
+                ],
+            },
+        ],
+        [{ id: 6, po_no: 'PO6', supplier_name: '乙厂', product_name: '垫片', status: '已下单', promised_date: '' }],
+    );
+    assert.match(consHtml, /CG3/);
+    assert.match(consHtml, /鹿特丹/);
+    assert.match(consHtml, /PO5/);
+    assert.match(consHtml, /移出/);
+
+    const poolHtml = ui._spBuildPoolRowsHtml(
+        [{ id: 6, po_no: 'PO6', supplier_name: '乙厂', product_name: '垫片', status: '已下单', promised_date: '' }],
+        [{ id: 3, code: 'CG3', destination_port: '鹿特丹' }],
+    );
+    assert.match(poolHtml, /PO6/);
+    assert.match(poolHtml, /CG3/);
+
+    assert.equal(ui._spBuildDeliveryAlertsBriefHtml([]), '');
+    const briefHtml = ui._spBuildDeliveryAlertsBriefHtml([
+        { id: 5, po_no: 'PO5', supplier_name: '顺达厂', product_name: '球阀', is_overdue: true, days_overdue: 3, days_left: 0 },
+    ]);
+    assert.match(briefHtml, /交期提醒/);
+    assert.match(briefHtml, /逾期 3 天/);
+
+    const linkedHtml = ui._spBuildOrderLinkedPosHtml([
+        { id: 5, po_no: 'PO5', supplier_name: '顺达厂', product_name: '球阀', status: '生产中', promised_date: '2026-12-01' },
+    ]);
+    assert.match(linkedHtml, /PO5/);
+    assert.match(linkedHtml, /顺达厂/);
 });

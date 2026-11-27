@@ -625,9 +625,12 @@ def test_a12_no_supplier_leak_into_chat_copilot_or_brand_safety():
         "trade.supplier",
         "trade.rfq",
         "rfq_responses",
+        "trade.purchase",
+        "purchase_orders",
         "handle_supplier_quote_search",
         "handle_supplier_compare",
         "handle_supplier_list",
+        "handle_supplier_delivery_alerts",
     )
     for path in protected_files:
         if not path.is_file():

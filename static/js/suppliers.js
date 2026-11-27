@@ -20,6 +20,14 @@ const _spState = {
     selectedRfqId: null,
     rfqDetail: null,
     companyInquiries: [],
+    poFilters: { status: '', supplier_id: '', q: '' },
+    pos: [],
+    selectedPoId: null,
+    poDetail: null,
+    companyOrders: [],
+    consolidations: [],
+    pool: [],
+    consStatusFilter: '',
 };
 
 const _SP_STATUS_CLASS = {
@@ -227,6 +235,159 @@ function _spBuildRfqResponsesHtml(responses) {
     }).join('');
 }
 
+const _PO_STATUS_CLASS = {
+    '已下单': 's-cand',
+    '生产中': 's-talk',
+    '待出货': 's-pause',
+    '已出货': 's-coop',
+    '完成': 's-coop',
+};
+
+function _spFormatPoStatus(status) {
+    const cls = _PO_STATUS_CLASS[status] || 's-cand';
+    return '<span class="sp-st ' + cls + '">' + esc(status || '已下单') + '</span>';
+}
+
+function _spFormatCutoffBadge(daysToCutoff, cutoffDate) {
+    if (!cutoffDate) return '<span class="sp-mut">未设截关日</span>';
+    if (daysToCutoff === null || daysToCutoff === undefined) return esc(cutoffDate);
+    const n = Number(daysToCutoff);
+    if (n < 0) return '<span class="sp-cut over">已过 ' + esc(String(Math.abs(n))) + ' 天</span>';
+    if (n === 0) return '<span class="sp-cut warn">今日截关</span>';
+    if (n <= 3) return '<span class="sp-cut warn">剩 ' + esc(String(n)) + ' 天</span>';
+    return '<span class="sp-cut ok">剩 ' + esc(String(n)) + ' 天</span>';
+}
+
+function _spBuildPoRowsHtml(items) {
+    if (!items || !items.length) {
+        return '<tr><td colspan="7"><div class="sp-state"><h3>暂无采购单</h3><p>点击「新建采购单」或「从询价单生成」创建采购单。</p></div></td></tr>';
+    }
+    return items.map(function (po) {
+        const sub = [po.spec_model, po.quantity != null ? (String(po.quantity) + (po.unit ? ' ' + po.unit : '')) : ''].filter(Boolean).join(' · ');
+        const ordLabel = po.order_display_no
+            ? ('<div class="rname">' + esc(po.order_display_no) + '</div>' + (po.customer_name ? '<div class="rsub">' + esc(po.customer_name) + '</div>' : ''))
+            : '<span class="sp-mut">—</span>';
+        const amtText = (po.amount !== null && po.amount !== undefined && po.amount !== '')
+            ? ('<span class="sp-num">' + esc(po.currency || 'CNY') + ' ' + esc(String(po.amount)) + '</span>')
+            : '<span class="sp-mut">—</span>';
+        return '<tr class="sp-row" data-po-open="' + esc(String(po.id)) + '">'
+            + '<td class="sp-num"><b>' + esc(po.po_no || ('PO' + po.id)) + '</b></td>'
+            + '<td>' + esc(po.supplier_name || '') + '</td>'
+            + '<td><div class="rname">' + esc(po.product_name) + '</div>' + (sub ? '<div class="rsub">' + esc(sub) + '</div>' : '') + '</td>'
+            + '<td>' + ordLabel + '</td>'
+            + '<td>' + amtText + '</td>'
+            + '<td class="sp-num">' + esc(po.promised_date || '—') + '</td>'
+            + '<td>' + _spFormatPoStatus(po.status) + '</td>'
+            + '</tr>';
+    }).join('');
+}
+
+function _spBuildConsolidationCardsHtml(consolidations, pool) {
+    if (!consolidations || !consolidations.length) {
+        return '<div class="sp-state"><h3>暂无拼柜计划</h3><p>点击「新建拼柜」创建拼柜，并从下方待拼池将采购单装入对应货柜。</p></div>';
+    }
+    const poolOpts = '<option value="">从待拼池选择采购单...</option>' + (pool || []).map(function (p) {
+        return '<option value="' + esc(String(p.id)) + '">' + esc((p.po_no || ('PO' + p.id)) + ' · ' + (p.supplier_name || '') + ' · ' + (p.product_name || '')) + '</option>';
+    }).join('');
+
+    return consolidations.map(function (c) {
+        const cid = esc(String(c.id));
+        const items = c.items || [];
+        const itemsHtml = items.length
+            ? '<table class="sp-mini"><thead><tr><th>采购单号</th><th>供应商</th><th>产品</th><th>采购单状态</th><th>约定交期</th><th style="width:60px;">操作</th></tr></thead><tbody>'
+              + items.map(function (it) {
+                  return '<tr>'
+                      + '<td class="sp-num"><b>' + esc(it.po_no || '') + '</b></td>'
+                      + '<td>' + esc(it.supplier_name || '') + '</td>'
+                      + '<td>' + esc(it.product_name || '') + (it.spec_model ? ' <span class="sp-mut">(' + esc(it.spec_model) + ')</span>' : '') + '</td>'
+                      + '<td>' + _spFormatPoStatus(it.po_status) + '</td>'
+                      + '<td class="sp-num">' + esc(it.promised_date || '—') + '</td>'
+                      + '<td><button type="button" class="sp-lnk danger" data-cons-rm-item="' + esc(String(it.item_id)) + '" data-cons-id="' + cid + '">移出</button></td>'
+                      + '</tr>';
+              }).join('') + '</tbody></table>'
+            : '<div class="sp-mut" style="font-size:12px;padding:6px 0;">柜内暂无采购单</div>';
+
+        const meta = [
+            c.destination_port ? ('目的港：' + esc(c.destination_port)) : '',
+            c.carrier ? ('船司/货代：' + esc(c.carrier)) : '',
+            c.cutoff_date ? ('截关日：' + esc(c.cutoff_date)) : '',
+            c.etd ? ('预计开船：' + esc(c.etd)) : '',
+        ].filter(Boolean).join(' · ');
+
+        return '<div class="sp-cons-card" data-cons-card="' + cid + '">'
+            + '<div class="ch">'
+            + '<span class="sp-num" style="font-weight:700;font-size:14px;">' + esc(c.code || ('CG' + c.id)) + '</span>'
+            + '<span class="sp-chip">' + esc(c.status || '组货中') + '</span>'
+            + _spFormatCutoffBadge(c.days_to_cutoff, c.cutoff_date)
+            + '<span class="sp-mut" style="font-size:12px;">共 ' + esc(String(items.length)) + ' 单</span>'
+            + '<div style="margin-left:auto;display:flex;gap:6px;">'
+            + '<button type="button" class="sp-lnk" data-cons-edit="' + cid + '">编辑</button>'
+            + '<button type="button" class="sp-lnk danger" data-cons-del="' + cid + '">删除</button>'
+            + '</div></div>'
+            + (meta ? '<div class="sp-mut" style="font-size:12px;margin-bottom:8px;">' + meta + '</div>' : '')
+            + itemsHtml
+            + '<div style="display:flex;gap:6px;margin-top:8px;align-items:center;">'
+            + '<select data-cons-add-sel="' + cid + '" style="flex:1;max-width:360px;">' + poolOpts + '</select>'
+            + '<button type="button" class="btn" data-cons-add-btn="' + cid + '">+ 添加采购单</button>'
+            + '</div></div>';
+    }).join('');
+}
+
+function _spBuildPoolRowsHtml(pool, consolidations) {
+    if (!pool || !pool.length) {
+        return '<tr><td colspan="6"><div class="sp-mut" style="padding:10px;text-align:center;">待拼池为空（所有未出货采购单均已入柜）</div></td></tr>';
+    }
+    const consOpts = '<option value="">选择拼柜...</option>' + (consolidations || []).map(function (c) {
+        return '<option value="' + esc(String(c.id)) + '">' + esc((c.code || ('CG' + c.id)) + (c.destination_port ? (' · ' + c.destination_port) : '')) + '</option>';
+    }).join('');
+    return pool.map(function (p) {
+        const pid = esc(String(p.id));
+        return '<tr>'
+            + '<td class="sp-num"><b>' + esc(p.po_no || ('PO' + p.id)) + '</b></td>'
+            + '<td>' + esc(p.supplier_name || '') + '</td>'
+            + '<td>' + esc(p.product_name || '') + '</td>'
+            + '<td>' + _spFormatPoStatus(p.status) + '</td>'
+            + '<td class="sp-num">' + esc(p.promised_date || '—') + '</td>'
+            + '<td style="white-space:nowrap;">'
+            + '<select data-pool-cons-sel="' + pid + '" style="width:150px;">' + consOpts + '</select> '
+            + '<button type="button" class="btn" data-pool-join="' + pid + '">加入</button>'
+            + '</td></tr>';
+    }).join('');
+}
+
+function _spBuildDeliveryAlertsBriefHtml(alerts) {
+    if (!alerts || !alerts.length) return '';
+    const rows = alerts.map(function (a) {
+        const tag = a.is_overdue
+            ? '<span class="sp-cut over">逾期 ' + esc(String(a.days_overdue)) + ' 天</span>'
+            : '<span class="sp-cut warn">剩 ' + esc(String(a.days_left)) + ' 天</span>';
+        return '<div class="sp-brief-al">'
+            + '<span class="sp-num"><b>' + esc(a.po_no || ('PO' + a.id)) + '</b></span> '
+            + esc(a.supplier_name || '') + ' · ' + esc(a.product_name || '') + ' '
+            + tag
+            + '</div>';
+    }).join('');
+    return '<div class="sp-brief-alerts" id="rail-brief-delivery-alerts">'
+        + '<div class="sp-brief-al-h">交期提醒（' + esc(String(alerts.length)) + '）</div>'
+        + rows + '</div>';
+}
+
+function _spBuildOrderLinkedPosHtml(pos) {
+    if (!pos || !pos.length) {
+        return '<div class="sp-mut" style="font-size:12px;">暂无关联采购单</div>';
+    }
+    return '<table class="sp-mini"><thead><tr><th>采购单号</th><th>供应商</th><th>产品</th><th>状态</th><th>约定交期</th></tr></thead><tbody>'
+        + pos.map(function (p) {
+            return '<tr>'
+                + '<td class="sp-num"><b>' + esc(p.po_no || ('PO' + p.id)) + '</b></td>'
+                + '<td>' + esc(p.supplier_name || '') + '</td>'
+                + '<td>' + esc(p.product_name || '') + '</td>'
+                + '<td>' + _spFormatPoStatus(p.status) + '</td>'
+                + '<td class="sp-num">' + esc(p.promised_date || '—') + '</td>'
+                + '</tr>';
+        }).join('') + '</tbody></table>';
+}
+
 // #endregion suppliers-ui
 
 function renderSuppliersViewInto(container) {
@@ -268,6 +429,8 @@ function _spRenderRoot() {
         + '<button type="button" class="sp-tab' + (t === 'compare' ? ' on' : '') + '" data-sp-tab="compare"><span class="zh">产品能力（比价）</span><span class="en">COMPARE</span></button>'
         + '<button type="button" class="sp-tab' + (t === 'import' ? ' on' : '') + '" data-sp-tab="import"><span class="zh">导入与确认</span><span class="en">IMPORT</span><span class="sp-n" id="sp-draft-badge"' + badgeStyle + '>' + esc(String(_spState.pendingDraftCount)) + '</span></button>'
         + '<button type="button" class="sp-tab' + (t === 'rfqs' ? ' on' : '') + '" data-sp-tab="rfqs"><span class="zh">采购询价</span><span class="en">RFQ</span></button>'
+        + '<button type="button" class="sp-tab' + (t === 'pos' ? ' on' : '') + '" data-sp-tab="pos"><span class="zh">采购单</span><span class="en">PO</span></button>'
+        + '<button type="button" class="sp-tab' + (t === 'consolidations' ? ' on' : '') + '" data-sp-tab="consolidations"><span class="zh">拼柜看板</span><span class="en">CONSOL</span></button>'
         + '</div>'
         + '<div class="sp-body" id="sp-body"></div>';
 
@@ -293,6 +456,14 @@ function _spRenderRoot() {
                 _spState.rfqDetail = null;
                 _spRenderRoot();
                 _spLoadRfqs();
+            } else if (_spState.tab === 'pos') {
+                _spState.selectedPoId = null;
+                _spState.poDetail = null;
+                _spRenderRoot();
+                _spLoadPos();
+            } else if (_spState.tab === 'consolidations') {
+                _spRenderRoot();
+                _spLoadConsolidations();
             }
         });
     });
@@ -316,6 +487,14 @@ function _spRenderBody() {
         } else {
             _spRenderRfqsList(body);
         }
+    } else if (_spState.tab === 'pos') {
+        if (_spState.selectedPoId && _spState.poDetail) {
+            _spRenderPoDetail(body, _spState.poDetail);
+        } else {
+            _spRenderPosList(body);
+        }
+    } else if (_spState.tab === 'consolidations') {
+        _spRenderConsolidations(body);
     } else {
         _spRenderImport(body);
     }
@@ -1386,4 +1565,466 @@ async function _spOpenRfqModal(existing) {
             else _spLoadRfqs();
         }
     });
+}
+
+// ── 采购单页签（供应商管理一期 · 第三批）─────────────────────────────────────
+
+async function _spLoadPos() {
+    if (!_spState.suppliers || !_spState.suppliers.length) {
+        const sups = await api('GET', '/api/trade/suppliers', null, null, { silent: true });
+        if (Array.isArray(sups)) _spState.suppliers = sups;
+    }
+    const f = _spState.poFilters;
+    const qs = new URLSearchParams();
+    if (f.status) qs.set('status', f.status);
+    if (f.supplier_id) qs.set('supplier_id', f.supplier_id);
+    if (f.q) qs.set('q', f.q);
+    const url = '/api/trade/purchase-orders' + (qs.toString() ? '?' + qs.toString() : '');
+    const res = await api('GET', url);
+    if (Array.isArray(res)) {
+        _spState.pos = res;
+        if (_spState.tab === 'pos' && !_spState.selectedPoId) {
+            _spRenderBody();
+        }
+    }
+}
+
+function _spRenderPosList(body) {
+    const f = _spState.poFilters;
+    const statuses = ['', '已下单', '生产中', '待出货', '已出货', '完成'];
+    const stOpts = statuses.map(function (s) {
+        return '<option value="' + esc(s) + '"' + (f.status === s ? ' selected' : '') + '>' + esc(s || '全部状态') + '</option>';
+    }).join('');
+    const supOpts = '<option value="">全部供应商</option>' + (_spState.suppliers || []).map(function (s) {
+        const sel = String(f.supplier_id) === String(s.id) ? ' selected' : '';
+        return '<option value="' + esc(String(s.id)) + '"' + sel + '>' + esc(s.name) + '</option>';
+    }).join('');
+
+    body.innerHTML =
+        '<div class="sp-bar">'
+        + '<input type="text" id="po-q" placeholder="搜索采购单号 / 产品名 / 客户订单号..." value="' + esc(f.q) + '" style="flex:1;min-width:220px;">'
+        + '<select id="po-status-filter">' + stOpts + '</select>'
+        + '<select id="po-sup-filter">' + supOpts + '</select>'
+        + '<button type="button" class="btn" id="po-search-btn">筛选</button>'
+        + '<button type="button" class="btn" id="po-from-rfq-btn">从询价单生成</button>'
+        + '<button type="button" class="btn btn-primary" id="po-new-btn">' + btnIcon('plus') + ' 新建采购单</button>'
+        + '</div>'
+        + '<div class="sp-table-wrap"><table class="sp-table">'
+        + '<thead><tr><th style="width:105px;">采购单号</th><th>供应商</th><th>产品 / 规格</th><th style="width:130px;">关联客户订单</th><th style="width:110px;">金额</th><th style="width:105px;">约定交期</th><th style="width:86px;">状态</th></tr></thead>'
+        + '<tbody>' + _spBuildPoRowsHtml(_spState.pos) + '</tbody></table></div>';
+
+    const applyFilter = function () {
+        _spState.poFilters.q = (document.getElementById('po-q')?.value || '').trim();
+        _spState.poFilters.status = document.getElementById('po-status-filter')?.value || '';
+        _spState.poFilters.supplier_id = document.getElementById('po-sup-filter')?.value || '';
+        _spLoadPos();
+    };
+    body.querySelector('#po-search-btn').addEventListener('click', applyFilter);
+    body.querySelector('#po-status-filter').addEventListener('change', applyFilter);
+    body.querySelector('#po-sup-filter').addEventListener('change', applyFilter);
+    body.querySelector('#po-q').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') applyFilter(); });
+    body.querySelector('#po-new-btn').addEventListener('click', function () { _spOpenPoModal(null); });
+    body.querySelector('#po-from-rfq-btn').addEventListener('click', function () { _spOpenPoFromRfqModal(); });
+    body.querySelectorAll('[data-po-open]').forEach(function (tr) {
+        tr.addEventListener('click', function () {
+            const pid = Number(tr.getAttribute('data-po-open'));
+            _spOpenPoDetail(pid);
+        });
+    });
+}
+
+async function _spOpenPoDetail(poId) {
+    const detail = await api('GET', '/api/trade/purchase-orders/' + poId);
+    if (!detail) return;
+    _spState.selectedPoId = poId;
+    _spState.poDetail = detail;
+    _spRenderBody();
+}
+
+function _spRenderPoDetail(body, d) {
+    const qtyText = (d.quantity !== null && d.quantity !== undefined && d.quantity !== '')
+        ? (esc(String(d.quantity)) + (d.unit ? ' ' + esc(d.unit) : ''))
+        : (d.unit ? esc(d.unit) : '—');
+    const amtText = (d.amount !== null && d.amount !== undefined && d.amount !== '')
+        ? (esc(d.currency || 'CNY') + ' ' + esc(String(d.amount)))
+        : '—';
+    const ordText = d.order_display_no
+        ? (esc(d.order_display_no) + (d.customer_name ? ('（' + esc(d.customer_name) + '）') : ''))
+        : '—';
+    const consList = (d.consolidations && d.consolidations.length)
+        ? d.consolidations.map(function (c) {
+            return '<span class="sp-chip">' + esc(c.code || ('CG' + c.id)) + (c.cutoff_date ? (' · 截关 ' + esc(c.cutoff_date)) : '') + '</span>';
+        }).join(' ')
+        : '<span class="sp-mut">未加入拼柜</span>';
+    const contact = d.primary_contact;
+    const contactText = contact
+        ? [contact.name, contact.phone, contact.wechat ? ('微信:' + contact.wechat) : ''].filter(Boolean).join(' · ')
+        : '—';
+
+    body.innerHTML =
+        '<div class="sp-detail-head">'
+        + '<button type="button" class="btn" id="po-back-btn">' + btnIcon('arrow-left') + ' 返回采购单列表</button>'
+        + '<h3 style="margin:0;font-size:15px;">' + esc(d.po_no || ('PO' + d.id)) + ' · ' + esc(d.product_name) + '</h3>'
+        + _spFormatPoStatus(d.status)
+        + '<div style="margin-left:auto;display:flex;gap:8px;">'
+        + '<button type="button" class="btn" id="po-todo-btn">+ 生成待办</button>'
+        + '<button type="button" class="btn" id="po-edit-btn">编辑采购单</button>'
+        + '<button type="button" class="btn btn-danger" id="po-del-btn">删除采购单</button>'
+        + '</div></div>'
+        + '<div class="sp-sec" style="margin-bottom:12px;">'
+        + '<div class="sp-sec-h"><span class="t">采购单信息</span></div>'
+        + '<div class="sp-kv">'
+        + '<div class="k">采购单号</div><div class="v sp-num"><b>' + esc(d.po_no || ('PO' + d.id)) + '</b></div>'
+        + '<div class="k">供应商</div><div class="v">' + esc(d.supplier_name || '') + '</div>'
+        + '<div class="k">主联系人</div><div class="v">' + esc(contactText) + '</div>'
+        + '<div class="k">产品 / 规格</div><div class="v">' + esc(d.product_name) + (d.spec_model ? ('（' + esc(d.spec_model) + '）') : '') + '</div>'
+        + '<div class="k">数量 / 金额</div><div class="v">' + qtyText + ' · ' + amtText + '</div>'
+        + '<div class="k">下单日 / 约定交期</div><div class="v sp-num">' + esc(d.ordered_at || '—') + ' / ' + esc(d.promised_date || '—') + '</div>'
+        + '<div class="k">关联客户订单</div><div class="v">' + ordText + '</div>'
+        + '<div class="k">所在拼柜</div><div class="v">' + consList + '</div>'
+        + '<div class="k">备注</div><div class="v">' + esc(d.note || '—') + '</div>'
+        + '</div></div>'
+        + '<div class="sp-sec">'
+        + '<div class="sp-sec-h"><span class="t">催货话术草稿（仅生成文本，需手动复制发送）</span></div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:6px 0;">'
+        + '<button type="button" class="btn" data-po-draft="upcoming">临期提醒话术</button>'
+        + '<button type="button" class="btn" data-po-draft="overdue">逾期催货话术</button>'
+        + '<button type="button" class="btn" data-po-draft="cutoff">拼柜截关催货话术</button>'
+        + '</div></div>';
+
+    body.querySelector('#po-back-btn').addEventListener('click', function () {
+        _spState.selectedPoId = null;
+        _spState.poDetail = null;
+        _spRenderBody();
+        _spLoadPos();
+    });
+    body.querySelector('#po-edit-btn').addEventListener('click', function () { _spOpenPoModal(d); });
+    body.querySelector('#po-del-btn').addEventListener('click', async function () {
+        if (!confirm('确认删除该采购单？（拼柜明细将同步移出，拼柜本身不受影响）')) return;
+        const ok = await api('DELETE', '/api/trade/purchase-orders/' + d.id);
+        if (ok) {
+            toast('已删除采购单');
+            _spState.selectedPoId = null;
+            _spState.poDetail = null;
+            _spRenderBody();
+            _spLoadPos();
+        }
+    });
+    body.querySelector('#po-todo-btn').addEventListener('click', async function () {
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const pDate = (d.promised_date || '').trim();
+        const title = '催货：' + (d.supplier_name || '') + ' ' + (d.product_name || '')
+            + '（采购单 ' + (d.po_no || ('PO' + d.id)) + '，约定交期 ' + (pDate || '待定') + '）';
+        const res = await api('POST', '/api/trade/todos', {
+            title: title,
+            due_date: pDate || todayIso,
+        });
+        if (res) {
+            toast('已加入待办清单');
+            if (typeof loadTodos === 'function') loadTodos(true);
+        }
+    });
+    body.querySelectorAll('[data-po-draft]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const variant = btn.getAttribute('data-po-draft');
+            const res = await api('POST', '/api/trade/purchase-orders/' + d.id + '/followup-draft', { variant: variant });
+            if (res && res.text) {
+                _spOpenFollowupDraftModal(res.text);
+            }
+        });
+    });
+}
+
+function _spOpenFollowupDraftModal(text) {
+    const modal = _spMountModal(
+        '<h3>催货话术（草稿，需你手动发送）</h3>'
+        + '<div class="form-group"><textarea id="sp-followup-text" rows="6" style="width:100%;font-size:13px;line-height:1.6;">' + esc(text) + '</textarea></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">关闭</button>'
+        + '<button type="button" class="btn btn-primary" id="sp-followup-copy">复制话术</button></div>'
+    );
+    modal.querySelector('#sp-followup-copy').addEventListener('click', async function () {
+        const val = modal.querySelector('#sp-followup-text').value;
+        try {
+            await navigator.clipboard.writeText(val);
+            toast('已复制到剪贴板，请手动发送');
+        } catch (_e) {
+            modal.querySelector('#sp-followup-text').select();
+            document.execCommand('copy');
+            toast('已复制，请手动发送');
+        }
+    });
+}
+
+async function _spOpenPoFromRfqModal() {
+    const decided = await api('GET', '/api/trade/rfqs?status=decided');
+    if (!Array.isArray(decided)) return;
+    if (!decided.length) {
+        toast('暂无「已选厂」的采购询价单，请先在采购询价页签选定供应商');
+        return;
+    }
+    const opts = decided.map(function (r) {
+        const lbl = '#' + r.id + ' ' + r.product_name + (r.spec_model ? (' (' + r.spec_model + ')') : '')
+            + (r.selected_supplier_name ? (' — ' + r.selected_supplier_name) : '');
+        return '<option value="' + esc(String(r.id)) + '">' + esc(lbl) + '</option>';
+    }).join('');
+    const modal = _spMountModal(
+        '<h3>从已选厂采购询价单生成采购单</h3>'
+        + '<div class="form-group"><label>选择已选厂的采购询价单</label><select id="po-rfq-sel">' + opts + '</select></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="po-rfq-go">生成采购单</button></div>'
+    );
+    modal.querySelector('#po-rfq-go').addEventListener('click', async function () {
+        const rid = Number(modal.querySelector('#po-rfq-sel').value);
+        const res = await api('POST', '/api/trade/purchase-orders/from-rfq', { rfq_id: rid });
+        if (res) {
+            modal.remove();
+            toast('已生成采购单 ' + (res.po_no || ('PO' + res.id)));
+            _spOpenPoDetail(res.id);
+        }
+    });
+}
+
+async function _spOpenPoModal(existing) {
+    const p = existing || {};
+    const isEdit = !!p.id;
+    const [sups, ords] = await Promise.all([
+        (_spState.suppliers && _spState.suppliers.length)
+            ? Promise.resolve(_spState.suppliers)
+            : api('GET', '/api/trade/suppliers', null, null, { silent: true }),
+        api('GET', '/api/trade/purchase-orders/orders', null, null, { silent: true }),
+    ]);
+    if (Array.isArray(sups)) _spState.suppliers = sups;
+    _spState.companyOrders = Array.isArray(ords) ? ords : [];
+
+    const supOpts = '<option value="">请选择供应商...</option>' + (_spState.suppliers || []).map(function (s) {
+        const sel = (p.supplier_id && Number(p.supplier_id) === Number(s.id)) ? ' selected' : '';
+        return '<option value="' + esc(String(s.id)) + '"' + sel + '>' + esc(s.name) + '</option>';
+    }).join('');
+    const ordOpts = '<option value="">不关联客户订单</option>' + _spState.companyOrders.map(function (o) {
+        const lbl = (o.display_no || ('SO' + o.id)) + (o.customer_name ? (' — ' + o.customer_name) : '') + (o.product_name ? (' (' + o.product_name + ')') : '');
+        const sel = (p.order_id && Number(p.order_id) === Number(o.id)) ? ' selected' : '';
+        return '<option value="' + esc(String(o.id)) + '"' + sel + '>' + esc(lbl) + '</option>';
+    }).join('');
+    const stOpts = ['已下单', '生产中', '待出货', '已出货', '完成'].map(function (st) {
+        return '<option value="' + esc(st) + '"' + ((p.status || '已下单') === st ? ' selected' : '') + '>' + esc(st) + '</option>';
+    }).join('');
+
+    const modal = _spMountModal(
+        '<h3>' + (isEdit ? '编辑采购单' : '新建采购单') + '</h3>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>采购单号（留空自动生成）</label><input type="text" id="pof-no" value="' + esc(p.po_no || '') + '"' + (isEdit ? ' readonly' : ' placeholder="留空自动生成 PO{id}"') + '></div>'
+        + '<div class="form-group"><label>供应商 *</label><select id="pof-sup">' + supOpts + '</select></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>产品名称 *</label><input type="text" id="pof-prod" value="' + esc(p.product_name || '') + '"></div>'
+        + '<div class="form-group"><label>规格型号</label><input type="text" id="pof-spec" value="' + esc(p.spec_model || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label>关联客户订单（可选）</label><select id="pof-ord">' + ordOpts + '</select></div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>数量</label><input type="text" id="pof-qty" value="' + (p.quantity != null ? esc(String(p.quantity)) : '') + '"></div>'
+        + '<div class="form-group"><label>单位</label><input type="text" id="pof-unit" value="' + esc(p.unit || '') + '"></div>'
+        + '<div class="form-group"><label>总金额</label><input type="text" id="pof-amt" value="' + (p.amount != null ? esc(String(p.amount)) : '') + '"></div>'
+        + '<div class="form-group"><label>币种</label><input type="text" id="pof-cur" value="' + esc(p.currency || 'CNY') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>下单日</label><input type="date" id="pof-ord-at" value="' + esc(p.ordered_at || '') + '"></div>'
+        + '<div class="form-group"><label>约定交期</label><input type="date" id="pof-prom" value="' + esc(p.promised_date || '') + '"></div>'
+        + '<div class="form-group"><label>状态</label><select id="pof-status">' + stOpts + '</select></div>'
+        + '</div>'
+        + '<div class="form-group"><label>备注</label><textarea id="pof-note">' + esc(p.note || '') + '</textarea></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="pof-save">保存</button></div>'
+    );
+
+    modal.querySelector('#pof-save').addEventListener('click', async function () {
+        const supVal = modal.querySelector('#pof-sup').value.trim();
+        const ordVal = modal.querySelector('#pof-ord').value.trim();
+        const payload = {
+            supplier_id: supVal ? Number(supVal) : null,
+            product_name: modal.querySelector('#pof-prod').value.trim(),
+            spec_model: modal.querySelector('#pof-spec').value.trim(),
+            order_id: ordVal ? Number(ordVal) : null,
+            quantity: modal.querySelector('#pof-qty').value.trim() || null,
+            unit: modal.querySelector('#pof-unit').value.trim(),
+            amount: modal.querySelector('#pof-amt').value.trim() || null,
+            currency: modal.querySelector('#pof-cur').value.trim() || 'CNY',
+            ordered_at: modal.querySelector('#pof-ord-at').value.trim(),
+            promised_date: modal.querySelector('#pof-prom').value.trim(),
+            status: modal.querySelector('#pof-status').value,
+            note: modal.querySelector('#pof-note').value.trim(),
+        };
+        if (!isEdit) payload.po_no = modal.querySelector('#pof-no').value.trim();
+        if (!payload.supplier_id) { toast('请选择供应商'); return; }
+        if (!payload.product_name) { toast('请填写产品名称'); return; }
+        const res = isEdit
+            ? await api('PUT', '/api/trade/purchase-orders/' + p.id, payload)
+            : await api('POST', '/api/trade/purchase-orders', payload);
+        if (res) {
+            modal.remove();
+            toast(isEdit ? '已更新采购单' : '已新建采购单');
+            if (_spState.selectedPoId) _spOpenPoDetail(_spState.selectedPoId);
+            else _spLoadPos();
+        }
+    });
+}
+
+// ── 拼柜看板页签（供应商管理一期 · 第三批）───────────────────────────────────
+
+async function _spLoadConsolidations() {
+    const qs = _spState.consStatusFilter ? ('?status=' + encodeURIComponent(_spState.consStatusFilter)) : '';
+    const [cons, pool] = await Promise.all([
+        api('GET', '/api/trade/consolidations' + qs),
+        api('GET', '/api/trade/consolidations/pool'),
+    ]);
+    if (Array.isArray(cons)) _spState.consolidations = cons;
+    if (Array.isArray(pool)) _spState.pool = pool;
+    if (_spState.tab === 'consolidations') _spRenderBody();
+}
+
+function _spRenderConsolidations(body) {
+    const st = _spState.consStatusFilter || '';
+    body.innerHTML =
+        '<div class="sp-bar">'
+        + '<select id="cons-status-filter">'
+        + '<option value=""' + (st === '' ? ' selected' : '') + '>全部拼柜状态</option>'
+        + '<option value="组货中"' + (st === '组货中' ? ' selected' : '') + '>组货中</option>'
+        + '<option value="已截关"' + (st === '已截关' ? ' selected' : '') + '>已截关</option>'
+        + '<option value="已发运"' + (st === '已发运' ? ' selected' : '') + '>已发运</option>'
+        + '</select>'
+        + '<button type="button" class="btn btn-primary" id="cons-new-btn" style="margin-left:auto;">' + btnIcon('plus') + ' 新建拼柜</button>'
+        + '</div>'
+        + '<div id="cons-cards">' + _spBuildConsolidationCardsHtml(_spState.consolidations, _spState.pool) + '</div>'
+        + '<div class="sp-sec" style="margin-top:16px;">'
+        + '<div class="sp-sec-h"><span class="t">待拼池（未入柜采购单 · 共 ' + esc(String((_spState.pool || []).length)) + ' 单）</span></div>'
+        + '<div class="sp-table-wrap"><table class="sp-table">'
+        + '<thead><tr><th style="width:105px;">采购单号</th><th>供应商</th><th>产品</th><th style="width:86px;">状态</th><th style="width:105px;">约定交期</th><th style="width:230px;">加入拼柜</th></tr></thead>'
+        + '<tbody>' + _spBuildPoolRowsHtml(_spState.pool, _spState.consolidations) + '</tbody></table></div></div>';
+
+    body.querySelector('#cons-status-filter').addEventListener('change', function (ev) {
+        _spState.consStatusFilter = ev.target.value;
+        _spLoadConsolidations();
+    });
+    body.querySelector('#cons-new-btn').addEventListener('click', function () {
+        _spOpenConsolidationModal(null);
+    });
+    body.querySelectorAll('[data-cons-edit]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const cid = Number(btn.getAttribute('data-cons-edit'));
+            const item = (_spState.consolidations || []).find(function (x) { return x.id === cid; });
+            if (item) _spOpenConsolidationModal(item);
+        });
+    });
+    body.querySelectorAll('[data-cons-del]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const cid = Number(btn.getAttribute('data-cons-del'));
+            if (!confirm('确认删除该拼柜？（柜内采购单本身不会被删除，将回到待拼池）')) return;
+            const ok = await api('DELETE', '/api/trade/consolidations/' + cid);
+            if (ok) { toast('已删除拼柜'); _spLoadConsolidations(); }
+        });
+    });
+    body.querySelectorAll('[data-cons-add-btn]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const cid = Number(btn.getAttribute('data-cons-add-btn'));
+            const sel = body.querySelector('[data-cons-add-sel="' + cid + '"]');
+            const poId = sel ? Number(sel.value) : 0;
+            if (!poId) { toast('请先从待拼池选择采购单'); return; }
+            const res = await api('POST', '/api/trade/consolidations/' + cid + '/items', { purchase_order_id: poId });
+            if (res) { toast('已加入拼柜'); _spLoadConsolidations(); }
+        });
+    });
+    body.querySelectorAll('[data-cons-rm-item]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const cid = Number(btn.getAttribute('data-cons-id'));
+            const itemId = Number(btn.getAttribute('data-cons-rm-item'));
+            const ok = await api('DELETE', '/api/trade/consolidations/' + cid + '/items/' + itemId);
+            if (ok) { toast('已移出拼柜'); _spLoadConsolidations(); }
+        });
+    });
+    body.querySelectorAll('[data-pool-join]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const poId = Number(btn.getAttribute('data-pool-join'));
+            const sel = body.querySelector('[data-pool-cons-sel="' + poId + '"]');
+            const cid = sel ? Number(sel.value) : 0;
+            if (!cid) { toast('请先选择目标拼柜'); return; }
+            const res = await api('POST', '/api/trade/consolidations/' + cid + '/items', { purchase_order_id: poId });
+            if (res) { toast('已加入拼柜'); _spLoadConsolidations(); }
+        });
+    });
+}
+
+function _spOpenConsolidationModal(existing) {
+    const c = existing || {};
+    const isEdit = !!c.id;
+    const stOpts = ['组货中', '已截关', '已发运'].map(function (st) {
+        return '<option value="' + esc(st) + '"' + ((c.status || '组货中') === st ? ' selected' : '') + '>' + esc(st) + '</option>';
+    }).join('');
+    const modal = _spMountModal(
+        '<h3>' + (isEdit ? '编辑拼柜' : '新建拼柜') + '</h3>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>拼柜编号（留空自动生成）</label><input type="text" id="cf-code" placeholder="留空自动生成 CG{id}" value="' + esc(c.code || '') + '"></div>'
+        + '<div class="form-group"><label>状态</label><select id="cf-status">' + stOpts + '</select></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>目的港</label><input type="text" id="cf-port" value="' + esc(c.destination_port || '') + '"></div>'
+        + '<div class="form-group"><label>船司 / 货代</label><input type="text" id="cf-carrier" value="' + esc(c.carrier || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>截关日</label><input type="date" id="cf-cutoff" value="' + esc(c.cutoff_date || '') + '"></div>'
+        + '<div class="form-group"><label>预计开船日 (ETD)</label><input type="date" id="cf-etd" value="' + esc(c.etd || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label>备注</label><textarea id="cf-note">' + esc(c.note || '') + '</textarea></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="cf-save">保存</button></div>'
+    );
+    modal.querySelector('#cf-save').addEventListener('click', async function () {
+        const payload = {
+            code: modal.querySelector('#cf-code').value.trim(),
+            status: modal.querySelector('#cf-status').value,
+            destination_port: modal.querySelector('#cf-port').value.trim(),
+            carrier: modal.querySelector('#cf-carrier').value.trim(),
+            cutoff_date: modal.querySelector('#cf-cutoff').value.trim(),
+            etd: modal.querySelector('#cf-etd').value.trim(),
+            note: modal.querySelector('#cf-note').value.trim(),
+        };
+        const res = isEdit
+            ? await api('PUT', '/api/trade/consolidations/' + c.id, payload)
+            : await api('POST', '/api/trade/consolidations', payload);
+        if (res) {
+            modal.remove();
+            toast(isEdit ? '已更新拼柜' : '已新建拼柜');
+            _spLoadConsolidations();
+        }
+    });
+}
+
+// ── 今日简报「交期提醒」联动（不改动 chat.js，挂接 loadTodayBrief 后渲染）────
+
+async function _spInjectBriefDeliveryAlerts() {
+    if (typeof currentCompanyId === 'undefined' || !currentCompanyId) return;
+    const alerts = await api('GET', '/api/trade/purchase-orders/alerts', null, undefined, { silent: true });
+    if (!Array.isArray(alerts) || !alerts.length) return;
+    const html = _spBuildDeliveryAlertsBriefHtml(alerts.slice(0, 10));
+    if (!html) return;
+    const railBrief = document.getElementById('rail-brief');
+    if (railBrief) {
+        const old = railBrief.querySelector('#rail-brief-delivery-alerts');
+        if (old) old.remove();
+        railBrief.insertAdjacentHTML('beforeend', html);
+        return;
+    }
+    const card = document.querySelector('.brief-kpi-card');
+    if (card) {
+        const old = card.querySelector('#rail-brief-delivery-alerts');
+        if (old) old.remove();
+        card.insertAdjacentHTML('beforeend', html);
+    }
+}
+
+if (typeof loadTodayBrief === 'function' && !loadTodayBrief._spDeliveryWrapped) {
+    const _origLoadTodayBrief = loadTodayBrief;
+    loadTodayBrief = async function (silent) {
+        await _origLoadTodayBrief(silent);
+        await _spInjectBriefDeliveryAlerts();
+    };
+    loadTodayBrief._spDeliveryWrapped = true;
 }

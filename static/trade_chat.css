@@ -2244,6 +2244,15 @@ tr.is-expired td .sp-num { text-decoration: line-through; text-decoration-color:
 tr.is-expired { background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(12,13,14,.035) 6px 7px); }
 tr.sp-rfq-sel { background: rgba(20, 120, 72, .08); }
 tr.sp-rfq-sel td:first-child { border-left: 3px solid var(--accent); }
+.sp-cut { display: inline-block; font-size: 11px; padding: 1px 6px; font-weight: 600; }
+.sp-cut.over { background: #fee2e2; color: #b91c1c; }
+.sp-cut.warn { background: #ffedd5; color: #c2410c; }
+.sp-cut.ok { background: #f3f4f6; color: var(--muted); }
+.sp-cons-card { border: 1px solid var(--ink); background: #fff; padding: 12px; margin-bottom: 12px; }
+.sp-cons-card .ch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.sp-brief-alerts { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line-strong, #ccc); }
+.sp-brief-al-h { font-size: 11.5px; font-weight: 600; margin-bottom: 4px; }
+.sp-brief-al { font-size: 11.5px; line-height: 1.6; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sp-src { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); }
 .sp-src.ai { color: var(--ink); border: 1px dashed var(--ink); padding: 0 4px; }
 .sp-lnk { font-size: 11.5px; color: var(--muted); border: none; border-bottom: 1px dashed var(--line-strong); background: none; padding: 0; cursor: pointer; }

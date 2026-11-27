@@ -441,6 +441,7 @@ def test_b8_readonly_supplier_tools_and_isolation(env, monkeypatch):
         "supplier_quote_search",
         "supplier_compare",
         "supplier_list",
+        "supplier_delivery_alerts",
     }
 
 

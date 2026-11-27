@@ -42,12 +42,28 @@ def get_today_brief(company_id: int) -> dict:
     finally:
         conn.close()
 
+    # 第三批交期提醒联动（与 /purchase-orders/alerts 同口径，最多返回前 10 条）
+    delivery_alerts: list[dict] = []
+    delivery_alert_count = 0
+    try:
+        from trade.purchase import get_delivery_alerts
+
+        all_alerts = get_delivery_alerts(company_id, today_str=today)
+        delivery_alert_count = len(all_alerts)
+        delivery_alerts = all_alerts[:10]
+    except Exception:
+        # 极旧库或异常时降级为空列表，不影响既有四项简报
+        delivery_alerts = []
+        delivery_alert_count = 0
+
     return {
         "date": today,
         "new_inquiries": new_inquiries,
         "overdue_followups": overdue,
         "pending_shipments": pending,
         "summary": _morning_brief_summary(company_id, today),
+        "delivery_alerts": delivery_alerts,
+        "delivery_alert_count": delivery_alert_count,
     }
 
 

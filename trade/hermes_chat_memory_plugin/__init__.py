@@ -29,6 +29,7 @@ from trade.hermes_chat_memory_plugin.tools import (
     OSINT_JOB_START_SCHEMA,
     SUPPLIER_CANDIDATE_SAVE_SCHEMA,
     SUPPLIER_COMPARE_SCHEMA,
+    SUPPLIER_DELIVERY_ALERTS_SCHEMA,
     SUPPLIER_LIST_SCHEMA,
     SUPPLIER_QUOTE_SEARCH_SCHEMA,
     handle_chat_memory_list,
@@ -38,6 +39,7 @@ from trade.hermes_chat_memory_plugin.tools import (
     handle_osint_job_start,
     handle_supplier_candidate_save,
     handle_supplier_compare,
+    handle_supplier_delivery_alerts,
     handle_supplier_list,
     handle_supplier_quote_search,
 )
@@ -61,6 +63,7 @@ if os.environ.get("TRADE_HOST") == "1":
         ("supplier_quote_search", SUPPLIER_QUOTE_SEARCH_SCHEMA, handle_supplier_quote_search, "💰"),
         ("supplier_compare", SUPPLIER_COMPARE_SCHEMA, handle_supplier_compare, "⚖️"),
         ("supplier_list", SUPPLIER_LIST_SCHEMA, handle_supplier_list, "📋"),
+        ("supplier_delivery_alerts", SUPPLIER_DELIVERY_ALERTS_SCHEMA, handle_supplier_delivery_alerts, "⏰"),
     )
 
 

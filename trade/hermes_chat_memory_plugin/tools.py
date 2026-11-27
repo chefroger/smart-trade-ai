@@ -531,6 +531,14 @@ SUPPLIER_LIST_SCHEMA = _schema(
     [],
 )
 
+SUPPLIER_DELIVERY_ALERTS_SCHEMA = _schema(
+    "supplier_delivery_alerts",
+    "查询本公司采购单的交期提醒（已逾期或未来 3 天内到期的未出货采购单，只读）。"
+    + _SUPPLIER_INTERNAL_NOTICE,
+    {},
+    [],
+)
+
 
 def handle_supplier_candidate_save(args: dict[str, Any], **_kw) -> str:
     """受控写入：将国内找厂线索保存为候选供应商（同公司同名不新建）。"""
@@ -687,3 +695,20 @@ def handle_supplier_list(args: dict[str, Any], **_kw) -> str:
     except Exception as exc:  # noqa: BLE001
         _log.exception("handle_supplier_list failed")
         return _err(f"查询供应商名录失败：{exc}")
+
+
+def handle_supplier_delivery_alerts(args: dict[str, Any], **_kw) -> str:
+    """内部只读查询：获取本公司采购单交期提醒（逾期与 3 天内临期）。"""
+    company_id = _bound_company()
+    # 无绑定公司上下文时拒绝读取
+    if company_id is None:
+        return _err("没有公司上下文，拒绝查询采购交期提醒")
+
+    try:
+        from trade import purchase as purchase_mod
+
+        rows = purchase_mod.get_delivery_alerts(company_id)
+        return _json({"count": len(rows), "alerts": rows})
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("handle_supplier_delivery_alerts failed")
+        return _err(f"查询采购交期提醒失败：{exc}")
