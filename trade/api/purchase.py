@@ -32,8 +32,9 @@ from pydantic import BaseModel
 
 from trade import purchase as purchase_mod
 from trade.api.deps import require_company
+from trade.api.suppliers import require_paid_supplier
 
-router = APIRouter(tags=["purchase"])
+router = APIRouter(tags=["purchase"], dependencies=[Depends(require_paid_supplier)])
 
 
 # ==============================================================================

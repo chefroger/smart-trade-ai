@@ -120,8 +120,8 @@ let _licenseActivated = false;
 let _licenseGateUnknown = false;
 
 // 与左侧被 data-paid 隐藏的三组栏目保持一致：
-// 销售转化（customers/docs/docgen）、工具（osint/tasks）、历史（history）。
-const _PAID_VIEWS = new Set(['customers', 'tasks', 'history']);
+// 销售转化（customers/suppliers/docs/docgen）、工具（osint/tasks）、历史（history）。
+const _PAID_VIEWS = new Set(['customers', 'suppliers', 'tasks', 'history']);
 const _PAID_CHAT_CTX = new Set(['docs', 'docgen', 'osint']);
 
 function _isPaidDestination(view, chatCtx) {

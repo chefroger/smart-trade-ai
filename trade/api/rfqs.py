@@ -24,8 +24,9 @@ from pydantic import BaseModel
 
 from trade import rfq as rfq_mod
 from trade.api.deps import require_company
+from trade.api.suppliers import require_paid_supplier
 
-router = APIRouter(tags=["rfqs"])
+router = APIRouter(tags=["rfqs"], dependencies=[Depends(require_paid_supplier)])
 
 
 # ==============================================================================

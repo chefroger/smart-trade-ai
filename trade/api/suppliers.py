@@ -42,7 +42,30 @@ from trade import supplier as supplier_mod
 from trade.api.customers import _find_static_dir
 from trade.api.deps import require_company
 
-router = APIRouter(tags=["suppliers"])
+SUPPLIER_PAID_ERROR = "供应商管理为付费功能，激活后可用。"
+
+
+def require_paid_supplier() -> None:
+    """供应商管理为付费能力：未激活（试用）时统一拦截（402）。
+
+    与 trade.api.transfer._require_paid_feature、trade.api.chat._require_paid_chat_skill
+    语义完全一致：状态 != "active" 时返回 402；许可证读取异常时 fail-open 放行。
+    """
+    try:
+        from trade.license import license_state
+
+        state, _message = license_state()
+    except Exception:  # noqa: BLE001 — 读不到许可证状态时不阻断付费用户
+        return
+    # 非 active 状态（试用/过期/篡改）统一拦截
+    if state != "active":
+        raise HTTPException(
+            status_code=402,
+            detail=SUPPLIER_PAID_ERROR,
+        )
+
+
+router = APIRouter(tags=["suppliers"], dependencies=[Depends(require_paid_supplier)])
 
 
 # ==============================================================================
