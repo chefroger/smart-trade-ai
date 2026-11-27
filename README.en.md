@@ -48,6 +48,21 @@
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshot-3.png" alt="Customer Dossier"><br><sub>Customer Dossier — contacts, preferences &amp; taboos, interaction timeline, extractable from chat/email</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshot-4.png" alt="Scheduled Tasks"><br><sub>Scheduled Tasks — morning brief, email follow-ups, LinkedIn content, B2B platform checks</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshot-5.png" alt="Site Visit Plan"><br><sub>Site Visit Plan — itinerary, assignments, checklists, internal risks and external briefing; print-ready</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshot-6.png" alt="Inquiry Reply"><br><sub>Inquiry Reply — AI drafts a reply grounded in the client dossier and order history</sub></td>
+  </tr>
+</table>
+
+---
+
 ## Prerequisite: LLM API Key
 
 > Smart Trade AI uses Hermes Agent as its AI engine. You need to register with a model provider and get an API Key.

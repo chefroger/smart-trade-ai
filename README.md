@@ -74,6 +74,21 @@ irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/inst
 
 ---
 
+## 界面一览
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshot-3.png" alt="客户画像"><br><sub>客户画像 — 联系人、喜好与禁忌、互动时间线，可从聊天/邮件一键提取</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshot-4.png" alt="定时任务"><br><sub>定时任务 — 早安简报、邮件处理、LinkedIn 内容、B2B 平台检查</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshot-5.png" alt="验厂计划"><br><sub>验厂计划 — 行程、分工、检查清单、内部风险与对外说明，可一键打印</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshot-6.png" alt="询盘回复"><br><sub>询盘回复 — AI 结合客户档案与订单记录生成回复草稿</sub></td>
+  </tr>
+</table>
+
+---
+
 ## 安装前须知
 
 ### 大模型 API Key（必需）
