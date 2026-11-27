@@ -136,8 +136,8 @@ injection_prompt: |
   `tool_search` 确认这两个工具确实不存在（独立 Hermes 环境）才退回 terminal。
   **一次用户请求只启动一个后台任务**：不要把同一家公司的公司名和官网域名拆成两个
   `osint_job_start` 调用（例如同时开 `company:Acme` 和 `domain:acme.com`）。已知官网域名时
-  直接传域名（如 `acme.com`），只知道公司名时传公司名，编排器会自动解析域名并并行跑各层；
-  人名目标才需显式加 `person:` 前缀。
+  直接传 `domain:acme.com`（或裸域名 `acme.com`），只知道公司名时传 `company:公司名`（或公司名），
+  人名目标加 `person:` 前缀，编排器会自动解析域名并并行跑各层。
 
   **查到的字段立刻登记进事实库**：Trade 还注册了 `osint_fact_save(target, field, value,
   source_url, source_name)` 与 `osint_fact_list(target)`（同样先 `tool_search` 再

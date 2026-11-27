@@ -191,8 +191,8 @@ Phase 3: 深度背调 (Deep Verification)
       地址必须标注类型（住宅/公司注册地/代理注册地址/无法确认），
       不得把代理注册地址写成居住地；
    h) **一次用户请求只启动一个后台任务**：不要把同一家公司的公司名和官网拆成两个
-      `osint_job_start` 调用；已知官网域名时直接传域名，只知道公司名时传公司名，
-      编排器会自动解析并并行跑各层；人名才需显式加 `person:` 前缀；
+      `osint_job_start` 调用；已知官网域名时直接传 `domain:域名`（或裸域名），只知道公司名时传
+      `company:公司名`（或公司名），人名加 `person:` 前缀，编排器会自动解析并并行跑各层；
    j) **查到关键字段就登记事实库**：Trade 还注册了 `osint_fact_save(target, field, value,
       source_url, source_name)` 与 `osint_fact_list(target)`（同样先 tool_search 再
       tool_call）。工商类站点普遍有反爬与滑块，**查到一次就登记**，下次同目标
