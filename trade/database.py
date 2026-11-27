@@ -519,6 +519,136 @@ CREATE TABLE IF NOT EXISTS osint_facts (
 );
 CREATE INDEX IF NOT EXISTS idx_osint_facts_subject ON osint_facts(company_id, subject);
 
+-- 供应商主表（供应商管理一期 · 第一批）
+CREATE TABLE IF NOT EXISTS suppliers (
+    id              INTEGER PRIMARY KEY,
+    company_id      INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    name            TEXT    NOT NULL,
+    short_name      TEXT    DEFAULT '',
+    supplier_type   TEXT    DEFAULT '',
+    main_products   TEXT    DEFAULT '',
+    province        TEXT    DEFAULT '',
+    city            TEXT    DEFAULT '',
+    address         TEXT    DEFAULT '',
+    status          TEXT    DEFAULT '候选',
+    rating          INTEGER,
+    is_starred      INTEGER DEFAULT 0,
+    can_issue_vat   INTEGER DEFAULT 2,
+    tax_point       REAL,
+    payment_terms   TEXT    DEFAULT '',
+    lead_time_days  INTEGER,
+    source          TEXT    DEFAULT '',
+    note            TEXT    DEFAULT '',
+    created_at      TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at      TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1          TEXT    DEFAULT '{}',
+    extra2          TEXT    DEFAULT '{}',
+    extra3          TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_suppliers_company ON suppliers(company_id);
+CREATE INDEX IF NOT EXISTS idx_suppliers_company_name ON suppliers(company_id, name);
+
+-- 供应商联系人
+CREATE TABLE IF NOT EXISTS supplier_contacts (
+    id          INTEGER PRIMARY KEY,
+    company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL DEFAULT '',
+    role        TEXT    DEFAULT '其他',
+    is_primary  INTEGER DEFAULT 0,
+    phone       TEXT    DEFAULT '',
+    wechat      TEXT    DEFAULT '',
+    email       TEXT    DEFAULT '',
+    qq          TEXT    DEFAULT '',
+    note        TEXT    DEFAULT '',
+    created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at  TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1      TEXT    DEFAULT '{}',
+    extra2      TEXT    DEFAULT '{}',
+    extra3      TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_contacts_supplier ON supplier_contacts(supplier_id);
+
+-- 供应商产品能力（每家供应商同一产品同一规格唯一一行）
+CREATE TABLE IF NOT EXISTS supplier_products (
+    id               INTEGER PRIMARY KEY,
+    company_id       INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    supplier_id      INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    product_name     TEXT    NOT NULL,
+    spec_model       TEXT    NOT NULL DEFAULT '',
+    unit             TEXT    DEFAULT '',
+    is_self_produced INTEGER DEFAULT 2,
+    quality_note     TEXT    DEFAULT '',
+    lead_time_days   INTEGER,
+    lead_time_text   TEXT    DEFAULT '',
+    moq              REAL,
+    packing_info     TEXT    DEFAULT '',
+    notes            TEXT    DEFAULT '',
+    created_at       TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at       TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1           TEXT    DEFAULT '{}',
+    extra2           TEXT    DEFAULT '{}',
+    extra3           TEXT    DEFAULT '{}',
+    UNIQUE(company_id, supplier_id, product_name, spec_model)
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_products_company_product ON supplier_products(company_id, product_name);
+
+-- 供应商报价历史（每次报价追加一行，不覆盖历史）
+CREATE TABLE IF NOT EXISTS supplier_quotes (
+    id                  INTEGER PRIMARY KEY,
+    company_id          INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    supplier_id         INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    supplier_product_id INTEGER REFERENCES supplier_products(id) ON DELETE SET NULL,
+    product_name        TEXT    NOT NULL,
+    spec_model          TEXT    DEFAULT '',
+    unit                TEXT    DEFAULT '',
+    price_excl_tax      REAL,
+    price_incl_tax      REAL,
+    currency            TEXT    DEFAULT 'CNY',
+    moq                 REAL,
+    quoted_at           TEXT    DEFAULT '',
+    valid_until         TEXT    DEFAULT '',
+    source_customer_id  INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+    rfq_id              INTEGER,
+    source              TEXT    DEFAULT 'manual',
+    source_ref          TEXT    DEFAULT '',
+    notes               TEXT    DEFAULT '',
+    created_at          TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at          TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1              TEXT    DEFAULT '{}',
+    extra2              TEXT    DEFAULT '{}',
+    extra3              TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_quotes_company_product ON supplier_quotes(company_id, product_name);
+CREATE INDEX IF NOT EXISTS idx_supplier_quotes_supplier ON supplier_quotes(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_quotes_customer ON supplier_quotes(company_id, source_customer_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_quotes_quoted_at ON supplier_quotes(company_id, quoted_at);
+
+-- AI 抽取报价确认区草稿（未确认不进正式库，且不进导出包）
+CREATE TABLE IF NOT EXISTS supplier_quote_drafts (
+    id                INTEGER PRIMARY KEY,
+    company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    supplier_id       INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    supplier_name_raw TEXT    DEFAULT '',
+    product_name      TEXT    DEFAULT '',
+    spec_model        TEXT    DEFAULT '',
+    unit              TEXT    DEFAULT '',
+    price_excl_tax    REAL,
+    price_incl_tax    REAL,
+    currency          TEXT    DEFAULT 'CNY',
+    quoted_at         TEXT    DEFAULT '',
+    valid_until       TEXT    DEFAULT '',
+    source_file       TEXT    NOT NULL,
+    raw_excerpt       TEXT    DEFAULT '',
+    status            TEXT    DEFAULT 'pending',
+    created_at        TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at        TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1            TEXT    DEFAULT '{}',
+    extra2            TEXT    DEFAULT '{}',
+    extra3            TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_quote_drafts_company_status ON supplier_quote_drafts(company_id, status);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,

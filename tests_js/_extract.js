@@ -23,6 +23,7 @@ const JS_ORDER = [
     'chat.js',
     'customers.js',
     'mailboxes.js',
+    'suppliers.js',
     'views.js',
     'fx.js',
     'wait.js',

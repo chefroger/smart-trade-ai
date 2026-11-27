@@ -371,6 +371,27 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     "SELECT * FROM inquiries WHERE company_id = ?",
                     (company_id,),
                 ),
+                # 供应商管理一期（四张正式表；supplier_quote_drafts 未确认草稿不导出）
+                "suppliers": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM suppliers WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "supplier_contacts": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM supplier_contacts WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "supplier_products": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM supplier_products WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "supplier_quotes": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM supplier_quotes WHERE company_id = ?",
+                    (company_id,),
+                ),
             }
             schema_version = _schema_version(conn)
         finally:
@@ -420,6 +441,7 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                 "license_data", "vec_customers", "vec_meta", "cron_job_companies",
                 "*.pid", "caches", "~/.hermes/config.yaml", "~/.hermes/skills",
                 "customer_gifts(客户索要)",
+                "supplier_quote_drafts(未确认草稿不迁移)",
             ],
         }
 
