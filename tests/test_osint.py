@@ -462,15 +462,15 @@ class TestOrchestrator:
 
     @pytest.mark.asyncio
     async def test_email_full_check(self):
-        """对邮箱执行完整尽职调查。"""
+        """对邮箱执行完整尽职调查（虚构非保留域名夹具）。"""
         from trade.osint import osint_full_check
         result = await osint_full_check(
-            "test@example.com",
+            "test@acme-fixture-trade.com",
             include_sanctions=True,
             include_tech_stack=False,
             include_linkedin=False,
         )
-        assert result["target"] == "test@example.com"
+        assert result["target"] == "test@acme-fixture-trade.com"
         assert result["target_type"] == "email"
         assert "layers" in result
         assert "domain_intel" in result["layers"]
@@ -479,10 +479,10 @@ class TestOrchestrator:
 
     @pytest.mark.asyncio
     async def test_domain_full_check(self):
-        """对域名执行完整尽职调查。"""
+        """对域名执行完整尽职调查（虚构非保留域名夹具）。"""
         from trade.osint import osint_full_check
         result = await osint_full_check(
-            "example.com",
+            "acme-fixture-trade.com",
             include_sanctions=False,
             include_tech_stack=False,
             include_linkedin=False,
@@ -505,10 +505,10 @@ class TestOrchestrator:
 
     @pytest.mark.asyncio
     async def test_risk_score_computed(self):
-        """orchestrator 应计算综合风险评分。"""
+        """orchestrator 应计算综合风险评分（虚构非保留域名夹具）。"""
         from trade.osint import osint_full_check
         result = await osint_full_check(
-            "test@example.com",
+            "test@acme-fixture-trade.com",
             include_sanctions=True,
             include_tech_stack=False,
             include_linkedin=False,
