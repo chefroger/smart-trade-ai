@@ -1034,8 +1034,14 @@ async function openCustomerWall(cid) {
                 title: title.trim(), summary: summary.trim(),
             });
             if (!r) return;
-            el.textContent = title.trim() || curTitle;
-            if (sumEl) sumEl.textContent = summary.trim() || curSummary;
+            const nextTitle = title.trim() || curTitle;
+            const nextSummary = summary.trim() || curSummary;
+            el.textContent = nextTitle;
+            if (card) {
+                card.setAttribute('data-conv-summary', nextSummary);
+                const sumEl = card.querySelector('.wall-talk-summary, .wall-talk-sum');
+                if (sumEl) sumEl.textContent = nextSummary;
+            }
             toast(currentLang === 'en' ? 'Saved' : '已保存');
         });
     });

@@ -43,7 +43,7 @@ function deleteCustomTemplate(id) {
     let customs = getCustomTemplates();
     customs = customs.filter(t => t.id !== id);
     localStorage.setItem('trade_custom_templates', JSON.stringify(customs));
-    const ct = currentChatContainer;
+    const ct = viewCache['tasks'] && viewCache['tasks'].element;
     if (ct && currentView === 'tasks') renderTasksViewInto(ct);
 }
 
@@ -342,8 +342,8 @@ function saveCustomTemplate() {
     localStorage.setItem('trade_custom_templates', JSON.stringify(customs));
     document.getElementById('custom-template-modal').remove();
     toast(`自定义模板「${name}」已添加`);
-    // 刷新视图
-    const ct = currentChatContainer;
+    // 刷新定时任务视图（不能误写 currentChatContainer，它指向隐藏的对话视图）
+    const ct = viewCache['tasks'] && viewCache['tasks'].element;
     if (ct && currentView === 'tasks') renderTasksViewInto(ct);
 }
 
@@ -823,13 +823,13 @@ async function onboardingStartOSINT() {
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
         var buffer = '';
+        var eventType = '', dataStr = '';
         while (true) {
             var _a = await reader.read(), done = _a.done, value = _a.value;
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
             var lines = buffer.split('\n');
             buffer = lines.pop() || '';
-            var eventType = '', dataStr = '';
             for (var i = 0; i < lines.length; i++) {
                 var line = lines[i].replace(/\r$/, '');
                 if (line.startsWith('event: ')) { eventType = line.slice(7).trim(); continue; }
@@ -1438,6 +1438,12 @@ async function onCompanyChange(cid) {
     // 约 5700 token，并让 Agent 去扫一个不属于当前公司的目录。
     currentLibraryId = null;
     currentCustomerId = null;
+    // 清空上一家公司的全局业务缓存，防止 @ 提及、待办关联客户或客户弹窗串用旧公司数据
+    if (typeof allCustomers !== 'undefined') allCustomers = [];
+    if (typeof allConversations !== 'undefined') allConversations = [];
+    if (typeof _todosData !== 'undefined') _todosData = [];
+    if (typeof editingCustomerData !== 'undefined') editingCustomerData = null;
+    if (typeof _chatLinkedName !== 'undefined') _chatLinkedName = '';
     if (cid) {
         const newCid = parseInt(cid);
         const prevCid = currentCompanyId;

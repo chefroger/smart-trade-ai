@@ -1601,12 +1601,13 @@ async function sendMsg() {
 
         const reader = r.body.getReader(); const decoder = new TextDecoder();
         let buffer = '';
+        // 声明在 while 循环外，防止 event: 与 data: 跨 chunk 分包时丢失整条事件
+        let eventType = '', dataStr = '';
         while (true) {
             const {done,value} = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, {stream:true});
             const lines = buffer.split('\n'); buffer = lines.pop()||'';
-            let eventType='',dataStr='';
             for (const raw of lines) {
                 const line = raw.replace(/\r$/,'');
                 if (line.startsWith('event: ')) { eventType=line.slice(7).trim(); continue; }
