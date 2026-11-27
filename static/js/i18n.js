@@ -5,7 +5,11 @@ const I18N = {
         'nav.daily':'对话','nav.lead':'客户开发','nav.platform':'网站诊断',
         'nav.social':'社媒营销','nav.linkedin':'LinkedIn','nav.customs':'海关数据',
         'nav.customers':'客户管理','nav.mailboxes':'邮箱','nav.docs':'文档库','nav.docgen':'文档生成',
-        'nav.osint':'客户背调','nav.tasks':'定时任务','nav.history':'对话记录',
+        'nav.osint':'客户背调','nav.tasks':'定时任务','nav.history':'对话记录','nav.visit':'验厂计划',
+        'top.status.0':'B2B 外贸助手 · TRADE',
+        'top.status.1':'客户开发 · LEAD GEN',
+        'top.status.2':'背调与画像 · DUE DILIGENCE',
+        'top.status.3':'文档与报价 · DOCUMENTS',
         'nav.workbench':'工作台 · DESK','nav.outreach':'获客引流 · LEADS',
         'nav.sales':'业务 · BUSINESS','nav.tools':'工具 · TOOLS','nav.hist':'历史 · LOG',
         'scene.brief':'早安简报',
@@ -358,7 +362,11 @@ const I18N = {
         'nav.daily':'Chat','nav.lead':'Lead Gen','nav.platform':'Site Audit',
         'nav.social':'Social','nav.linkedin':'LinkedIn','nav.customs':'Customs',
         'nav.customers':'Customers','nav.mailboxes':'Mailboxes','nav.docs':'Documents','nav.docgen':'Doc Gen',
-        'nav.osint':'Due Diligence','nav.tasks':'Tasks','nav.history':'History',
+        'nav.osint':'Due Diligence','nav.tasks':'Tasks','nav.history':'History','nav.visit':'Site Visit',
+        'top.status.0':'B2B TRADE ASSISTANT · TRADE',
+        'top.status.1':'LEAD GENERATION · LEADS',
+        'top.status.2':'DUE DILIGENCE · PROFILE',
+        'top.status.3':'DOCUMENTS & QUOTES · DOCS',
         'nav.workbench':'WORKSPACE · DESK','nav.outreach':'OUTREACH · LEADS',
         'nav.sales':'BUSINESS','nav.tools':'TOOLS','nav.hist':'HISTORY · LOG',
         'scene.brief':'Morning Brief',
@@ -871,6 +879,9 @@ function _updateStaticModals() {
         var sbtns = sm.querySelectorAll('.form-actions button');
         sbtns.forEach(function(b) { b.textContent = t('btn.close'); });
     }
+    // P7：语言切换后立刻刷新顶栏状态文案与当前页标题，不等 8 秒轮播
+    if (typeof window.refreshTopStatusText === 'function') window.refreshTopStatusText();
+    if (typeof window.refreshTopTitle === 'function') window.refreshTopTitle();
 }
 let _onboardingOsinResponse = ''; // accumulated AI response text
 let _onboardingStreamCtl = null;  // AbortController for SSE stream

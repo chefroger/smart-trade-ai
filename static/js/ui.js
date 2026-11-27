@@ -303,21 +303,31 @@ function navToView(view, chatCtx, chatName) {
                        document.querySelector(`.nav-item[data-view="${view}"]`);
     if (activeItem) activeItem.classList.add('active');
 
-    // 顶栏标题（zip s1–s4 统一外壳）
-    const topMeta = {
-        'chat-daily': [t('nav.daily'), '/ CHAT'],
-        'chat-docs': [t('nav.docs'), '/ LIBRARY'],
-        'customers': [t('nav.customers'), '/ CUSTOMERS'],
-        'mailboxes': [t('nav.mailboxes'), '/ MAILBOXES'],
-        'tasks': [t('nav.tasks'), '/ CRON'],
-        'history': [t('nav.history'), '/ HISTORY'],
-        'visit': ['验厂计划', '/ SITE VISIT'],
-    };
-    const topInfo = topMeta[view + (chatCtx ? '-' + chatCtx : '')] || [chatName || '', ''];
+    // 顶栏标题（zip s1–s4 统一外壳；P7/U2：走 i18n 且优先回退 topMeta[view] 避免残留旧 chatName）
+    function _resolveTopMeta(v, ctx, fallbackName) {
+        const topMeta = {
+            'chat-daily': [t('nav.daily'), '/ CHAT'],
+            'chat-docs': [t('nav.docs'), '/ LIBRARY'],
+            'customers': [t('nav.customers'), '/ CUSTOMERS'],
+            'mailboxes': [t('nav.mailboxes'), '/ MAILBOXES'],
+            'tasks': [t('nav.tasks'), '/ CRON'],
+            'history': [t('nav.history'), '/ HISTORY'],
+            'visit': [t('nav.visit'), '/ SITE VISIT'],
+        };
+        return topMeta[v + (ctx ? '-' + ctx : '')] || topMeta[v] || [fallbackName || '', ''];
+    }
+    const topInfo = _resolveTopMeta(view, chatCtx, chatName);
     const topTitleEl = document.getElementById('app-top-title');
     const topLblEl = document.getElementById('app-top-lbl');
     if (topTitleEl) topTitleEl.textContent = topInfo[0];
     if (topLblEl) topLblEl.textContent = topInfo[1];
+    window.refreshTopTitle = function () {
+        const info = _resolveTopMeta(currentView, currentChatContext, '');
+        const te = document.getElementById('app-top-title');
+        const le = document.getElementById('app-top-lbl');
+        if (te && info[0]) te.textContent = info[0];
+        if (le && info[1]) le.textContent = info[1];
+    };
 
     // 隐藏所有视图，并清除非缓存内容（如 empty state）
     const main = $('main-content');
