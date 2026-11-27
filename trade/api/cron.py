@@ -12,10 +12,12 @@ import re
 import sys
 import threading
 import time
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from trade.api.deps import require_company
 
@@ -278,6 +280,175 @@ def _cron_to_time(expr: str) -> str:
         if re.match(r"^\d+$", h) and re.match(r"^\d+$", m):
             return f"{int(h):02d}:{int(m):02d}"
     return ""
+
+
+_jobs_file_lock = threading.Lock()
+
+
+class CronTaskSpec(BaseModel):
+    """单条定时任务创建规格。"""
+
+    name: str = ""
+    schedule: str = ""
+    prompt: str = ""
+    deliver: str = "local"
+
+
+class CronBatchCreateRequest(BaseModel):
+    """批量创建定时任务请求体。"""
+
+    tasks: list[CronTaskSpec] = Field(default_factory=list)
+
+
+def _read_jobs_payload() -> dict:
+    """读取 jobs.json，文件不存在或损坏时返回标准空结构。"""
+    if not _JOBS_FILE.is_file():
+        return {"jobs": [], "updated_at": ""}
+    try:
+        data = json.loads(_JOBS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("jobs"), list):
+            return data
+    except Exception:
+        pass
+    return {"jobs": [], "updated_at": ""}
+
+
+def _write_jobs_payload(payload: dict) -> None:
+    """原子写入 jobs.json（同目录临时文件 + os.replace）。"""
+    _JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload["updated_at"] = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    tmp_path = _JOBS_FILE.with_name(f".jobs.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, _JOBS_FILE)
+
+
+def _create_single_cron_job(cid: int, spec: CronTaskSpec) -> dict:
+    """为当前公司创建一条 Hermes 兼容的定时任务并写入归属映射。"""
+    name = (spec.name or "").strip()
+    schedule = (spec.schedule or "").strip()
+    prompt = (spec.prompt or "").strip()
+    deliver = (spec.deliver or "local").strip() or "local"
+    if not name:
+        raise ValueError("任务名称不能为空")
+    if not schedule:
+        raise ValueError("调度表达式不能为空")
+    if not prompt:
+        raise ValueError("任务提示词不能为空")
+
+    job_id = uuid.uuid4().hex[:12]
+    now_iso = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    entry = {
+        "id": job_id,
+        "name": name,
+        "prompt": prompt,
+        "schedule": {"kind": "cron", "expr": schedule, "display": schedule},
+        "schedule_display": schedule,
+        "deliver": deliver,
+        "enabled": True,
+        "created_at": now_iso,
+        "next_run_at": "",
+        "last_run_at": "",
+    }
+    with _jobs_file_lock:
+        payload = _read_jobs_payload()
+        payload["jobs"].append(entry)
+        _write_jobs_payload(payload)
+
+    from trade.cron_binding import bind_job
+
+    bind_job(job_id, cid)
+    return {
+        "id": job_id,
+        "name": name,
+        "schedule": schedule,
+        "deliver": deliver,
+        "enabled": True,
+    }
+
+
+@router.post("/cron/jobs/batch")
+def batch_create_cron_jobs(body: CronBatchCreateRequest, cid: int = Depends(require_company)):
+    """确定性批量创建当前公司的定时任务（P5：不经过 LLM/终端）。"""
+    if not body.tasks:
+        raise HTTPException(status_code=400, detail="请至少提供一个任务模板。")
+
+    created: list[dict] = []
+    failed: list[dict] = []
+    for idx, spec in enumerate(body.tasks):
+        try:
+            item = _create_single_cron_job(cid, spec)
+            created.append(item)
+        except Exception as exc:
+            failed.append({
+                "index": idx,
+                "name": (spec.name or "").strip(),
+                "error": str(exc),
+            })
+    return {
+        "created": created,
+        "failed": failed,
+        "total": len(body.tasks),
+    }
+
+
+@router.delete("/cron/jobs/{job_id}")
+def delete_cron_job(job_id: str, cid: int = Depends(require_company)):
+    """删除当前公司的单条定时任务（仅允许删除本公司可见任务）。"""
+    target_id = (job_id or "").strip()
+    if not target_id:
+        raise HTTPException(status_code=400, detail="job_id 不能为空。")
+
+    removed = False
+    with _jobs_file_lock:
+        payload = _read_jobs_payload()
+        kept = []
+        for job in payload["jobs"]:
+            if not isinstance(job, dict):
+                kept.append(job)
+                continue
+            jid = str(job.get("id") or "")
+            if jid == target_id and _job_visible(jid, cid, job=job):
+                removed = True
+                continue
+            kept.append(job)
+        if removed:
+            payload["jobs"] = kept
+            _write_jobs_payload(payload)
+
+    if not removed:
+        raise HTTPException(status_code=404, detail="定时任务不存在或不属于当前公司。")
+
+    from trade.cron_binding import unbind_job
+
+    unbind_job(target_id)
+    return {"ok": True, "deleted": target_id}
+
+
+@router.delete("/cron/jobs")
+def clear_company_cron_jobs(cid: int = Depends(require_company)):
+    """清空当前公司所有可见定时任务，不影响其他公司任务（P5）。"""
+    deleted_ids: list[str] = []
+    with _jobs_file_lock:
+        payload = _read_jobs_payload()
+        kept = []
+        for job in payload["jobs"]:
+            if not isinstance(job, dict):
+                kept.append(job)
+                continue
+            jid = str(job.get("id") or "")
+            if jid and _job_visible(jid, cid, job=job):
+                deleted_ids.append(jid)
+                continue
+            kept.append(job)
+        if deleted_ids:
+            payload["jobs"] = kept
+            _write_jobs_payload(payload)
+
+    from trade.cron_binding import unbind_job
+
+    for jid in deleted_ids:
+        unbind_job(jid)
+    return {"ok": True, "deleted_count": len(deleted_ids), "deleted_ids": deleted_ids}
 
 
 @router.get("/cron/jobs")

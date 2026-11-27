@@ -367,14 +367,14 @@ function runSingleTask(taskName, prompt) {
     }, 300);
 }
 
-function batchCreateCronTasks() {
+async function batchCreateCronTasks() {
     if (!currentCompanyId) { toast('请先选择公司'); return; }
     const checks = document.querySelectorAll('.task-template-check:checked');
     if (!checks.length) { toast('请至少选择一个任务模板'); return; }
 
     const coName = (companies.find(c => c.id === currentCompanyId)?.name || '').trim();
     const allTemplates = getAllTemplates();
-    const selected = [];
+    const tasks = [];
     checks.forEach(cb => {
         const id = cb.dataset.id;
         const t = allTemplates.find(x => x.id === id);
@@ -386,18 +386,25 @@ function batchCreateCronTasks() {
         const prompt = (!/company_id\s*[:=]/.test(rawPrompt) && coName)
             ? ('当前公司：' + coName + '（company_id=' + currentCompanyId + '）。所有数据查询必须限定在该公司范围内。 ' + rawPrompt)
             : rawPrompt;
-        selected.push(`任务名: ${t.name} | schedule: ${cronExpr} | Prompt: ${prompt}`);
+        tasks.push({ name: t.name, schedule: cronExpr, prompt: prompt, deliver: 'local' });
     });
+    if (!tasks.length) { toast('未找到有效的任务模板'); return; }
 
-    navToView('chat', 'daily', '定时任务批量创建');
-    setTimeout(() => {
-        const ct = currentChatContainer;
-        const input = ct ? ct.querySelector('#msg-input') : null;
-        if (input) {
-            input.value = `请使用 cronjob 工具为我批量创建以下定时任务，所有任务使用 --deliver local：\n${selected.join('\n')}\n\n请为每个任务创建 cron job 并返回创建结果。`;
-            sendMsg();
-        }
-    }, 300);
+    // P5：走确定性后端接口直接创建，不再跳转对话依赖模型跑终端
+    const res = await api('POST', '/api/trade/cron/jobs/batch', { tasks: tasks }).catch(() => null);
+    if (!res) {
+        toast('批量创建定时任务失败，请重试');
+        return;
+    }
+    const okCount = (res.created || []).length;
+    const failCount = (res.failed || []).length;
+    if (failCount === 0) {
+        toast('已成功创建 ' + okCount + ' 个定时任务');
+    } else {
+        toast('已创建 ' + okCount + ' 个，失败 ' + failCount + ' 个，可重试未成功项');
+    }
+    await loadActiveCronJobs();
+    if (typeof loadCronStatus === 'function') loadCronStatus(true);
 }
 
 async function clearAllCronTasks() {
@@ -408,18 +415,15 @@ async function clearAllCronTasks() {
         return;
     }
     if (!confirm('确定删除当前公司已激活的 ' + jobs.length + ' 个定时任务？此操作不可恢复。')) return;
-    const jobIds = jobs.map(j => j.id).filter(Boolean).join(', ');
-    navToView('chat', 'daily', '清空定时任务');
-    setTimeout(() => {
-        const ct = currentChatContainer;
-        const input = ct ? ct.querySelector('#msg-input') : null;
-        if (input) {
-            input.value = '请使用 cronjob 工具仅删除当前公司的以下定时任务（按 job_id 逐一执行 remove，不要列出或操作其它任务）：' + jobIds + '。完成后告知结果。';
-            sendMsg();
-            // 刷新列表
-            setTimeout(loadActiveCronJobs, 5000);
-        }
-    }, 300);
+    // P5：走确定性后端接口删除当前公司任务，不再跳转对话依赖模型跑终端
+    const res = await api('DELETE', '/api/trade/cron/jobs').catch(() => null);
+    if (!res) {
+        toast('清空定时任务失败，请重试');
+        return;
+    }
+    toast('已删除 ' + (res.deleted_count || 0) + ' 个定时任务');
+    await loadActiveCronJobs();
+    if (typeof loadCronStatus === 'function') loadCronStatus(true);
 }
 
 async function loadActiveCronJobs() {
