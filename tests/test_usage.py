@@ -293,11 +293,21 @@ def test_record_response_usage_handles_deepseek_and_missing(conn):
         ts=_utc_ts(2026, 11, 27, 13, 0),
     )
     assert cost > 0
-    assert usage.tokens_today(conn, 3) == 2300
     row = conn.execute(
         "SELECT skill, cache_hit_tokens, cache_miss_tokens, price_window FROM usage_ledger"
     ).fetchone()
     assert row == ("supplier-extract", 1800, 200, "offpeak")
+
+    # 当天默认时间戳写入后，tokens_today 准确累加（不依赖固定历史日期）
+    usage.record_response_usage(
+        fake_usage,
+        skill="supplier-extract",
+        provider="deepseek",
+        model="deepseek-flash",
+        company_id=3,
+        conn=conn,
+    )
+    assert usage.tokens_today(conn, 3) >= 2300
 
     # 模型未返回 usage 时记 0 不报错
     assert usage.record_response_usage(None, skill="supplier-extract", conn=conn) == 0.0
@@ -325,3 +335,42 @@ def test_doctor_pricing_freshness_warns_after_90_days(monkeypatch):
     assert res[0].status == doctor.STATUS_WARN
     assert res[0].fatal is False
     assert "90" in res[0].detail
+
+
+# ==============================================================================
+# 工单 #7：账本技能归类准确（背调记 b2b-osint，普通对话记 chat 不为空串）
+# ==============================================================================
+
+
+def test_usage_skill_attribution_osint_and_plain_chat():
+    """背调胶囊/背调工具记 b2b-osint；普通对话与跟进邮件记 chat，不记空串。"""
+    from trade.api import chat as chat_api
+
+    # 1) 对话内「客户背调」胶囊（context='osint'）即使前置误匹配其他技能也归类为 b2b-osint
+    assert (
+        chat_api._resolve_usage_skill("b2b-document", context="osint")
+        == "b2b-osint"
+    )
+
+    # 2) 本轮实际调用了 osint_job_start 工具时，归类为 b2b-osint
+    tracker = chat_api.CompletedToolTracker()
+    tracker.on_start("osint_job_start", {"target": "acme-fixture.com"})
+    tracker.on_complete("osint_job_start", {"target": "acme-fixture.com"}, {"job_id": 1})
+    assert (
+        chat_api._resolve_usage_skill("b2b-document", context="daily", tools_tracker=tracker)
+        == "b2b-osint"
+    )
+
+    # 3) 普通对话 / 跟进邮件（未触发任何技能）记 'chat'，不出现空串
+    assert chat_api._resolve_usage_skill(None, context="daily") == "chat"
+    assert chat_api._resolve_usage_skill("", context="") == "chat"
+
+    # 4) 正常命中技能时保留实际技能名
+    assert chat_api._resolve_usage_skill("b2b-lead-generation", context="daily") == "b2b-lead-generation"
+
+    # 5) _extract_and_cache_skill 传入 raw_query 时不被 full_query 里的历史文本污染
+    full_with_history = "## 历史对话\n## 技能触发：b2b-document\n\n用户：你好，帮我写一封跟进邮件"
+    extracted = chat_api._extract_and_cache_skill(
+        99, full_with_history, None, raw_query="帮我把刚才那句话翻译成英文"
+    )
+    assert extracted != "b2b-document"
