@@ -665,6 +665,11 @@ body {
     box-shadow: var(--shadow-lg); padding: 48px 52px;
     max-width: 600px; width: 100%;
     animation: msgIn 0.4s var(--ease-out);
+    transition: max-width 0.25s var(--ease-out);
+}
+.onboarding-card.has-results {
+    max-width: min(1040px, calc(100% - 32px));
+    padding: 32px 36px;
 }
 .onboarding-icon { font-size: 56px; text-align: center; margin-bottom: 16px; }
 .onboarding-title {
@@ -762,22 +767,24 @@ body {
 /* Results area */
 #onboarding-results-area {
     margin-top: 16px;
-    max-height: 50vh; overflow-y: auto;
+    max-height: 55vh; overflow: auto;
     border: 1px solid var(--border); border-radius: var(--radius);
     background: var(--bg-card);
 }
 .onboarding-progress { padding: 12px 16px; }
 .onboarding-response {
     padding: 16px 20px; font-size: 14px; line-height: 1.7;
+    overflow-x: auto;
 }
 .onboarding-response p { margin: 0 0 8px 0; }
 .onboarding-response p:last-child { margin-bottom: 0; }
 .onboarding-response table {
-    width: 100%; border-collapse: collapse; margin: 8px 0;
+    width: max-content; min-width: 100%; border-collapse: collapse; margin: 8px 0;
     border: 1px solid var(--border); font-size: 13px;
 }
 .onboarding-response th, .onboarding-response td {
     padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
 }
 .onboarding-response th { background: var(--bg-input); font-weight: 600; }
 .onboarding-response code {

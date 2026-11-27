@@ -97,9 +97,22 @@
 /* ── 后台任务浮层（非阻塞）：固定右下，不覆盖交互区；点浮层外面照常操作 ── */
 .wait-dock {
   position: fixed; right: 16px; bottom: 128px; z-index: 60;
-  width: min(980px, calc(100vw - 300px)); max-height: calc(100vh - 200px);
+  width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 200px);
   background: var(--paper); border: 1px solid var(--ink);
   display: flex; flex-direction: column; overflow: hidden;
+}
+.onb-osint-inline {
+  margin: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--paper); overflow: hidden;
+}
+.onb-osint-inline-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; background: var(--ink); color: var(--paper);
+  font-family: var(--mono); font-size: 11px;
+}
+.onb-osint-inline-close {
+  background: transparent; color: var(--paper); border: 1px solid var(--paper);
+  padding: 1px 8px; font-size: 10px; cursor: pointer;
 }
 .wait-dock.hidden { display: none; }
 .wait-dock.is-collapsed .wd-tabs,

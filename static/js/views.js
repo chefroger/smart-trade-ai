@@ -866,6 +866,10 @@ async function onboardingStartOSINT() {
         progDiv.remove();
         if (responseText) {
             _onboardingOsinResponse = responseText;
+            var card = resultsArea.closest ? resultsArea.closest('.onboarding-card') : null;
+            if (card) card.classList.add('has-results');
+            // 结果出来后，若内嵌背调面板已结束/失败则自动清理，避免占用视口
+            resultsArea.querySelectorAll('.onb-osint-inline').forEach(function (el) { el.remove(); });
             var respDiv = document.createElement('div');
             respDiv.className = 'onboarding-response';
             var raw = marked.parse(responseText);

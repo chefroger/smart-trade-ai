@@ -1933,9 +1933,10 @@ function _positionOsintDock(root) {
         return;
     }
     const r = ref.getBoundingClientRect();
+    const dockW = Math.min(460, Math.max(280, Math.round(r.width)));
     root.style.right = 'auto';
-    root.style.left = Math.round(r.left) + 'px';
-    root.style.width = Math.round(r.width) + 'px';
+    root.style.left = Math.max(12, Math.round(r.right - dockW)) + 'px';
+    root.style.width = dockW + 'px';
     root.style.bottom = Math.max(12, Math.round(window.innerHeight - r.top + 12)) + 'px';
 }
 
@@ -1949,6 +1950,17 @@ function _ensureDock() {
             parts.root.classList.toggle('is-collapsed');
             parts.toggle.textContent = parts.root.classList.contains('is-collapsed') ? '展开' : '收起';
         });
+        // 允许立即关闭浮层（尤其失败态不等 3 秒倒计时）
+        if (!parts.root.querySelector('.wd-close')) {
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.className = 'wd-toggle wd-close';
+            closeBtn.textContent = '关闭';
+            closeBtn.addEventListener('click', function () {
+                _detachOsintTaskPanels();
+            });
+            parts.toggle.parentNode.appendChild(closeBtn);
+        }
         window.addEventListener('resize', function () {
             if (!parts.root.classList.contains('hidden')) _positionOsintDock(parts.root);
         });
@@ -1969,7 +1981,10 @@ function _osintStatusZh(status) {
 function _updateDock() {
     const parts = _dockParts();
     if (!parts) return;
-    const items = Object.keys(_osintTaskPanels).map(function (id) { return _osintTaskPanels[id]; });
+    // 内嵌到引导页等容器中的面板不进入全局右下角浮层
+    const items = Object.keys(_osintTaskPanels)
+        .map(function (id) { return _osintTaskPanels[id]; })
+        .filter(function (p) { return p && !p.inline; });
     if (!items.length) { parts.root.classList.add('hidden'); return; }
     _ensureDock();
     _positionOsintDock(parts.root);
@@ -1993,6 +2008,7 @@ function _updateDock() {
     }
 
     items.forEach(function (p) {
+        if (!p.tab) return;
         p.tab.classList.toggle('is-done', p.status === 'done');
         p.tab.classList.toggle('is-bad', p.status === 'failed' || p.status === 'cancelled');
         p.tab.classList.toggle('is-active', String(_osintActiveJobId) === String(p.jobId));
@@ -2000,17 +2016,20 @@ function _updateDock() {
         if (st) st.textContent = _osintStatusZh(p.status);
     });
 
-    // 全部结束后：没有聊天在生成就自动收起（先保留 3 秒让用户看到结论）
+    // 全部结束后：没有聊天在生成就自动收起（失败态快速收起避免长期遮挡）
+    const allFailed = !running.length && items.every(function (p) {
+        return p.status === 'failed' || p.status === 'cancelled';
+    });
     clearTimeout(_osintDockHideTimer);
     if (!running.length && _chatStreamActive <= 0) {
         _osintDockHideTimer = setTimeout(function () {
             if (Object.keys(_osintTaskPanels).some(function (id) {
                 const p = _osintTaskPanels[id];
-                return p.status === 'running' || p.status === 'queued';
+                return p && !p.inline && (p.status === 'running' || p.status === 'queued');
             })) return;
             if (_chatStreamActive > 0) return;
             _detachOsintTaskPanels();
-        }, 3000);
+        }, allFailed ? 800 : 3000);
     }
 }
 
@@ -2038,17 +2057,72 @@ function _detachOsintTaskPanels() {
     if (parts) parts.root.classList.add('hidden');
 }
 
-function _attachOsintTaskPanel(_container, job) {
-    /** 把后台任务挂到右下角浮层；多个任务用标签切换，不往聊天流里插面板。 */
+function _attachOsintTaskPanel(container, job) {
+    /** 把后台任务挂到右下角浮层；新手引导结果区则内嵌挂载，避免浮层遮挡按钮。 */
     if (!job || !job.job_id) return;
     if (typeof TradeWait === 'undefined') return;
     // 复用的已完成任务：右栏显示完成态即可，不挂浮层
     if (job.status && job.status !== 'queued' && job.status !== 'running') return;
     if (_osintTaskPanels[job.job_id]) return;
-    const parts = _ensureDock();
-    if (!parts) return;
     const jobId = job.job_id;
     const target = _jobShortName(job.target);
+
+    // P3：新手引导页传入 #onboarding-results-area 时内嵌在结果区内，不弹出全局 .wait-dock
+    const isOnboarding = !!(
+        container &&
+        (container.id === 'onboarding-results-area' ||
+            (typeof container.closest === 'function' && container.closest('.onboarding-card')))
+    );
+    if (isOnboarding) {
+        const inlineBox = document.createElement('div');
+        inlineBox.className = 'onb-osint-inline';
+        const head = document.createElement('div');
+        head.className = 'onb-osint-inline-head';
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = '后台背调 · ' + (target || ('任务 ' + jobId));
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'onb-osint-inline-close';
+        closeBtn.textContent = '收起';
+        closeBtn.addEventListener('click', function () {
+            const p = _osintTaskPanels[jobId];
+            try { if (p && p.wait) p.wait.destroy(); } catch (e) {}
+            if (inlineBox.parentNode) inlineBox.parentNode.removeChild(inlineBox);
+            delete _osintTaskPanels[jobId];
+        });
+        head.appendChild(titleSpan);
+        head.appendChild(closeBtn);
+        inlineBox.appendChild(head);
+
+        const body = document.createElement('div');
+        inlineBox.appendChild(body);
+        if (container.firstChild) container.insertBefore(inlineBox, container.firstChild);
+        else container.appendChild(inlineBox);
+
+        let wait = null;
+        try {
+            wait = TradeWait.mount(body, {
+                mode: 'task',
+                title: '背调 · BACKGROUND CHECK',
+                statusLabel: '背调进行中',
+                onCancel: function () { _cancelOsintJob(jobId); },
+            });
+        } catch (e) {
+            console.warn('引导页内嵌背调面板挂载失败', e);
+            inlineBox.remove();
+            return;
+        }
+        _osintTaskPanels[jobId] = {
+            jobId: jobId, target: target, wait: wait, tab: null, wrap: inlineBox,
+            inline: true,
+            status: job.status === 'queued' ? 'queued' : 'running',
+        };
+        _watchOsintJob(jobId);
+        return;
+    }
+
+    const parts = _ensureDock();
+    if (!parts) return;
 
     const tab = document.createElement('button');
     tab.type = 'button';
