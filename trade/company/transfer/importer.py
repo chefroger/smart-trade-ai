@@ -147,6 +147,17 @@ def _supplier_quote_signature(row: dict) -> tuple:
     )
 
 
+def _rfq_signature(row: dict) -> tuple:
+    """采购询价单去重键：(customer_id 映射后, inquiry_id 映射后, product_name, spec_model, created_at)。"""
+    return (
+        row.get("customer_id"),
+        row.get("inquiry_id"),
+        (row.get("product_name") or "").strip(),
+        (row.get("spec_model") or "").strip(),
+        row.get("created_at"),
+    )
+
+
 _SUPPLIER_MERGE_TEXT_FIELDS = (
     "short_name", "supplier_type", "main_products", "province", "city",
     "address", "payment_terms", "source", "note",
@@ -612,6 +623,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "usage_ledger", "doc_extractions", "contacts",
                 "customer_facts", "customer_gifts", "inquiries", "visit_plans",
                 "suppliers", "supplier_contacts", "supplier_products", "supplier_quotes",
+                "rfqs", "rfq_responses",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -883,18 +895,20 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
 
         # 询盘实体（旧包缺文件时 _load_table 已返回 []；映射不到客户则跳过）
         inq_inserted = inq_skipped = 0
+        inquiry_map: dict[int, int] = {}
         if _table_exists(conn, "inquiries"):
             # 二次导入同一份包不能翻倍：按自然键判重（2026-11-20 审计 C1）
-            existing_inq = {
-                _inquiry_signature(row)
+            existing_inq: dict[tuple, int] = {
+                _inquiry_signature(row): int(row["id"])
                 for row in _rows(
                     conn,
-                    "SELECT customer_id, title, stage, source, created_at "
+                    "SELECT id, customer_id, title, stage, source, created_at "
                     "FROM inquiries WHERE company_id = ?",
                     (target_id,),
                 )
             }
             for row in source_tables["inquiries"]:
+                old_inq_id = row.get("id")
                 mapped_cust = customer_map.get(row.get("customer_id"))
                 if not mapped_cust:
                     inq_skipped += 1
@@ -913,13 +927,17 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                     except (TypeError, ValueError):
                         new_row["source_id"] = None
                 sig = _inquiry_signature(new_row)
-                # 目标库里已有同一条：计 skipped，不重复插入
+                # 目标库里已有同一条：计 skipped，同时登记映射供 rfqs 复用
                 if sig in existing_inq:
+                    if old_inq_id is not None:
+                        inquiry_map[int(old_inq_id)] = existing_inq[sig]
                     inq_skipped += 1
                     continue
                 try:
-                    _insert(conn, "inquiries", new_row)
-                    existing_inq.add(sig)
+                    new_inq_id = _insert(conn, "inquiries", new_row)
+                    existing_inq[sig] = int(new_inq_id)
+                    if old_inq_id is not None:
+                        inquiry_map[int(old_inq_id)] = int(new_inq_id)
                     inq_inserted += 1
                 except Exception:
                     inq_skipped += 1
@@ -1227,19 +1245,73 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
             "inserted": sp_added, "added": sp_added, "skipped": sp_skipped,
         }
 
-        sq_added = sq_skipped = 0
-        if _table_exists(conn, "supplier_quotes"):
-            existing_sq = {
-                _supplier_quote_signature(r)
+        # 采购询价单头（rfqs）：在 supplier_quotes 之前导入以便重映射 rfq_id
+        rfq_map: dict[int, int] = {}
+        rfq_added = rfq_skipped = 0
+        if _table_exists(conn, "rfqs"):
+            existing_rfqs: dict[tuple, int] = {
+                _rfq_signature(r): int(r["id"])
                 for r in _rows(
                     conn,
-                    "SELECT supplier_id, product_name, spec_model, quoted_at, "
+                    "SELECT id, customer_id, inquiry_id, product_name, spec_model, created_at "
+                    "FROM rfqs WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
+            for row in source_tables.get("rfqs") or []:
+                old_rfq_id = row.get("id")
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                # customer_id 与 inquiry_id 映射不到时置 NULL，不中断导入
+                old_cust_id = row.get("customer_id")
+                if old_cust_id is not None:
+                    try:
+                        new_row["customer_id"] = customer_map.get(int(old_cust_id))
+                    except (TypeError, ValueError):
+                        new_row["customer_id"] = None
+                else:
+                    new_row["customer_id"] = None
+                old_inq_id = row.get("inquiry_id")
+                if old_inq_id is not None:
+                    try:
+                        new_row["inquiry_id"] = inquiry_map.get(int(old_inq_id))
+                    except (TypeError, ValueError):
+                        new_row["inquiry_id"] = None
+                else:
+                    new_row["inquiry_id"] = None
+                sig = _rfq_signature(new_row)
+                # 同去重签名已存在：跳过并记录旧→新映射
+                if sig in existing_rfqs:
+                    if old_rfq_id is not None:
+                        rfq_map[int(old_rfq_id)] = existing_rfqs[sig]
+                    rfq_skipped += 1
+                    continue
+                new_rfq_id = _insert(conn, "rfqs", new_row)
+                existing_rfqs[sig] = int(new_rfq_id)
+                if old_rfq_id is not None:
+                    rfq_map[int(old_rfq_id)] = int(new_rfq_id)
+                rfq_added += 1
+        else:
+            rfq_skipped = len(source_tables.get("rfqs") or [])
+        report["tables"]["rfqs"] = {
+            "inserted": rfq_added, "added": rfq_added, "skipped": rfq_skipped,
+        }
+
+        supplier_quote_map: dict[int, int] = {}
+        sq_added = sq_skipped = 0
+        if _table_exists(conn, "supplier_quotes"):
+            existing_sq: dict[tuple, int] = {
+                _supplier_quote_signature(r): int(r["id"])
+                for r in _rows(
+                    conn,
+                    "SELECT id, supplier_id, product_name, spec_model, quoted_at, "
                     "price_excl_tax, price_incl_tax "
                     "FROM supplier_quotes WHERE company_id = ?",
                     (target_id,),
                 )
             }
             for row in source_tables.get("supplier_quotes") or []:
+                old_qid = row.get("id")
                 mapped_sid = supplier_map.get(row.get("supplier_id"))
                 # 映射不到目标供应商时跳过
                 if not mapped_sid:
@@ -1256,20 +1328,75 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 new_row["source_customer_id"] = (
                     customer_map.get(int(old_cust_id)) if old_cust_id is not None else None
                 )
-                # rfq_id 本批预留恒空
-                new_row["rfq_id"] = None
+                # 第二批：按 rfq_map 重映射 rfq_id，映射不到置 NULL
+                old_rfq_id = row.get("rfq_id")
+                if old_rfq_id is not None:
+                    try:
+                        new_row["rfq_id"] = rfq_map.get(int(old_rfq_id))
+                    except (TypeError, ValueError):
+                        new_row["rfq_id"] = None
+                else:
+                    new_row["rfq_id"] = None
                 sig = _supplier_quote_signature(new_row)
-                # 同去重键报价已存在时跳过（重复导入一条不增）
+                # 同去重键报价已存在时跳过（重复导入一条不增），但仍记录旧→新 id 供 rfq_responses 关联
                 if sig in existing_sq:
+                    if old_qid is not None:
+                        supplier_quote_map[int(old_qid)] = existing_sq[sig]
                     sq_skipped += 1
                     continue
-                _insert(conn, "supplier_quotes", new_row)
-                existing_sq.add(sig)
+                new_qid = _insert(conn, "supplier_quotes", new_row)
+                existing_sq[sig] = int(new_qid)
+                if old_qid is not None:
+                    supplier_quote_map[int(old_qid)] = int(new_qid)
                 sq_added += 1
         else:
             sq_skipped = len(source_tables.get("supplier_quotes") or [])
         report["tables"]["supplier_quotes"] = {
             "inserted": sq_added, "added": sq_added, "skipped": sq_skipped,
+        }
+
+        # 采购询价回复行（rfq_responses）：按 (rfq_id 映射后, supplier_id 映射后) 去重
+        rr_added = rr_skipped = 0
+        if _table_exists(conn, "rfq_responses"):
+            existing_rr: set[tuple[int, int]] = {
+                (int(r["rfq_id"]), int(r["supplier_id"]))
+                for r in _rows(
+                    conn,
+                    "SELECT rfq_id, supplier_id FROM rfq_responses WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
+            for row in source_tables.get("rfq_responses") or []:
+                mapped_rfq = rfq_map.get(row.get("rfq_id"))
+                mapped_sup = supplier_map.get(row.get("supplier_id"))
+                # 映射不到询价单或供应商时跳过
+                if not mapped_rfq or not mapped_sup:
+                    rr_skipped += 1
+                    continue
+                rr_key = (int(mapped_rfq), int(mapped_sup))
+                # 同单同供应商回复已存在时跳过
+                if rr_key in existing_rr:
+                    rr_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["rfq_id"] = mapped_rfq
+                new_row["supplier_id"] = mapped_sup
+                old_qid = row.get("quote_id")
+                if old_qid is not None:
+                    try:
+                        new_row["quote_id"] = supplier_quote_map.get(int(old_qid))
+                    except (TypeError, ValueError):
+                        new_row["quote_id"] = None
+                else:
+                    new_row["quote_id"] = None
+                _insert(conn, "rfq_responses", new_row)
+                existing_rr.add(rr_key)
+                rr_added += 1
+        else:
+            rr_skipped = len(source_tables.get("rfq_responses") or [])
+        report["tables"]["rfq_responses"] = {
+            "inserted": rr_added, "added": rr_added, "skipped": rr_skipped,
         }
 
         # 公司身份 + 工作目录路径

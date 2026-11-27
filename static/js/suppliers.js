@@ -2,7 +2,7 @@
 // #region suppliers-ui —— 供 tests_js/suppliers.test.js 抽取测试，勿删标记
 
 const _spState = {
-    tab: 'directory',          // directory | compare | import
+    tab: 'directory',          // directory | compare | import | rfqs
     importSub: 'upload',       // upload | drafts
     draftStatus: 'pending',    // pending | approved | rejected | all
     selectedSupplierId: null,
@@ -15,6 +15,11 @@ const _spState = {
     extractResult: null,
     drafts: [],
     pendingDraftCount: 0,
+    rfqFilters: { status: '', q: '' },
+    rfqs: [],
+    selectedRfqId: null,
+    rfqDetail: null,
+    companyInquiries: [],
 };
 
 const _SP_STATUS_CLASS = {
@@ -50,6 +55,11 @@ function _spFormatPriceCell(value, currency, isConverted) {
     const num = esc(String(value));
     const badge = isConverted ? '<span class="sp-conv">换算</span>' : '';
     return '<span class="sp-num">' + cur + ' ' + num + '</span>' + badge;
+}
+
+function _spFormatQuotedAt(val) {
+    const text = (val === null || val === undefined) ? '' : String(val).trim();
+    return text ? esc(text) : '<span class="sp-mut">日期未注明</span>';
 }
 
 function _spBuildDirectoryRowsHtml(items) {
@@ -111,7 +121,7 @@ function _spBuildCompareGroupsHtml(result) {
                 + '<td>' + _spFormatPriceCell(lq.price_excl_tax, lq.currency, lq.price_excl_tax_converted) + '</td>'
                 + '<td>' + _spFormatPriceCell(lq.price_incl_tax, lq.currency, lq.price_incl_tax_converted) + '</td>'
                 + '<td><div>' + rangeText + '</div><div class="rsub">共 ' + esc(String(row.quote_count || 0)) + ' 条</div></td>'
-                + '<td>' + esc(lq.quoted_at || '—') + expTag + '</td>'
+                + '<td>' + _spFormatQuotedAt(lq.quoted_at) + expTag + '</td>'
                 + '</tr>';
         }).join('');
         parts.push(
@@ -140,6 +150,81 @@ function _spBuildCompareGroupsHtml(result) {
         );
     }
     return parts.join('');
+}
+
+function _spFormatRfqStatus(status) {
+    if (status === 'decided') return '<span class="sp-st s-coop">已选厂</span>';
+    return '<span class="sp-st s-talk">待回复</span>';
+}
+
+function _spBuildRfqRowsHtml(items) {
+    if (!items || !items.length) {
+        return '<tr><td colspan="6"><div class="sp-state"><h3>暂无采购询价单</h3><p>点击「新建采购询价」向多家供应商发询价、记录回复并选定供应商。</p></div></td></tr>';
+    }
+    return items.map(function (r) {
+        const sub = [r.spec_model, r.title].filter(Boolean).join(' · ');
+        const qtyText = (r.quantity !== null && r.quantity !== undefined && r.quantity !== '')
+            ? (esc(String(r.quantity)) + (r.unit ? ' ' + esc(r.unit) : ''))
+            : (r.unit ? esc(r.unit) : '—');
+        const custText = r.customer_name ? esc(r.customer_name) : '<span class="sp-mut">—</span>';
+        const respCount = Number(r.responded_count || 0);
+        const totalCount = Number(r.total_responses || 0);
+        const progText = '已回 ' + esc(String(respCount)) + ' / 共 ' + esc(String(totalCount));
+        const selText = r.selected_supplier_name
+            ? '<span class="sp-self yes">' + esc(r.selected_supplier_name) + '</span>'
+            : '<span class="sp-mut">—</span>';
+        return '<tr class="sp-row" data-rfq-open="' + esc(String(r.id)) + '">'
+            + '<td><div class="rname">' + esc(r.product_name) + '</div>' + (sub ? '<div class="rsub">' + esc(sub) + '</div>' : '') + '</td>'
+            + '<td class="sp-num">' + qtyText + '</td>'
+            + '<td>' + custText + '</td>'
+            + '<td class="sp-num">' + progText + '</td>'
+            + '<td>' + selText + '</td>'
+            + '<td>' + _spFormatRfqStatus(r.status) + '</td>'
+            + '</tr>';
+    }).join('');
+}
+
+function _spBuildRfqResponsesHtml(responses) {
+    if (!responses || !responses.length) {
+        return '<tr><td colspan="8"><div class="sp-state"><h3>暂未添加供应商</h3><p>在上方选择本公司供应商加入本采购询价单。</p></div></td></tr>';
+    }
+    return responses.map(function (r) {
+        const rid = esc(String(r.id));
+        const isSel = Number(r.selected || 0) === 1;
+        const isResp = Number(r.responded || 0) === 1;
+        const rowCls = isSel ? 'sp-rfq-sel' : '';
+        const respBadge = isResp
+            ? '<span class="sp-self yes">已回</span>'
+            : '<span class="sp-self tbc">未回</span>';
+        const exclVal = (r.price_excl_tax !== null && r.price_excl_tax !== undefined) ? String(r.price_excl_tax) : '';
+        const inclVal = (r.price_incl_tax !== null && r.price_incl_tax !== undefined) ? String(r.price_incl_tax) : '';
+        const curVal = r.currency || 'CNY';
+        const daysVal = (r.lead_time_days !== null && r.lead_time_days !== undefined) ? String(r.lead_time_days) : '';
+        const ltxtVal = r.lead_time_text || '';
+        const moqVal = (r.moq !== null && r.moq !== undefined) ? String(r.moq) : '';
+        const selBtn = isSel
+            ? '<button type="button" class="btn" data-rfq-unselect="' + rid + '">取消选定</button>'
+            : '<button type="button" class="btn btn-primary" data-rfq-select="' + rid + '">选定</button>';
+        return '<tr class="' + rowCls + '" data-rfq-resp-row="' + rid + '">'
+            + '<td><div class="rname">' + esc(r.supplier_name || '') + '</div>'
+            + (isSel ? '<div class="rsub" style="color:var(--accent);font-weight:600;">已选定供应商</div>' : '')
+            + (r.quote_id ? '<div class="rsub">已沉淀报价 #' + esc(String(r.quote_id)) + '</div>' : '') + '</td>'
+            + '<td><label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">'
+            + '<input type="checkbox" data-rfq-f="responded"' + (isResp ? ' checked' : '') + '> ' + respBadge + '</label>'
+            + (r.responded_at ? '<div class="rsub">' + esc(r.responded_at) + '</div>' : '') + '</td>'
+            + '<td><input type="text" data-rfq-f="price_excl_tax" placeholder="不含税" value="' + esc(exclVal) + '" style="width:78px;"></td>'
+            + '<td><input type="text" data-rfq-f="price_incl_tax" placeholder="含税" value="' + esc(inclVal) + '" style="width:78px;">'
+            + '<input type="text" data-rfq-f="currency" value="' + esc(curVal) + '" style="width:50px;margin-left:4px;" title="币种"></td>'
+            + '<td><input type="text" data-rfq-f="lead_time_days" placeholder="天数" value="' + esc(daysVal) + '" style="width:56px;"> '
+            + '<input type="text" data-rfq-f="lead_time_text" placeholder="周期说明" value="' + esc(ltxtVal) + '" style="width:88px;"></td>'
+            + '<td><input type="text" data-rfq-f="moq" placeholder="MOQ" value="' + esc(moqVal) + '" style="width:68px;"></td>'
+            + '<td><input type="text" data-rfq-f="notes" placeholder="备注" value="' + esc(r.notes || '') + '" style="width:120px;"></td>'
+            + '<td style="white-space:nowrap;">'
+            + '<button type="button" class="btn" data-rfq-save="' + rid + '">保存</button> '
+            + selBtn + ' '
+            + '<button type="button" class="sp-lnk danger" data-rfq-del="' + rid + '">删除</button>'
+            + '</td></tr>';
+    }).join('');
 }
 
 // #endregion suppliers-ui
@@ -182,6 +267,7 @@ function _spRenderRoot() {
         + '<button type="button" class="sp-tab' + (t === 'directory' ? ' on' : '') + '" data-sp-tab="directory"><span class="zh">供应商名录</span><span class="en">DIRECTORY</span></button>'
         + '<button type="button" class="sp-tab' + (t === 'compare' ? ' on' : '') + '" data-sp-tab="compare"><span class="zh">产品能力（比价）</span><span class="en">COMPARE</span></button>'
         + '<button type="button" class="sp-tab' + (t === 'import' ? ' on' : '') + '" data-sp-tab="import"><span class="zh">导入与确认</span><span class="en">IMPORT</span><span class="sp-n" id="sp-draft-badge"' + badgeStyle + '>' + esc(String(_spState.pendingDraftCount)) + '</span></button>'
+        + '<button type="button" class="sp-tab' + (t === 'rfqs' ? ' on' : '') + '" data-sp-tab="rfqs"><span class="zh">采购询价</span><span class="en">RFQ</span></button>'
         + '</div>'
         + '<div class="sp-body" id="sp-body"></div>';
 
@@ -202,6 +288,11 @@ function _spRenderRoot() {
                 _spRenderRoot();
                 _spRenderBody();
                 if (_spState.importSub === 'drafts') _spLoadDrafts();
+            } else if (_spState.tab === 'rfqs') {
+                _spState.selectedRfqId = null;
+                _spState.rfqDetail = null;
+                _spRenderRoot();
+                _spLoadRfqs();
             }
         });
     });
@@ -219,6 +310,12 @@ function _spRenderBody() {
         }
     } else if (_spState.tab === 'compare') {
         _spRenderCompare(body);
+    } else if (_spState.tab === 'rfqs') {
+        if (_spState.selectedRfqId && _spState.rfqDetail) {
+            _spRenderRfqDetail(body, _spState.rfqDetail);
+        } else {
+            _spRenderRfqsList(body);
+        }
     } else {
         _spRenderImport(body);
     }
@@ -362,7 +459,7 @@ function _spRenderDetail(body, d) {
                 + '<td><b>' + esc(q.product_name) + '</b>' + (q.spec_model ? '<div class="rsub">' + esc(q.spec_model) + '</div>' : '') + '</td>'
                 + '<td>' + _spFormatPriceCell(q.price_excl_tax, q.currency, false) + '</td>'
                 + '<td>' + _spFormatPriceCell(q.price_incl_tax, q.currency, false) + '</td>'
-                + '<td>' + esc(q.quoted_at || '—') + expTag + (q.valid_until ? '<div class="rsub">有效期：' + esc(q.valid_until) + '</div>' : '') + '</td>'
+                + '<td>' + _spFormatQuotedAt(q.quoted_at) + expTag + (q.valid_until ? '<div class="rsub">有效期：' + esc(q.valid_until) + '</div>' : '') + '</td>'
                 + '<td><span class="' + srcCls + '">' + esc(q.source || 'manual') + '</span></td>'
                 + '<td><button type="button" class="sp-lnk" data-sp-edit-quote="' + esc(String(q.id)) + '">编辑</button> '
                 + '<button type="button" class="sp-lnk danger" data-sp-del-quote="' + esc(String(q.id)) + '">删除</button></td>'
@@ -703,7 +800,7 @@ function _spRenderDraftsList(panel) {
                 + '<div><div class="k">币种</div><div class="v">' + esc(d.currency || 'CNY') + '</div></div>'
                 + '<div><div class="k">不含税价</div><div class="v">' + _spFormatPriceCell(d.price_excl_tax, d.currency, false) + '</div></div>'
                 + '<div><div class="k">含税价</div><div class="v">' + _spFormatPriceCell(d.price_incl_tax, d.currency, false) + '</div></div>'
-                + '<div><div class="k">报价日期</div><div class="v">' + esc(d.quoted_at || '—') + '</div></div>'
+                + '<div><div class="k">报价日期</div><div class="v">' + _spFormatQuotedAt(d.quoted_at) + '</div></div>'
                 + '<div><div class="k">有效期</div><div class="v">' + esc(d.valid_until || '—') + '</div></div>'
                 + '</div>'
                 + '<div class="ex"><span class="sp-lbl">原文摘录</span><q>' + esc(d.raw_excerpt || '（无摘录）') + '</q>'
@@ -1024,5 +1121,269 @@ function _spOpenDraftEditModal(d) {
         };
         const res = await api('PUT', '/api/trade/supplier-quote-drafts/' + d.id, payload);
         if (res) { modal.remove(); _spLoadDrafts(); }
+    });
+}
+
+// ── 采购询价页签（供应商管理一期 · 第二批）───────────────────────────────────
+
+async function _spLoadRfqs() {
+    const f = _spState.rfqFilters;
+    const qs = new URLSearchParams();
+    if (f.status) qs.set('status', f.status);
+    if (f.q) qs.set('q', f.q);
+    const url = '/api/trade/rfqs' + (qs.toString() ? '?' + qs.toString() : '');
+    const res = await api('GET', url);
+    if (Array.isArray(res)) {
+        _spState.rfqs = res;
+        if (_spState.tab === 'rfqs' && !_spState.selectedRfqId) {
+            _spRenderBody();
+        }
+    }
+}
+
+function _spRenderRfqsList(body) {
+    const f = _spState.rfqFilters;
+    body.innerHTML =
+        '<div class="sp-bar">'
+        + '<input type="text" id="rfq-q" placeholder="搜索采购询价产品名 / 主题..." value="' + esc(f.q) + '" style="flex:1;min-width:220px;">'
+        + '<select id="rfq-status-filter">'
+        + '<option value=""' + (f.status === '' ? ' selected' : '') + '>全部状态</option>'
+        + '<option value="open"' + (f.status === 'open' ? ' selected' : '') + '>待回复</option>'
+        + '<option value="decided"' + (f.status === 'decided' ? ' selected' : '') + '>已选厂</option>'
+        + '</select>'
+        + '<button type="button" class="btn" id="rfq-search-btn">筛选</button>'
+        + '<button type="button" class="btn btn-primary" id="rfq-new-btn">' + btnIcon('plus') + ' 新建采购询价</button>'
+        + '</div>'
+        + '<div class="sp-table-wrap"><table class="sp-table">'
+        + '<thead><tr><th>产品 / 规格</th><th style="width:100px;">数量</th><th style="width:140px;">关联客户</th><th style="width:110px;">回复进度</th><th style="width:140px;">选中供应商</th><th style="width:90px;">状态</th></tr></thead>'
+        + '<tbody>' + _spBuildRfqRowsHtml(_spState.rfqs) + '</tbody></table></div>';
+
+    const applyFilter = function () {
+        _spState.rfqFilters.q = (document.getElementById('rfq-q')?.value || '').trim();
+        _spState.rfqFilters.status = document.getElementById('rfq-status-filter')?.value || '';
+        _spLoadRfqs();
+    };
+    body.querySelector('#rfq-search-btn').addEventListener('click', applyFilter);
+    body.querySelector('#rfq-status-filter').addEventListener('change', applyFilter);
+    body.querySelector('#rfq-q').addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') applyFilter();
+    });
+    body.querySelector('#rfq-new-btn').addEventListener('click', function () {
+        _spOpenRfqModal(null);
+    });
+    body.querySelectorAll('[data-rfq-open]').forEach(function (tr) {
+        tr.addEventListener('click', function () {
+            const rid = Number(tr.getAttribute('data-rfq-open'));
+            _spOpenRfqDetail(rid);
+        });
+    });
+}
+
+async function _spOpenRfqDetail(rfqId) {
+    const detail = await api('GET', '/api/trade/rfqs/' + rfqId);
+    if (!detail) return;
+    if (!_spState.suppliers || !_spState.suppliers.length) {
+        const sups = await api('GET', '/api/trade/suppliers', null, null, { silent: true });
+        if (Array.isArray(sups)) _spState.suppliers = sups;
+    }
+    _spState.selectedRfqId = rfqId;
+    _spState.rfqDetail = detail;
+    _spRenderBody();
+}
+
+function _spRenderRfqDetail(body, d) {
+    const qtyText = (d.quantity !== null && d.quantity !== undefined && d.quantity !== '')
+        ? (esc(String(d.quantity)) + (d.unit ? ' ' + esc(d.unit) : ''))
+        : (d.unit ? esc(d.unit) : '—');
+    const supOpts = (_spState.suppliers || []).map(function (s) {
+        return '<option value="' + esc(String(s.id)) + '">' + esc(s.name) + '</option>';
+    }).join('');
+
+    body.innerHTML =
+        '<div class="sp-detail-head">'
+        + '<button type="button" class="btn" id="rfq-back-btn">' + btnIcon('arrow-left') + ' 返回采购询价列表</button>'
+        + '<h3 style="margin:0;font-size:15px;">' + esc(d.product_name) + (d.spec_model ? '（' + esc(d.spec_model) + '）' : '') + '</h3>'
+        + _spFormatRfqStatus(d.status)
+        + '<div style="margin-left:auto;display:flex;gap:8px;">'
+        + '<button type="button" class="btn" id="rfq-edit-btn">编辑采购询价</button>'
+        + '<button type="button" class="btn btn-danger" id="rfq-del-btn">删除采购询价</button>'
+        + '</div></div>'
+        + '<div class="sp-sec" style="margin-bottom:12px;">'
+        + '<div class="sp-kv">'
+        + '<div class="k">询价主题</div><div class="v">' + esc(d.title || '—') + '</div>'
+        + '<div class="k">数量 / 单位</div><div class="v">' + qtyText + '</div>'
+        + '<div class="k">目标交期</div><div class="v">' + esc(d.target_delivery_date || '—') + '</div>'
+        + '<div class="k">关联客户</div><div class="v">' + esc(d.customer_name || '—') + '</div>'
+        + '<div class="k">关联询盘</div><div class="v">' + esc(d.inquiry_title || (d.inquiry_id ? ('#' + String(d.inquiry_id)) : '—')) + '</div>'
+        + '<div class="k">备注</div><div class="v">' + esc(d.note || '—') + '</div>'
+        + '</div></div>'
+        + '<div class="sp-sec">'
+        + '<div class="sp-sec-h"><span class="t">供应商回复（已回 ' + esc(String(d.responded_count || 0)) + ' / 共 ' + esc(String(d.total_responses || 0)) + '）</span>'
+        + '<div class="acts" style="display:flex;gap:6px;align-items:center;">'
+        + '<select id="rfq-add-sup-sel" style="min-width:180px;"><option value="">选择本公司供应商...</option>' + supOpts + '</select>'
+        + '<button type="button" class="btn btn-primary" id="rfq-add-sup-btn">+ 添加供应商</button>'
+        + '</div></div>'
+        + '<div class="sp-table-wrap"><table class="sp-table">'
+        + '<thead><tr><th>供应商</th><th style="width:92px;">是否已回</th><th style="width:96px;">不含税价</th><th style="width:150px;">含税价 / 币种</th><th style="width:165px;">交期</th><th style="width:82px;">MOQ</th><th>备注</th><th style="width:160px;">操作</th></tr></thead>'
+        + '<tbody>' + _spBuildRfqResponsesHtml(d.responses || []) + '</tbody></table></div></div>';
+
+    body.querySelector('#rfq-back-btn').addEventListener('click', function () {
+        _spState.selectedRfqId = null;
+        _spState.rfqDetail = null;
+        _spRenderBody();
+        _spLoadRfqs();
+    });
+    body.querySelector('#rfq-edit-btn').addEventListener('click', function () {
+        _spOpenRfqModal(d);
+    });
+    body.querySelector('#rfq-del-btn').addEventListener('click', async function () {
+        if (!confirm('确认删除该采购询价单？（其回复行与已沉淀的询价报价将一并删除）')) return;
+        const ok = await api('DELETE', '/api/trade/rfqs/' + d.id);
+        if (ok) {
+            toast('已删除采购询价单');
+            _spState.selectedRfqId = null;
+            _spState.rfqDetail = null;
+            _spRenderBody();
+            _spLoadRfqs();
+        }
+    });
+    body.querySelector('#rfq-add-sup-btn').addEventListener('click', async function () {
+        const sid = document.getElementById('rfq-add-sup-sel')?.value || '';
+        if (!sid) { toast('请先选择要加入的供应商'); return; }
+        const res = await api('POST', '/api/trade/rfqs/' + d.id + '/responses', { supplier_id: Number(sid) });
+        if (res) {
+            toast('已加入采购询价单');
+            _spOpenRfqDetail(d.id);
+        }
+    });
+
+    body.querySelectorAll('[data-rfq-save]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const rid = Number(btn.getAttribute('data-rfq-save'));
+            const tr = body.querySelector('[data-rfq-resp-row="' + rid + '"]');
+            if (!tr) return;
+            const val = function (k) {
+                const el = tr.querySelector('[data-rfq-f="' + k + '"]');
+                return el ? el.value.trim() : '';
+            };
+            const respCb = tr.querySelector('[data-rfq-f="responded"]');
+            const payload = {
+                responded: respCb && respCb.checked ? 1 : 0,
+                price_excl_tax: val('price_excl_tax') || null,
+                price_incl_tax: val('price_incl_tax') || null,
+                currency: val('currency') || 'CNY',
+                lead_time_days: val('lead_time_days') || null,
+                lead_time_text: val('lead_time_text'),
+                moq: val('moq') || null,
+                notes: val('notes'),
+            };
+            const res = await api('PUT', '/api/trade/rfq-responses/' + rid, payload);
+            if (res) {
+                toast('已保存供应商回复');
+                _spOpenRfqDetail(d.id);
+            }
+        });
+    });
+
+    body.querySelectorAll('[data-rfq-select]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const rid = Number(btn.getAttribute('data-rfq-select'));
+            const res = await api('POST', '/api/trade/rfq-responses/' + rid + '/select');
+            if (res) {
+                toast('已选定该供应商');
+                _spOpenRfqDetail(d.id);
+            }
+        });
+    });
+
+    body.querySelectorAll('[data-rfq-unselect]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const rid = Number(btn.getAttribute('data-rfq-unselect'));
+            const res = await api('POST', '/api/trade/rfq-responses/' + rid + '/unselect');
+            if (res) {
+                toast('已取消选定');
+                _spOpenRfqDetail(d.id);
+            }
+        });
+    });
+
+    body.querySelectorAll('[data-rfq-del]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const rid = Number(btn.getAttribute('data-rfq-del'));
+            if (!confirm('确认删除该回复行？（已沉淀报价将同步删除）')) return;
+            const ok = await api('DELETE', '/api/trade/rfq-responses/' + rid);
+            if (ok) {
+                toast('已删除回复行');
+                _spOpenRfqDetail(d.id);
+            }
+        });
+    });
+}
+
+async function _spOpenRfqModal(existing) {
+    const r = existing || {};
+    const isEdit = !!r.id;
+    const inqs = await api('GET', '/api/trade/rfqs/inquiries', null, null, { silent: true });
+    _spState.companyInquiries = Array.isArray(inqs) ? inqs : [];
+    const inqOpts = '<option value="">不关联询盘</option>' + _spState.companyInquiries.map(function (iq) {
+        const label = (iq.title || ('询盘 #' + iq.id)) + (iq.customer_name ? (' — ' + iq.customer_name) : '');
+        const sel = (r.inquiry_id && Number(r.inquiry_id) === Number(iq.id)) ? ' selected' : '';
+        return '<option value="' + esc(String(iq.id)) + '" data-cust-id="' + esc(String(iq.customer_id || '')) + '" data-cust-name="' + esc(iq.customer_name || '') + '"' + sel + '>' + esc(label) + '</option>';
+    }).join('');
+
+    const modal = _spMountModal(
+        '<h3>' + (isEdit ? '编辑采购询价' : '新建采购询价') + '</h3>'
+        + '<div class="form-group"><label>询价主题（可选）</label><input type="text" id="rfqf-title" placeholder="如：德客 Q4 阀门采购询价" value="' + esc(r.title || '') + '"></div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>产品名称 *</label><input type="text" id="rfqf-prod" value="' + esc(r.product_name || '') + '"></div>'
+        + '<div class="form-group"><label>规格型号</label><input type="text" id="rfqf-spec" value="' + esc(r.spec_model || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>数量</label><input type="text" id="rfqf-qty" value="' + (r.quantity != null ? esc(String(r.quantity)) : '') + '"></div>'
+        + '<div class="form-group"><label>单位</label><input type="text" id="rfqf-unit" placeholder="件 / 台 / kg" value="' + esc(r.unit || '') + '"></div>'
+        + '<div class="form-group"><label>目标交期</label><input type="date" id="rfqf-date" value="' + esc(r.target_delivery_date || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>关联客户询盘</label><select id="rfqf-inq">' + inqOpts + '</select></div>'
+        + '<div class="form-group"><label>关联客户（选询盘自动带出）</label><input type="text" id="rfqf-cust-name" readonly value="' + esc(r.customer_name || '') + '" placeholder="选择询盘后自动带出"><input type="hidden" id="rfqf-cust-id" value="' + (r.customer_id != null ? esc(String(r.customer_id)) : '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label>备注</label><textarea id="rfqf-note">' + esc(r.note || '') + '</textarea></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="rfqf-save">保存</button></div>'
+    );
+
+    const inqSel = modal.querySelector('#rfqf-inq');
+    inqSel.addEventListener('change', function () {
+        const opt = inqSel.options[inqSel.selectedIndex];
+        const cid = opt ? (opt.getAttribute('data-cust-id') || '') : '';
+        const cname = opt ? (opt.getAttribute('data-cust-name') || '') : '';
+        modal.querySelector('#rfqf-cust-id').value = cid;
+        modal.querySelector('#rfqf-cust-name').value = cname;
+    });
+
+    modal.querySelector('#rfqf-save').addEventListener('click', async function () {
+        const inqVal = modal.querySelector('#rfqf-inq').value.trim();
+        const custVal = modal.querySelector('#rfqf-cust-id').value.trim();
+        const payload = {
+            title: modal.querySelector('#rfqf-title').value.trim(),
+            product_name: modal.querySelector('#rfqf-prod').value.trim(),
+            spec_model: modal.querySelector('#rfqf-spec').value.trim(),
+            quantity: modal.querySelector('#rfqf-qty').value.trim() || null,
+            unit: modal.querySelector('#rfqf-unit').value.trim(),
+            target_delivery_date: modal.querySelector('#rfqf-date').value.trim(),
+            inquiry_id: inqVal ? Number(inqVal) : null,
+            customer_id: custVal ? Number(custVal) : null,
+            note: modal.querySelector('#rfqf-note').value.trim(),
+        };
+        if (!payload.product_name) { toast('请填写产品名称'); return; }
+        const res = isEdit
+            ? await api('PUT', '/api/trade/rfqs/' + r.id, payload)
+            : await api('POST', '/api/trade/rfqs', payload);
+        if (res) {
+            modal.remove();
+            toast(isEdit ? '已更新采购询价单' : '已新建采购询价单');
+            if (_spState.selectedRfqId) _spOpenRfqDetail(_spState.selectedRfqId);
+            else _spLoadRfqs();
+        }
     });
 }

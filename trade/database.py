@@ -649,6 +649,57 @@ CREATE TABLE IF NOT EXISTS supplier_quote_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_supplier_quote_drafts_company_status ON supplier_quote_drafts(company_id, status);
 
+-- 采购询价单头（供应商管理一期 · 第二批；与客户询盘 inquiries 严格分开）
+CREATE TABLE IF NOT EXISTS rfqs (
+    id                   INTEGER PRIMARY KEY,
+    company_id           INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    title                TEXT    DEFAULT '',
+    product_name         TEXT    NOT NULL,
+    spec_model           TEXT    DEFAULT '',
+    quantity             REAL,
+    unit                 TEXT    DEFAULT '',
+    target_delivery_date TEXT    DEFAULT '',
+    inquiry_id           INTEGER REFERENCES inquiries(id) ON DELETE SET NULL,
+    customer_id          INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+    status               TEXT    DEFAULT 'open',   -- open=待回复 / decided=已选厂（只此两态）
+    note                 TEXT    DEFAULT '',
+    created_at           TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at           TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1               TEXT    DEFAULT '{}',
+    extra2               TEXT    DEFAULT '{}',
+    extra3               TEXT    DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_rfqs_company_status   ON rfqs(company_id, status);
+CREATE INDEX IF NOT EXISTS idx_rfqs_company_inquiry  ON rfqs(company_id, inquiry_id);
+CREATE INDEX IF NOT EXISTS idx_rfqs_company_customer ON rfqs(company_id, customer_id);
+
+-- 采购询价回复行（同一询价单内一家供应商只占一行）
+CREATE TABLE IF NOT EXISTS rfq_responses (
+    id             INTEGER PRIMARY KEY,
+    company_id     INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    rfq_id         INTEGER NOT NULL REFERENCES rfqs(id) ON DELETE CASCADE,
+    supplier_id    INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    responded      INTEGER DEFAULT 0,   -- 0 未回 / 1 已回
+    responded_at   TEXT    DEFAULT '',  -- 首次置已回时打戳
+    price_excl_tax REAL,
+    price_incl_tax REAL,
+    currency       TEXT    DEFAULT 'CNY',
+    lead_time_days INTEGER,
+    lead_time_text TEXT    DEFAULT '',
+    moq            REAL,
+    notes          TEXT    DEFAULT '',
+    quote_id       INTEGER REFERENCES supplier_quotes(id) ON DELETE SET NULL,
+    selected       INTEGER DEFAULT 0,
+    created_at     TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_at     TEXT    DEFAULT (datetime('now', 'localtime')),
+    extra1         TEXT    DEFAULT '{}',
+    extra2         TEXT    DEFAULT '{}',
+    extra3         TEXT    DEFAULT '{}',
+    UNIQUE(rfq_id, supplier_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rfq_responses_rfq              ON rfq_responses(rfq_id);
+CREATE INDEX IF NOT EXISTS idx_rfq_responses_company_supplier ON rfq_responses(company_id, supplier_id);
+
 -- Schema migrations tracking (for versioned upgrades)
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,

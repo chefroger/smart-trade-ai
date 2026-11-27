@@ -446,3 +446,244 @@ def _json(obj: Any) -> str:
 
 def _err(msg: str) -> str:
     return _json({"error": msg})
+
+
+# ==============================================================================
+# 供应商管理一期 · 第二批工具（受控写入候选供应商 + 3 个内部只读查询工具）
+# ==============================================================================
+
+_SUPPLIER_INTERNAL_NOTICE = (
+    "内部采购数据，仅供内部查询，禁止写入给客户的邮件、报价单等对外文案。"
+)
+
+SUPPLIER_CANDIDATE_SAVE_SCHEMA = _schema(
+    "supplier_candidate_save",
+    "将 b2b-china-leads 找到的国内厂家线索保存为本公司供应商库中的「候选」供应商"
+    "（status='候选'，source='china-leads'）。"
+    "入库前必须先将候选名单给用户确认，用户未明确同意前不得调用。"
+    "同公司已有同名供应商时不重复新建，直接返回既有 supplier_id。"
+    + _SUPPLIER_INTERNAL_NOTICE,
+    {
+        "name": _str("供应商全称（必填）"),
+        "short_name": _str("简称（可选）"),
+        "main_products": _str("主营产品/品类（可选）"),
+        "province": _str("所在省份（可选）"),
+        "city": _str("所在城市（可选）"),
+        "source_url": _str("线索来源 URL（可选）"),
+        "note": _str("备注信息（可选）"),
+        "contact": {
+            "type": "object",
+            "description": "可选联系人信息（name/phone/wechat）",
+            "properties": {
+                "name": _str("联系人姓名"),
+                "phone": _str("联系电话"),
+                "wechat": _str("微信号"),
+            },
+            "additionalProperties": False,
+        },
+        "contact_name": _str("联系人姓名（可选，与 contact.name 等效）"),
+        "contact_phone": _str("联系电话（可选，与 contact.phone 等效）"),
+        "contact_wechat": _str("微信号（可选，与 contact.wechat 等效）"),
+    },
+    ["name"],
+)
+
+SUPPLIER_QUOTE_SEARCH_SCHEMA = _schema(
+    "supplier_quote_search",
+    "按产品名、供应商 ID 或来源客户 ID 查询本公司历史采购报价（只读）。"
+    + _SUPPLIER_INTERNAL_NOTICE,
+    {
+        "product_name": _str("产品名称关键词（模糊匹配，可选）"),
+        "supplier_id": {"type": "integer", "description": "供应商 ID（可选）"},
+        "customer_id": {"type": "integer", "description": "来源客户 ID（可选）"},
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50,
+            "description": "最大返回条数（默认 50，上限 200）",
+        },
+    },
+    [],
+)
+
+SUPPLIER_COMPARE_SCHEMA = _schema(
+    "supplier_compare",
+    "按产品名（及可选规格型号）对本公司多家供应商做比价聚合（只读，按单位分组返回）。"
+    + _SUPPLIER_INTERNAL_NOTICE,
+    {
+        "product_name": _str("要对比的产品名称（必填，模糊匹配）"),
+        "spec_model": _str("规格型号关键词（可选，模糊匹配）"),
+    },
+    ["product_name"],
+)
+
+SUPPLIER_LIST_SCHEMA = _schema(
+    "supplier_list",
+    "按关键词或合作状态查询本公司供应商名录（只读）。"
+    + _SUPPLIER_INTERNAL_NOTICE,
+    {
+        "q": _str("搜索关键词：匹配名称、简称或主营品类（可选）"),
+        "status": _str("状态筛选：候选/洽谈中/合作中/暂停/黑名单（可选）"),
+        "supplier_type": _str("供应商类型筛选（可选）"),
+        "is_starred": {"type": "integer", "description": "星标筛选：1 仅星标（可选）"},
+    },
+    [],
+)
+
+
+def handle_supplier_candidate_save(args: dict[str, Any], **_kw) -> str:
+    """受控写入：将国内找厂线索保存为候选供应商（同公司同名不新建）。"""
+    company_id = _bound_company()
+    # 无绑定公司上下文时拒绝任何写入
+    if company_id is None:
+        return _err("没有公司上下文，拒绝写入候选供应商")
+
+    name = str(args.get("name") or "").strip()
+    # 名称必填
+    if not name:
+        return _err("name is required")
+
+    try:
+        from trade import supplier as supplier_mod
+        from trade.company.transfer import merge as merge_mod
+
+        target_key = merge_mod.norm_name(name)
+        existing_list = supplier_mod.list_suppliers(company_id)
+        matched = next(
+            (s for s in existing_list if merge_mod.norm_name(s.get("name")) == target_key),
+            None,
+        )
+        # 同公司已有同名供应商（norm 口径）：不新建，返回既有 id 并注明已存在
+        if matched is not None:
+            return _json({
+                "created": False,
+                "already_exists": True,
+                "supplier_id": matched["id"],
+                "supplier": matched,
+                "message": f"本公司已存在同名供应商「{matched['name']}」（ID #{matched['id']}），未重复新建",
+            })
+
+        source_url = str(args.get("source_url") or "").strip()
+        extra1 = {"source_url": source_url} if source_url else {}
+        note_text = str(args.get("note") or "").strip()
+        # 有来源 URL 时同步记入备注方便界面查看
+        if source_url and source_url not in note_text:
+            note_text = f"{note_text}\n来源：{source_url}".strip() if note_text else f"来源：{source_url}"
+
+        created = supplier_mod.create_supplier(
+            company_id,
+            name=name,
+            short_name=str(args.get("short_name") or "").strip(),
+            main_products=str(args.get("main_products") or "").strip(),
+            province=str(args.get("province") or "").strip(),
+            city=str(args.get("city") or "").strip(),
+            status="候选",
+            source="china-leads",
+            note=note_text,
+            extra1=extra1,
+        )
+
+        # 可选联系人（支持 contact 嵌套对象或扁平字段）
+        contact_obj = args.get("contact") if isinstance(args.get("contact"), dict) else {}
+        c_name = str(contact_obj.get("name") or args.get("contact_name") or "").strip()
+        c_phone = str(contact_obj.get("phone") or args.get("contact_phone") or "").strip()
+        c_wechat = str(contact_obj.get("wechat") or args.get("contact_wechat") or "").strip()
+        created_contact = None
+        if c_name:
+            created_contact = supplier_mod.create_contact(
+                company_id,
+                int(created["id"]),
+                name=c_name,
+                phone=c_phone,
+                wechat=c_wechat,
+                is_primary=1,
+            )
+
+        return _json({
+            "created": True,
+            "already_exists": False,
+            "supplier_id": created["id"],
+            "supplier": created,
+            "contact": created_contact,
+        })
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("handle_supplier_candidate_save failed")
+        return _err(f"保存候选供应商失败：{exc}")
+
+
+def handle_supplier_quote_search(args: dict[str, Any], **_kw) -> str:
+    """内部只读查询：按产品/供应商/客户查询本公司历史采购报价。"""
+    company_id = _bound_company()
+    # 无绑定公司上下文时拒绝读取
+    if company_id is None:
+        return _err("没有公司上下文，拒绝查询供应商报价")
+
+    try:
+        from trade import supplier as supplier_mod
+
+        sup_id = args.get("supplier_id")
+        cust_id = args.get("customer_id")
+        limit = int(args.get("limit") or 50)
+        limit = max(1, min(limit, 200))
+        rows = supplier_mod.search_quotes(
+            company_id,
+            product_name=str(args.get("product_name") or "").strip(),
+            supplier_id=int(sup_id) if sup_id is not None else None,
+            customer_id=int(cust_id) if cust_id is not None else None,
+            limit=limit,
+        )
+        return _json({"count": len(rows), "quotes": rows})
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("handle_supplier_quote_search failed")
+        return _err(f"查询供应商报价失败：{exc}")
+
+
+def handle_supplier_compare(args: dict[str, Any], **_kw) -> str:
+    """内部只读查询：按产品名与规格比价。"""
+    company_id = _bound_company()
+    # 无绑定公司上下文时拒绝读取
+    if company_id is None:
+        return _err("没有公司上下文，拒绝执行产品比价")
+
+    product_name = str(args.get("product_name") or "").strip()
+    # 产品名称必填
+    if not product_name:
+        return _err("product_name is required")
+
+    try:
+        from trade import supplier as supplier_mod
+
+        res = supplier_mod.compare_product(
+            company_id,
+            product_name=product_name,
+            spec_model=str(args.get("spec_model") or "").strip(),
+        )
+        return _json(res)
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("handle_supplier_compare failed")
+        return _err(f"产品比价失败：{exc}")
+
+
+def handle_supplier_list(args: dict[str, Any], **_kw) -> str:
+    """内部只读查询：按关键词/状态查询本公司供应商名录。"""
+    company_id = _bound_company()
+    # 无绑定公司上下文时拒绝读取
+    if company_id is None:
+        return _err("没有公司上下文，拒绝查询供应商名录")
+
+    try:
+        from trade import supplier as supplier_mod
+
+        starred = args.get("is_starred")
+        rows = supplier_mod.list_suppliers(
+            company_id,
+            q=str(args.get("q") or "").strip(),
+            status=str(args.get("status") or "").strip(),
+            supplier_type=str(args.get("supplier_type") or "").strip(),
+            is_starred=int(starred) if starred is not None else None,
+        )
+        return _json({"count": len(rows), "suppliers": rows})
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("handle_supplier_list failed")
+        return _err(f"查询供应商名录失败：{exc}")

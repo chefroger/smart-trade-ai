@@ -357,13 +357,18 @@ def test_a6_compare_tax_conversion_and_unit_grouping(env):
     assert groups["kg"]["lowest_excl_tax"] == 25.0
 
     rows_piece = {r["supplier_name"]: r["latest_quote"] for r in groups["件"]["suppliers"]}
-    # 甲：换算含税价 108.0，标记 converted=True
+    rows_piece_full = {r["supplier_name"]: r for r in groups["件"]["suppliers"]}
+    # 甲：换算含税价 108.0，标记 converted=True；O-供2：含税区间不纳入换算值
     assert rows_piece["甲供应商"]["price_incl_tax"] == 108.0
     assert rows_piece["甲供应商"]["converted"] is True
     assert rows_piece["甲供应商"]["price_incl_tax_converted"] is True
+    assert rows_piece_full["甲供应商"]["price_excl_range"] == [100.0, 100.0]
+    assert rows_piece_full["甲供应商"]["price_incl_range"] is None
     # 乙：无 tax_point，严禁编造含税价
     assert rows_piece["乙供应商"]["price_incl_tax"] is None
     assert rows_piece["乙供应商"]["converted"] is False
+    # O-供1：有含税价（含换算）的甲排在无含税价的乙前面
+    assert [r["supplier_name"] for r in groups["件"]["suppliers"]] == ["甲供应商", "乙供应商"]
 
 
 # ==============================================================================
@@ -590,6 +595,8 @@ async def test_a11_ai_extract_no_fabrication_and_tristate_default(env, tmp_path)
     assert detail["products"][0]["is_self_produced"] == 2
     assert approved["quote"]["price_excl_tax"] is None
     assert approved["quote"]["price_incl_tax"] is None
+    # O-供3：草稿无报价日期时留空，不兜底填批准当天
+    assert approved["quote"]["quoted_at"] == ""
 
 
 # ==============================================================================
@@ -598,7 +605,7 @@ async def test_a11_ai_extract_no_fabrication_and_tristate_default(env, tmp_path)
 
 
 def test_a12_no_supplier_leak_into_chat_copilot_or_brand_safety():
-    """A12：对外路径（chat / copilot / helpers / prompt / brand safety）不得注入供应商或报价数据。"""
+    """A12（第二批扩展）：对外路径（chat / copilot / draft / helpers / prompt / brand safety）不得引用供应商或采购询价模块。"""
     root = Path(__file__).resolve().parent.parent
     protected_files = [
         root / "trade" / "api" / "chat.py",
@@ -606,11 +613,96 @@ def test_a12_no_supplier_leak_into_chat_copilot_or_brand_safety():
         root / "trade" / "prompt.py",
         root / "trade" / "prompts.py",
         root / "trade" / "api" / "copilot.py",
+        root / "trade" / "copilot" / "draft.py",
+        root / "trade" / "copilot" / "context.py",
+        root / "trade" / "copilot" / "service.py",
+        root / "trade" / "opener.py",
     ]
-    forbidden_tokens = ("supplier_quotes", "supplier_products", "supplier_quote_drafts", "trade.supplier")
+    forbidden_tokens = (
+        "supplier_quotes",
+        "supplier_products",
+        "supplier_quote_drafts",
+        "trade.supplier",
+        "trade.rfq",
+        "rfq_responses",
+        "handle_supplier_quote_search",
+        "handle_supplier_compare",
+        "handle_supplier_list",
+    )
     for path in protected_files:
         if not path.is_file():
             continue
         src = path.read_text(encoding="utf-8")
         for token in forbidden_tokens:
-            assert token not in src, f"{path.name} 不得引用 {token}（A12 对外隔离约束）"
+            assert token not in src, f"{path.name} 不得引用 {token}（A12/B9 对外隔离约束）"
+
+
+# ==============================================================================
+# B11 第一批 O-供1 / O-供2 / O-供3 修补回归
+# ==============================================================================
+
+
+def test_b11_o_fixes_compare_sort_range_and_draft_date(env):
+    """B11：验证 O-供1 排序统一含税口径、O-供2 区间仅统计原值、O-供3 草稿空日期留空。"""
+    cid = env["co_a"]["id"]
+    future = (date.today() + timedelta(days=30)).isoformat()
+    past = (date.today() - timedelta(days=3)).isoformat()
+
+    # O-供1：原值含税 108 vs 换算含税 108 vs 换算含税 107.35 vs 无价 vs 过期低价
+    s_orig = supplier_mod.create_supplier(cid, name="原值含税厂", tax_point=13.0)
+    supplier_mod.create_quote(
+        cid, s_orig["id"], product_name="工业阀门", unit="台",
+        price_incl_tax=108.0, quoted_at="2026-11-20", valid_until=future,
+    )
+    s_conv_tie = supplier_mod.create_supplier(cid, name="换算同价厂", tax_point=8.0)
+    supplier_mod.create_quote(
+        cid, s_conv_tie["id"], product_name="工业阀门", unit="台",
+        price_excl_tax=100.0, quoted_at="2026-11-20", valid_until=future,
+    )
+    # 给换算同价厂再加一条历史不含税价，顺便测 O-供2 区间排除换算值
+    supplier_mod.create_quote(
+        cid, s_conv_tie["id"], product_name="工业阀门", unit="台",
+        price_excl_tax=110.0, quoted_at="2026-11-10", valid_until=future,
+    )
+    s_conv_low = supplier_mod.create_supplier(cid, name="换算更低厂", tax_point=13.0)
+    supplier_mod.create_quote(
+        cid, s_conv_low["id"], product_name="工业阀门", unit="台",
+        price_excl_tax=95.0, quoted_at="2026-11-20", valid_until=future,
+    )
+    s_noprice = supplier_mod.create_supplier(cid, name="无价厂")
+    supplier_mod.create_quote(
+        cid, s_noprice["id"], product_name="工业阀门", unit="台",
+        quoted_at="2026-11-20", valid_until=future,
+    )
+    s_expired = supplier_mod.create_supplier(cid, name="过期低价厂")
+    supplier_mod.create_quote(
+        cid, s_expired["id"], product_name="工业阀门", unit="台",
+        price_incl_tax=50.0, quoted_at="2026-08-01", valid_until=past,
+    )
+
+    cmp_res = supplier_mod.compare_product(cid, product_name="工业阀门")
+    grp = cmp_res["unit_groups"][0]
+    names = [r["supplier_name"] for r in grp["suppliers"]]
+    # 顺序：换算更低(107.35) → 原值含税(108) → 换算同价(108) → 无价 → 过期沉底
+    assert names == ["换算更低厂", "原值含税厂", "换算同价厂", "无价厂", "过期低价厂"]
+
+    # O-供2：换算同价厂只报了不含税价(100/110)，含税区间必须为 None（排除换算值）
+    tie_row = next(r for r in grp["suppliers"] if r["supplier_name"] == "换算同价厂")
+    assert tie_row["price_excl_range"] == [100.0, 110.0]
+    assert tie_row["price_incl_range"] is None
+    assert tie_row["latest_quote"]["converted"] is True
+
+    # O-供3：草稿无 quoted_at 时批准后仍留空串，不填批准当天
+    conn = db_mod.get_connection()
+    cur = conn.execute(
+        "INSERT INTO supplier_quote_drafts "
+        "(company_id, supplier_name_raw, product_name, unit, price_excl_tax, quoted_at, source_file, status) "
+        "VALUES (?, '空日期测试厂', '工业阀门', '台', 88.0, '', '/tmp/q.pdf', 'pending')",
+        (cid,),
+    )
+    draft_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    approved = supplier_mod.approve_draft(draft_id, cid)
+    assert approved["quote"]["quoted_at"] == ""
