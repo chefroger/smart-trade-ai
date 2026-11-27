@@ -118,6 +118,72 @@ def gift_fingerprint(direction: str, item: str, gift_date: str, occasion: str) -
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
+_PUNCT_SPACE_RE = re.compile(r"[\s\W_]+", re.UNICODE)
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
+_SYNONYM_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("不要聊", "不谈"),
+    ("不要谈", "不谈"),
+    ("不要提", "不谈"),
+    ("别聊", "不谈"),
+    ("别谈", "不谈"),
+    ("别提", "不谈"),
+    ("避免聊", "不谈"),
+    ("避免谈", "不谈"),
+    ("避免讨论", "不谈"),
+    ("忌聊", "不谈"),
+    ("忌谈", "不谈"),
+    ("忌讳", "不谈"),
+    ("不喜欢聊", "不谈"),
+    ("不喜欢谈", "不谈"),
+    ("话题", ""),
+    ("问题", ""),
+    ("内容", ""),
+)
+
+
+def _semantic_skeleton(text: str) -> str:
+    """提取用于同义去重的归一化语义骨架（去标点空白 + 常见口语同义归一）。"""
+    s = norm(text)
+    if not s:
+        return ""
+    s = _PUNCT_SPACE_RE.sub("", s)
+    for src, dst in _SYNONYM_REPLACEMENTS:
+        if src in s:
+            s = s.replace(src, dst)
+    return s
+
+
+def _is_semantically_duplicate(existing: str, candidate: str) -> bool:
+    """判断两条内容是否语义重复（P6：标点/全半角/常见同义改写去重，不误伤不同数值条款）。"""
+    if norm(existing) == norm(candidate):
+        return True
+    # 若两边包含不同数字/金额/日期（如 30%定金 vs 50%定金、$120 vs $150），绝不判为重复
+    nums_a = _NUMBER_TOKEN_RE.findall(norm(existing))
+    nums_b = _NUMBER_TOKEN_RE.findall(norm(candidate))
+    if (nums_a or nums_b) and nums_a != nums_b:
+        return False
+
+    sa = _semantic_skeleton(existing)
+    sb = _semantic_skeleton(candidate)
+    if not sa or not sb:
+        return False
+    if sa == sb:
+        return True
+
+    short, long = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    if len(short) >= 4 and short in long and (len(short) / len(long)) >= 0.65:
+        return True
+
+    # 2-gram Jaccard 相似度兜底（覆盖语序微调或轻微措辞差异）
+    if len(sa) >= 4 and len(sb) >= 4:
+        bg_a = {sa[i:i + 2] for i in range(len(sa) - 1)}
+        bg_b = {sb[i:i + 2] for i in range(len(sb) - 1)}
+        union = bg_a | bg_b
+        if union and (len(bg_a & bg_b) / len(union)) >= 0.72:
+            return True
+    return False
+
+
 def invalidate_table_cache() -> None:
     """建表后使探表缓存失效。"""
     _TABLE_CACHE.clear()
@@ -1193,11 +1259,25 @@ def _insert_pending_fact(
     source_ref: int | None,
     source_quote: str,
 ) -> bool:
-    """插入待确认事实；重复返回 False。"""
+    """插入待确认事实；字面重复或同 category+subject 下语义重复返回 False。"""
     fp = fact_fingerprint(category, subject, content)
+    norm_subj = norm(subject)
     conn = get_connection()
     try:
         begin_immediate(conn)
+        # P6：同客户、同分类、同主题下已有非作废事实时，做同义去重
+        existing_rows = conn.execute(
+            "SELECT subject, content FROM customer_facts "
+            "WHERE company_id = ? AND customer_id = ? AND category = ? AND status <> '已作废'",
+            (company_id, customer_id, category),
+        ).fetchall()
+        for row in existing_rows:
+            if norm(row["subject"]) == norm_subj and _is_semantically_duplicate(
+                row["content"], content
+            ):
+                conn.commit()
+                return False
+
         cur = conn.execute(
             "INSERT OR IGNORE INTO customer_facts ("
             "company_id, customer_id, attach_to, contact_id, category, subject, "
@@ -1229,11 +1309,23 @@ def _insert_pending_gift(
     source_ref: int | None,
     source_quote: str,
 ) -> bool:
-    """插入待确认礼物。"""
+    """插入待确认礼物；同方向同日期下语义重复返回 False。"""
     fp = gift_fingerprint(direction, item, gift_date, occasion)
     conn = get_connection()
     try:
         begin_immediate(conn)
+        existing_rows = conn.execute(
+            "SELECT item, gift_date FROM customer_gifts "
+            "WHERE company_id = ? AND customer_id = ? AND direction = ? AND status <> '已作废'",
+            (company_id, customer_id, direction),
+        ).fetchall()
+        for row in existing_rows:
+            if (row["gift_date"] or "") == (gift_date or "") and _is_semantically_duplicate(
+                row["item"], item
+            ):
+                conn.commit()
+                return False
+
         cur = conn.execute(
             "INSERT OR IGNORE INTO customer_gifts ("
             "company_id, customer_id, attach_to, contact_id, direction, item, "
