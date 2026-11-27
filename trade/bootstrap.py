@@ -917,6 +917,54 @@ _FRESH_CONFIG_SKELETON = (
 )
 
 
+def ensure_background_review_disabled() -> bool:
+    """默认关闭 Hermes 的 auxiliary.background_review，避免对话结束后静默改写技能文件（U4）。
+
+    - 显式设置环境变量 ``TRADE_ALLOW_SKILL_SELF_IMPROVE=1`` 时跳过（保留可开启能力）；
+    - 仅修改 ``HERMES_HOME/config.yaml`` 的 ``auxiliary.background_review.enabled``，不动 Hermes 源码；
+    - 写盘前留 ``.bak`` 备份，解析或写盘异常只记警告不阻断启动。
+
+    Returns:
+        实际写入修改返回 True，否则 False。
+    """
+    if os.environ.get("TRADE_ALLOW_SKILL_SELF_IMPROVE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }:
+        return False
+
+    from trade.post_install.skills import _get_hermes_home
+
+    config_path = _get_hermes_home() / "config.yaml"
+    original = _read_yaml_simple(config_path)
+    if not original.strip():
+        return False
+
+    data = _try_load_yaml(original)
+    if not isinstance(data, dict):
+        return False
+
+    aux = data.get("auxiliary")
+    if isinstance(aux, dict):
+        br = aux.get("background_review")
+        if isinstance(br, dict) and br.get("enabled") is False:
+            return False  # 已经显式关闭，无需改动
+
+    try:
+        import yaml
+
+        if not isinstance(data.get("auxiliary"), dict):
+            data["auxiliary"] = {}
+        if not isinstance(data["auxiliary"].get("background_review"), dict):
+            data["auxiliary"]["background_review"] = {}
+        data["auxiliary"]["background_review"]["enabled"] = False
+        new_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        _write_yaml_with_backup(config_path, new_text)
+        return True
+    except Exception as exc:
+        print(f"  ⚠️ failed to disable auxiliary.background_review: {exc}")
+        return False
+
+
 def ensure_chat_memory_plugin_enabled() -> None:
     """把 chat-memory 加进 ~/.hermes/config.yaml 的 `plugins.enabled`。
 
@@ -1311,7 +1359,7 @@ def setup():
         # `ensure_document_deps` 会试 Hermes 的 lazy_deps）。这里逐个兜住：
         # 降级模式唯一不可违反的不变量是**服务必须起得来** —— 任一可选项失败都绝不能
         # 把升级界面挡在门外，那会让用户彻底无从下手。
-        for _optional_step in (sync_b2b_skills, sync_chat_memory_plugin, ensure_chat_memory_plugin_enabled, lambda: verify_tool_guard_ready(announce=True), ensure_document_deps, ensure_desktop_integration):
+        for _optional_step in (sync_b2b_skills, sync_chat_memory_plugin, ensure_chat_memory_plugin_enabled, ensure_background_review_disabled, lambda: verify_tool_guard_ready(announce=True), ensure_document_deps, ensure_desktop_integration):
             try:
                 _optional_step()
             except Exception as exc:  # noqa: BLE001 — 见上：降级模式必须走到起服务
@@ -1326,6 +1374,7 @@ def setup():
     sync_b2b_skills()
     sync_chat_memory_plugin()
     ensure_chat_memory_plugin_enabled()
+    ensure_background_review_disabled()
     verify_tool_guard_ready(announce=True)
     ensure_document_deps()
     ensure_desktop_integration()

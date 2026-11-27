@@ -466,7 +466,7 @@ append ONE fenced block at the very end of the reply (never in the middle):
 
 Rules:
 - `facts`: up to 4 key-value cards when you have numbers (quantity / unit price / lead time / historical price).
-- `draft`: optional email draft; never claim it was sent.
+- `draft`: optional email draft; never claim it was sent. **Email signature/sign-off MUST only use our own company/sender info (from Agent Identity) — NEVER put the customer's/recipient's email, phone, or company name in the sender signature block.**
 - `next_actions[].action` may only be `gen_pi` or `customs_lookup`. Do **not** emit `add_todo`.
 - Outside the fence, write normal prose. Only one fence, at the end.
 """

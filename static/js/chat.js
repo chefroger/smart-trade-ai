@@ -1376,22 +1376,41 @@ function _handleNextAction(action) {
     _fillChatInput(prompt);
 }
 
+let _chatHistoryReqSeq = 0;
+
 async function loadChatHistory() {
     if (!currentCompanyId) return;
     const ct = currentChatContainer;
     if (!ct) return;
+    // U1：记录请求快照与序号，避免从日常/引导页切到文档库时，慢返回的日常历史覆盖文档库视图
+    const reqSeq = ++_chatHistoryReqSeq;
+    const reqCid = currentCompanyId;
+    const reqCtx = currentChatContext || '';
+    const reqLib = currentLibraryId;
     // 文档库视图按 library_id 过滤；统一对话（daily）按时间流汇总原 8 个入口历史
-    const isUnified = currentChatContext === 'daily';
-    const ctx = encodeURIComponent(currentChatContext || '');
-    const params = currentLibraryId
-        ? `?library_id=${currentLibraryId}&limit=30`
-        : (isUnified ? '?limit=30' : `?context=${ctx}&limit=30`);
+    const isUnified = reqCtx === 'daily';
+    const ctx = encodeURIComponent(reqCtx);
+    const params = reqLib
+        ? ('?library_id=' + encodeURIComponent(reqLib) + '&limit=30')
+        : (isUnified ? '?limit=30' : ('?context=' + ctx + '&limit=30'));
     const rawData = await api('GET', `/api/trade/conversations${params}`);
+    // 竞态守卫：公司、视图上下文、文档库或容器已变更时丢弃旧响应
+    if (
+        reqSeq !== _chatHistoryReqSeq ||
+        currentCompanyId !== reqCid ||
+        (currentChatContext || '') !== reqCtx ||
+        currentLibraryId !== reqLib ||
+        currentChatContainer !== ct
+    ) {
+        return;
+    }
     if (!rawData || !rawData.length) return;
-    // 统一对话流剔除绑定了文档库的纯文档库问答，避免与「文档库」入口重复
+    // 统一对话流剔除绑定了文档库的纯文档库问答；文档库视图严格只保留 docs 上下文或当前库记录
     const data = isUnified
         ? rawData.filter(function (c) { return !(c.context === 'docs' && c.library_id); })
-        : rawData;
+        : (reqCtx === 'docs' && !reqLib
+            ? rawData.filter(function (c) { return c.context === 'docs'; })
+            : rawData);
     if (!data.length) return;
     const container = ct.querySelector('#chat-messages');
     if (!container) return;
