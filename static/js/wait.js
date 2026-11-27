@@ -71,7 +71,16 @@
       this.raf = 0;
       if (ts - this.last >= FRAME_MS) {
         this.last = ts;
-        this.list.forEach(function (w) { if (w.animating && w.visible && !w.three) w._frame(ts); });
+        this.list.forEach(function (w) {
+          if (!w.animating || !w.visible || w.three) return;
+          try {
+            w._frame(ts);
+          } catch (e) {
+            // O-等待2：单实例 _frame 异常降级为静态，避免拖垮共享 rAF 循环
+            w.animating = false;
+            if (w.root && w.root.classList) w.root.classList.add('is-static');
+          }
+        });
       }
       this.kick();
     }
@@ -499,7 +508,8 @@
     this.phase(o.phase || 'acquired', o.zh);
     this.final = true;
     this.root.classList.add('is-final');
-    this.cancelBtn.disabled = true; this.cancelBtn.textContent = o.phase === 'aborted' ? '已停止' : '完成';
+    this.cancelBtn.disabled = true;
+    this.cancelBtn.textContent = o.phase === 'aborted' ? '已停止' : (o.phase === 'failed' ? '已失败' : '完成');
     if (this.verdictEl && o.verdict) {
       this.verdictEl.textContent = 'CONCLUSION:';
       var tag = el('span', 'tag' + (/高|严重|high/i.test(o.verdict) ? '' : ' neutral'), redact(o.verdict));

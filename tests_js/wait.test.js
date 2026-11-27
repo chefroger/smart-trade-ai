@@ -284,3 +284,60 @@ test('finish 之后 phase 不再改文案（W15 O-24）', () => {
   assert.strictEqual(wait.zhEl.textContent, before);
   wait.destroy();
 });
+
+test('O-等待1：failed 终态按钮文案为「已失败」，aborted 为「已停止」，成功类为「完成」', () => {
+  const env = loadComponent();
+
+  const wFail = mountTask(env).wait;
+  wFail.push({ type: 'error', message: 'boom' });
+  assert.strictEqual(wFail.phaseKey, 'failed');
+  assert.strictEqual(wFail.cancelBtn.disabled, true);
+  assert.strictEqual(wFail.cancelBtn.textContent, '已失败');
+  wFail.destroy();
+
+  const wAbort = mountTask(env).wait;
+  wAbort.finish({ phase: 'aborted' });
+  assert.strictEqual(wAbort.cancelBtn.textContent, '已停止');
+  wAbort.destroy();
+
+  ['acquired', 'partial', 'done'].forEach((ph) => {
+    const wOk = mountTask(env).wait;
+    wOk.finish({ phase: ph });
+    assert.strictEqual(wOk.cancelBtn.textContent, '完成', `终态 ${ph} 应显示完成`);
+    wOk.destroy();
+  });
+});
+
+test('O-等待2：2D 共享引擎单实例 _frame 抛错时降级该实例，不阻塞其余实例动画', () => {
+  const env = loadComponent();
+  const broken = mountTask(env).wait;
+  const healthy = mountTask(env).wait;
+
+  let brokenCalls = 0;
+  let healthyCalls = 0;
+  broken._frame = () => {
+    brokenCalls++;
+    throw new Error('canvas draw failed');
+  };
+  healthy._frame = () => {
+    healthyCalls++;
+  };
+
+  assert.strictEqual(broken.animating, true);
+  assert.strictEqual(healthy.animating, true);
+
+  assert.doesNotThrow(() => env.SW._engine.tick(100));
+  assert.strictEqual(brokenCalls, 1);
+  assert.strictEqual(broken.animating, false, '抛错实例应降为静态');
+  assert.strictEqual(broken.root.classList.contains('is-static'), true);
+  assert.strictEqual(healthyCalls, 1, '正常实例应照常执行');
+  assert.strictEqual(healthy.animating, true);
+
+  // 下一帧：降级实例不再触发，正常实例继续运行
+  assert.doesNotThrow(() => env.SW._engine.tick(200));
+  assert.strictEqual(brokenCalls, 1);
+  assert.strictEqual(healthyCalls, 2);
+
+  broken.destroy();
+  healthy.destroy();
+});

@@ -1958,10 +1958,9 @@ function _positionOsintDock(root) {
         return;
     }
     const r = ref.getBoundingClientRect();
-    const dockW = Math.min(460, Math.max(280, Math.round(r.width)));
     root.style.right = 'auto';
-    root.style.left = Math.max(12, Math.round(r.right - dockW)) + 'px';
-    root.style.width = dockW + 'px';
+    root.style.left = Math.round(r.left) + 'px';
+    root.style.width = Math.round(r.width) + 'px';
     root.style.bottom = Math.max(12, Math.round(window.innerHeight - r.top + 12)) + 'px';
 }
 
