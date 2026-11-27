@@ -2016,6 +2016,15 @@ body.profile-open #main-content > .empty-state { display: none !important; }
     margin: 6px 0 0 0 !important; padding: 6px 8px !important;
     text-align: left !important; line-height: 1.5 !important;
 }
+/* 侧栏图标按钮处于 TradeWait.inline 忙态时，放开 22×22 固定宽高并独占一行左对齐，避免文字被裁切或竖排叠在图标上 */
+.sidebar-footer button.is-waiting,
+.sidebar-footer button:has(.sw-inline) {
+    flex: 1 1 100% !important; width: auto !important; height: auto !important;
+    min-height: 22px !important; justify-content: flex-start !important;
+    padding: 2px 0 !important; opacity: 0.85;
+}
+.sidebar-footer button.is-waiting::after,
+.sidebar-footer button:has(.sw-inline)::after { display: none; }
 
 /* 原句浮层：hover 即在卡片下方浮出（点击展开仍保留） */
 #customer-wall .profile-fact, #customer-profile .profile-fact { position: relative; }

@@ -453,9 +453,10 @@ def test_a9_csv_template_download_and_bulk_import(env):
     cid = env["co_a"]["id"]
     hdr = env["headers"](cid)
 
-    # 下载 CSV 模板
+    # 下载 CSV 模板（必须带 UTF-8 BOM，避免 macOS/Windows Excel 打开中文乱码）
     r_tpl = client.get("/api/trade/suppliers/template", headers=hdr)
     assert r_tpl.status_code == 200
+    assert r_tpl.content.startswith(b"\xef\xbb\xbf")
     assert "供应商名称*" in r_tpl.text
 
     csv_body = (

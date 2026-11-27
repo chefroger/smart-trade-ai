@@ -549,8 +549,13 @@
     s.appendChild(el('span', 'tri')); s.appendChild(el('span', 'w', o.en || 'WORKING'));
     if (o.zh) s.appendChild(el('span', 'zh', o.zh));
     target.textContent = ''; target.appendChild(s);
+    target.classList.add('is-waiting');
     if (o.disable !== false && 'disabled' in target) target.disabled = true;
-    return function restore() { target.innerHTML = prev; if ('disabled' in target) target.disabled = wasDisabled; };
+    return function restore() {
+      target.classList.remove('is-waiting');
+      target.innerHTML = prev;
+      if ('disabled' in target) target.disabled = wasDisabled;
+    };
   }
 
   // ── 顶栏真实任务状态（替代装饰轮播；只用真实事件，空闲时还原）──────────

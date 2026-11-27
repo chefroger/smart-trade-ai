@@ -85,7 +85,7 @@
 .sw.is-final .sw-phrase .w::after { content: ""; }
 
 /* ── 模式三：内联（按钮 / 状态行：导入中、测试连接中、拉取中…）── */
-.sw-inline { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink); }
+.sw-inline { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink); white-space: nowrap; }
 .sw-inline .tri { animation: swTri .8s alternate infinite linear; }
 .sw-inline .zh { letter-spacing: .04em; text-transform: none; font-family: var(--sans); color: var(--ink-2); }
 .sw-inline .w::after { content: "_"; animation: swBlink 1s steps(1) infinite; }
