@@ -52,6 +52,11 @@ function _spFormatPriceCell(value, currency, isConverted) {
     return '<span class="sp-num">' + cur + ' ' + num + '</span>' + badge;
 }
 
+function _spFormatQuotedAt(val) {
+    const text = (val === null || val === undefined) ? '' : String(val).trim();
+    return text ? esc(text) : '<span class="sp-mut">日期未注明</span>';
+}
+
 function _spBuildDirectoryRowsHtml(items) {
     if (!items || !items.length) {
         return '<tr><td colspan="7"><div class="sp-state"><h3>暂无供应商</h3><p>点击右上角「新建供应商」，或前往「导入与确认」通过 CSV 模板批量导入。</p></div></td></tr>';
@@ -111,7 +116,7 @@ function _spBuildCompareGroupsHtml(result) {
                 + '<td>' + _spFormatPriceCell(lq.price_excl_tax, lq.currency, lq.price_excl_tax_converted) + '</td>'
                 + '<td>' + _spFormatPriceCell(lq.price_incl_tax, lq.currency, lq.price_incl_tax_converted) + '</td>'
                 + '<td><div>' + rangeText + '</div><div class="rsub">共 ' + esc(String(row.quote_count || 0)) + ' 条</div></td>'
-                + '<td>' + esc(lq.quoted_at || '—') + expTag + '</td>'
+                + '<td>' + _spFormatQuotedAt(lq.quoted_at) + expTag + '</td>'
                 + '</tr>';
         }).join('');
         parts.push(
@@ -362,7 +367,7 @@ function _spRenderDetail(body, d) {
                 + '<td><b>' + esc(q.product_name) + '</b>' + (q.spec_model ? '<div class="rsub">' + esc(q.spec_model) + '</div>' : '') + '</td>'
                 + '<td>' + _spFormatPriceCell(q.price_excl_tax, q.currency, false) + '</td>'
                 + '<td>' + _spFormatPriceCell(q.price_incl_tax, q.currency, false) + '</td>'
-                + '<td>' + esc(q.quoted_at || '—') + expTag + (q.valid_until ? '<div class="rsub">有效期：' + esc(q.valid_until) + '</div>' : '') + '</td>'
+                + '<td>' + _spFormatQuotedAt(q.quoted_at) + expTag + (q.valid_until ? '<div class="rsub">有效期：' + esc(q.valid_until) + '</div>' : '') + '</td>'
                 + '<td><span class="' + srcCls + '">' + esc(q.source || 'manual') + '</span></td>'
                 + '<td><button type="button" class="sp-lnk" data-sp-edit-quote="' + esc(String(q.id)) + '">编辑</button> '
                 + '<button type="button" class="sp-lnk danger" data-sp-del-quote="' + esc(String(q.id)) + '">删除</button></td>'
@@ -703,7 +708,7 @@ function _spRenderDraftsList(panel) {
                 + '<div><div class="k">币种</div><div class="v">' + esc(d.currency || 'CNY') + '</div></div>'
                 + '<div><div class="k">不含税价</div><div class="v">' + _spFormatPriceCell(d.price_excl_tax, d.currency, false) + '</div></div>'
                 + '<div><div class="k">含税价</div><div class="v">' + _spFormatPriceCell(d.price_incl_tax, d.currency, false) + '</div></div>'
-                + '<div><div class="k">报价日期</div><div class="v">' + esc(d.quoted_at || '—') + '</div></div>'
+                + '<div><div class="k">报价日期</div><div class="v">' + _spFormatQuotedAt(d.quoted_at) + '</div></div>'
                 + '<div><div class="k">有效期</div><div class="v">' + esc(d.valid_until || '—') + '</div></div>'
                 + '</div>'
                 + '<div class="ex"><span class="sp-lbl">原文摘录</span><q>' + esc(d.raw_excerpt || '（无摘录）') + '</q>'

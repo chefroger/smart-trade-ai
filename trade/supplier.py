@@ -1091,8 +1091,19 @@ def compare_product(
             for unit_key, u_quotes in by_unit.items():
                 # 报价已按 quoted_at DESC, id DESC 排好，第 0 条即最近报价
                 latest = u_quotes[0]
-                excl_vals = [q["price_excl_tax"] for q in u_quotes if q.get("price_excl_tax") is not None]
-                incl_vals = [q["price_incl_tax"] for q in u_quotes if q.get("price_incl_tax") is not None]
+                # O-供2：价格区间仅统计原值，排除换算侧，与最低价口径一致
+                excl_vals = [
+                    q["price_excl_tax"]
+                    for q in u_quotes
+                    if q.get("price_excl_tax") is not None
+                    and not q.get("price_excl_tax_converted")
+                ]
+                incl_vals = [
+                    q["price_incl_tax"]
+                    for q in u_quotes
+                    if q.get("price_incl_tax") is not None
+                    and not q.get("price_incl_tax_converted")
+                ]
                 # 优先取匹配单位的能力行，否则取该供应商首条能力行
                 matched_prod = next(
                     (p for p in sup_entry["products"] if _norm_text(p.get("unit")) == unit_key),
@@ -1122,12 +1133,18 @@ def compare_product(
 
             def _sort_key(item: dict) -> tuple:
                 lq = item["latest_quote"]
-                # 未过期的排在前面；同为有效时按不含税价、再按含税价升序
+                # O-供1：过期仍沉底；组内统一按含税价（原值优先，无原值用换算值）升序；
+                # 无含税价（仅不含税且无加点）排在含税价之后，无任何价格的行排最后
                 expired_rank = 1 if lq.get("expired") else 0
-                p_excl = lq.get("price_excl_tax")
                 p_incl = lq.get("price_incl_tax")
-                price_rank = p_excl if p_excl is not None else (p_incl if p_incl is not None else float("inf"))
-                return (expired_rank, price_rank, item["supplier_id"])
+                p_excl = lq.get("price_excl_tax")
+                if p_incl is not None:
+                    # 原值优先于换算值（同价时原值排前）
+                    conv_rank = 1 if lq.get("price_incl_tax_converted") else 0
+                    return (expired_rank, 0, float(p_incl), conv_rank, item["supplier_id"])
+                if p_excl is not None:
+                    return (expired_rank, 1, float(p_excl), 0, item["supplier_id"])
+                return (expired_rank, 2, float("inf"), 0, item["supplier_id"])
 
             sup_rows.sort(key=_sort_key)
 
@@ -1743,7 +1760,8 @@ def approve_draft(draft_id: int, company_id: int) -> dict | None:
             )
             prod_id = int(cur_p.lastrowid)
 
-        quoted_date = _norm_text(draft.get("quoted_at")) or date.today().isoformat()
+        # O-供3：草稿未注明报价日期时留空字符串，不再填批准当天
+        quoted_date = _norm_text(draft.get("quoted_at"))
         cur_q = conn.execute(
             "INSERT INTO supplier_quotes ("
             "company_id, supplier_id, supplier_product_id, product_name, spec_model, unit, "

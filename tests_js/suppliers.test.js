@@ -12,7 +12,7 @@ function loadSuppliersUi() {
     const esc = (s) => String(s || '').replace(/[&<>"']/g, (ch) => escMap[ch]);
     return loadRegion(
         'suppliers-ui',
-        '{ _spBuildDirectoryRowsHtml, _spBuildCompareGroupsHtml, _spFormatSelfProduced, _spFormatPriceCell }',
+        '{ _spBuildDirectoryRowsHtml, _spBuildCompareGroupsHtml, _spFormatSelfProduced, _spFormatPriceCell, _spFormatQuotedAt }',
         { esc },
     );
 }
@@ -105,4 +105,39 @@ test('比价视图：按不同单位分组展示、自产三态、换算标记�
     assert.match(html, /CNY 108<\/span><span class="sp-conv">换算<\/span>/);
     assert.match(html, /is-expired/);
     assert.match(html, /已过期/);
+});
+
+test('O-供3：空报价日期在前端显示「日期未注明」', () => {
+    const ui = loadSuppliersUi();
+    assert.match(ui._spFormatQuotedAt(''), /日期未注明/);
+    assert.match(ui._spFormatQuotedAt(null), /日期未注明/);
+    assert.equal(ui._spFormatQuotedAt('2026-11-20'), '2026-11-20');
+
+    const html = ui._spBuildCompareGroupsHtml({
+        product_name: '工业阀门',
+        unit_groups: [
+            {
+                unit: '台',
+                lowest_excl_tax: 88,
+                lowest_incl_tax: null,
+                suppliers: [
+                    {
+                        supplier_name: '空日期厂',
+                        product: { is_self_produced: 2 },
+                        latest_quote: {
+                            currency: 'CNY',
+                            price_excl_tax: 88,
+                            price_incl_tax: null,
+                            quoted_at: '',
+                            expired: false,
+                        },
+                        quote_count: 1,
+                        price_excl_range: [88, 88],
+                    },
+                ],
+            },
+        ],
+        no_quote_suppliers: [],
+    });
+    assert.match(html, /日期未注明/);
 });
