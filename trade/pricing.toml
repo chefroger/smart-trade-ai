@@ -1,0 +1,73 @@
+# Trade AI Assistant — 模型价格与时段配置文件（单位：美元 / 1M tokens）
+#
+# 官方来源 URL：https://api-docs.deepseek.com/quick_start/pricing
+# 查阅日期：2026-11-27
+#
+# 说明：
+# - DeepSeek 闲时价为高峰价的一半。
+# - 高峰时段：UTC 01:00-04:00 与 06:00-10:00，周一至周五，中国法定节假日除外
+#   （折合北京时间 09:00-12:00 与 14:00-18:00）。其余时间为闲时。
+# - holidays 为空时按工作日规则判定，可能将法定节假日误算为高峰（只会高估，不会低估）。
+# - 可通过环境变量 TRADE_PRICING_FILE 指向自定义 TOML，或通过 TRADE_PRICE_<MODEL> 覆盖单模型价格。
+
+[meta]
+verified_at = "2026-11-27"
+source_url = "https://api-docs.deepseek.com/quick_start/pricing"
+currency = "USD"
+stale_days = 90
+
+[windows.deepseek]
+# UTC weekday: 0=周一 .. 4=周五（周六=5、周日=6 全天闲时）
+peak_weekdays = [0, 1, 2, 3, 4]
+# 左闭右开小时区间（UTC）
+peak_utc_ranges = [[1, 4], [6, 10]]
+# 中国法定节假日（YYYY-MM-DD）；未配置时按工作日规则判定（仅可能高估，不会低估）
+holidays = []
+
+[models."deepseek-flash"]
+window_group = "deepseek"
+[models."deepseek-flash".peak]
+cache_hit = 0.006
+cache_miss = 0.30
+output = 1.20
+[models."deepseek-flash".offpeak]
+cache_hit = 0.003
+cache_miss = 0.15
+output = 0.60
+
+[models."deepseek-v4-pro"]
+window_group = "deepseek"
+[models."deepseek-v4-pro".peak]
+cache_hit = 0.044
+cache_miss = 1.32
+output = 3.96
+[models."deepseek-v4-pro".offpeak]
+cache_hit = 0.022
+cache_miss = 0.66
+output = 1.98
+
+# 兼容既有默认费率（不分时段）
+[models."deepseek-chat"]
+cache_hit = 0.27
+cache_miss = 0.27
+output = 1.10
+
+[models."deepseek-reasoner"]
+cache_hit = 0.55
+cache_miss = 0.55
+output = 2.19
+
+[models."gpt-4o-mini"]
+cache_hit = 0.15
+cache_miss = 0.15
+output = 0.60
+
+[models."gpt-4o"]
+cache_hit = 2.50
+cache_miss = 2.50
+output = 10.00
+
+[models."claude-3-5-haiku"]
+cache_hit = 0.80
+cache_miss = 0.80
+output = 4.00

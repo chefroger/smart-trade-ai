@@ -1541,7 +1541,7 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
             )
             messages = [{"role": "user", "content": prompt}]
             try:
-                raw_out = await doc_extract._call_model(
+                raw_out, usage_obj = await doc_extract._call_model_with_usage(
                     messages,
                     provider=provider,
                     model=model,
@@ -1551,6 +1551,15 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
                 _log.warning("供应商报价抽取调用模型失败（%s）：%s", source_file, exc)
                 failed.append({"file": source_file, "error": f"model_error: {exc}"})
                 continue
+
+            # 供应商抽取记账（skill='supplier-extract'，失败只打日志不影响抽取）
+            doc_extract._record_extract_usage(
+                usage_obj,
+                skill="supplier-extract",
+                provider=provider,
+                model=model,
+                company_id=company_id,
+            )
 
             obj = doc_extract._parse_json_object(raw_out)
             # 模型返回无法解析为合法 JSON 时归入失败清单

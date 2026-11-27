@@ -713,3 +713,81 @@ def test_b11_o_fixes_compare_sort_range_and_draft_date(env):
 
     approved = supplier_mod.approve_draft(draft_id, cid)
     assert approved["quote"]["quoted_at"] == ""
+
+
+# ==============================================================================
+# 工单 #3：供应商 AI 抽取 token 记账
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_extract_records_usage_ledger(env, monkeypatch, tmp_path):
+    """给 async_call_llm 打桩返回带 usage 对象，断言账本出现 skill='supplier-extract' 行。"""
+    import sys as _sys
+    import types as _types
+    from types import SimpleNamespace
+
+    from trade import usage as usage_mod
+
+    cid = env["co_a"]["id"]
+    # 虚构测试报价单文件（仅用于单元测试）
+    sample = tmp_path / "fictional_quote.txt"
+    sample.write_text("虚构测试厂\n测试件A 单价 12 元/件\n", encoding="utf-8")
+
+    fake_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "quotes": [
+                                {
+                                    "supplier_name": "虚构测试厂",
+                                    "product_name": "测试件A",
+                                    "unit": "件",
+                                    "price_excl_tax": 12.0,
+                                    "price_incl_tax": None,
+                                    "currency": "CNY",
+                                    "raw_excerpt": "测试件A 单价 12 元/件",
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=1500,
+            completion_tokens=200,
+            prompt_cache_hit_tokens=1200,
+            prompt_cache_miss_tokens=300,
+        ),
+    )
+
+    async def _fake_async_call_llm(**_kwargs):
+        return fake_response
+
+    fake_agent_pkg = _types.ModuleType("agent")
+    fake_aux_mod = _types.ModuleType("agent.auxiliary_client")
+    fake_aux_mod.async_call_llm = _fake_async_call_llm
+    monkeypatch.setitem(_sys.modules, "agent", fake_agent_pkg)
+    monkeypatch.setitem(_sys.modules, "agent.auxiliary_client", fake_aux_mod)
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+
+    res = await supplier_mod.extract_files_to_drafts(cid, [str(sample)])
+    assert res["drafts_created"] == 1
+
+    conn = db_mod.get_connection()
+    try:
+        assert usage_mod.tokens_today(conn, cid) == 1700
+        row = conn.execute(
+            "SELECT skill, provider, model, prompt_tokens, completion_tokens, "
+            "cache_hit_tokens, cache_miss_tokens FROM usage_ledger WHERE company_id = ?",
+            (cid,),
+        ).fetchone()
+        assert tuple(row) == ("supplier-extract", "deepseek", "deepseek-flash", 1500, 200, 1200, 300)
+    finally:
+        conn.close()

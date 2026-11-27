@@ -252,6 +252,10 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     model             TEXT    NOT NULL DEFAULT '',
     prompt_tokens     INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_hit_tokens  INTEGER NOT NULL DEFAULT 0,
+    cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+    price_window      TEXT    NOT NULL DEFAULT '',
+    currency          TEXT    NOT NULL DEFAULT 'USD',
     cost_usd          REAL    NOT NULL DEFAULT 0,
     extra1            TEXT    NOT NULL DEFAULT '',
     extra2            TEXT    NOT NULL DEFAULT '',
@@ -1024,7 +1028,7 @@ _EXPECTED_TABLES = frozenset({
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
-_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5})
+_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 
 
 def _needs_schema_work(conn: sqlite3.Connection) -> bool:
@@ -1199,6 +1203,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
         (4, "osint_facts_verified", ""),
         # v5：待办 reason 列（P2）
         (5, "todos_reason", ""),
+        # v6：usage_ledger 缓存命中/未命中、高峰闲时与币种列（工单 #8）
+        (6, "usage_ledger_cache_and_window", ""),
     ]
 
     # 获取已应用的版本
@@ -1218,6 +1224,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
             _migrate_osint_facts_verified_v4(conn)
         elif version == 5:
             _migrate_todos_reason_v5(conn)
+        elif version == 6:
+            _migrate_usage_ledger_pricing_v6(conn)
         else:
             conn.executescript(sql)
         conn.execute(
@@ -1354,6 +1362,27 @@ def _migrate_todos_reason_v5(conn: sqlite3.Connection) -> None:
         return
     if cols and "reason" not in cols:
         conn.execute("ALTER TABLE todos ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+
+
+def _migrate_usage_ledger_pricing_v6(conn: sqlite3.Connection) -> None:
+    """迁移 6：usage_ledger 补 cache_hit_tokens / cache_miss_tokens / price_window / currency。"""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(usage_ledger)")}
+    except sqlite3.Error:
+        return
+    # 表尚未创建时跳过（新库 SCHEMA_SQL 已含全部列）
+    if not cols:
+        return
+    additions = [
+        ("cache_hit_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cache_miss_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("price_window", "TEXT NOT NULL DEFAULT ''"),
+        ("currency", "TEXT NOT NULL DEFAULT 'USD'"),
+    ]
+    for col, col_def in additions:
+        # 仅当列缺失时执行 ALTER，保证老库幂等升级
+        if col not in cols:
+            conn.execute(f"ALTER TABLE usage_ledger ADD COLUMN {col} {col_def}")
 
 
 def init_db() -> Path:
