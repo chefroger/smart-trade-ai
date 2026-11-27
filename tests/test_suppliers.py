@@ -605,7 +605,7 @@ async def test_a11_ai_extract_no_fabrication_and_tristate_default(env, tmp_path)
 
 
 def test_a12_no_supplier_leak_into_chat_copilot_or_brand_safety():
-    """A12：对外路径（chat / copilot / helpers / prompt / brand safety）不得注入供应商或报价数据。"""
+    """A12（第二批扩展）：对外路径（chat / copilot / draft / helpers / prompt / brand safety）不得引用供应商或采购询价模块。"""
     root = Path(__file__).resolve().parent.parent
     protected_files = [
         root / "trade" / "api" / "chat.py",
@@ -613,14 +613,28 @@ def test_a12_no_supplier_leak_into_chat_copilot_or_brand_safety():
         root / "trade" / "prompt.py",
         root / "trade" / "prompts.py",
         root / "trade" / "api" / "copilot.py",
+        root / "trade" / "copilot" / "draft.py",
+        root / "trade" / "copilot" / "context.py",
+        root / "trade" / "copilot" / "service.py",
+        root / "trade" / "opener.py",
     ]
-    forbidden_tokens = ("supplier_quotes", "supplier_products", "supplier_quote_drafts", "trade.supplier")
+    forbidden_tokens = (
+        "supplier_quotes",
+        "supplier_products",
+        "supplier_quote_drafts",
+        "trade.supplier",
+        "trade.rfq",
+        "rfq_responses",
+        "handle_supplier_quote_search",
+        "handle_supplier_compare",
+        "handle_supplier_list",
+    )
     for path in protected_files:
         if not path.is_file():
             continue
         src = path.read_text(encoding="utf-8")
         for token in forbidden_tokens:
-            assert token not in src, f"{path.name} 不得引用 {token}（A12 对外隔离约束）"
+            assert token not in src, f"{path.name} 不得引用 {token}（A12/B9 对外隔离约束）"
 
 
 # ==============================================================================

@@ -29,6 +29,7 @@ from trade.api.onboarding import router as onboarding_router
 from trade.api.orders import router as orders_router
 from trade.api.osint_jobs import router as osint_jobs_router
 from trade.api.profile import router as profile_router
+from trade.api.rfqs import router as rfqs_router
 from trade.api.suppliers import router as suppliers_router
 from trade.api.templates import router as templates_router
 from trade.api.todos import router as todos_router
@@ -118,6 +119,7 @@ router.include_router(visit_plans_router)
 router.include_router(todos_router)
 router.include_router(osint_jobs_router)
 router.include_router(suppliers_router)
+router.include_router(rfqs_router)
 
 # 便捷导出
 __all__ = [

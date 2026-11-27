@@ -2242,6 +2242,8 @@ body.profile-open #main-content > .empty-state { display: none !important; }
 tr.is-expired td, .is-expired .sp-num { color: var(--muted); }
 tr.is-expired td .sp-num { text-decoration: line-through; text-decoration-color: rgba(12,13,14,.4); }
 tr.is-expired { background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(12,13,14,.035) 6px 7px); }
+tr.sp-rfq-sel { background: rgba(20, 120, 72, .08); }
+tr.sp-rfq-sel td:first-child { border-left: 3px solid var(--accent); }
 .sp-src { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); }
 .sp-src.ai { color: var(--ink); border: 1px dashed var(--ink); padding: 0 4px; }
 .sp-lnk { font-size: 11.5px; color: var(--muted); border: none; border-bottom: 1px dashed var(--line-strong); background: none; padding: 0; cursor: pointer; }

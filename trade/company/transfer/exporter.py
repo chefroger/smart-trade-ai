@@ -392,6 +392,17 @@ def export_company(company_id: int, dest_zip: Path | None = None,
                     "SELECT * FROM supplier_quotes WHERE company_id = ?",
                     (company_id,),
                 ),
+                # 供应商管理一期 · 第二批（采购询价两表）
+                "rfqs": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM rfqs WHERE company_id = ?",
+                    (company_id,),
+                ),
+                "rfq_responses": _safe_table_rows(
+                    conn,
+                    "SELECT * FROM rfq_responses WHERE company_id = ?",
+                    (company_id,),
+                ),
             }
             schema_version = _schema_version(conn)
         finally:
