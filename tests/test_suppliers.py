@@ -960,3 +960,86 @@ async def test_extract_draft_edit_and_approve_preserves_moq(env, monkeypatch, tm
     app_y = supplier_mod.approve_draft(d_y["id"], cid)
     assert app_x["quote"]["moq"] == 800.0
     assert app_y["quote"]["moq"] is None
+
+
+# ==============================================================================
+# 工单 #5：AI 抽取后台作业接口（真实逐文件进度 + 取消 + 公司隔离）
+# ==============================================================================
+
+
+def test_extract_background_job_progress_and_isolation(env, monkeypatch, tmp_path):
+    """后台抽取 5 个虚构文件：轮询可见真实进度事件，完成后产出结果，跨公司查询 404。"""
+    import time as _time
+
+    cid_a = env["co_a"]["id"]
+    cid_b = env["co_b"]["id"]
+    client = env["client"]
+
+    folder = tmp_path / "fictional_batch5"
+    folder.mkdir()
+    for i in range(1, 6):
+        (folder / f"quote_{i}.txt").write_text(f"虚构厂{i}\n件{i} 1{i}元/个\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+
+    async def _fake_model(messages, **_kw):
+        return json.dumps(
+            {
+                "quotes": [
+                    {
+                        "supplier_name": "虚构批量厂",
+                        "product_name": "批量测试件",
+                        "unit": "个",
+                        "price_excl_tax": 10.0,
+                        "moq": 100,
+                        "raw_excerpt": "批量测试件 10元/个",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(doc_extract, "_call_model", _fake_model)
+
+    start_resp = client.post(
+        "/api/trade/suppliers/extract/jobs",
+        headers=env["headers"](cid_a),
+        json={"paths": [str(folder)]},
+    )
+    assert start_resp.status_code == 200
+    job_id = start_resp.json()["job_id"]
+
+    # 跨公司查作业必须 404（先解除会话公司绑定再以公司 B 身份请求）
+    deps_mod._ACTIVE_COMPANY.clear()
+    cross = client.get(
+        f"/api/trade/suppliers/extract/jobs/{job_id}",
+        headers=env["headers"](cid_b),
+    )
+    assert cross.status_code == 404
+    deps_mod._ACTIVE_COMPANY.clear()
+
+    # 轮询直到完成
+    final_job = None
+    deadline = _time.time() + 10.0
+    while _time.time() < deadline:
+        st = client.get(
+            f"/api/trade/suppliers/extract/jobs/{job_id}",
+            headers=env["headers"](cid_a),
+        )
+        assert st.status_code == 200
+        data = st.json()
+        if data["status"] in ("done", "failed", "cancelled"):
+            final_job = data
+            break
+        _time.sleep(0.05)
+
+    assert final_job is not None
+    assert final_job["status"] == "done"
+    assert final_job["total"] == 5
+    assert final_job["done"] == 5
+    assert final_job["result"]["drafts_created"] == 5
+    ev_types = [e["type"] for e in final_job["events"]]
+    assert ev_types.count("file_start") == 5
+    assert ev_types.count("file_done") == 5

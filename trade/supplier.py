@@ -1522,8 +1522,27 @@ def _expand_input_paths(raw_paths: list[str]) -> tuple[list[Path], list[dict]]:
     return files, failed
 
 
-async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dict:
-    """从选定的文件/文件夹抽取供应商报价到草稿确认区（绝不直接写正式表）。"""
+async def extract_files_to_drafts(
+    company_id: int,
+    file_paths: list[str],
+    *,
+    on_progress: Any = None,
+    should_cancel: Any = None,
+) -> dict:
+    """从选定的文件/文件夹抽取供应商报价到草稿确认区（绝不直接写正式表）。
+
+    支持可选回调 on_progress(event_dict) 与 should_cancel() -> bool，
+    供后台长任务作业上报真实逐文件进度与响应取消（工单 #5）。
+    """
+    import time as _time
+
+    def _emit(ev: dict) -> None:
+        if callable(on_progress):
+            try:
+                on_progress(ev)
+            except Exception:  # noqa: BLE001 — 进度回调异常不影响抽取主流程
+                pass
+
     # 先解析用户配置的抽取模型；未配置时直接报错返回
     resolved = doc_extract.resolve_extraction_model()
     if resolved is None:
@@ -1532,6 +1551,14 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
 
     files, failed = _expand_input_paths(file_paths)
     created_drafts: list[dict] = []
+    processed_count = 0
+    cancelled = False
+
+    _emit({
+        "type": "job_start",
+        "total": len(files),
+        "skipped": len(failed),
+    })
 
     conn = get_connection()
     try:
@@ -1542,24 +1569,43 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
         ).fetchall()
         sup_by_name = {r["name"].strip().lower(): int(r["id"]) for r in sup_rows}
 
-        for fpath in files:
+        for idx, fpath in enumerate(files, start=1):
+            # 响应后台作业取消：保留已生成的草稿并立即结束循环
+            if callable(should_cancel) and should_cancel():
+                cancelled = True
+                break
+
             source_file = str(fpath)
+            file_key = f"file_{idx}"
+            t0 = _time.monotonic()
+            _emit({
+                "type": "file_start",
+                "source": file_key,
+                "label": fpath.name,
+                "index": idx,
+                "total": len(files),
+            })
             parsed = doc_extract.parse_document(fpath)
             # 复用 doc_extract 的确定性失败分类，单文件失败不阻塞整批
             if parsed.unsupported:
                 failed.append({"file": source_file, "error": "unsupported_type"})
+                _emit({"type": "file_done", "source": file_key, "label": fpath.name, "status": "error", "ms": int((_time.monotonic() - t0) * 1000), "index": idx, "total": len(files)})
                 continue
             if parsed.error:
                 failed.append({"file": source_file, "error": f"parse_error: {parsed.error}"})
+                _emit({"type": "file_done", "source": file_key, "label": fpath.name, "status": "error", "ms": int((_time.monotonic() - t0) * 1000), "index": idx, "total": len(files)})
                 continue
             if parsed.needs_ocr:
                 failed.append({"file": source_file, "error": "needs_ocr"})
+                _emit({"type": "file_done", "source": file_key, "label": fpath.name, "status": "error", "ms": int((_time.monotonic() - t0) * 1000), "index": idx, "total": len(files)})
                 continue
             if parsed.truncated:
                 failed.append({"file": source_file, "error": "truncated"})
+                _emit({"type": "file_done", "source": file_key, "label": fpath.name, "status": "error", "ms": int((_time.monotonic() - t0) * 1000), "index": idx, "total": len(files)})
                 continue
             if not parsed.text.strip() and not parsed.facts:
                 failed.append({"file": source_file, "error": "empty"})
+                _emit({"type": "file_done", "source": file_key, "label": fpath.name, "status": "empty", "ms": int((_time.monotonic() - t0) * 1000), "index": idx, "total": len(files)})
                 continue
 
             prompt = (
@@ -1580,6 +1626,7 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
             except Exception as exc:
                 _log.warning("供应商报价抽取调用模型失败（%s）：%s", source_file, exc)
                 failed.append({"file": source_file, "error": f"model_error: {exc}"})
+                _emit({"type": "file_done", "source": file_key, "label": fpath.name, "status": "error", "ms": int((_time.monotonic() - t0) * 1000), "index": idx, "total": len(files)})
                 continue
 
             # 供应商抽取记账（skill='supplier-extract'，失败只打日志不影响抽取）
@@ -1595,8 +1642,10 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
             # 模型返回无法解析为合法 JSON 时归入失败清单
             if obj is None or not isinstance(obj.get("quotes"), list):
                 failed.append({"file": source_file, "error": "parse_error"})
+                _emit({"type": "file_done", "source": file_key, "label": fpath.name, "status": "error", "ms": int((_time.monotonic() - t0) * 1000), "index": idx, "total": len(files)})
                 continue
 
+            file_drafts = 0
             for item in obj["quotes"]:
                 # 忽略非字典或缺少品名的条目
                 if not isinstance(item, dict):
@@ -1645,13 +1694,25 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
                     ).fetchone()
                 )
                 created_drafts.append(draft_row)
+                file_drafts += 1
+            processed_count += 1
+            _emit({
+                "type": "file_done",
+                "source": file_key,
+                "label": fpath.name,
+                "status": "hit" if file_drafts > 0 else "empty",
+                "ms": int((_time.monotonic() - t0) * 1000),
+                "index": idx,
+                "total": len(files),
+            })
 
         conn.commit()
         return {
             "drafts_created": len(created_drafts),
             "drafts": created_drafts,
             "failed": failed,
-            "files_processed": len(files),
+            "files_processed": processed_count,
+            "cancelled": cancelled,
         }
     finally:
         conn.close()

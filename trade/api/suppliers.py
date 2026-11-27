@@ -32,6 +32,10 @@ Trade AI Assistant — 供应商管理 API 路由（一期 · 第一批数据底
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
@@ -324,6 +328,157 @@ async def extract_suppliers_api(
         return await supplier_mod.extract_files_to_drafts(cid, body.paths)
     except supplier_mod.SupplierError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ==============================================================================
+# 供应商 AI 抽取后台长任务作业（工单 #5：真实逐文件进度 + 可取消 + 离页不丢结果）
+# ==============================================================================
+
+_EXTRACT_JOBS: dict[str, dict[str, Any]] = {}
+_EXTRACT_JOBS_LOCK = threading.Lock()
+_MAX_EXTRACT_JOBS = 50
+
+
+def _prune_extract_jobs() -> None:
+    """保留最近 _MAX_EXTRACT_JOBS 个已完成抽取作业，避免内存增长。"""
+    with _EXTRACT_JOBS_LOCK:
+        if len(_EXTRACT_JOBS) <= _MAX_EXTRACT_JOBS:
+            return
+        finished = [
+            (jid, job.get("updated_at", 0.0))
+            for jid, job in _EXTRACT_JOBS.items()
+            if job.get("status") in ("done", "failed", "cancelled")
+        ]
+        finished.sort(key=lambda item: item[1])
+        for jid, _ in finished[: max(0, len(_EXTRACT_JOBS) - _MAX_EXTRACT_JOBS)]:
+            _EXTRACT_JOBS.pop(jid, None)
+
+
+def _snapshot_extract_job(job: dict[str, Any]) -> dict[str, Any]:
+    """生成可供 API 返回的作业快照（不含线程原语）。"""
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "total": job["total"],
+        "done": job["done"],
+        "current_file": job["current_file"],
+        "events": list(job["events"]),
+        "result": job["result"],
+        "error": job["error"],
+    }
+
+
+def _run_extract_job_thread(job_id: str, company_id: int, paths: list[str]) -> None:
+    """后台线程运行供应商报价抽取，实时写入真实进度事件。"""
+    def _on_progress(ev: dict[str, Any]) -> None:
+        with _EXTRACT_JOBS_LOCK:
+            job = _EXTRACT_JOBS.get(job_id)
+            if not job:
+                return
+            job["events"].append(ev)
+            job["updated_at"] = time.time()
+            ev_type = ev.get("type")
+            if ev_type == "job_start":
+                job["total"] = int(ev.get("total") or 0)
+            elif ev_type == "file_start":
+                job["current_file"] = str(ev.get("label") or "")
+            elif ev_type == "file_done":
+                job["done"] = int(job.get("done") or 0) + 1
+
+    def _should_cancel() -> bool:
+        with _EXTRACT_JOBS_LOCK:
+            job = _EXTRACT_JOBS.get(job_id)
+            return bool(job and job.get("cancel_requested"))
+
+    try:
+        res = asyncio.run(
+            supplier_mod.extract_files_to_drafts(
+                company_id,
+                paths,
+                on_progress=_on_progress,
+                should_cancel=_should_cancel,
+            )
+        )
+        with _EXTRACT_JOBS_LOCK:
+            job = _EXTRACT_JOBS.get(job_id)
+            if job:
+                job["result"] = res
+                job["status"] = "cancelled" if res.get("cancelled") else "done"
+                job["current_file"] = ""
+                job["updated_at"] = time.time()
+    except Exception as exc:  # noqa: BLE001 — 后台线程捕获异常并写明失败原因
+        with _EXTRACT_JOBS_LOCK:
+            job = _EXTRACT_JOBS.get(job_id)
+            if job:
+                job["status"] = "failed"
+                job["error"] = str(exc)
+                job["current_file"] = ""
+                job["updated_at"] = time.time()
+
+
+@router.post("/suppliers/extract/jobs")
+def start_extract_job_api(
+    body: SupplierExtractBody,
+    cid: int = Depends(require_company),
+):
+    """启动后台供应商报价抽取作业，立即返回 job_id 供前端 TradeWait 轮询真实进度。"""
+    if not body.paths:
+        raise HTTPException(status_code=400, detail="请至少选择一个文件或文件夹路径")
+    _prune_extract_jobs()
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "job_id": job_id,
+        "company_id": cid,
+        "status": "running",
+        "total": 0,
+        "done": 0,
+        "current_file": "",
+        "events": [],
+        "result": None,
+        "error": "",
+        "cancel_requested": False,
+        "updated_at": time.time(),
+    }
+    with _EXTRACT_JOBS_LOCK:
+        _EXTRACT_JOBS[job_id] = job
+    thread = threading.Thread(
+        target=_run_extract_job_thread,
+        args=(job_id, cid, list(body.paths)),
+        daemon=True,
+        name=f"supplier-extract-{job_id}",
+    )
+    thread.start()
+    return _snapshot_extract_job(job)
+
+
+@router.get("/suppliers/extract/jobs/{job_id}")
+def get_extract_job_api(
+    job_id: str,
+    cid: int = Depends(require_company),
+):
+    """查询后台供应商报价抽取作业的真实进度与最终结果（严格公司隔离）。"""
+    with _EXTRACT_JOBS_LOCK:
+        job = _EXTRACT_JOBS.get(job_id)
+        if not job or int(job.get("company_id", -1)) != cid:
+            raise HTTPException(status_code=404, detail="抽取作业不存在")
+        return _snapshot_extract_job(job)
+
+
+@router.post("/suppliers/extract/jobs/{job_id}/cancel")
+def cancel_extract_job_api(
+    job_id: str,
+    cid: int = Depends(require_company),
+):
+    """取消进行中的供应商报价抽取作业（幂等，严格公司隔离）。"""
+    with _EXTRACT_JOBS_LOCK:
+        job = _EXTRACT_JOBS.get(job_id)
+        if not job or int(job.get("company_id", -1)) != cid:
+            raise HTTPException(status_code=404, detail="抽取作业不存在")
+        job["cancel_requested"] = True
+        if job["status"] == "running":
+            job["status"] = "cancelling"
+        job["updated_at"] = time.time()
+        return _snapshot_extract_job(job)
 
 
 @router.put("/suppliers/contacts/{contact_id}")

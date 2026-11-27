@@ -873,6 +873,7 @@ function _spRenderImportUpload(panel) {
         + '<button type="button" class="btn btn-primary" id="sp-extract-go-btn">开始 AI 抽取</button>'
         + '<span id="sp-extract-status" class="sp-mut" style="font-size:12px;"></span>'
         + '</div>'
+        + '<div id="sp-extract-wait-host" style="margin-top:10px;"></div>'
         + extResHtml
         + '</div>'
         + '</div>';
@@ -909,6 +910,91 @@ function _spRenderImportUpload(panel) {
         }
     });
 
+    function _spClearExtractWait() {
+        if (_spState.extractPollTimer) {
+            clearInterval(_spState.extractPollTimer);
+            _spState.extractPollTimer = null;
+        }
+        if (_spState.extractWait) {
+            try { _spState.extractWait.destroy(); } catch (e) {}
+            _spState.extractWait = null;
+        }
+    }
+
+    function _spFeedExtractEvents(waitObj, events, startIndex) {
+        if (!waitObj || !Array.isArray(events)) return startIndex;
+        let cursor = startIndex || 0;
+        for (; cursor < events.length; cursor++) {
+            const ev = events[cursor];
+            if (!ev) continue;
+            if (ev.type === 'job_start') {
+                waitObj.push({ type: 'job_start', target: '共 ' + String(ev.total || 0) + ' 个可解析文件', budget: 180 });
+            } else if (ev.type === 'file_start') {
+                waitObj.push({ type: 'source_start', source: ev.source || ('f' + cursor), label: ev.label || '文档' });
+            } else if (ev.type === 'file_done') {
+                waitObj.push({ type: 'source_done', source: ev.source || ('f' + cursor), status: ev.status || 'hit', ms: ev.ms });
+            }
+        }
+        return cursor;
+    }
+
+    function _spAttachExtractJob(jobId) {
+        _spClearExtractWait();
+        _spState.extractJobId = jobId;
+        _spState.extractEventCursor = 0;
+        const host = document.getElementById('sp-extract-wait-host');
+        const goBtnEl = document.getElementById('sp-extract-go-btn');
+        if (goBtnEl) goBtnEl.disabled = true;
+
+        let waitObj = null;
+        if (host && typeof TradeWait !== 'undefined' && typeof TradeWait.mount === 'function') {
+            host.innerHTML = '';
+            waitObj = TradeWait.mount(host, {
+                mode: 'task',
+                title: 'TRADE · SUPPLIER EXTRACT  ///  报价抽取',
+                statusLabel: '报价抽取',
+                onCancel: function () {
+                    api('POST', '/api/trade/suppliers/extract/jobs/' + encodeURIComponent(jobId) + '/cancel', null, undefined, { silent: true });
+                },
+            });
+            _spState.extractWait = waitObj;
+        }
+
+        const pollOnce = async function () {
+            const job = await api('GET', '/api/trade/suppliers/extract/jobs/' + encodeURIComponent(jobId), null, undefined, { silent: true });
+            if (!job) return;
+            _spState.extractEventCursor = _spFeedExtractEvents(_spState.extractWait, job.events, _spState.extractEventCursor);
+            const stEl = document.getElementById('sp-extract-status');
+            if (stEl && job.status === 'running') {
+                stEl.textContent = job.total ? ('已完成 ' + job.done + ' / ' + job.total + (job.current_file ? ' · ' + job.current_file : '')) : '正在扫描目录...';
+            }
+            if (job.status === 'done' || job.status === 'cancelled' || job.status === 'failed') {
+                _spClearExtractWait();
+                _spState.extractJobId = null;
+                if (stEl) stEl.textContent = '';
+                if (job.result) {
+                    _spState.extractResult = job.result;
+                    await _spRefreshPendingCount();
+                    toast(job.status === 'cancelled' ? '抽取已取消（已保留已完成草稿）' : ('抽取完成：生成 ' + (job.result.drafts_created || 0) + ' 条草稿'));
+                } else if (job.error) {
+                    toast('抽取失败：' + job.error);
+                }
+                const curPanel = document.getElementById('sp-imp-panel');
+                if (curPanel && _spState.tab === 'import' && _spState.importSub === 'upload') {
+                    _spRenderImportUpload(curPanel);
+                }
+            }
+        };
+
+        pollOnce();
+        _spState.extractPollTimer = setInterval(pollOnce, 600);
+    }
+
+    // 离开页面再切回时，若后台抽取作业仍在跑，自动恢复 TradeWait 进度与最终结果
+    if (_spState.extractJobId) {
+        _spAttachExtractJob(_spState.extractJobId);
+    }
+
     panel.querySelector('#sp-extract-go-btn').addEventListener('click', async function () {
         const raw = document.getElementById('sp-extract-paths')?.value || '';
         const paths = raw.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
@@ -916,15 +1002,10 @@ function _spRenderImportUpload(panel) {
             toast('请先输入至少一个文件或文件夹路径');
             return;
         }
-        const stEl = document.getElementById('sp-extract-status');
-        if (stEl) stEl.textContent = '正在抽取，请稍候...';
-        const res = await api('POST', '/api/trade/suppliers/extract', { paths: paths });
-        if (stEl) stEl.textContent = '';
-        if (res) {
-            _spState.extractResult = res;
-            await _spRefreshPendingCount();
-            toast('抽取完成：生成 ' + res.drafts_created + ' 条草稿');
-            _spRenderImportUpload(panel);
+        _spState.extractResult = null;
+        const job = await api('POST', '/api/trade/suppliers/extract/jobs', { paths: paths });
+        if (job && job.job_id) {
+            _spAttachExtractJob(job.job_id);
         }
     });
 

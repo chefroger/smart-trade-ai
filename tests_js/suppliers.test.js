@@ -308,3 +308,11 @@ test('工单 #2 & #4：AI 抽取结果框展示未处理扫描件原因，草稿
     assert.match(modalBody, /id="spd-moq"/, '编辑弹窗必须包含 MOQ 输入框');
     assert.match(modalBody, /moq:\s*document\.getElementById\('spd-moq'\)/, '保存草稿必须提交 moq 字段');
 });
+
+test('工单 #5：AI 抽取复用 TradeWait 长任务等待组件，结束后销毁并展示结果', () => {
+    const { SRC } = require('./_extract');
+    assert.match(SRC, /id="sp-extract-wait-host"/, '缺少 TradeWait 挂载容器');
+    assert.match(SRC, /TradeWait\.mount\(host,\s*\{[\s\S]*?mode:\s*'task'/, '必须复用 TradeWait(mode=task)');
+    assert.match(SRC, /\/api\/trade\/suppliers\/extract\/jobs/, '应通过后台抽取作业接口获取真实进度');
+    assert.match(SRC, /_spState\.extractWait\.destroy\(\)/, '结束后必须销毁并移除等待组件');
+});
