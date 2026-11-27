@@ -124,6 +124,70 @@ def _visit_plan_signature(row: dict) -> tuple:
     )
 
 
+def _num_or_none(value) -> float | None:
+    """把价格归一化为 float 或 None，避免 10 与 10.0 在去重键里不相等。"""
+    # 空值返回 None
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _supplier_quote_signature(row: dict) -> tuple:
+    """供应商报价去重键：(supplier_id 映射后, product_name, spec_model, quoted_at, price_excl_tax, price_incl_tax)。"""
+    return (
+        row.get("supplier_id"),
+        (row.get("product_name") or "").strip(),
+        (row.get("spec_model") or "").strip(),
+        (row.get("quoted_at") or "").strip(),
+        _num_or_none(row.get("price_excl_tax")),
+        _num_or_none(row.get("price_incl_tax")),
+    )
+
+
+_SUPPLIER_MERGE_TEXT_FIELDS = (
+    "short_name", "supplier_type", "main_products", "province", "city",
+    "address", "payment_terms", "source", "note",
+)
+_SUPPLIER_MERGE_NUM_FIELDS = ("rating", "tax_point", "lead_time_days")
+_SUPPLIER_MERGE_JSON_FIELDS = ("extra1", "extra2", "extra3")
+
+
+def _fill_empty_supplier_fields(conn: sqlite3.Connection, supplier_id: int, source: dict) -> None:
+    """合并同名供应商：目标为空时用源值补齐，已有非空值不动。"""
+    row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+    # 目标行不存在时直接返回
+    if row is None:
+        return
+    target = dict(row)
+    changes: dict = {}
+    for field in _SUPPLIER_MERGE_TEXT_FIELDS:
+        # 目标为空串且源非空时补齐
+        if not str(target.get(field) or "").strip() and str(source.get(field) or "").strip():
+            changes[field] = source[field]
+    for field in _SUPPLIER_MERGE_NUM_FIELDS:
+        # 目标为 None 且源有值时补齐
+        if target.get(field) is None and source.get(field) is not None:
+            changes[field] = source[field]
+    # can_issue_vat：目标为 2（待确认）且源为 0/1 时补齐
+    if target.get("can_issue_vat") in (None, 2) and source.get("can_issue_vat") in (0, 1):
+        changes["can_issue_vat"] = source["can_issue_vat"]
+    for field in _SUPPLIER_MERGE_JSON_FIELDS:
+        merged = _merge_json_blanks(target.get(field), source.get(field))
+        if merged is not None:
+            changes[field] = merged
+    # 没有任何空缺字段可补则不写库
+    if not changes:
+        return
+    cols = ", ".join(f"{k} = ?" for k in changes)
+    conn.execute(
+        f"UPDATE suppliers SET {cols} WHERE id = ?",
+        (*changes.values(), supplier_id),
+    )
+
+
 def _insert(conn: sqlite3.Connection, table: str, row: dict,
             *, or_ignore: bool = False) -> int | None:
     valid = set(_columns(conn, table))
@@ -547,6 +611,7 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
                 "order_events",
                 "usage_ledger", "doc_extractions", "contacts",
                 "customer_facts", "customer_gifts", "inquiries", "visit_plans",
+                "suppliers", "supplier_contacts", "supplier_products", "supplier_quotes",
             )
         }
         source_tc = source_tables["trade_company"][0] if source_tables["trade_company"] else {}
@@ -1001,6 +1066,210 @@ def import_company(zip_path: Path, *, target_company_id: int | None = None,
         }
         report["tables"]["doc_extractions"] = {
             "inserted": doc_added, "skipped": doc_skipped,
+        }
+
+        # 供应商四张正式表：suppliers / supplier_contacts / supplier_products / supplier_quotes
+        supplier_map: dict[int, int] = {}
+        sup_added = sup_skipped = 0
+        if _table_exists(conn, "suppliers"):
+            target_suppliers = _rows(conn, "SELECT * FROM suppliers WHERE company_id = ?", (target_id,))
+            sup_by_name = {merge_mod.norm_name(row.get("name")): row for row in target_suppliers}
+            for row in source_tables.get("suppliers") or []:
+                old_sid = row.get("id")
+                key = merge_mod.norm_name(row.get("name"))
+                existing = sup_by_name.get(key)
+                # 同公司已存在同名供应商：合并空缺字段，不新建重复行
+                if existing:
+                    if old_sid is not None:
+                        supplier_map[int(old_sid)] = int(existing["id"])
+                    _fill_empty_supplier_fields(conn, int(existing["id"]), row)
+                    sup_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_sid = _insert(conn, "suppliers", new_row)
+                if old_sid is not None:
+                    supplier_map[int(old_sid)] = int(new_sid)
+                sup_by_name[key] = {"id": new_sid, "name": new_row.get("name")}
+                sup_added += 1
+        else:
+            sup_skipped = len(source_tables.get("suppliers") or [])
+        report["tables"]["suppliers"] = {
+            "inserted": sup_added, "added": sup_added, "skipped": sup_skipped,
+        }
+
+        sc_added = sc_skipped = 0
+        if _table_exists(conn, "supplier_contacts"):
+            existing_sc = {
+                (
+                    int(r["supplier_id"]),
+                    (r.get("name") or "").strip(),
+                    (r.get("phone") or "").strip(),
+                    (r.get("email") or "").strip().lower(),
+                )
+                for r in _rows(
+                    conn,
+                    "SELECT supplier_id, name, phone, email FROM supplier_contacts WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
+            suppliers_with_primary = {
+                int(r["supplier_id"])
+                for r in _rows(
+                    conn,
+                    "SELECT DISTINCT supplier_id FROM supplier_contacts WHERE company_id = ? AND is_primary = 1",
+                    (target_id,),
+                )
+            }
+            for row in source_tables.get("supplier_contacts") or []:
+                mapped_sid = supplier_map.get(row.get("supplier_id"))
+                # 映射不到目标供应商时跳过
+                if not mapped_sid:
+                    sc_skipped += 1
+                    continue
+                sc_key = (
+                    int(mapped_sid),
+                    (row.get("name") or "").strip(),
+                    (row.get("phone") or "").strip(),
+                    (row.get("email") or "").strip().lower(),
+                )
+                # 联系人已存在则跳过
+                if sc_key in existing_sc:
+                    sc_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["supplier_id"] = mapped_sid
+                # 目标供应商已有主联系人时，导入的新联系人不覆盖主联系人标记
+                if int(new_row.get("is_primary") or 0) == 1:
+                    if mapped_sid in suppliers_with_primary:
+                        new_row["is_primary"] = 0
+                    else:
+                        suppliers_with_primary.add(mapped_sid)
+                _insert(conn, "supplier_contacts", new_row)
+                existing_sc.add(sc_key)
+                sc_added += 1
+        else:
+            sc_skipped = len(source_tables.get("supplier_contacts") or [])
+        report["tables"]["supplier_contacts"] = {
+            "inserted": sc_added, "added": sc_added, "skipped": sc_skipped,
+        }
+
+        supplier_product_map: dict[int, int] = {}
+        sp_added = sp_skipped = 0
+        if _table_exists(conn, "supplier_products"):
+            existing_sp: dict[tuple[int, str, str], dict] = {}
+            for r in _rows(conn, "SELECT * FROM supplier_products WHERE company_id = ?", (target_id,)):
+                sp_key = (
+                    int(r["supplier_id"]),
+                    (r.get("product_name") or "").strip(),
+                    (r.get("spec_model") or "").strip(),
+                )
+                existing_sp[sp_key] = r
+            for row in source_tables.get("supplier_products") or []:
+                old_spid = row.get("id")
+                mapped_sid = supplier_map.get(row.get("supplier_id"))
+                # 映射不到目标供应商时跳过
+                if not mapped_sid:
+                    sp_skipped += 1
+                    continue
+                prod_name = (row.get("product_name") or "").strip()
+                spec_model = (row.get("spec_model") or "").strip()
+                sp_key = (int(mapped_sid), prod_name, spec_model)
+                existing = existing_sp.get(sp_key)
+                # 能力行已存在：按 updated_at 较新者为准合并冲突字段
+                if existing:
+                    if old_spid is not None:
+                        supplier_product_map[int(old_spid)] = int(existing["id"])
+                    src_upd = str(row.get("updated_at") or "")
+                    tgt_upd = str(existing.get("updated_at") or "")
+                    if src_upd > tgt_upd:
+                        conn.execute(
+                            "UPDATE supplier_products SET "
+                            "unit = ?, is_self_produced = ?, quality_note = ?, "
+                            "lead_time_days = ?, lead_time_text = ?, moq = ?, "
+                            "packing_info = ?, notes = ?, extra1 = ?, extra2 = ?, extra3 = ?, "
+                            "updated_at = ? "
+                            "WHERE id = ? AND company_id = ?",
+                            (
+                                row.get("unit") or "",
+                                row.get("is_self_produced") if row.get("is_self_produced") in (0, 1, 2) else 2,
+                                row.get("quality_note") or "",
+                                row.get("lead_time_days"),
+                                row.get("lead_time_text") or "",
+                                row.get("moq"),
+                                row.get("packing_info") or "",
+                                row.get("notes") or "",
+                                row.get("extra1") or "{}",
+                                row.get("extra2") or "{}",
+                                row.get("extra3") or "{}",
+                                src_upd,
+                                int(existing["id"]),
+                                target_id,
+                            ),
+                        )
+                        existing["updated_at"] = src_upd
+                    sp_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["supplier_id"] = mapped_sid
+                new_row["product_name"] = prod_name
+                new_row["spec_model"] = spec_model
+                new_spid = _insert(conn, "supplier_products", new_row)
+                if old_spid is not None:
+                    supplier_product_map[int(old_spid)] = int(new_spid)
+                existing_sp[sp_key] = {"id": new_spid, "updated_at": new_row.get("updated_at") or ""}
+                sp_added += 1
+        else:
+            sp_skipped = len(source_tables.get("supplier_products") or [])
+        report["tables"]["supplier_products"] = {
+            "inserted": sp_added, "added": sp_added, "skipped": sp_skipped,
+        }
+
+        sq_added = sq_skipped = 0
+        if _table_exists(conn, "supplier_quotes"):
+            existing_sq = {
+                _supplier_quote_signature(r)
+                for r in _rows(
+                    conn,
+                    "SELECT supplier_id, product_name, spec_model, quoted_at, "
+                    "price_excl_tax, price_incl_tax "
+                    "FROM supplier_quotes WHERE company_id = ?",
+                    (target_id,),
+                )
+            }
+            for row in source_tables.get("supplier_quotes") or []:
+                mapped_sid = supplier_map.get(row.get("supplier_id"))
+                # 映射不到目标供应商时跳过
+                if not mapped_sid:
+                    sq_skipped += 1
+                    continue
+                new_row = _without_id(dict(row))
+                new_row["company_id"] = target_id
+                new_row["supplier_id"] = mapped_sid
+                old_spid = row.get("supplier_product_id")
+                new_row["supplier_product_id"] = (
+                    supplier_product_map.get(int(old_spid)) if old_spid is not None else None
+                )
+                old_cust_id = row.get("source_customer_id")
+                new_row["source_customer_id"] = (
+                    customer_map.get(int(old_cust_id)) if old_cust_id is not None else None
+                )
+                # rfq_id 本批预留恒空
+                new_row["rfq_id"] = None
+                sig = _supplier_quote_signature(new_row)
+                # 同去重键报价已存在时跳过（重复导入一条不增）
+                if sig in existing_sq:
+                    sq_skipped += 1
+                    continue
+                _insert(conn, "supplier_quotes", new_row)
+                existing_sq.add(sig)
+                sq_added += 1
+        else:
+            sq_skipped = len(source_tables.get("supplier_quotes") or [])
+        report["tables"]["supplier_quotes"] = {
+            "inserted": sq_added, "added": sq_added, "skipped": sq_skipped,
         }
 
         # 公司身份 + 工作目录路径

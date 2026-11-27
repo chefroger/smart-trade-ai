@@ -309,6 +309,7 @@ function navToView(view, chatCtx, chatName) {
             'chat-daily': [t('nav.daily'), '/ CHAT'],
             'chat-docs': [t('nav.docs'), '/ LIBRARY'],
             'customers': [t('nav.customers'), '/ CUSTOMERS'],
+            'suppliers': ['供应商', '/ SUPPLIERS'],
             'mailboxes': [t('nav.mailboxes'), '/ MAILBOXES'],
             'tasks': [t('nav.tasks'), '/ CRON'],
             'history': [t('nav.history'), '/ HISTORY'],
@@ -362,6 +363,9 @@ function navToView(view, chatCtx, chatName) {
                 break;
             case 'customers':
                 renderCustomersViewInto(container);
+                break;
+            case 'suppliers':
+                renderSuppliersViewInto(container);
                 break;
             case 'mailboxes':
                 renderMailboxesViewInto(container);

@@ -1,0 +1,1028 @@
+// ═════════════════════ SUPPLIERS VIEW（供应商管理一期 · 第一批）═════════════════════
+// #region suppliers-ui —— 供 tests_js/suppliers.test.js 抽取测试，勿删标记
+
+const _spState = {
+    tab: 'directory',          // directory | compare | import
+    importSub: 'upload',       // upload | drafts
+    draftStatus: 'pending',    // pending | approved | rejected | all
+    selectedSupplierId: null,
+    filters: { q: '', status: '', supplier_type: '', is_starred: '' },
+    suppliers: [],
+    detail: null,
+    compareQuery: { product_name: '', spec_model: '' },
+    compareResult: null,
+    csvResult: null,
+    extractResult: null,
+    drafts: [],
+    pendingDraftCount: 0,
+};
+
+const _SP_STATUS_CLASS = {
+    '候选': 's-cand',
+    '洽谈中': 's-talk',
+    '合作中': 's-coop',
+    '暂停': 's-pause',
+    '黑名单': 's-black',
+};
+
+function _spFormatVat(canIssueVat, taxPoint) {
+    if (canIssueVat === 1) {
+        const pt = (taxPoint !== null && taxPoint !== undefined && taxPoint !== '')
+            ? '<b>+' + esc(String(taxPoint)) + '%</b>'
+            : '';
+        return '<span class="sp-vat ok">可开专票' + pt + '</span>';
+    }
+    if (canIssueVat === 0) return '<span class="sp-vat no">不开票</span>';
+    return '<span class="sp-vat tbc">专票待确认</span>';
+}
+
+function _spFormatSelfProduced(val) {
+    if (val === 1) return '<span class="sp-self yes">自产</span>';
+    if (val === 0) return '<span class="sp-self no">外协/调货</span>';
+    return '<span class="sp-self tbc">待确认</span>';
+}
+
+function _spFormatPriceCell(value, currency, isConverted) {
+    if (value === null || value === undefined || value === '') {
+        return '<span class="sp-mut">—</span>';
+    }
+    const cur = esc(currency || 'CNY');
+    const num = esc(String(value));
+    const badge = isConverted ? '<span class="sp-conv">换算</span>' : '';
+    return '<span class="sp-num">' + cur + ' ' + num + '</span>' + badge;
+}
+
+function _spBuildDirectoryRowsHtml(items) {
+    if (!items || !items.length) {
+        return '<tr><td colspan="7"><div class="sp-state"><h3>暂无供应商</h3><p>点击右上角「新建供应商」，或前往「导入与确认」通过 CSV 模板批量导入。</p></div></td></tr>';
+    }
+    return items.map(function (s) {
+        const stCls = _SP_STATUS_CLASS[s.status] || 's-cand';
+        const loc = [s.province, s.city].filter(Boolean).join(' · ');
+        const sub = [s.short_name, loc].filter(Boolean).join(' / ');
+        const starCls = s.is_starred ? 'sp-star-btn on' : 'sp-star-btn';
+        const starChar = s.is_starred ? '★' : '☆';
+        const ratingText = s.rating ? (esc(String(s.rating)) + ' / 5') : '—';
+        return '<tr class="sp-row" data-sp-open="' + esc(String(s.id)) + '">'
+            + '<td><button type="button" class="' + starCls + '" data-sp-star="' + esc(String(s.id)) + '" data-sp-starred="' + (s.is_starred ? '1' : '0') + '" title="切换星标">' + starChar + '</button></td>'
+            + '<td><div class="rname">' + esc(s.name) + '</div>' + (sub ? '<div class="rsub">' + esc(sub) + '</div>' : '') + '</td>'
+            + '<td>' + (s.supplier_type ? '<span class="sp-chip">' + esc(s.supplier_type) + '</span>' : '<span class="sp-mut">—</span>') + '</td>'
+            + '<td>' + (s.main_products ? esc(s.main_products) : '<span class="sp-mut">—</span>') + '</td>'
+            + '<td><span class="sp-st ' + stCls + '">' + esc(s.status || '候选') + '</span></td>'
+            + '<td>' + _spFormatVat(s.can_issue_vat, s.tax_point) + '</td>'
+            + '<td class="sp-num">' + ratingText + '</td>'
+            + '</tr>';
+    }).join('');
+}
+
+function _spBuildCompareGroupsHtml(result) {
+    if (!result || !result.product_name) {
+        return '<div class="sp-state"><h3>输入产品名称开始比价</h3><p>支持按产品名称和规格型号跨供应商对比：自产标记、质量备注、交期、MOQ、含税与不含税价（含税换算仅在有开票加点时展示，不同单位自动分组）。</p></div>';
+    }
+    const groups = result.unit_groups || [];
+    const noQuotes = result.no_quote_suppliers || [];
+    if (!groups.length && !noQuotes.length) {
+        return '<div class="sp-state"><h3>未找到匹配的供应商能力或报价</h3><p>请调整产品名称或规格关键词重试。</p></div>';
+    }
+    const parts = [];
+    groups.forEach(function (g) {
+        const lowExcl = (g.lowest_excl_tax !== null && g.lowest_excl_tax !== undefined)
+            ? ('最低不含税：' + esc(String(g.lowest_excl_tax))) : '';
+        const lowIncl = (g.lowest_incl_tax !== null && g.lowest_incl_tax !== undefined)
+            ? ('最低含税：' + esc(String(g.lowest_incl_tax))) : '';
+        const lowSummary = [lowExcl, lowIncl].filter(Boolean).join(' · ') || '暂无有效原价最低值';
+        const rows = (g.suppliers || []).map(function (row) {
+            const prod = row.product || {};
+            const lq = row.latest_quote || {};
+            const rowCls = lq.expired ? 'is-expired' : '';
+            const lead = prod.lead_time_text || (prod.lead_time_days !== null && prod.lead_time_days !== undefined ? (String(prod.lead_time_days) + ' 天') : '—');
+            const moqVal = (prod.moq !== null && prod.moq !== undefined) ? prod.moq : lq.moq;
+            const moqText = (moqVal !== null && moqVal !== undefined && moqVal !== '') ? esc(String(moqVal)) : '—';
+            const rangeArr = row.price_excl_range || row.price_incl_range;
+            const rangeText = rangeArr ? (esc(String(rangeArr[0])) + ' ~ ' + esc(String(rangeArr[1]))) : '—';
+            const expTag = lq.expired ? '<span class="sp-exp">已过期</span>' : '';
+            return '<tr class="' + rowCls + '">'
+                + '<td><div class="rname">' + esc(row.supplier_name) + '</div>'
+                + (row.payment_terms ? '<div class="rsub">' + esc(row.payment_terms) + '</div>' : '') + '</td>'
+                + '<td>' + _spFormatSelfProduced(prod.is_self_produced !== undefined ? prod.is_self_produced : 2) + '</td>'
+                + '<td>' + (prod.quality_note ? esc(prod.quality_note) : '<span class="sp-mut">—</span>') + '</td>'
+                + '<td>' + esc(lead) + '</td>'
+                + '<td class="sp-num">' + moqText + '</td>'
+                + '<td>' + _spFormatPriceCell(lq.price_excl_tax, lq.currency, lq.price_excl_tax_converted) + '</td>'
+                + '<td>' + _spFormatPriceCell(lq.price_incl_tax, lq.currency, lq.price_incl_tax_converted) + '</td>'
+                + '<td><div>' + rangeText + '</div><div class="rsub">共 ' + esc(String(row.quote_count || 0)) + ' 条</div></td>'
+                + '<td>' + esc(lq.quoted_at || '—') + expTag + '</td>'
+                + '</tr>';
+        }).join('');
+        parts.push(
+            '<div class="sp-cmp-grp">'
+            + '<div class="gh"><span>单位组：' + esc(g.unit) + '</span><span class="r">' + lowSummary + '</span></div>'
+            + '<table class="sp-cmp"><thead><tr>'
+            + '<th>供应商</th><th>自产</th><th>质量备注</th><th>交期</th><th>MOQ</th>'
+            + '<th>不含税价</th><th>含税价</th><th>历史区间</th><th>最近报价日期</th>'
+            + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+        );
+    });
+    if (noQuotes.length) {
+        const nqRows = noQuotes.map(function (s) {
+            const p = (s.products && s.products[0]) || {};
+            return '<tr><td>' + esc(s.supplier_name) + '</td>'
+                + '<td>' + _spFormatSelfProduced(p.is_self_produced !== undefined ? p.is_self_produced : 2) + '</td>'
+                + '<td>' + esc(p.spec_model || '—') + '</td>'
+                + '<td>' + esc(p.quality_note || '—') + '</td>'
+                + '<td>' + esc(p.lead_time_text || (p.lead_time_days != null ? String(p.lead_time_days) + ' 天' : '—')) + '</td></tr>';
+        }).join('');
+        parts.push(
+            '<div class="sp-cmp-grp">'
+            + '<div class="gh"><span>仅有能力登记、暂无报价</span><span class="r">' + esc(String(noQuotes.length)) + ' 家</span></div>'
+            + '<table class="sp-cmp"><thead><tr><th>供应商</th><th>自产</th><th>规格</th><th>质量备注</th><th>交期</th></tr></thead><tbody>'
+            + nqRows + '</tbody></table></div>'
+        );
+    }
+    return parts.join('');
+}
+
+// #endregion suppliers-ui
+
+function renderSuppliersViewInto(container) {
+    container.innerHTML = '<div class="sp-wrap" id="sp-root"></div>';
+    _spRefreshPendingCount();
+    _spRenderRoot(container);
+    _spLoadSuppliers();
+}
+
+function _spGetRoot() {
+    return document.getElementById('sp-root');
+}
+
+async function _spRefreshPendingCount() {
+    const list = await api('GET', '/api/trade/supplier-quote-drafts?status=pending', null, null, { silent: true });
+    if (Array.isArray(list)) {
+        _spState.pendingDraftCount = list.length;
+        const badge = document.getElementById('sp-draft-badge');
+        if (badge) {
+            badge.textContent = String(list.length);
+            badge.style.display = list.length > 0 ? '' : 'none';
+        }
+    }
+}
+
+function _spRenderRoot() {
+    const root = _spGetRoot();
+    if (!root) return;
+    const t = _spState.tab;
+    const badgeStyle = _spState.pendingDraftCount > 0 ? '' : ' style="display:none"';
+    root.innerHTML =
+        '<div class="sp-head">'
+        + '<h2>' + btnIcon('building-complex') + ' 供应商管理</h2>'
+        + '<div class="sp-head-acts">'
+        + '<button type="button" class="btn btn-primary" id="sp-new-btn">' + btnIcon('plus') + ' 新建供应商</button>'
+        + '</div></div>'
+        + '<div class="sp-tabs" role="tablist">'
+        + '<button type="button" class="sp-tab' + (t === 'directory' ? ' on' : '') + '" data-sp-tab="directory"><span class="zh">供应商名录</span><span class="en">DIRECTORY</span></button>'
+        + '<button type="button" class="sp-tab' + (t === 'compare' ? ' on' : '') + '" data-sp-tab="compare"><span class="zh">产品能力（比价）</span><span class="en">COMPARE</span></button>'
+        + '<button type="button" class="sp-tab' + (t === 'import' ? ' on' : '') + '" data-sp-tab="import"><span class="zh">导入与确认</span><span class="en">IMPORT</span><span class="sp-n" id="sp-draft-badge"' + badgeStyle + '>' + esc(String(_spState.pendingDraftCount)) + '</span></button>'
+        + '</div>'
+        + '<div class="sp-body" id="sp-body"></div>';
+
+    root.querySelector('#sp-new-btn').addEventListener('click', function () {
+        _spOpenSupplierModal(null);
+    });
+    root.querySelectorAll('[data-sp-tab]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            _spState.tab = btn.getAttribute('data-sp-tab');
+            if (_spState.tab === 'directory') {
+                _spState.selectedSupplierId = null;
+                _spRenderRoot();
+                _spLoadSuppliers();
+            } else if (_spState.tab === 'compare') {
+                _spRenderRoot();
+                _spRenderBody();
+            } else if (_spState.tab === 'import') {
+                _spRenderRoot();
+                _spRenderBody();
+                if (_spState.importSub === 'drafts') _spLoadDrafts();
+            }
+        });
+    });
+    _spRenderBody();
+}
+
+function _spRenderBody() {
+    const body = document.getElementById('sp-body');
+    if (!body) return;
+    if (_spState.tab === 'directory') {
+        if (_spState.selectedSupplierId && _spState.detail) {
+            _spRenderDetail(body, _spState.detail);
+        } else {
+            _spRenderDirectory(body);
+        }
+    } else if (_spState.tab === 'compare') {
+        _spRenderCompare(body);
+    } else {
+        _spRenderImport(body);
+    }
+}
+
+// ── 名录页签 ────────────────────────────────────────────────────────────────
+
+async function _spLoadSuppliers() {
+    const f = _spState.filters;
+    const qs = new URLSearchParams();
+    if (f.q) qs.set('q', f.q);
+    if (f.status) qs.set('status', f.status);
+    if (f.supplier_type) qs.set('supplier_type', f.supplier_type);
+    if (f.is_starred !== '') qs.set('is_starred', f.is_starred);
+    const url = '/api/trade/suppliers' + (qs.toString() ? '?' + qs.toString() : '');
+    const res = await api('GET', url);
+    if (Array.isArray(res)) {
+        _spState.suppliers = res;
+        if (_spState.tab === 'directory' && !_spState.selectedSupplierId) {
+            _spRenderBody();
+        }
+    }
+}
+
+function _spRenderDirectory(body) {
+    const f = _spState.filters;
+    const statuses = ['', '候选', '洽谈中', '合作中', '暂停', '黑名单'];
+    const types = ['', '工厂', '贸易商', '工贸一体', '未知'];
+    const stOpts = statuses.map(function (s) {
+        return '<option value="' + esc(s) + '"' + (f.status === s ? ' selected' : '') + '>' + esc(s || '全部状态') + '</option>';
+    }).join('');
+    const tyOpts = types.map(function (s) {
+        return '<option value="' + esc(s) + '"' + (f.supplier_type === s ? ' selected' : '') + '>' + esc(s || '全部类型') + '</option>';
+    }).join('');
+
+    body.innerHTML =
+        '<div class="sp-bar">'
+        + '<input type="text" id="sp-q" placeholder="搜索供应商名称 / 简称 / 主营品类..." value="' + esc(f.q) + '" style="flex:1;min-width:220px;">'
+        + '<select id="sp-status-filter">' + stOpts + '</select>'
+        + '<select id="sp-type-filter">' + tyOpts + '</select>'
+        + '<label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">'
+        + '<input type="checkbox" id="sp-star-filter"' + (f.is_starred === '1' ? ' checked' : '') + '> 仅星标</label>'
+        + '<button type="button" class="btn" id="sp-search-btn">筛选</button>'
+        + '</div>'
+        + '<div class="sp-table-wrap"><table class="sp-table">'
+        + '<thead><tr><th style="width:36px;">星标</th><th>供应商</th><th style="width:90px;">类型</th><th>主营品类</th><th style="width:90px;">状态</th><th style="width:120px;">开票</th><th style="width:70px;text-align:right;">评分</th></tr></thead>'
+        + '<tbody>' + _spBuildDirectoryRowsHtml(_spState.suppliers) + '</tbody></table></div>';
+
+    const applyFilter = function () {
+        _spState.filters.q = (document.getElementById('sp-q')?.value || '').trim();
+        _spState.filters.status = document.getElementById('sp-status-filter')?.value || '';
+        _spState.filters.supplier_type = document.getElementById('sp-type-filter')?.value || '';
+        _spState.filters.is_starred = document.getElementById('sp-star-filter')?.checked ? '1' : '';
+        _spLoadSuppliers();
+    };
+    body.querySelector('#sp-search-btn').addEventListener('click', applyFilter);
+    body.querySelector('#sp-status-filter').addEventListener('change', applyFilter);
+    body.querySelector('#sp-type-filter').addEventListener('change', applyFilter);
+    body.querySelector('#sp-star-filter').addEventListener('change', applyFilter);
+    body.querySelector('#sp-q').addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') applyFilter();
+    });
+
+    body.querySelectorAll('[data-sp-star]').forEach(function (btn) {
+        btn.addEventListener('click', async function (ev) {
+            ev.stopPropagation();
+            const sid = Number(btn.getAttribute('data-sp-star'));
+            const cur = btn.getAttribute('data-sp-starred') === '1';
+            const updated = await api('PUT', '/api/trade/suppliers/' + sid, { is_starred: cur ? 0 : 1 });
+            if (updated) _spLoadSuppliers();
+        });
+    });
+
+    body.querySelectorAll('[data-sp-open]').forEach(function (tr) {
+        tr.addEventListener('click', function () {
+            const sid = Number(tr.getAttribute('data-sp-open'));
+            _spOpenDetail(sid);
+        });
+    });
+}
+
+// ── 供应商详情面板 ──────────────────────────────────────────────────────────
+
+async function _spOpenDetail(supplierId) {
+    const detail = await api('GET', '/api/trade/suppliers/' + supplierId);
+    if (!detail) return;
+    _spState.selectedSupplierId = supplierId;
+    _spState.detail = detail;
+    _spRenderBody();
+}
+
+function _spRenderDetail(body, d) {
+    const stCls = _SP_STATUS_CLASS[d.status] || 's-cand';
+    const loc = [d.province, d.city, d.address].filter(Boolean).join(' ');
+    const contactsHtml = (d.contacts && d.contacts.length)
+        ? d.contacts.map(function (c) {
+            const priTag = c.is_primary ? '<span class="pri">主联系人</span>' : '';
+            const info = [
+                c.role ? '角色：' + esc(c.role) : '',
+                c.phone ? '电话：' + esc(c.phone) : '',
+                c.wechat ? '微信：' + esc(c.wechat) : '',
+                c.email ? '邮箱：' + esc(c.email) : '',
+                c.qq ? 'QQ：' + esc(c.qq) : '',
+            ].filter(Boolean).join(' · ');
+            return '<div class="sp-person">'
+                + '<div class="nm">' + esc(c.name) + priTag + '</div>'
+                + '<div class="acts">'
+                + '<button type="button" class="sp-lnk" data-sp-edit-contact="' + esc(String(c.id)) + '">编辑</button>'
+                + '<button type="button" class="sp-lnk danger" data-sp-del-contact="' + esc(String(c.id)) + '">删除</button>'
+                + '</div>'
+                + '<div style="font-size:12px;color:var(--muted);margin-top:4px;">' + (info || '—') + '</div>'
+                + (c.note ? '<div style="font-size:11.5px;margin-top:2px;">' + esc(c.note) + '</div>' : '')
+                + '</div>';
+        }).join('')
+        : '<div class="sp-mut" style="font-size:12px;padding:6px 0;">暂无联系人</div>';
+
+    const productsHtml = (d.products && d.products.length)
+        ? '<table class="sp-mini"><thead><tr><th>产品名</th><th>规格</th><th>自产</th><th>交期 / MOQ</th><th>质量备注</th><th style="width:76px;">操作</th></tr></thead><tbody>'
+        + d.products.map(function (p) {
+            const lead = p.lead_time_text || (p.lead_time_days != null ? String(p.lead_time_days) + ' 天' : '—');
+            const moq = p.moq != null ? ('MOQ ' + esc(String(p.moq))) : '';
+            return '<tr>'
+                + '<td><b>' + esc(p.product_name) + '</b>' + (p.unit ? '<div class="rsub">单位：' + esc(p.unit) + '</div>' : '') + '</td>'
+                + '<td>' + esc(p.spec_model || '—') + '</td>'
+                + '<td>' + _spFormatSelfProduced(p.is_self_produced) + '</td>'
+                + '<td>' + esc(lead) + (moq ? '<div class="rsub">' + moq + '</div>' : '') + '</td>'
+                + '<td>' + esc(p.quality_note || '—') + '</td>'
+                + '<td><button type="button" class="sp-lnk" data-sp-edit-prod="' + esc(String(p.id)) + '">编辑</button> '
+                + '<button type="button" class="sp-lnk danger" data-sp-del-prod="' + esc(String(p.id)) + '">删除</button></td>'
+                + '</tr>';
+        }).join('') + '</tbody></table>'
+        : '<div class="sp-mut" style="font-size:12px;padding:6px 0;">暂无产品能力登记</div>';
+
+    const quotesHtml = (d.quotes && d.quotes.length)
+        ? '<table class="sp-mini"><thead><tr><th>产品 / 规格</th><th>不含税价</th><th>含税价</th><th>报价日 / 有效期</th><th>来源</th><th style="width:76px;">操作</th></tr></thead><tbody>'
+        + d.quotes.map(function (q) {
+            const rowCls = q.expired ? 'is-expired' : '';
+            const expTag = q.expired ? '<span class="sp-exp">已过期</span>' : '';
+            const srcCls = q.source === 'ai-extract' ? 'sp-src ai' : 'sp-src';
+            return '<tr class="' + rowCls + '">'
+                + '<td><b>' + esc(q.product_name) + '</b>' + (q.spec_model ? '<div class="rsub">' + esc(q.spec_model) + '</div>' : '') + '</td>'
+                + '<td>' + _spFormatPriceCell(q.price_excl_tax, q.currency, false) + '</td>'
+                + '<td>' + _spFormatPriceCell(q.price_incl_tax, q.currency, false) + '</td>'
+                + '<td>' + esc(q.quoted_at || '—') + expTag + (q.valid_until ? '<div class="rsub">有效期：' + esc(q.valid_until) + '</div>' : '') + '</td>'
+                + '<td><span class="' + srcCls + '">' + esc(q.source || 'manual') + '</span></td>'
+                + '<td><button type="button" class="sp-lnk" data-sp-edit-quote="' + esc(String(q.id)) + '">编辑</button> '
+                + '<button type="button" class="sp-lnk danger" data-sp-del-quote="' + esc(String(q.id)) + '">删除</button></td>'
+                + '</tr>';
+        }).join('') + '</tbody></table>'
+        : '<div class="sp-mut" style="font-size:12px;padding:6px 0;">暂无报价记录</div>';
+
+    body.innerHTML =
+        '<div class="sp-detail-head">'
+        + '<button type="button" class="btn" id="sp-back-btn">' + btnIcon('arrow-left') + ' 返回名录</button>'
+        + '<h3 style="margin:0;font-size:15px;">' + esc(d.name) + '</h3>'
+        + '<span class="sp-st ' + stCls + '">' + esc(d.status || '候选') + '</span>'
+        + '<div style="margin-left:auto;display:flex;gap:8px;">'
+        + '<button type="button" class="btn" id="sp-edit-sup-btn">编辑基本信息</button>'
+        + '<button type="button" class="btn btn-danger" id="sp-del-sup-btn">删除供应商</button>'
+        + '</div></div>'
+        + '<div class="sp-detail-grid">'
+        + '<div class="sp-col">'
+        + '<div class="sp-sec"><div class="sp-sec-h"><span class="t">基本信息</span></div>'
+        + '<div class="sp-kv">'
+        + '<div class="k">简称</div><div class="v">' + esc(d.short_name || '—') + '</div>'
+        + '<div class="k">类型</div><div class="v">' + esc(d.supplier_type || '—') + '</div>'
+        + '<div class="k">主营品类</div><div class="v">' + esc(d.main_products || '—') + '</div>'
+        + '<div class="k">地区地址</div><div class="v">' + esc(loc || '—') + '</div>'
+        + '<div class="k">开票能力</div><div class="v">' + _spFormatVat(d.can_issue_vat, d.tax_point) + '</div>'
+        + '<div class="k">结算方式</div><div class="v">' + esc(d.payment_terms || '—') + '</div>'
+        + '<div class="k">常规交期</div><div class="v">' + (d.lead_time_days != null ? esc(String(d.lead_time_days)) + ' 天' : '—') + '</div>'
+        + '<div class="k">来源</div><div class="v">' + esc(d.source || '—') + '</div>'
+        + '<div class="k">备注</div><div class="v">' + esc(d.note || '—') + '</div>'
+        + '</div></div>'
+        + '<div class="sp-sec"><div class="sp-sec-h"><span class="t">联系人（' + esc(String((d.contacts || []).length)) + '）</span>'
+        + '<div class="acts"><button type="button" class="btn" id="sp-add-contact-btn">+ 新增联系人</button></div></div>'
+        + contactsHtml + '</div>'
+        + '</div>'
+        + '<div class="sp-col">'
+        + '<div class="sp-sec"><div class="sp-sec-h"><span class="t">产品能力（' + esc(String((d.products || []).length)) + '）</span>'
+        + '<div class="acts"><button type="button" class="btn" id="sp-add-prod-btn">+ 登记产品能力</button></div></div>'
+        + productsHtml + '</div>'
+        + '<div class="sp-sec"><div class="sp-sec-h"><span class="t">最近报价（显示 ' + esc(String((d.quotes || []).length)) + ' / 共 ' + esc(String(d.quotes_total || 0)) + ' 条）</span>'
+        + '<div class="acts"><button type="button" class="btn btn-primary" id="sp-add-quote-btn">+ 追加报价</button></div></div>'
+        + quotesHtml + '</div>'
+        + '</div></div>';
+
+    body.querySelector('#sp-back-btn').addEventListener('click', function () {
+        _spState.selectedSupplierId = null;
+        _spState.detail = null;
+        _spRenderBody();
+        _spLoadSuppliers();
+    });
+    body.querySelector('#sp-edit-sup-btn').addEventListener('click', function () { _spOpenSupplierModal(d); });
+    body.querySelector('#sp-del-sup-btn').addEventListener('click', function () { _spOpenDeleteSupplierModal(d); });
+    body.querySelector('#sp-add-contact-btn').addEventListener('click', function () { _spOpenContactModal(d.id, null); });
+    body.querySelector('#sp-add-prod-btn').addEventListener('click', function () { _spOpenProductModal(d.id, null); });
+    body.querySelector('#sp-add-quote-btn').addEventListener('click', function () { _spOpenQuoteModal(d.id, null); });
+
+    body.querySelectorAll('[data-sp-edit-contact]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const cid = Number(btn.getAttribute('data-sp-edit-contact'));
+            const item = (d.contacts || []).find(function (x) { return x.id === cid; });
+            if (item) _spOpenContactModal(d.id, item);
+        });
+    });
+    body.querySelectorAll('[data-sp-del-contact]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const cid = Number(btn.getAttribute('data-sp-del-contact'));
+            if (!confirm('确认删除该联系人？')) return;
+            const ok = await api('DELETE', '/api/trade/suppliers/contacts/' + cid);
+            if (ok) _spOpenDetail(d.id);
+        });
+    });
+    body.querySelectorAll('[data-sp-edit-prod]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const pid = Number(btn.getAttribute('data-sp-edit-prod'));
+            const item = (d.products || []).find(function (x) { return x.id === pid; });
+            if (item) _spOpenProductModal(d.id, item);
+        });
+    });
+    body.querySelectorAll('[data-sp-del-prod]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const pid = Number(btn.getAttribute('data-sp-del-prod'));
+            if (!confirm('确认删除该产品能力行？（已有历史报价会保留）')) return;
+            const ok = await api('DELETE', '/api/trade/supplier-products/' + pid);
+            if (ok) _spOpenDetail(d.id);
+        });
+    });
+    body.querySelectorAll('[data-sp-edit-quote]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const qid = Number(btn.getAttribute('data-sp-edit-quote'));
+            const item = (d.quotes || []).find(function (x) { return x.id === qid; });
+            if (item) _spOpenQuoteModal(d.id, item);
+        });
+    });
+    body.querySelectorAll('[data-sp-del-quote]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const qid = Number(btn.getAttribute('data-sp-del-quote'));
+            if (!confirm('确认删除该条报价记录？')) return;
+            const ok = await api('DELETE', '/api/trade/supplier-quotes/' + qid);
+            if (ok) _spOpenDetail(d.id);
+        });
+    });
+}
+
+// ── 比价页签 ────────────────────────────────────────────────────────────────
+
+function _spRenderCompare(body) {
+    const q = _spState.compareQuery;
+    body.innerHTML =
+        '<div class="sp-cmp-bar">'
+        + '<span class="sp-lbl">产品名称</span>'
+        + '<input type="text" id="sp-cmp-prod" placeholder="输入产品名称，如 陶瓷马克杯" value="' + esc(q.product_name) + '" style="flex:1;min-width:200px;">'
+        + '<span class="sp-lbl">规格型号</span>'
+        + '<input type="text" id="sp-cmp-spec" placeholder="可选，如 350ml" value="' + esc(q.spec_model) + '" style="width:180px;">'
+        + '<button type="button" class="btn btn-primary" id="sp-cmp-go">开始比价</button>'
+        + '</div>'
+        + '<div id="sp-cmp-result">' + _spBuildCompareGroupsHtml(_spState.compareResult) + '</div>';
+
+    const runCompare = async function () {
+        const pn = (document.getElementById('sp-cmp-prod')?.value || '').trim();
+        const sm = (document.getElementById('sp-cmp-spec')?.value || '').trim();
+        if (!pn) {
+            toast('请输入要对比的产品名称');
+            return;
+        }
+        _spState.compareQuery = { product_name: pn, spec_model: sm };
+        const qs = new URLSearchParams({ product_name: pn });
+        if (sm) qs.set('spec_model', sm);
+        const res = await api('GET', '/api/trade/supplier-compare?' + qs.toString());
+        if (res) {
+            _spState.compareResult = res;
+            const box = document.getElementById('sp-cmp-result');
+            if (box) box.innerHTML = _spBuildCompareGroupsHtml(res);
+        }
+    };
+    body.querySelector('#sp-cmp-go').addEventListener('click', runCompare);
+    body.querySelector('#sp-cmp-prod').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') runCompare(); });
+    body.querySelector('#sp-cmp-spec').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') runCompare(); });
+}
+
+// ── 导入与确认页签 ──────────────────────────────────────────────────────────
+
+function _spRenderImport(body) {
+    const sub = _spState.importSub;
+    body.innerHTML =
+        '<div class="sp-seg2">'
+        + '<button type="button" class="' + (sub === 'upload' ? 'on' : '') + '" data-sp-imp-sub="upload">批量导入与 AI 抽取</button>'
+        + '<button type="button" class="' + (sub === 'drafts' ? 'on' : '') + '" data-sp-imp-sub="drafts">确认区（待确认 ' + esc(String(_spState.pendingDraftCount)) + '）</button>'
+        + '</div>'
+        + '<div id="sp-imp-panel"></div>';
+
+    body.querySelectorAll('[data-sp-imp-sub]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            _spState.importSub = btn.getAttribute('data-sp-imp-sub');
+            _spRenderImport(body);
+            if (_spState.importSub === 'drafts') _spLoadDrafts();
+        });
+    });
+
+    const panel = document.getElementById('sp-imp-panel');
+    if (sub === 'upload') {
+        _spRenderImportUpload(panel);
+    } else {
+        _spRenderDraftsList(panel);
+    }
+}
+
+function _spRenderImportUpload(panel) {
+    let csvResHtml = '';
+    if (_spState.csvResult) {
+        const r = _spState.csvResult;
+        const errRows = (r.errors || []).map(function (e) {
+            return '<tr><td>第 ' + esc(String(e.row)) + ' 行</td><td style="color:var(--accent);">' + esc(e.error) + '</td></tr>';
+        }).join('');
+        csvResHtml =
+            '<div class="sp-rsum" style="margin-top:8px;">'
+            + '<div><div class="n">' + esc(String(r.ok_rows || 0)) + '</div><div class="d">成功行数</div></div>'
+            + '<div><div class="n">' + esc(String(r.created_suppliers || 0)) + '</div><div class="d">新建供应商</div></div>'
+            + '<div><div class="n">' + esc(String(r.created_quotes || 0)) + '</div><div class="d">新增报价</div></div>'
+            + '<div><div class="n r">' + esc(String(r.error_count || 0)) + '</div><div class="d">失败行数</div></div>'
+            + '</div>'
+            + (errRows ? '<table class="sp-mini" style="margin-top:8px;"><thead><tr><th style="width:90px;">行号</th><th>失败原因</th></tr></thead><tbody>' + errRows + '</tbody></table>' : '');
+    }
+
+    let extResHtml = '';
+    if (_spState.extractResult) {
+        const er = _spState.extractResult;
+        const failRows = (er.failed || []).map(function (f) {
+            return '<tr><td>' + esc(f.file) + '</td><td style="color:var(--accent);">' + esc(f.error) + '</td></tr>';
+        }).join('');
+        extResHtml =
+            '<div class="sp-warn-box" style="margin-top:8px;">'
+            + '已处理文件：<b>' + esc(String(er.files_processed || 0)) + '</b>，生成待确认草稿：<b>' + esc(String(er.drafts_created || 0)) + '</b> 条，失败：<b>' + esc(String((er.failed || []).length)) + '</b> 个。'
+            + ' <button type="button" class="sp-lnk" id="sp-go-drafts-btn">前往确认区审核 →</button></div>'
+            + (failRows ? '<table class="sp-mini"><thead><tr><th>失败文件</th><th>原因</th></tr></thead><tbody>' + failRows + '</tbody></table>' : '');
+    }
+
+    panel.innerHTML =
+        '<div class="sp-imp2">'
+        + '<div class="sp-card">'
+        + '<h4>1. CSV 模板批量导入</h4>'
+        + '<p>下载标准模板，一次导入供应商、联系人、产品能力与报价历史。同文件内同名供应商自动合并；坏行逐行报错、好行照常入库。</p>'
+        + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+        + '<button type="button" class="btn" id="sp-dl-tpl-btn">' + btnIcon('download') + ' 下载 CSV 模板</button>'
+        + '<input type="file" id="sp-csv-file" accept=".csv" style="font-size:12px;">'
+        + '<button type="button" class="btn btn-primary" id="sp-csv-upload-btn">' + btnIcon('upload') + ' 上传导入</button>'
+        + '</div>'
+        + csvResHtml
+        + '</div>'
+        + '<div class="sp-card">'
+        + '<h4>2. AI 文件夹报价抽取</h4>'
+        + '<p>输入本机报价文件或文件夹绝对路径（每行一个，支持 txt/csv/xlsx/docx/pdf）。抽取结果仅写入确认区草稿，人工核对批准后才进入正式报价库。</p>'
+        + '<textarea id="sp-extract-paths" rows="4" placeholder="/Users/yourname/Documents/供应商报价单" style="width:100%;font-family:var(--font-mono);font-size:12px;padding:6px 8px;border:1px solid var(--line-strong);"></textarea>'
+        + '<div style="display:flex;gap:8px;align-items:center;">'
+        + '<button type="button" class="btn btn-primary" id="sp-extract-go-btn">开始 AI 抽取</button>'
+        + '<span id="sp-extract-status" class="sp-mut" style="font-size:12px;"></span>'
+        + '</div>'
+        + extResHtml
+        + '</div>'
+        + '</div>';
+
+    panel.querySelector('#sp-dl-tpl-btn').addEventListener('click', async function () {
+        const opts = _buildApiOpts('GET', null, TOKEN, currentCompanyId);
+        const r = await fetch('/api/trade/suppliers/template', opts);
+        if (!r.ok) {
+            toast('下载模板失败');
+            return;
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'trade-supplier-template.csv';
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+
+    panel.querySelector('#sp-csv-upload-btn').addEventListener('click', async function () {
+        const inp = document.getElementById('sp-csv-file');
+        if (!inp || !inp.files || !inp.files.length) {
+            toast('请先选择要上传的 CSV 文件');
+            return;
+        }
+        const fd = new FormData();
+        fd.append('file', inp.files[0]);
+        const res = await api('POST', '/api/trade/suppliers/bulk', fd);
+        if (res) {
+            _spState.csvResult = res;
+            toast('导入完成：成功 ' + res.ok_rows + ' 行，失败 ' + res.error_count + ' 行');
+            _spRenderImportUpload(panel);
+        }
+    });
+
+    panel.querySelector('#sp-extract-go-btn').addEventListener('click', async function () {
+        const raw = document.getElementById('sp-extract-paths')?.value || '';
+        const paths = raw.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+        if (!paths.length) {
+            toast('请先输入至少一个文件或文件夹路径');
+            return;
+        }
+        const stEl = document.getElementById('sp-extract-status');
+        if (stEl) stEl.textContent = '正在抽取，请稍候...';
+        const res = await api('POST', '/api/trade/suppliers/extract', { paths: paths });
+        if (stEl) stEl.textContent = '';
+        if (res) {
+            _spState.extractResult = res;
+            await _spRefreshPendingCount();
+            toast('抽取完成：生成 ' + res.drafts_created + ' 条草稿');
+            _spRenderImportUpload(panel);
+        }
+    });
+
+    const goBtn = panel.querySelector('#sp-go-drafts-btn');
+    if (goBtn) {
+        goBtn.addEventListener('click', function () {
+            _spState.importSub = 'drafts';
+            const body = document.getElementById('sp-body');
+            if (body) _spRenderImport(body);
+            _spLoadDrafts();
+        });
+    }
+}
+
+async function _spLoadDrafts() {
+    const st = _spState.draftStatus || 'pending';
+    const list = await api('GET', '/api/trade/supplier-quote-drafts?status=' + encodeURIComponent(st));
+    if (Array.isArray(list)) {
+        _spState.drafts = list;
+        if (st === 'pending') {
+            _spState.pendingDraftCount = list.length;
+            const badge = document.getElementById('sp-draft-badge');
+            if (badge) {
+                badge.textContent = String(list.length);
+                badge.style.display = list.length > 0 ? '' : 'none';
+            }
+        }
+        const panel = document.getElementById('sp-imp-panel');
+        if (panel && _spState.tab === 'import' && _spState.importSub === 'drafts') {
+            _spRenderDraftsList(panel);
+        }
+    }
+}
+
+function _spRenderDraftsList(panel) {
+    const st = _spState.draftStatus;
+    const filterHtml =
+        '<div class="sp-bar" style="margin-bottom:10px;">'
+        + '<span class="sp-lbl">状态筛选</span>'
+        + '<select id="sp-draft-st-sel">'
+        + '<option value="pending"' + (st === 'pending' ? ' selected' : '') + '>待确认</option>'
+        + '<option value="approved"' + (st === 'approved' ? ' selected' : '') + '>已批准</option>'
+        + '<option value="rejected"' + (st === 'rejected' ? ' selected' : '') + '>已驳回</option>'
+        + '<option value="all"' + (st === 'all' ? ' selected' : '') + '>全部</option>'
+        + '</select></div>';
+
+    const items = _spState.drafts || [];
+    if (!items.length) {
+        panel.innerHTML = filterHtml + '<div class="sp-state"><h3>当前筛选下暂无草稿</h3><p>AI 抽取生成的报价草稿会先进入这里，经你核对修改、批准后才写入正式报价库。</p></div>';
+    } else {
+        const cards = items.map(function (d) {
+            const matchText = d.matched_supplier_name
+                ? ('已匹配：' + esc(d.matched_supplier_name))
+                : '批准后将按原文名自动匹配或新建供应商';
+            const actions = d.status === 'pending'
+                ? '<button type="button" class="btn" data-sp-draft-edit="' + esc(String(d.id)) + '">编辑字段</button>'
+                  + '<button type="button" class="btn btn-primary" data-sp-draft-approve="' + esc(String(d.id)) + '">批准入库</button>'
+                  + '<button type="button" class="btn btn-danger" data-sp-draft-reject="' + esc(String(d.id)) + '">驳回</button>'
+                : '<span class="sp-chip mono">' + esc(d.status === 'approved' ? '已批准入库' : '已驳回留痕') + '</span>';
+
+            return '<div class="sp-draft">'
+                + '<div class="dh"><span class="no">#' + esc(String(d.id)) + '</span>'
+                + '<b>' + esc(d.supplier_name_raw || '（未识别供应商名）') + '</b>'
+                + '<span class="sp-mut" style="font-size:11.5px;">' + matchText + '</span>'
+                + '</div>'
+                + '<div class="db">'
+                + '<div class="f">'
+                + '<div><div class="k">产品名</div><div class="v">' + esc(d.product_name || '—') + '</div></div>'
+                + '<div><div class="k">规格型号</div><div class="v">' + esc(d.spec_model || '—') + '</div></div>'
+                + '<div><div class="k">单位</div><div class="v">' + esc(d.unit || '—') + '</div></div>'
+                + '<div><div class="k">币种</div><div class="v">' + esc(d.currency || 'CNY') + '</div></div>'
+                + '<div><div class="k">不含税价</div><div class="v">' + _spFormatPriceCell(d.price_excl_tax, d.currency, false) + '</div></div>'
+                + '<div><div class="k">含税价</div><div class="v">' + _spFormatPriceCell(d.price_incl_tax, d.currency, false) + '</div></div>'
+                + '<div><div class="k">报价日期</div><div class="v">' + esc(d.quoted_at || '—') + '</div></div>'
+                + '<div><div class="k">有效期</div><div class="v">' + esc(d.valid_until || '—') + '</div></div>'
+                + '</div>'
+                + '<div class="ex"><span class="sp-lbl">原文摘录</span><q>' + esc(d.raw_excerpt || '（无摘录）') + '</q>'
+                + '<div class="sp-mut" style="word-break:break-all;">来源：' + esc(d.source_file) + '</div></div>'
+                + '</div>'
+                + '<div class="df">' + actions + '</div>'
+                + '</div>';
+        }).join('');
+        panel.innerHTML = filterHtml + cards;
+    }
+
+    panel.querySelector('#sp-draft-st-sel').addEventListener('change', function (ev) {
+        _spState.draftStatus = ev.target.value;
+        _spLoadDrafts();
+    });
+    panel.querySelectorAll('[data-sp-draft-edit]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const did = Number(btn.getAttribute('data-sp-draft-edit'));
+            const item = items.find(function (x) { return x.id === did; });
+            if (item) _spOpenDraftEditModal(item);
+        });
+    });
+    panel.querySelectorAll('[data-sp-draft-approve]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const did = Number(btn.getAttribute('data-sp-draft-approve'));
+            const res = await api('POST', '/api/trade/supplier-quote-drafts/' + did + '/approve');
+            if (res) {
+                toast('已批准入正式报价库');
+                await _spRefreshPendingCount();
+                _spLoadDrafts();
+            }
+        });
+    });
+    panel.querySelectorAll('[data-sp-draft-reject]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const did = Number(btn.getAttribute('data-sp-draft-reject'));
+            const res = await api('POST', '/api/trade/supplier-quote-drafts/' + did + '/reject');
+            if (res) {
+                toast('已驳回并留痕');
+                await _spRefreshPendingCount();
+                _spLoadDrafts();
+            }
+        });
+    });
+}
+
+// ── 动态模态弹窗（增改删表单）───────────────────────────────────────────────
+
+function _spMountModal(html) {
+    _removeDynamicModals();
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-backdrop';
+    wrap.id = 'sp-dynamic-modal';
+    wrap.innerHTML = '<div class="modal" style="max-width:560px;">' + html + '</div>';
+    document.body.appendChild(wrap);
+    wrap.querySelectorAll('[data-sp-close]').forEach(function (btn) {
+        btn.addEventListener('click', function () { wrap.remove(); });
+    });
+    return wrap;
+}
+
+function _spOpenSupplierModal(existing) {
+    const s = existing || {};
+    const isEdit = !!s.id;
+    const modal = _spMountModal(
+        '<h3>' + (isEdit ? '编辑供应商' : '新建供应商') + '</h3>'
+        + '<div class="form-group"><label>供应商全称 *</label><input type="text" id="spf-name" value="' + esc(s.name || '') + '"></div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>简称</label><input type="text" id="spf-short" value="' + esc(s.short_name || '') + '"></div>'
+        + '<div class="form-group"><label>类型</label><input type="text" id="spf-type" placeholder="工厂 / 贸易商 / 工贸一体" value="' + esc(s.supplier_type || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label>主营品类</label><input type="text" id="spf-main" value="' + esc(s.main_products || '') + '"></div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>省</label><input type="text" id="spf-prov" value="' + esc(s.province || '') + '"></div>'
+        + '<div class="form-group"><label>市</label><input type="text" id="spf-city" value="' + esc(s.city || '') + '"></div>'
+        + '<div class="form-group"><label>状态</label><select id="spf-status">'
+        + ['候选', '洽谈中', '合作中', '暂停', '黑名单'].map(function (v) {
+            return '<option value="' + esc(v) + '"' + ((s.status || '候选') === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+        }).join('') + '</select></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>可开专票</label><select id="spf-vat">'
+        + '<option value="2"' + ((s.can_issue_vat === undefined || s.can_issue_vat === 2) ? ' selected' : '') + '>待确认</option>'
+        + '<option value="1"' + (s.can_issue_vat === 1 ? ' selected' : '') + '>是</option>'
+        + '<option value="0"' + (s.can_issue_vat === 0 ? ' selected' : '') + '>否</option>'
+        + '</select></div>'
+        + '<div class="form-group"><label>开票加点 (%)</label><input type="text" id="spf-tax" placeholder="如 8.0" value="' + (s.tax_point != null ? esc(String(s.tax_point)) : '') + '"></div>'
+        + '<div class="form-group"><label>评分 (1-5)</label><input type="text" id="spf-rating" value="' + (s.rating != null ? esc(String(s.rating)) : '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>结算方式</label><input type="text" id="spf-pay" value="' + esc(s.payment_terms || '') + '"></div>'
+        + '<div class="form-group"><label>交期（天）</label><input type="text" id="spf-lead" value="' + (s.lead_time_days != null ? esc(String(s.lead_time_days)) : '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label>详细地址</label><input type="text" id="spf-addr" value="' + esc(s.address || '') + '"></div>'
+        + '<div class="form-group"><label>备注</label><textarea id="spf-note">' + esc(s.note || '') + '</textarea></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="spf-save">保存</button></div>'
+    );
+    modal.querySelector('#spf-save').addEventListener('click', async function () {
+        const payload = {
+            name: (document.getElementById('spf-name').value || '').trim(),
+            short_name: document.getElementById('spf-short').value.trim(),
+            supplier_type: document.getElementById('spf-type').value.trim(),
+            main_products: document.getElementById('spf-main').value.trim(),
+            province: document.getElementById('spf-prov').value.trim(),
+            city: document.getElementById('spf-city').value.trim(),
+            status: document.getElementById('spf-status').value,
+            can_issue_vat: Number(document.getElementById('spf-vat').value),
+            tax_point: document.getElementById('spf-tax').value.trim() || null,
+            rating: document.getElementById('spf-rating').value.trim() || null,
+            payment_terms: document.getElementById('spf-pay').value.trim(),
+            lead_time_days: document.getElementById('spf-lead').value.trim() || null,
+            address: document.getElementById('spf-addr').value.trim(),
+            note: document.getElementById('spf-note').value.trim(),
+        };
+        if (!payload.name) { toast('请填写供应商全称'); return; }
+        const res = isEdit
+            ? await api('PUT', '/api/trade/suppliers/' + s.id, payload)
+            : await api('POST', '/api/trade/suppliers', payload);
+        if (res) {
+            modal.remove();
+            if (res.duplicate_warning) toast(res.duplicate_warning, { sticky: true });
+            else toast(isEdit ? '已更新供应商' : '已新建供应商');
+            if (_spState.selectedSupplierId) _spOpenDetail(_spState.selectedSupplierId);
+            else _spLoadSuppliers();
+        }
+    });
+}
+
+function _spOpenDeleteSupplierModal(d) {
+    const modal = _spMountModal(
+        '<h3>确认删除供应商</h3>'
+        + '<div class="sp-warn-box">将永久删除供应商 <b>' + esc(d.name) + '</b>，并级联删除其全部 '
+        + '<b>' + esc(String((d.contacts || []).length)) + '</b> 位联系人、'
+        + '<b>' + esc(String((d.products || []).length)) + '</b> 条产品能力及 '
+        + '<b>' + esc(String(d.quotes_total || 0)) + '</b> 条报价历史，删除后不可恢复。</div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-danger" id="sp-confirm-del">确认级联删除</button></div>'
+    );
+    modal.querySelector('#sp-confirm-del').addEventListener('click', async function () {
+        const res = await api('DELETE', '/api/trade/suppliers/' + d.id);
+        if (res) {
+            modal.remove();
+            toast('已删除供应商');
+            _spState.selectedSupplierId = null;
+            _spState.detail = null;
+            _spRenderBody();
+            _spLoadSuppliers();
+        }
+    });
+}
+
+function _spOpenContactModal(supplierId, existing) {
+    const c = existing || {};
+    const isEdit = !!c.id;
+    const modal = _spMountModal(
+        '<h3>' + (isEdit ? '编辑联系人' : '新增联系人') + '</h3>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>姓名 *</label><input type="text" id="spc-name" value="' + esc(c.name || '') + '"></div>'
+        + '<div class="form-group"><label>角色</label><input type="text" id="spc-role" placeholder="老板/业务报价/跟单/财务/仓储" value="' + esc(c.role || '业务报价') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>电话</label><input type="text" id="spc-phone" value="' + esc(c.phone || '') + '"></div>'
+        + '<div class="form-group"><label>微信</label><input type="text" id="spc-wechat" value="' + esc(c.wechat || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>邮箱</label><input type="text" id="spc-email" value="' + esc(c.email || '') + '"></div>'
+        + '<div class="form-group"><label>QQ</label><input type="text" id="spc-qq" value="' + esc(c.qq || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label><input type="checkbox" id="spc-primary"' + (c.is_primary ? ' checked' : '') + '> 设为主联系人（将自动取消同供应商其他主联系人）</label></div>'
+        + '<div class="form-group"><label>备注</label><input type="text" id="spc-note" value="' + esc(c.note || '') + '"></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="spc-save">保存</button></div>'
+    );
+    modal.querySelector('#spc-save').addEventListener('click', async function () {
+        const payload = {
+            name: document.getElementById('spc-name').value.trim(),
+            role: document.getElementById('spc-role').value.trim() || '其他',
+            phone: document.getElementById('spc-phone').value.trim(),
+            wechat: document.getElementById('spc-wechat').value.trim(),
+            email: document.getElementById('spc-email').value.trim(),
+            qq: document.getElementById('spc-qq').value.trim(),
+            is_primary: document.getElementById('spc-primary').checked ? 1 : 0,
+            note: document.getElementById('spc-note').value.trim(),
+        };
+        if (!payload.name) { toast('请填写联系人姓名'); return; }
+        const res = isEdit
+            ? await api('PUT', '/api/trade/suppliers/contacts/' + c.id, payload)
+            : await api('POST', '/api/trade/suppliers/' + supplierId + '/contacts', payload);
+        if (res) { modal.remove(); _spOpenDetail(supplierId); }
+    });
+}
+
+function _spOpenProductModal(supplierId, existing) {
+    const p = existing || {};
+    const isEdit = !!p.id;
+    const modal = _spMountModal(
+        '<h3>' + (isEdit ? '编辑产品能力' : '登记产品能力（同品名+规格自动更新）') + '</h3>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>产品名 *</label><input type="text" id="spp-name" value="' + esc(p.product_name || '') + '"></div>'
+        + '<div class="form-group"><label>规格型号</label><input type="text" id="spp-spec" value="' + esc(p.spec_model || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>单位</label><input type="text" id="spp-unit" placeholder="件 / kg / 台" value="' + esc(p.unit || '') + '"></div>'
+        + '<div class="form-group"><label>是否自产</label><select id="spp-self">'
+        + '<option value="2"' + ((p.is_self_produced === undefined || p.is_self_produced === 2) ? ' selected' : '') + '>待确认</option>'
+        + '<option value="1"' + (p.is_self_produced === 1 ? ' selected' : '') + '>是（自产）</option>'
+        + '<option value="0"' + (p.is_self_produced === 0 ? ' selected' : '') + '>否（外协/调货）</option>'
+        + '</select></div>'
+        + '<div class="form-group"><label>MOQ</label><input type="text" id="spp-moq" value="' + (p.moq != null ? esc(String(p.moq)) : '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>交期天数</label><input type="text" id="spp-days" value="' + (p.lead_time_days != null ? esc(String(p.lead_time_days)) : '') + '"></div>'
+        + '<div class="form-group"><label>交期说明</label><input type="text" id="spp-ltxt" placeholder="如 旺季 20 天" value="' + esc(p.lead_time_text || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label>质量备注</label><input type="text" id="spp-qual" value="' + esc(p.quality_note || '') + '"></div>'
+        + '<div class="form-group"><label>包装信息</label><input type="text" id="spp-pack" value="' + esc(p.packing_info || '') + '"></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="spp-save">保存</button></div>'
+    );
+    modal.querySelector('#spp-save').addEventListener('click', async function () {
+        const payload = {
+            product_name: document.getElementById('spp-name').value.trim(),
+            spec_model: document.getElementById('spp-spec').value.trim(),
+            unit: document.getElementById('spp-unit').value.trim(),
+            is_self_produced: Number(document.getElementById('spp-self').value),
+            moq: document.getElementById('spp-moq').value.trim() || null,
+            lead_time_days: document.getElementById('spp-days').value.trim() || null,
+            lead_time_text: document.getElementById('spp-ltxt').value.trim(),
+            quality_note: document.getElementById('spp-qual').value.trim(),
+            packing_info: document.getElementById('spp-pack').value.trim(),
+        };
+        if (!payload.product_name) { toast('请填写产品名'); return; }
+        const res = isEdit
+            ? await api('PUT', '/api/trade/supplier-products/' + p.id, payload)
+            : await api('POST', '/api/trade/suppliers/' + supplierId + '/products', payload);
+        if (res) { modal.remove(); _spOpenDetail(supplierId); }
+    });
+}
+
+function _spOpenQuoteModal(supplierId, existing) {
+    const q = existing || {};
+    const isEdit = !!q.id;
+    const modal = _spMountModal(
+        '<h3>' + (isEdit ? '修改报价（纠错）' : '追加报价（不覆盖历史）') + '</h3>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>产品名 *</label><input type="text" id="spq-name" value="' + esc(q.product_name || '') + '"></div>'
+        + '<div class="form-group"><label>规格型号</label><input type="text" id="spq-spec" placeholder="设备类可写年份/工时/配置" value="' + esc(q.spec_model || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>单位</label><input type="text" id="spq-unit" value="' + esc(q.unit || '') + '"></div>'
+        + '<div class="form-group"><label>币种</label><input type="text" id="spq-cur" value="' + esc(q.currency || 'CNY') + '"></div>'
+        + '<div class="form-group"><label>MOQ</label><input type="text" id="spq-moq" value="' + (q.moq != null ? esc(String(q.moq)) : '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>不含税价</label><input type="text" id="spq-excl" value="' + (q.price_excl_tax != null ? esc(String(q.price_excl_tax)) : '') + '"></div>'
+        + '<div class="form-group"><label>含税价</label><input type="text" id="spq-incl" value="' + (q.price_incl_tax != null ? esc(String(q.price_incl_tax)) : '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>报价日期</label><input type="date" id="spq-date" value="' + esc(q.quoted_at || '') + '"></div>'
+        + '<div class="form-group"><label>有效期至</label><input type="date" id="spq-valid" value="' + esc(q.valid_until || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-group"><label>备注</label><input type="text" id="spq-notes" value="' + esc(q.notes || '') + '"></div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="spq-save">保存</button></div>'
+    );
+    modal.querySelector('#spq-save').addEventListener('click', async function () {
+        const payload = {
+            product_name: document.getElementById('spq-name').value.trim(),
+            spec_model: document.getElementById('spq-spec').value.trim(),
+            unit: document.getElementById('spq-unit').value.trim(),
+            currency: document.getElementById('spq-cur').value.trim() || 'CNY',
+            moq: document.getElementById('spq-moq').value.trim() || null,
+            price_excl_tax: document.getElementById('spq-excl').value.trim() || null,
+            price_incl_tax: document.getElementById('spq-incl').value.trim() || null,
+            quoted_at: document.getElementById('spq-date').value.trim(),
+            valid_until: document.getElementById('spq-valid').value.trim(),
+            notes: document.getElementById('spq-notes').value.trim(),
+        };
+        if (!payload.product_name) { toast('请填写产品名'); return; }
+        const res = isEdit
+            ? await api('PUT', '/api/trade/supplier-quotes/' + q.id, payload)
+            : await api('POST', '/api/trade/suppliers/' + supplierId + '/quotes', payload);
+        if (res) { modal.remove(); _spOpenDetail(supplierId); }
+    });
+}
+
+function _spOpenDraftEditModal(d) {
+    const modal = _spMountModal(
+        '<h3>编辑草稿 #' + esc(String(d.id)) + '</h3>'
+        + '<div class="form-group"><label>供应商名称</label><input type="text" id="spd-sup" value="' + esc(d.supplier_name_raw || '') + '"></div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>产品名</label><input type="text" id="spd-prod" value="' + esc(d.product_name || '') + '"></div>'
+        + '<div class="form-group"><label>规格型号</label><input type="text" id="spd-spec" value="' + esc(d.spec_model || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>单位</label><input type="text" id="spd-unit" value="' + esc(d.unit || '') + '"></div>'
+        + '<div class="form-group"><label>不含税价</label><input type="text" id="spd-excl" value="' + (d.price_excl_tax != null ? esc(String(d.price_excl_tax)) : '') + '"></div>'
+        + '<div class="form-group"><label>含税价</label><input type="text" id="spd-incl" value="' + (d.price_incl_tax != null ? esc(String(d.price_incl_tax)) : '') + '"></div>'
+        + '</div>'
+        + '<div class="form-row">'
+        + '<div class="form-group"><label>报价日期</label><input type="text" id="spd-date" value="' + esc(d.quoted_at || '') + '"></div>'
+        + '<div class="form-group"><label>有效期</label><input type="text" id="spd-valid" value="' + esc(d.valid_until || '') + '"></div>'
+        + '</div>'
+        + '<div class="form-actions"><button type="button" class="btn" data-sp-close="1">取消</button>'
+        + '<button type="button" class="btn btn-primary" id="spd-save">保存草稿</button></div>'
+    );
+    modal.querySelector('#spd-save').addEventListener('click', async function () {
+        const payload = {
+            supplier_name_raw: document.getElementById('spd-sup').value.trim(),
+            product_name: document.getElementById('spd-prod').value.trim(),
+            spec_model: document.getElementById('spd-spec').value.trim(),
+            unit: document.getElementById('spd-unit').value.trim(),
+            price_excl_tax: document.getElementById('spd-excl').value.trim() || null,
+            price_incl_tax: document.getElementById('spd-incl').value.trim() || null,
+            quoted_at: document.getElementById('spd-date').value.trim(),
+            valid_until: document.getElementById('spd-valid').value.trim(),
+        };
+        const res = await api('PUT', '/api/trade/supplier-quote-drafts/' + d.id, payload);
+        if (res) { modal.remove(); _spLoadDrafts(); }
+    });
+}
