@@ -1503,7 +1503,7 @@ function showOrderEditModal(oid, presetCid) {
             '<button type="button" class="btn-xs" style="margin-top:6px;" data-act="addOrderItemRow">'+t('order.add_line')+'</button>' +
         '</div>' +
         '<div class="form-group"><label for="order-notes">'+t('order.notes')+'</label><textarea id="order-notes" style="min-height:50px;" placeholder="Notes"></textarea></div>' +
-        (isEdit ? '<div class="form-group"><label>关联采购单</label><div id="order-linked-pos"><span style="font-size:12px;color:var(--muted);">加载中...</span></div></div>' : '') +
+        (isEdit ? '<div class="form-group" id="order-linked-pos-group"><label>关联采购单</label><div id="order-linked-pos"><span style="font-size:12px;color:var(--muted);">加载中...</span></div></div>' : '') +
         '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">' +
             (isEdit?'<button class="btn btn-danger" data-act="deleteOrder" data-arg="'+oid+'">'+t('order.btn_delete')+'</button>':'') +
             '<button class="btn" data-act="closeBackdrop">'+t('btn.cancel')+'</button>' +
@@ -1541,12 +1541,23 @@ function showOrderEditModal(oid, presetCid) {
                 }];
             setOrderItems(items);
         });
+        const _hideLinkedPos = () => {
+            const grp = $('order-linked-pos-group');
+            if (grp) grp.style.display = 'none';
+        };
         api('GET', `/api/trade/purchase-orders?order_id=${oid}`, null, undefined, { silent: true }).then(pos => {
+            // 试用 402 或接口失败时 api() 返回 null：静默隐藏「关联采购单」区块，不弹错也不影响订单页其他内容
+            if (!Array.isArray(pos)) {
+                _hideLinkedPos();
+                return;
+            }
             const box = $('order-linked-pos');
             if (!box) return;
             if (typeof _spBuildOrderLinkedPosHtml === 'function') {
-                box.innerHTML = _spBuildOrderLinkedPosHtml(Array.isArray(pos) ? pos : []);
+                box.innerHTML = _spBuildOrderLinkedPosHtml(pos);
             }
+        }).catch(() => {
+            _hideLinkedPos();
         });
     }
     // 加载客户下拉

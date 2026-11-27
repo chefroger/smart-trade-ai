@@ -540,12 +540,37 @@ SUPPLIER_DELIVERY_ALERTS_SCHEMA = _schema(
 )
 
 
+_SUPPLIER_PAID_ERROR = "供应商管理为付费功能，激活后可用。"
+
+
+def _check_supplier_license() -> str | None:
+    """检查供应商 AI 工具的付费许可证状态。
+
+    语义与后端 HTTP 门禁完全一致：状态 != "active" 时返回 _err 错误 JSON；
+    读取异常时 fail-open 返回 None 放行。
+    """
+    try:
+        from trade.license import license_state
+
+        state, _message = license_state()
+    except Exception:  # noqa: BLE001 — 读不到许可证状态时 fail-open 放行
+        return None
+    # 非 active 状态（试用/过期/异常）拦截，不返回数据也不执行写入
+    if state != "active":
+        return _err(_SUPPLIER_PAID_ERROR)
+    return None
+
+
 def handle_supplier_candidate_save(args: dict[str, Any], **_kw) -> str:
     """受控写入：将国内找厂线索保存为候选供应商（同公司同名不新建）。"""
     company_id = _bound_company()
     # 无绑定公司上下文时拒绝任何写入
     if company_id is None:
         return _err("没有公司上下文，拒绝写入候选供应商")
+    gate_err = _check_supplier_license()
+    # 非 active 许可证状态下拦截，不返回数据也不执行写入
+    if gate_err is not None:
+        return gate_err
 
     name = str(args.get("name") or "").strip()
     # 名称必填
@@ -626,6 +651,10 @@ def handle_supplier_quote_search(args: dict[str, Any], **_kw) -> str:
     # 无绑定公司上下文时拒绝读取
     if company_id is None:
         return _err("没有公司上下文，拒绝查询供应商报价")
+    gate_err = _check_supplier_license()
+    # 非 active 许可证状态下拦截，不返回任何供应商数据
+    if gate_err is not None:
+        return gate_err
 
     try:
         from trade import supplier as supplier_mod
@@ -653,6 +682,10 @@ def handle_supplier_compare(args: dict[str, Any], **_kw) -> str:
     # 无绑定公司上下文时拒绝读取
     if company_id is None:
         return _err("没有公司上下文，拒绝执行产品比价")
+    gate_err = _check_supplier_license()
+    # 非 active 许可证状态下拦截，不返回任何供应商数据
+    if gate_err is not None:
+        return gate_err
 
     product_name = str(args.get("product_name") or "").strip()
     # 产品名称必填
@@ -679,6 +712,10 @@ def handle_supplier_list(args: dict[str, Any], **_kw) -> str:
     # 无绑定公司上下文时拒绝读取
     if company_id is None:
         return _err("没有公司上下文，拒绝查询供应商名录")
+    gate_err = _check_supplier_license()
+    # 非 active 许可证状态下拦截，不返回任何供应商数据
+    if gate_err is not None:
+        return gate_err
 
     try:
         from trade import supplier as supplier_mod
@@ -703,6 +740,10 @@ def handle_supplier_delivery_alerts(args: dict[str, Any], **_kw) -> str:
     # 无绑定公司上下文时拒绝读取
     if company_id is None:
         return _err("没有公司上下文，拒绝查询采购交期提醒")
+    gate_err = _check_supplier_license()
+    # 非 active 许可证状态下拦截，不返回任何供应商数据
+    if gate_err is not None:
+        return gate_err
 
     try:
         from trade import purchase as purchase_mod

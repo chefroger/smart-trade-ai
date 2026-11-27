@@ -30,6 +30,7 @@ from trade import company as company_mod
 from trade import customer as customer_mod
 from trade import database as db_mod
 from trade import inquiry as inquiry_mod
+from trade import license as license_mod
 from trade import prompt as prompt_mod
 from trade import rfq as rfq_mod
 from trade import supplier as supplier_mod
@@ -50,6 +51,8 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADE_HOME", str(trade_home))
     monkeypatch.setattr(db_mod, "_get_db_path", lambda: db_path)
     monkeypatch.setattr(company_mod.crud, "TRADE_HOME", trade_home)
+    # 供应商模块为付费能力：既有第二批功能验收在已激活（active）状态下运行
+    monkeypatch.setattr(license_mod, "license_state", lambda: ("active", ""))
 
     def _fake_work_dir(name, slug, suggested_name=""):
         wd = tmp_path / "work" / (slug or "co")
