@@ -20,9 +20,9 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-2.png" alt="Customer & Cron Panel" width="75%">
+  <video src="docs/demo-part1.mp4" controls width="75%"></video>
   <br>
-  <em>Customer management + Cron task panel</em>
+  <em>Feature Demo (Part 1) — <a href="docs/demo-part1.mp4">View / Download MP4 Video</a></em>
 </p>
 
 ---
@@ -41,9 +41,9 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-1.png" alt="AI Chat Interface" width="75%">
+  <video src="docs/demo-part2.mp4" controls width="75%"></video>
   <br>
-  <em>AI Chat — auto-invokes web_search / read_file / database tools</em>
+  <em>Feature Demo (Part 2) — <a href="docs/demo-part2.mp4">View / Download MP4 Video</a></em>
 </p>
 
 ---

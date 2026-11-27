@@ -18,9 +18,9 @@
 ---
 
 <p align="center">
-  <img src="docs/screenshot-1.png" alt="AI Chat Interface" width="75%">
+  <video src="docs/demo-part1.mp4" controls width="75%"></video>
   <br>
-  <em>AI 对话界面 — 自动调用 web_search / read_file / database 工具</em>
+  <em>功能演示（上）— <a href="docs/demo-part1.mp4">点击查看 / 下载 MP4 视频</a></em>
 </p>
 
 ---
@@ -67,9 +67,9 @@ irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/inst
 ---
 
 <p align="center">
-  <img src="docs/screenshot-2.png" alt="Customer & Cron Panel" width="75%">
+  <video src="docs/demo-part2.mp4" controls width="75%"></video>
   <br>
-  <em>客户管理 + 定时任务面板</em>
+  <em>功能演示（下）— <a href="docs/demo-part2.mp4">点击查看 / 下载 MP4 视频</a></em>
 </p>
 
 ---
