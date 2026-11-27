@@ -46,29 +46,50 @@ _TEMP_SAFE_PROVIDERS = frozenset({
 # 分析/提取类任务的默认温度（可用 TRADE_CONSISTENCY_TEMPERATURE 环境变量覆盖）
 _DEFAULT_CONSISTENCY_TEMPERATURE = "0.1"
 
+# 长报告类技能（P8）：推理模型（如 deepseek-flash）会先消耗输出预算做思考，
+# 需要显式提供更高的 max_tokens 避免报告中途 finish_reason=length 截断。
+_LONG_REPORT_SKILLS = frozenset({
+    "b2b-osint",
+    "b2b-market-analysis",
+    "b2b-guarantee-proposal",
+    "b2b-doc-generation",
+    "b2b-sales-playbook",
+    "b2b-china-leads",
+})
+_DEFAULT_LONG_REPORT_MAX_TOKENS = 8192
+
 
 def _consistency_request_overrides(skill_name: str | None, provider: str) -> dict | None:
-    """按 skill 类型与 provider 决定是否注入一致性 temperature。
+    """按 skill 类型与 provider 决定是否注入一致性 temperature 及长报告 max_tokens。
 
-    - 创作类 skill（_CREATIVE_SKILLS）→ None（用 provider 默认温度，保多样性）
-    - 白名单外 provider → None（会报错型如 Kimi/Anthropic；静默忽略型如 deepseek）
-    - 其余（分析/提取/清单类 + 无匹配通用对话）→ {"temperature": 低温}
-
-    注意：temperature 只是"锦上添花"的一致性辅助，不是主防线。分析/提取类任务的
-    确定性主防线在 prompt 层（STOP RULE / 清单协议 / 事实核查）与代码校验层
-    （三道防线），它们不依赖 provider 的采样参数契约——尤其是 deepseek 这类
-    thinking mode 下 temperature 被静默忽略的 provider。
+    - 创作类 skill（_CREATIVE_SKILLS）→ 不注入低温（用 provider 默认温度，保多样性）
+    - 白名单内 provider + 非创作类 → 注入 {"temperature": 低温}
+    - 长报告类 skill（_LONG_REPORT_SKILLS）→ 额外注入较高 max_tokens，降低
+      deepseek-flash 等推理模型 finish_reason=length 截断概率（P8）
     """
-    if skill_name in _CREATIVE_SKILLS:
-        return None
-    if (provider or "").strip().lower() not in _TEMP_SAFE_PROVIDERS:
-        return None
-    try:
-        temp = float(os.environ.get(
-            "TRADE_CONSISTENCY_TEMPERATURE", _DEFAULT_CONSISTENCY_TEMPERATURE))
-    except ValueError:
-        temp = 0.1  # 环境变量值非法时回退默认
-    return {"temperature": temp}
+    overrides: dict[str, float | int] = {}
+    if (
+        skill_name not in _CREATIVE_SKILLS
+        and (provider or "").strip().lower() in _TEMP_SAFE_PROVIDERS
+    ):
+        try:
+            temp = float(os.environ.get(
+                "TRADE_CONSISTENCY_TEMPERATURE", _DEFAULT_CONSISTENCY_TEMPERATURE))
+        except ValueError:
+            temp = 0.1  # 环境变量值非法时回退默认
+        overrides["temperature"] = temp
+
+    if skill_name in _LONG_REPORT_SKILLS:
+        try:
+            max_tok = int(os.environ.get(
+                "TRADE_LONG_REPORT_MAX_TOKENS", str(_DEFAULT_LONG_REPORT_MAX_TOKENS)
+            ))
+        except ValueError:
+            max_tok = _DEFAULT_LONG_REPORT_MAX_TOKENS
+        if max_tok > 0:
+            overrides["max_tokens"] = max_tok
+
+    return overrides or None
 
 
 def _json_loads(raw):

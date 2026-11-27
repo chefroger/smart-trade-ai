@@ -1645,6 +1645,11 @@ async function sendMsg() {
                         break;
                     case 'response':
                         responseText = data.text||'';
+                        if (data.truncated) {
+                            responseText += (currentLang === 'en'
+                                ? '\n\n> ⚠️ Response was truncated due to length limit. Type "continue" to get the rest.'
+                                : '\n\n> ⚠️ 回复因达到长度上限被截断，可输入「继续」获取剩余内容。');
+                        }
                         responseConvId = data.conversation_id || null;
                         _currentConvId = data.conversation_id || null;
                         responseBlocks = data.blocks || null;

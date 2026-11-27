@@ -375,6 +375,17 @@ def _classify_user_paths(query: str, cid: int) -> list[str]:
     return allowed
 
 
+def _is_length_truncated(agent) -> bool:
+    """检测 agent 最后一次模型响应是否因 finish_reason=length 被截断（P8）。"""
+    if agent is None:
+        return False
+    for attr in ("last_finish_reason", "_last_finish_reason", "finish_reason"):
+        val = getattr(agent, attr, None)
+        if isinstance(val, str) and val.strip().lower() == "length":
+            return True
+    return False
+
+
 def _abort_running_agent(agent) -> None:
     """超时 / 客户端放弃后，尽力让仍在跑的 agent 停下来（审计 P1-21）。
 
@@ -1405,6 +1416,8 @@ async def trade_chat_stream(
             "elapsed_sec": round(elapsed, 1),
             "conversation_id": conv_id,
         }
+        if _is_length_truncated(agent_holder[-1] if agent_holder else None):
+            resp_payload["truncated"] = True
         if reply_blocks:
             resp_payload["blocks"] = reply_blocks
         if partial:
