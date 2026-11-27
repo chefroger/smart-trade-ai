@@ -388,6 +388,33 @@ function _spBuildOrderLinkedPosHtml(pos) {
         }).join('') + '</tbody></table>';
 }
 
+function _spFormatExtractError(errCode, filePath) {
+    const code = String(errCode || '');
+    const lower = String(filePath || '').toLowerCase();
+    if (code === 'unsupported_type') {
+        if (/\.(jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(lower)) {
+            return '图片 / 扫描件暂不支持，需要先 OCR';
+        }
+        return '文件格式暂不支持（目前支持 txt/md/csv/tsv/xlsx/docx/pdf）';
+    }
+    if (code === 'needs_ocr') return '扫描版 PDF 暂不支持，需要先 OCR';
+    if (code === 'file_not_found') return '文件或路径不存在';
+    if (code === 'empty') return '文件内容为空';
+    if (code === 'truncated') return '文件内容过长被截断，未自动抽取';
+    return code || '未知错误';
+}
+
+function _spBuildExtractResultHtml(er) {
+    if (!er) return '';
+    const failed = Array.isArray(er.failed) ? er.failed : [];
+    const failRows = failed.map(function (f) {
+        return '<tr><td>' + esc(f.file || '') + '</td><td style="color:var(--accent);">' + esc(_spFormatExtractError(f.error, f.file)) + '</td></tr>';
+    }).join('');
+    return '<div class="sp-warn-box" style="margin-top:8px;">'
+        + '已处理文件：<b>' + esc(String(er.files_processed || 0)) + '</b>，生成待确认草稿：<b>' + esc(String(er.drafts_created || 0)) + '</b> 条，失败/跳过：<b>' + esc(String(failed.length)) + '</b> 个。'
+        + ' <button type="button" class="sp-lnk" id="sp-go-drafts-btn">前往确认区审核 →</button></div>'
+        + (failRows ? '<table class="sp-mini"><thead><tr><th>未处理 / 失败文件</th><th>原因</th></tr></thead><tbody>' + failRows + '</tbody></table>' : '');
+}
 // #endregion suppliers-ui
 
 function renderSuppliersViewInto(container) {
@@ -823,15 +850,7 @@ function _spRenderImportUpload(panel) {
 
     let extResHtml = '';
     if (_spState.extractResult) {
-        const er = _spState.extractResult;
-        const failRows = (er.failed || []).map(function (f) {
-            return '<tr><td>' + esc(f.file) + '</td><td style="color:var(--accent);">' + esc(f.error) + '</td></tr>';
-        }).join('');
-        extResHtml =
-            '<div class="sp-warn-box" style="margin-top:8px;">'
-            + '已处理文件：<b>' + esc(String(er.files_processed || 0)) + '</b>，生成待确认草稿：<b>' + esc(String(er.drafts_created || 0)) + '</b> 条，失败：<b>' + esc(String((er.failed || []).length)) + '</b> 个。'
-            + ' <button type="button" class="sp-lnk" id="sp-go-drafts-btn">前往确认区审核 →</button></div>'
-            + (failRows ? '<table class="sp-mini"><thead><tr><th>失败文件</th><th>原因</th></tr></thead><tbody>' + failRows + '</tbody></table>' : '');
+        extResHtml = _spBuildExtractResultHtml(_spState.extractResult);
     }
 
     panel.innerHTML =
@@ -979,6 +998,7 @@ function _spRenderDraftsList(panel) {
                 + '<div><div class="k">币种</div><div class="v">' + esc(d.currency || 'CNY') + '</div></div>'
                 + '<div><div class="k">不含税价</div><div class="v">' + _spFormatPriceCell(d.price_excl_tax, d.currency, false) + '</div></div>'
                 + '<div><div class="k">含税价</div><div class="v">' + _spFormatPriceCell(d.price_incl_tax, d.currency, false) + '</div></div>'
+                + '<div><div class="k">起订量 (MOQ)</div><div class="v">' + (d.moq != null ? esc(String(d.moq)) : '—') + '</div></div>'
                 + '<div><div class="k">报价日期</div><div class="v">' + _spFormatQuotedAt(d.quoted_at) + '</div></div>'
                 + '<div><div class="k">有效期</div><div class="v">' + esc(d.valid_until || '—') + '</div></div>'
                 + '</div>'
@@ -1279,6 +1299,7 @@ function _spOpenDraftEditModal(d) {
         + '<div class="form-group"><label>单位</label><input type="text" id="spd-unit" value="' + esc(d.unit || '') + '"></div>'
         + '<div class="form-group"><label>不含税价</label><input type="text" id="spd-excl" value="' + (d.price_excl_tax != null ? esc(String(d.price_excl_tax)) : '') + '"></div>'
         + '<div class="form-group"><label>含税价</label><input type="text" id="spd-incl" value="' + (d.price_incl_tax != null ? esc(String(d.price_incl_tax)) : '') + '"></div>'
+        + '<div class="form-group"><label>起订量 (MOQ)</label><input type="text" id="spd-moq" value="' + (d.moq != null ? esc(String(d.moq)) : '') + '"></div>'
         + '</div>'
         + '<div class="form-row">'
         + '<div class="form-group"><label>报价日期</label><input type="text" id="spd-date" value="' + esc(d.quoted_at || '') + '"></div>'
@@ -1295,6 +1316,7 @@ function _spOpenDraftEditModal(d) {
             unit: document.getElementById('spd-unit').value.trim(),
             price_excl_tax: document.getElementById('spd-excl').value.trim() || null,
             price_incl_tax: document.getElementById('spd-incl').value.trim() || null,
+            moq: document.getElementById('spd-moq').value.trim() || null,
             quoted_at: document.getElementById('spd-date').value.trim(),
             valid_until: document.getElementById('spd-valid').value.trim(),
         };

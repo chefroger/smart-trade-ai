@@ -224,6 +224,7 @@ class SupplierDraftUpdateBody(BaseModel):
     price_excl_tax: Any = None
     price_incl_tax: Any = None
     currency: str | None = None
+    moq: Any = None
     quoted_at: str | None = None
     valid_until: str | None = None
     raw_excerpt: str | None = None

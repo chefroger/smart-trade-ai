@@ -791,3 +791,172 @@ async def test_extract_records_usage_ledger(env, monkeypatch, tmp_path):
         assert tuple(row) == ("supplier-extract", "deepseek", "deepseek-flash", 1500, 200, 1200, 300)
     finally:
         conn.close()
+
+
+# ==============================================================================
+# 工单 #2：按文件夹抽取时不支持文件不静默跳过，系统隐藏文件安静忽略
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_extract_folder_reports_unsupported_and_ignores_system_files(env, monkeypatch, tmp_path):
+    """混合目录（txt + jpg + .DS_Store + ~$temp.xlsx）：jpg 进 failed，系统/临时文件不出现。"""
+    cid = env["co_a"]["id"]
+    folder = tmp_path / "fictional_mixed_dir"
+    folder.mkdir()
+    # 虚构测试报价与占位图片
+    (folder / "quote.txt").write_text("虚构工厂\n测试件B 10元/个\n", encoding="utf-8")
+    jpg_file = folder / "scan_quote.jpg"
+    jpg_file.write_bytes(b"\xff\xd8\xff\xe0fakejpg")
+    (folder / ".DS_Store").write_bytes(b"macos-meta")
+    (folder / "Thumbs.db").write_bytes(b"win-meta")
+    (folder / "~$quote.xlsx").write_bytes(b"office-lock")
+
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+    monkeypatch.setattr(
+        doc_extract,
+        "_call_model",
+        AsyncMock(
+            return_value=json.dumps(
+                {
+                    "quotes": [
+                        {
+                            "supplier_name": "虚构工厂",
+                            "product_name": "测试件B",
+                            "unit": "个",
+                            "price_excl_tax": 10.0,
+                            "moq": None,
+                            "raw_excerpt": "测试件B 10元/个",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
+
+    dir_res = await supplier_mod.extract_files_to_drafts(cid, [str(folder)])
+    assert dir_res["files_processed"] == 1
+    assert dir_res["drafts_created"] == 1
+    assert len(dir_res["failed"]) == 1
+    assert dir_res["failed"][0]["file"].endswith("scan_quote.jpg")
+    assert dir_res["failed"][0]["error"] == "unsupported_type"
+
+    # 单文件路径与文件夹路径对同一种文件给出同样的错误码
+    single_res = await supplier_mod.extract_files_to_drafts(cid, [str(jpg_file)])
+    assert len(single_res["failed"]) == 1
+    assert single_res["failed"][0]["error"] == dir_res["failed"][0]["error"] == "unsupported_type"
+
+
+# ==============================================================================
+# 工单 #4：确认区草稿 MOQ 字段（迁移 + 抽取 → 编辑 → 批准全链路）
+# ==============================================================================
+
+
+def test_draft_moq_migration_preserves_old_drafts(tmp_path):
+    """老库升级：给旧结构 supplier_quote_drafts 补 moq 列，旧草稿数据不丢且 moq 为 NULL。"""
+    db_path = tmp_path / "legacy_drafts.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE supplier_quote_drafts (
+            id                INTEGER PRIMARY KEY,
+            company_id        INTEGER NOT NULL,
+            supplier_id       INTEGER,
+            supplier_name_raw TEXT DEFAULT '',
+            product_name      TEXT DEFAULT '',
+            spec_model        TEXT DEFAULT '',
+            unit              TEXT DEFAULT '',
+            price_excl_tax    REAL,
+            price_incl_tax    REAL,
+            currency          TEXT DEFAULT 'CNY',
+            quoted_at         TEXT DEFAULT '',
+            valid_until       TEXT DEFAULT '',
+            source_file       TEXT NOT NULL,
+            raw_excerpt       TEXT DEFAULT '',
+            status            TEXT DEFAULT 'pending'
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO supplier_quote_drafts (company_id, supplier_name_raw, product_name, source_file) "
+        "VALUES (1, '旧厂', '旧件', '/tmp/old.txt')"
+    )
+    conn.commit()
+
+    db_mod._migrate_supplier_drafts_moq_v7(conn)
+    conn.commit()
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(supplier_quote_drafts)").fetchall()}
+    assert "moq" in cols
+    row = conn.execute("SELECT product_name, moq FROM supplier_quote_drafts").fetchone()
+    assert row == ("旧件", None)
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_extract_draft_edit_and_approve_preserves_moq(env, monkeypatch, tmp_path):
+    """含 MOQ 的虚构样例走完抽取→编辑→批准，正式报价 MOQ 正确；无 MOQ 为 None。"""
+    cid = env["co_a"]["id"]
+    client = env["client"]
+    headers = env["headers"](cid)
+
+    sample = tmp_path / "fictional_moq.txt"
+    sample.write_text("虚构MOQ厂\n件X MOQ 500 个 8元\n件Y 无起订 9元\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+    monkeypatch.setattr(
+        doc_extract,
+        "_call_model",
+        AsyncMock(
+            return_value=json.dumps(
+                {
+                    "quotes": [
+                        {
+                            "supplier_name": "虚构MOQ厂",
+                            "product_name": "件X",
+                            "unit": "个",
+                            "price_excl_tax": 8.0,
+                            "moq": 500,
+                            "raw_excerpt": "件X MOQ 500 个 8元",
+                        },
+                        {
+                            "supplier_name": "虚构MOQ厂",
+                            "product_name": "件Y",
+                            "unit": "个",
+                            "price_excl_tax": 9.0,
+                            "moq": None,
+                            "raw_excerpt": "件Y 无起订 9元",
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
+
+    ext = await supplier_mod.extract_files_to_drafts(cid, [str(sample)])
+    assert ext["drafts_created"] == 2
+    d_x = next(d for d in ext["drafts"] if d["product_name"] == "件X")
+    d_y = next(d for d in ext["drafts"] if d["product_name"] == "件Y")
+    assert d_x["moq"] == 500.0
+    assert d_y["moq"] is None
+
+    # 通过编辑接口修改 MOQ 为 800
+    upd = client.put(
+        f"/api/trade/supplier-quote-drafts/{d_x['id']}",
+        headers=headers,
+        json={"moq": 800},
+    )
+    assert upd.status_code == 200
+    assert upd.json()["moq"] == 800.0
+
+    # 批准入正式库后 MOQ 正确保留
+    app_x = supplier_mod.approve_draft(d_x["id"], cid)
+    app_y = supplier_mod.approve_draft(d_y["id"], cid)
+    assert app_x["quote"]["moq"] == 800.0
+    assert app_y["quote"]["moq"] is None

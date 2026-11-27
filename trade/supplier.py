@@ -1433,6 +1433,7 @@ _SUPPLIER_QUOTE_EXTRACT_PROMPT = """\
 - 严禁用常识或猜测补全任何文档里没有的字段，尤其是价格、税率、日期、MOQ。
 - 文档没有写价格时，price_excl_tax 和 price_incl_tax 必须都为 null。
 - 文档只给了一个价格且未说明含税或不含税时，只填对应字段，另一字段必须为 null，严禁自行换算。
+- moq（起订量）：仅当文档明确写出起订数量且与报价单位一致时填写数字；若未注明或单位与报价单位不同，保持 moq 为 null，并将起订量原文放进 raw_excerpt，严禁换算或猜测。
 - 每条记录必须附带 raw_excerpt（原文中对应这行报价的摘录，供人工核对）。
 
 严格输出 JSON（不要解释文字、不要 markdown 围栏）：
@@ -1445,6 +1446,7 @@ _SUPPLIER_QUOTE_EXTRACT_PROMPT = """\
     "price_excl_tax": null,
     "price_incl_tax": null,
     "currency": "CNY",
+    "moq": null,
     "quoted_at": "YYYY-MM-DD（没有则空串）",
     "valid_until": "YYYY-MM-DD（没有则空串）",
     "raw_excerpt": "原文摘录"
@@ -1455,6 +1457,28 @@ _SUPPLIER_QUOTE_EXTRACT_PROMPT = """\
 _EXTRACTABLE_SUFFIXES = frozenset({
     ".txt", ".md", ".csv", ".tsv", ".xlsx", ".docx", ".pdf",
 })
+
+# 目录遍历时安静忽略的系统/隐藏/Office 临时锁文件（不计入已处理也不计入失败）：
+# 1. 文件名以 '.' 开头（如 .DS_Store、._foo）或位于 '.' 开头隐藏目录中；
+# 2. Windows 系统缓存文件 Thumbs.db / desktop.ini（大小写不敏感）；
+# 3. Office 临时锁文件（以 '~$' 开头）。
+_IGNORED_SYSTEM_FILENAMES = frozenset({"thumbs.db", "desktop.ini"})
+
+
+def _is_ignored_dir_entry(path: Path, root: Path) -> bool:
+    """判断目录遍历中的文件是否属于应静默忽略的隐藏/系统/临时文件。"""
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        rel_parts = (path.name,)
+    # 任意一级相对路径为隐藏文件/目录（以 '.' 开头）时忽略
+    if any(part.startswith(".") for part in rel_parts):
+        return True
+    name_lower = path.name.lower()
+    # 系统元数据文件或 Office 临时锁文件忽略
+    if name_lower in _IGNORED_SYSTEM_FILENAMES or path.name.startswith("~$"):
+        return True
+    return False
 
 
 def _expand_input_paths(raw_paths: list[str]) -> tuple[list[Path], list[dict]]:
@@ -1478,12 +1502,18 @@ def _expand_input_paths(raw_paths: list[str]) -> tuple[list[Path], list[dict]]:
             for child in sorted(p.rglob("*")):
                 if child.is_symlink() or not child.is_file():
                     continue
-                if child.suffix.lower() not in _EXTRACTABLE_SUFFIXES:
+                # 隐藏文件、系统文件与 Office 临时文件安静忽略（见 _is_ignored_dir_entry）
+                if _is_ignored_dir_entry(child, p):
                     continue
                 key = str(child.resolve())
-                if key not in seen:
-                    seen.add(key)
-                    files.append(child)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # 不支持的后缀（如扫描件 jpg/png）不再静默跳过，统一记 unsupported_type 与单文件路径一致
+                if child.suffix.lower() not in _EXTRACTABLE_SUFFIXES:
+                    failed.append({"file": str(child), "error": "unsupported_type"})
+                    continue
+                files.append(child)
         elif p.is_file():
             key = str(p.resolve())
             if key not in seen:
@@ -1587,18 +1617,23 @@ async def extract_files_to_drafts(company_id: int, file_paths: list[str]) -> dic
                     incl_val = _parse_optional_float(item.get("price_incl_tax"), "含税价")
                 except SupplierError:
                     incl_val = None
+                try:
+                    moq_val = _parse_optional_float(item.get("moq"), "起订量")
+                except SupplierError:
+                    moq_val = None
 
                 excerpt = _norm_text(item.get("raw_excerpt")) or (parsed.text.strip()[:300])
                 cur = conn.execute(
                     "INSERT INTO supplier_quote_drafts ("
                     "company_id, supplier_id, supplier_name_raw, product_name, spec_model, unit, "
-                    "price_excl_tax, price_incl_tax, currency, quoted_at, valid_until, "
+                    "price_excl_tax, price_incl_tax, currency, moq, quoted_at, valid_until, "
                     "source_file, raw_excerpt, status"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
                     (
                         company_id, matched_sid, sup_raw, prod_name,
                         _norm_text(item.get("spec_model")), _norm_text(item.get("unit")),
                         excl_val, incl_val, _norm_text(item.get("currency")) or "CNY",
+                        moq_val,
                         _norm_text(item.get("quoted_at")), _norm_text(item.get("valid_until")),
                         source_file, excerpt,
                     ),
@@ -1653,7 +1688,7 @@ def list_drafts(company_id: int, *, status: str = "pending") -> list[dict]:
 
 _DRAFT_UPDATABLE = {
     "supplier_id", "supplier_name_raw", "product_name", "spec_model", "unit",
-    "price_excl_tax", "price_incl_tax", "currency", "quoted_at", "valid_until",
+    "price_excl_tax", "price_incl_tax", "currency", "moq", "quoted_at", "valid_until",
     "raw_excerpt",
 }
 
@@ -1681,7 +1716,7 @@ def update_draft(draft_id: int, company_id: int, **fields: Any) -> dict | None:
                 if sid is not None and not _check_supplier_belongs(conn, sid, company_id):
                     raise SupplierError("关联的供应商不存在或不属于当前公司")
                 updates[key] = sid
-            elif key in ("price_excl_tax", "price_incl_tax"):
+            elif key in ("price_excl_tax", "price_incl_tax", "moq"):
                 updates[key] = _parse_optional_float(raw, key)
             else:
                 updates[key] = _norm_text(raw)
@@ -1774,13 +1809,14 @@ def approve_draft(draft_id: int, company_id: int) -> dict | None:
         cur_q = conn.execute(
             "INSERT INTO supplier_quotes ("
             "company_id, supplier_id, supplier_product_id, product_name, spec_model, unit, "
-            "price_excl_tax, price_incl_tax, currency, quoted_at, valid_until, "
+            "price_excl_tax, price_incl_tax, currency, moq, quoted_at, valid_until, "
             "rfq_id, source, source_ref"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ai-extract', ?)",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ai-extract', ?)",
             (
                 company_id, sup_id, prod_id, prod_name, spec_val, unit_val,
                 draft.get("price_excl_tax"), draft.get("price_incl_tax"),
                 _norm_text(draft.get("currency")) or "CNY",
+                draft.get("moq"),
                 quoted_date, _norm_text(draft.get("valid_until")),
                 draft["source_file"],
             ),

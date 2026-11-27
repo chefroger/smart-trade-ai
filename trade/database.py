@@ -640,6 +640,7 @@ CREATE TABLE IF NOT EXISTS supplier_quote_drafts (
     price_excl_tax    REAL,
     price_incl_tax    REAL,
     currency          TEXT    DEFAULT 'CNY',
+    moq               REAL,
     quoted_at         TEXT    DEFAULT '',
     valid_until       TEXT    DEFAULT '',
     source_file       TEXT    NOT NULL,
@@ -1028,7 +1029,7 @@ _EXPECTED_TABLES = frozenset({
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
-_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
+_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
 
 
 def _needs_schema_work(conn: sqlite3.Connection) -> bool:
@@ -1205,6 +1206,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
         (5, "todos_reason", ""),
         # v6：usage_ledger 缓存命中/未命中、高峰闲时与币种列（工单 #8）
         (6, "usage_ledger_cache_and_window", ""),
+        # v7：supplier_quote_drafts 补 moq 列（工单 #4）
+        (7, "supplier_quote_drafts_moq", ""),
     ]
 
     # 获取已应用的版本
@@ -1226,6 +1229,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
             _migrate_todos_reason_v5(conn)
         elif version == 6:
             _migrate_usage_ledger_pricing_v6(conn)
+        elif version == 7:
+            _migrate_supplier_drafts_moq_v7(conn)
         else:
             conn.executescript(sql)
         conn.execute(
@@ -1383,6 +1388,17 @@ def _migrate_usage_ledger_pricing_v6(conn: sqlite3.Connection) -> None:
         # 仅当列缺失时执行 ALTER，保证老库幂等升级
         if col not in cols:
             conn.execute(f"ALTER TABLE usage_ledger ADD COLUMN {col} {col_def}")
+
+
+def _migrate_supplier_drafts_moq_v7(conn: sqlite3.Connection) -> None:
+    """迁移 7：supplier_quote_drafts 补 moq 列（工单 #4）。"""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(supplier_quote_drafts)")}
+    except sqlite3.Error:
+        return
+    # 表尚未创建或已含 moq 列时跳过，保证幂等
+    if cols and "moq" not in cols:
+        conn.execute("ALTER TABLE supplier_quote_drafts ADD COLUMN moq REAL")
 
 
 def init_db() -> Path:
