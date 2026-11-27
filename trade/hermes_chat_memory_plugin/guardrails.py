@@ -210,8 +210,10 @@ def _user_pasted_file(raw: str) -> bool:
 def _is_sensitive_write_target(path: Path, roots: list[Path]) -> bool:
     """白名单根内、但一旦可写就会变成持久化提示注入的文件。
 
-    两类（都相对于公司 data_dir 根）：
+    四类（都相对于公司 data_dir 根）：
       - `companies/{slug}/agent-identity.md`（运行时优先读入 system prompt）
+      - `companies/{slug}/brand_safety.md`（运行时读入品牌安全护栏）
+      - `memories/MEMORY.md`（运行时每轮注入公司级长期记忆）
       - `prompts/*.md`（公司级提示词目录）
     """
     for root in roots:
@@ -220,7 +222,12 @@ def _is_sensitive_write_target(path: Path, roots: list[Path]) -> bool:
         except ValueError:
             continue
         parts = [p.lower() for p in rel.parts]
-        if len(parts) == 3 and parts[0] == "companies" and path.name.lower() in _IDENTITY_FILENAMES:
+        name_l = path.name.lower()
+        if len(parts) == 3 and parts[0] == "companies" and (
+            name_l in _IDENTITY_FILENAMES or name_l == "brand_safety.md"
+        ):
+            return True
+        if len(parts) == 2 and parts[0] == "memories" and name_l == "memory.md":
             return True
         if len(parts) == 2 and parts[0] == "prompts" and path.suffix.lower() == ".md":
             return True

@@ -344,8 +344,8 @@ CREATE TABLE IF NOT EXISTS emails (
 );
 CREATE INDEX IF NOT EXISTS idx_emails_mailbox ON emails(mailbox_id);
 CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at);
-CREATE INDEX IF NOT EXISTS idx_emails_company_customer_time
-    ON emails(company_id, customer_id, received_at);
+-- idx_emails_company_customer_time 不放这里：旧库 emails 表无 company_id/customer_id 列，
+-- executescript 建索引会在补列前报错。该索引在 _ensure_emails_customer_columns 补列后创建。
 
 -- 附加联系人（第 2 人起；主联系人仍在 customers.contact + extra2）
 CREATE TABLE IF NOT EXISTS contacts (

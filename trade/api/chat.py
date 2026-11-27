@@ -342,7 +342,9 @@ def _classify_user_paths(query: str, cid: int) -> list[str]:
     仍保留一条：~/.trade 下但不是本公司目录（其它公司/全局数据）不进清单 ——
     多公司隔离是产品口径，不因放宽守卫而放开。
     """
+    from trade.database import get_connection
     from trade.helpers import _allowed_path_roots
+    from trade.library import _FORBIDDEN_DIRS
     from trade.post_install.skills import _get_trade_home
 
     paths = extract_user_paths(query)
@@ -363,13 +365,37 @@ def _classify_user_paths(query: str, cid: int) -> list[str]:
     except Exception:
         trade_home = None
 
+    # 收集其他公司的桌面工作目录与文档库目录，防止通过用户消息贴路径越权读取他司文件
+    other_company_roots: list[Path] = []
+    try:
+        conn = get_connection()
+        try:
+            for row in conn.execute(
+                "SELECT id FROM companies WHERE is_active = 1 AND id <> ?", (cid,)
+            ).fetchall():
+                other_id = int(row["id"])
+                for r in _allowed_path_roots(other_id):
+                    try:
+                        other_company_roots.append(Path(r).resolve())
+                    except OSError:
+                        continue
+        finally:
+            conn.close()
+    except Exception:
+        other_company_roots = []
+
     allowed: list[str] = []
     for raw in paths:
         path = Path(raw)
-        # ~/.trade 下、但不是本公司目录：其它公司数据 / 全局数据，硬拦
-        if trade_home is not None and _path_under(path, trade_home) and not any(
-            _path_under(path, root) for root in roots
-        ):
+        in_own_roots = any(_path_under(path, root) for root in roots)
+        # 1) 系统敏感目录（~/.hermes、~/.ssh、/etc 等）一律硬拦
+        if not in_own_roots and any(_path_under(path, fb) for fb in _FORBIDDEN_DIRS):
+            continue
+        # 2) ~/.trade 下、但不是本公司目录：其它公司数据 / 全局数据，硬拦
+        if trade_home is not None and _path_under(path, trade_home) and not in_own_roots:
+            continue
+        # 3) 其他公司的桌面工作目录或文档库目录，硬拦
+        if not in_own_roots and any(_path_under(path, o_root) for o_root in other_company_roots):
             continue
         allowed.append(raw)
     return allowed
