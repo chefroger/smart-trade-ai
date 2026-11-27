@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## v0.9.62 — 2026-11-27
+
+- 拍摄工单 P0–P8/U1–U4 与全项目代码审计 P0 修复
+- `d417a9a` fix(osint): 在单任务提示词中保留 domain:/company: 前缀说明以兼容 CLI 回归校验（P1）
+- `3b681e5` fix(security): 加固跨公司路径隔离、防写 brand_safety/MEMORY 与旧库迁移索引顺序（审计 P0）
+- `52b5466` fix(ui): 修复 SSE 跨包丢事件、客户墙 sumEl 崩溃、切公司缓存串用与模板页覆写（审计 P0）
+- `ec924ce` fix(trade): 修复文档库历史串流、邮件落款约束与默认关闭后台技能改写（U1/U3/U4）
+- `56c95f7` fix(chat): 为背调等长报告技能注入 max_tokens 预算并补充截断提示（P8）
+- `90fe031` fix(i18n): 顶栏状态轮播与验厂标题接入 i18n 并补齐顶栏标题回退（P7/U2）
+- `e6c5974` fix(profile): 增加画像事实与礼物语义同义去重并保留不同数值条款（P6）
+- `b0deda4` feat(cron): 新增确定性批量创建与清空定时任务 API 并由前端直连（P5）
+- `bb97c8d` fix(ui): 引导页背调面板改内嵌挂载、收缩浮层宽度并加宽引导结果卡片（P3/P4）
+- `409b4ea` fix(doctor): base_url 为空时回退默认推理地址并禁止将非 OpenAI Key 发往 OpenAI（P2）
+- `5fa5af4` fix(osint): 归一化后台任务复用键并禁止拆单重复启动（P1）
+- `8a393e8` fix(osint): 将各层协程包装为 asyncio.Task 以修复后台背调 TypeError（P0）
+
 ## v0.9.61 — 2026-11-26
 
 - `1f412a1` fix(memo): 迁移旧版 memo.json 节流字段至 memo_throttle.json 并清理死字段（O-新30）
