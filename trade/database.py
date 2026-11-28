@@ -518,6 +518,8 @@ CREATE TABLE IF NOT EXISTS osint_facts (
     note        TEXT    NOT NULL DEFAULT '',
     -- 1 = 来源 URL 在本轮已完成工具证据里出现过；0 = 模型自报未核实（P1-D）
     verified    INTEGER NOT NULL DEFAULT 1,
+    -- M8：found（已检索到）| not_found（已查询未检索到）| failed（查询失败）
+    status      TEXT    NOT NULL DEFAULT 'found',
     observed_at TEXT    DEFAULT (datetime('now', 'localtime')),
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     UNIQUE (company_id, subject, field, value, source_url)
@@ -1030,7 +1032,7 @@ _EXPECTED_TABLES = frozenset({
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
-_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
+_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9})
 
 
 def _needs_schema_work(conn: sqlite3.Connection) -> bool:
@@ -1211,6 +1213,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
         (7, "supplier_quote_drafts_moq", ""),
         # v8：usage_ledger 补 duration_ms 列（M7 长任务历史耗时预估）
         (8, "usage_ledger_duration_ms", ""),
+        # v9：osint_facts 补 status 列（M8 否定事实缓存）
+        (9, "osint_facts_status", ""),
     ]
 
     # 获取已应用的版本
@@ -1236,6 +1240,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
             _migrate_supplier_drafts_moq_v7(conn)
         elif version == 8:
             _migrate_usage_ledger_duration_v8(conn)
+        elif version == 9:
+            _migrate_osint_facts_status_v9(conn)
         else:
             conn.executescript(sql)
         conn.execute(
@@ -1415,6 +1421,17 @@ def _migrate_usage_ledger_duration_v8(conn: sqlite3.Connection) -> None:
     # 表尚未创建或已含 duration_ms 列时跳过，保证幂等
     if cols and "duration_ms" not in cols:
         conn.execute("ALTER TABLE usage_ledger ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0")
+
+
+def _migrate_osint_facts_status_v9(conn: sqlite3.Connection) -> None:
+    """迁移 9：osint_facts 补 status 列（默认 'found'，兼容所有历史已存事实，M8）。"""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(osint_facts)")}
+    except sqlite3.Error:
+        return
+    # 表尚未创建或已含 status 列时跳过，保证幂等
+    if cols and "status" not in cols:
+        conn.execute("ALTER TABLE osint_facts ADD COLUMN status TEXT NOT NULL DEFAULT 'found'")
 
 
 def init_db() -> Path:

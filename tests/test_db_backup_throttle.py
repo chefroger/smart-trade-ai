@@ -42,6 +42,7 @@ def _fresh_db(tmp_path: Path) -> Path:
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (6, 'usage_ledger_cache_and_window')")
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (7, 'supplier_quote_drafts_moq')")
     conn.execute("INSERT INTO schema_migrations (version, name) VALUES (8, 'usage_ledger_duration_ms')")
+    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (9, 'osint_facts_status')")
     conn.execute("ALTER TABLE conversations ADD COLUMN context TEXT DEFAULT ''")
     conn.execute("ALTER TABLE conversations ADD COLUMN customer_id INTEGER")
     # 与 _needs_schema_work / _add_context_column 对齐：缺 is_important 也会触发备份
