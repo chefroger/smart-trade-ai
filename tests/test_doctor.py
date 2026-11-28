@@ -731,3 +731,125 @@ class TestSkillsConsistency:
         result = check_skills(package_dir=tmp_path / "nope", installed_dir=tmp_path)[0]
         assert result.status == STATUS_WARN
         assert "找不到包内" in result.detail
+
+
+class TestLayeredLlmProbes:
+    """M2：主 LLM 通道 L1/L2/L3 分层探测、快速模式零 token 与 Key 脱敏测试。"""
+
+    def _cfg(self, key: str = "sk-testlayeredprobe998877"):
+        return lambda: {
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "api_key": key,
+            "base_url": "https://api.deepseek.com/v1",
+        }
+
+    def test_l1_dns_and_tls_failures_stop_before_l2_l3(self):
+        from trade.doctor import STATUS_WARN, check_llm_layered
+
+        l2_called = 0
+        l3_called = 0
+
+        def _l2(*_a):
+            nonlocal l2_called
+            l2_called += 1
+            return "ok", "ok"
+
+        def _l3(*_a):
+            nonlocal l3_called
+            l3_called += 1
+            return True, "ok"
+
+        for msg in ("DNS 解析失败（api.deepseek.com）", "TLS 握手失败（可能是系统代理拦截）"):
+            res = check_llm_layered(
+                deep=True,
+                config_loader=self._cfg(),
+                l1_prober=lambda _u, m=msg: (False, m),
+                l2_prober=_l2,
+                l3_prober=_l3,
+            )
+            assert len(res) == 1
+            assert res[0].status == STATUS_WARN
+            assert res[0].fatal is False
+            assert msg in res[0].detail
+        assert l2_called == 0 and l3_called == 0
+
+    def test_l2_handles_401_missing_model_and_404(self, monkeypatch):
+        import io
+        import urllib.error
+
+        from trade.doctor import STATUS_WARN, _probe_llm_l2
+
+        # 401 未授权
+        def _err_401(*_a, **_kw):
+            raise urllib.error.HTTPError("https://api.deepseek.com/v1/models", 401, "Unauthorized", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", _err_401)
+        st, d = _probe_llm_l2("https://api.deepseek.com/v1", "sk-testbadkey123456", "deepseek-flash")
+        assert st == STATUS_WARN and "无效或没有权限" in d
+
+        # 404 不支持模型列表
+        def _err_404(*_a, **_kw):
+            raise urllib.error.HTTPError("https://api.deepseek.com/v1/models", 404, "Not Found", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", _err_404)
+        st, d = _probe_llm_l2("https://api.deepseek.com/v1", "sk-testbadkey123456", "deepseek-flash")
+        assert st == STATUS_WARN and "不支持模型列表" in d
+
+        # 200 但模型缺失
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+            def read(self):
+                return io.BytesIO(b'{"data": [{"id": "other-model"}]}').read()
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *_a, **_kw: _Resp())
+        st, d = _probe_llm_l2("https://api.deepseek.com/v1", "sk-testbadkey123456", "deepseek-flash")
+        assert st == STATUS_WARN and "模型名可能写错" in d
+
+    def test_fast_mode_skips_l3_and_deep_mode_redacts_key(self, tmp_path, monkeypatch):
+        from trade.doctor import STATUS_FAIL, STATUS_OK, check_llm_layered, save_doctor_result
+
+        secret = "sk-testsecretlayer12345678"
+        l3_calls = 0
+
+        def _l3(_u, _k, _m):
+            nonlocal l3_calls
+            l3_calls += 1
+            return False, f"auth error for {secret} prefix {secret[:6]} tail {secret[-4:]}"
+
+        # deep=False 绝不调 L3（零 token）
+        fast_res = check_llm_layered(
+            deep=False,
+            config_loader=self._cfg(secret),
+            l1_prober=lambda _u: (True, "ok"),
+            l2_prober=lambda _u, _k, _m: (STATUS_OK, "ok"),
+            l3_prober=_l3,
+        )
+        assert l3_calls == 0
+        assert len(fast_res) == 2
+
+        # deep=True 调 L3，失败记 fatal 且彻底脱敏（原文、前6位、后4位均不出现）
+        deep_res = check_llm_layered(
+            deep=True,
+            config_loader=self._cfg(secret),
+            l1_prober=lambda _u: (True, "ok"),
+            l2_prober=lambda _u, _k, _m: (STATUS_OK, "ok"),
+            l3_prober=_l3,
+        )
+        assert l3_calls == 1
+        assert deep_res[-1].status == STATUS_FAIL
+        assert deep_res[-1].fatal is True
+        for part in (secret, secret[:6], secret[-4:]):
+            assert part not in deep_res[-1].detail
+
+        # save_doctor_result 落盘文件也不含任何 Key 片段
+        monkeypatch.setenv("TRADE_HOME", str(tmp_path))
+        save_doctor_result(deep_res, deep=True)
+        saved_text = (tmp_path / "data" / "doctor.json").read_text(encoding="utf-8")
+        for part in (secret, secret[:6], secret[-4:]):
+            assert part not in saved_text
