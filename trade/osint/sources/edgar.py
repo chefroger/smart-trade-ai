@@ -15,6 +15,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_json,
     quote,
     skipped,
@@ -69,9 +70,9 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     try:
         payload = fetch_json(url, fetch=fetch, headers=headers)
     except Exception as exc:  # noqa: BLE001
-        return SourceResult(NAME, "error", error=f"EDGAR 查询失败：{exc}")
+        return error_result(NAME, exc)
     if not isinstance(payload, dict):
-        return SourceResult(NAME, "miss", error="EDGAR 无有效响应")
+        return error_result(NAME, code="parse_error", detail="EDGAR 无有效 JSON 响应")
 
     hits = ((payload.get("hits") or {}).get("hits")) or []
     if not hits:

@@ -180,6 +180,7 @@ def compute_verdict(
     target_type: str | None = None,
     has_domain: bool = True,
     public_hits: int = 0,
+    all_sources_failed: bool = False,
 ) -> tuple[int | None, str, int]:
     """fail-closed 汇总：关键层没查成、或只有制裁一层核验过时不给数字结论。
 
@@ -206,6 +207,10 @@ def compute_verdict(
 
     if any(u.get("required") for u in unverified):
         # 不输出数字：未核验时任何分数都会被读成「结论」
+        return None, "incomplete", score
+
+    if all_sources_failed:
+        # M4：公开来源全部报错或超时（多半为网络或代理问题），结论不可用，评级为 incomplete 而非 limited
         return None, "incomplete", score
 
     # 无域名 + 公开来源零命中：只跑过制裁这一层，rating 不能是 low/medium

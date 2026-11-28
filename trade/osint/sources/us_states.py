@@ -60,13 +60,17 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     ny = None
     co = None
 
+    ny_exc: BaseException | None = None
+    co_exc: BaseException | None = None
+
     # 纽约州（含 DOS 流程地址：注册代理/邮寄地址，不是经营地证明）
     ny_url = NY_URL.format(where=_where("current_entity_name", hint))
     try:
         ny = fetch_json(ny_url, fetch=fetch)
     except Exception as exc:  # noqa: BLE001
         ny = None
-        errors.append(f"NY {exc}")
+        ny_exc = exc
+        errors.append(f"NY {type(exc).__name__}")
     for row in (_ny_rows(ny or [], hint) if isinstance(ny, list) else [])[:3]:
         name = str(row.get("current_entity_name") or "")
         parts = [f"纽约州登记：{name}"]
@@ -92,7 +96,8 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
         co = fetch_json(co_url, fetch=fetch)
     except Exception as exc:  # noqa: BLE001
         co = None
-        errors.append(f"CO {exc}")
+        co_exc = exc
+        errors.append(f"CO {type(exc).__name__}")
     for row in (_co_rows(co or [], hint) if isinstance(co, list) else [])[:3]:
         parts = [f"科罗拉多州登记：{row.get('entityname') or ''}"]
         if row.get("entityid"):
@@ -113,5 +118,7 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     if facts:
         return SourceResult(NAME, "hit", facts=facts, data=data)
     if errors and ny is None and co is None:
-        return SourceResult(NAME, "error", error="；".join(errors))
+        from trade.osint.sources.base import error_result
+
+        return error_result(NAME, co_exc or ny_exc)
     return SourceResult(NAME, "miss", error="NY/CO 未查到匹配登记")

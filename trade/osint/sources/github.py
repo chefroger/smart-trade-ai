@@ -111,7 +111,9 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
             if isinstance(profile, dict) and profile.get("login"):
                 candidates.append(profile)
     except Exception as exc:  # noqa: BLE001
-        return SourceResult(NAME, "error", error=f"GitHub 查询失败：{exc}")
+        from trade.osint.sources.base import error_result
+
+        return error_result(NAME, exc)
 
     if not candidates:
         return SourceResult(NAME, "miss", error="GitHub 候选资料均不可读")

@@ -9,6 +9,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_json,
     quote,
     skipped,
@@ -42,9 +43,9 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     try:
         payload = fetch_json(url, fetch=fetch, timeout=20)
     except Exception as exc:  # noqa: BLE001
-        return SourceResult(NAME, "error", error=f"GDELT 查询失败：{exc}")
+        return error_result(NAME, exc)
     if not isinstance(payload, dict):
-        return SourceResult(NAME, "miss", error="GDELT 无有效响应")
+        return error_result(NAME, code="parse_error", detail="GDELT 无有效 JSON 响应")
 
     articles = payload.get("articles") or []
     if not articles:

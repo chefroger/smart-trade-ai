@@ -62,6 +62,18 @@ def _public_hit_counts(sources: dict) -> tuple[int, int]:
     return substantive, registry
 
 
+def _all_public_sources_failed(sources: dict) -> bool:
+    """判断已执行的公开来源是否全部报错或超时（排除 skipped / not_applicable）。"""
+    executed = [
+        item
+        for item in (sources or {}).values()
+        if isinstance(item, dict) and item.get("status") not in ("skipped", "not_applicable", None)
+    ]
+    if not executed:
+        return False  # 无任何已执行公开来源时不判「全部报错」
+    return all(item.get("status") in ("error", "timeout") for item in executed)
+
+
 def _registry_formation_dates(sources: dict) -> list[str]:
     """从登记类事实里抽取成立日期（报告要写出，W3）。"""
     import re as _re
@@ -475,17 +487,25 @@ async def osint_full_check(
     # 公开来源按「登记类 / 实质核验」分开计数（W3）：
     # us_states/GLEIF/VIES 只证明“注册过”，壳公司也能拿 low/100。
     public_hits, registry_hits = _public_hit_counts(report["sources"])
+    all_sources_failed = _all_public_sources_failed(report["sources"])
     score, rating, provisional = compute_verdict(
         report["flags"],
         report["unverified"],
         target_type=target_type,
         has_domain=bool(lookup_domain),
         public_hits=public_hits,
+        all_sources_failed=all_sources_failed,
     )
     report["overall_score"] = score          # None = 未完成核验/仅完成制裁筛查
     report["overall_rating"] = rating
     report["provisional_score"] = provisional  # 仅供诊断，不是对外结论
-    if rating == "limited":
+    if all_sources_failed:
+        # M4：公开来源全部报错/超时，首屏明确提示网络或代理问题，结论不可用
+        report["rating_note"] = (
+            "公开来源全部没查成（多半是网络或代理问题），本次结论不可用；"
+            "请检查网络或代理设置后稍后重试。"
+        )
+    elif rating == "limited":
         dates = _registry_formation_dates(report["sources"])
         if registry_hits:
             # S9：有登记类命中时如实写「已查到公司登记」，不再说「没有实质
@@ -661,12 +681,18 @@ async def _run_layer(
             status = "error"
 
     if on_event:
-        on_event({
+        ev_payload: dict[str, Any] = {
             "event": "source_done",
             "source": source,
             "status": status,
             "ms": int((time.monotonic() - started) * 1000),
-        })
+        }
+        if isinstance(result, dict):
+            if result.get("error_code"):
+                ev_payload["error_code"] = result["error_code"]
+            if "retryable" in result:
+                ev_payload["retryable"] = bool(result["retryable"])
+        on_event(ev_payload)
     return result
 
 
@@ -700,20 +726,50 @@ def _status_for(source: str, layer: dict) -> str:
 
 
 def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str = "") -> dict:
-    """构造失败层的返回桩（形状与正常结果一致）。"""
+    """构造失败层的返回桩（形状与正常结果一致；原始异常不直接透出给用户）。"""
+    from trade.osint.sources.base import ERROR_CODE_META, redact_error_detail
+
+    error_code: str | None = None
+    retryable = False
     if kind == "timeout":
-        reason = f"超时（{timeout:.0f} 秒）"
+        reason = f"请求超时（{timeout:.0f} 秒），可以稍后重试"
+        error_code = "timeout"
+        retryable = True
     elif kind == "budget":
-        reason = "预算耗尽，未执行"
+        reason = "预算耗尽，未执行，可以稍后重试"
+        error_code = "timeout"
+        retryable = True
     elif kind == "cancelled":
         reason = "已取消（用户中止）"
+        error_code = None
+        retryable = False
     else:
-        reason = detail or "未知错误"
+        # 原始异常只写日志脱敏；公开来源一律返回中文错误码文案，不透出原始异常
+        if detail:
+            import logging
 
-    stub: dict = {"error": reason, "timed_out": kind in ("timeout", "budget", "cancelled")}
+            logging.getLogger(__name__).warning(
+                "osint layer %s failed: %s",
+                source,
+                redact_error_detail(detail),
+            )
+        error_code = "network"
+        default_msg, retryable = ERROR_CODE_META["network"]
+        if source in SOURCE_LABELS or "urlopen error" in detail.lower() or "traceback" in detail.lower():
+            reason = default_msg
+        else:
+            reason = redact_error_detail(detail) if detail else default_msg
+
+    stub: dict = {
+        "error": reason,
+        "error_code": error_code,
+        "retryable": retryable,
+        "timed_out": kind in ("timeout", "budget", "cancelled"),
+    }
     if source in SOURCE_LABELS:
         # 公开来源桩：字段与 SourceResult.to_dict() 对齐
         stub.update({
+            "source": source,
             "status": "timeout" if kind in ("timeout", "budget") else "error",
             "facts": [],
             "data": {},
