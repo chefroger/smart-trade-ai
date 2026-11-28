@@ -309,7 +309,7 @@ function navToView(view, chatCtx, chatName) {
             'chat-daily': [t('nav.daily'), '/ CHAT'],
             'chat-docs': [t('nav.docs'), '/ LIBRARY'],
             'customers': [t('nav.customers'), '/ CUSTOMERS'],
-            'suppliers': ['供应商', '/ SUPPLIERS'],
+            'suppliers': [t('nav.suppliers'), '/ SUPPLIERS'],
             'mailboxes': [t('nav.mailboxes'), '/ MAILBOXES'],
             'tasks': [t('nav.tasks'), '/ CRON'],
             'history': [t('nav.history'), '/ HISTORY'],
