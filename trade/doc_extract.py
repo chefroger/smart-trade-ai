@@ -200,7 +200,8 @@ def warm_cache(paths, *, tenant_id, limit: int | None = None) -> int:
                     continue
             attempts = existing.attempts + 1 if existing else 1
             try:
-                result = asyncio.run(extract_document(path))
+                _cid = int(tenant_id) if str(tenant_id or "").isdigit() else 0
+                result = asyncio.run(extract_document(path, company_id=_cid))
             except Exception as exc:
                 # 单个文件的解析/提取异常不能带走整轮预热线程。
                 _log.warning("预热提取失败（%s）：%s", path, exc)
@@ -260,7 +261,7 @@ def parse_document(path: str | Path) -> ParsedDocument:
 
 
 async def extract_document(
-    path: str | Path, *, timeout: float | None = None
+    path: str | Path, *, timeout: float | None = None, company_id: int = 0
 ) -> ExtractionResult:
     """解析 + 模型提取 + 分类。任何一步失败都返回 failed，不猜、不跳过。"""
     parsed = parse_document(path)
@@ -300,8 +301,14 @@ async def extract_document(
         _log.warning("文档提取模型调用失败：%s", exc)
         return _failed("model_error")
 
-    # 文档库抽取同步记账（失败只打日志，不影响抽取）
-    _record_extract_usage(usage_obj, skill="doc-extract", provider=provider, model=model)
+    # 文档库抽取同步记账（按 company_id 归属到对应公司；失败只打日志，不影响抽取）
+    _record_extract_usage(
+        usage_obj,
+        skill="doc-extract",
+        provider=provider,
+        model=model,
+        company_id=company_id,
+    )
 
     obj = _parse_json_object(raw)
     if obj is None:

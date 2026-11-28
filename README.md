@@ -58,7 +58,7 @@ irm https://raw.githubusercontent.com/chefroger/smart-trade-ai/main/scripts/inst
 | 痛点 | 不用这个工具 | 用了之后 |
 |------|-------------|---------|
 | 早安简报 | 每天打开 5 个网站查汇率/金价/新闻 | 自动生成，含实时汇率+大宗商品行情+客户跟进提醒 |
-| 客户背调 | 手动 Google → LinkedIn → WHOIS | 一键 6 层验证：邮箱注册检测→WHOIS→制裁名单→邮箱验证→技术栈→LinkedIn |
+| 客户背调 | 手动 Google → LinkedIn → WHOIS | 一键 6 层验证：邮箱注册检测→WHOIS→邮箱验证→制裁名单→技术栈→LinkedIn |
 | 开发信 | 每封手动写，客户多了记不清 | 根据客户画像自动生成，带具体痛点引用 |
 | B2B 平台 | 每天登录阿里国际站/中国制造网看数据 | 定时自动检查，新询盘/待跟进报价一目了然 |
 | LinkedIn | 不知道发什么内容 | AI 按周生成内容日历，轮换行业洞察/产品案例/互动提问 |
@@ -666,6 +666,10 @@ python server.py
 ### 升级后页面样式异常
 
 浏览器缓存了旧版 CSS/JS，按 `Cmd+Shift+R` (macOS) 或 `Ctrl+Shift+R` (Windows) 强制刷新即可。
+
+### 仓库安全检查
+
+CI 与本地均提供 `bash scripts/repo_safety.sh` 安全闸门，用于拦截密钥、私有域名及敏感样本误入版本库。
 
 ---
 

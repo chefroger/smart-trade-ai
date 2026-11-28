@@ -76,6 +76,14 @@
 .sw-log .row.hit .tx b { color: var(--ink); }
 .sw-log .row.bad .tx { color: var(--red); }
 .sw-log .row .tx { color: var(--ink-2); overflow-wrap: anywhere; }
+.sw-kv .v.sw-estimate { white-space: normal; font-size: 11px; color: var(--ink-2); line-height: 1.4; }
+.sw-retry-btn {
+  margin-left: 6px; padding: 1px 6px; font-family: var(--mono); font-size: 10px;
+  background: var(--paper); color: var(--ink); border: 1px solid var(--ink);
+  cursor: pointer; vertical-align: middle;
+}
+.sw-retry-btn:hover:not(:disabled) { background: var(--ink); color: var(--paper); }
+.sw-retry-btn:disabled { opacity: .45; cursor: not-allowed; }
 @keyframes swRowIn { from { opacity: 0; transform: translateY(4px); } }
 .sw-foot { border-top: 1px solid var(--ink); padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .sw-verdict { display: none; font-family: var(--mono); font-size: 11px; letter-spacing: .16em; }

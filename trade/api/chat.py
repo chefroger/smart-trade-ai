@@ -41,6 +41,7 @@ from trade.document_task import (
     should_enforce_document_gate,
 )
 from trade.helpers import build_query, configured_run_budget_seconds, create_agent
+from trade.hermes_chat_memory_plugin import soft_budget as soft_budget_mod
 from trade.hermes_chat_memory_plugin.doc_skip import register as register_doc_skip
 from trade.hermes_chat_memory_plugin.doc_skip import release as release_doc_skip
 from trade.hermes_compat import release_read_coverage, snapshot_read_coverage
@@ -561,6 +562,47 @@ def _resolve_usage_skill(
     cleaned = (current_skill or "").strip()
     return cleaned if cleaned else "chat"
 
+
+def _read_agent_tokens(agent) -> int:
+    """读取运行中 agent 的累计 token 数（输入 + 输出），字段缺失时返回 0。"""
+    if agent is None:
+        return 0
+    prompt = usage_module._to_nonneg_int(getattr(agent, "session_prompt_tokens", 0))
+    completion = usage_module._to_nonneg_int(getattr(agent, "session_completion_tokens", 0))
+    if not prompt:
+        raw_in = usage_module._to_nonneg_int(getattr(agent, "session_input_tokens", 0))
+        cache_read = usage_module._to_nonneg_int(getattr(agent, "session_cache_read_tokens", 0))
+        prompt = raw_in + cache_read if raw_in > 0 else raw_in
+    if not completion:
+        completion = usage_module._to_nonneg_int(getattr(agent, "session_output_tokens", 0))
+    return prompt + completion
+
+
+def _resolve_chat_soft_budget(company_id: int, skill: str) -> int | None:
+    """查询本次对话的软 token 预算；读库异常时返回 None（不设上限、不阻塞聊天）。"""
+    conn = None
+    try:
+        conn = get_connection()
+        return usage_module.resolve_soft_token_budget(conn, company_id, skill)
+    except Exception:  # noqa: BLE001 — 软预算读取失败降级为不设上限
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _append_soft_budget_notice(text: str, task_id: str | None) -> str:
+    """若本轮触发了软预算提前收尾且正文尚未写明，自动在开头补上说明。"""
+    if not text or not task_id:
+        return text
+    notice = soft_budget_mod.format_wrapup_notice(task_id)
+    if not notice or "因达到本次预算提前收尾" in text:
+        return text
+    return f"> {notice}\n\n{text}"
+
 def _validate_scope(payload, cid: int) -> None:
     """校验 payload 里的 customer_id / library_id 属于当前公司。
 
@@ -899,9 +941,25 @@ async def trade_chat(
 
     _MAX_AGENT_RETRIES = 2  # 最多重试 2 次（共 3 次尝试），与 SSE 流式端点保持一致
 
-    request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
+    # 超时后主线程要靠它中断仍在跑的 agent；列表用于跨线程传引用
+    agent_holder: list = []
+    usage_skill = _resolve_usage_skill(current_skill, context=payload.context or "")
+    soft_budget_limit = _resolve_chat_soft_budget(cid, usage_skill)
+
+    request_task_id = (
+        f"trade-doc-{cid}-{time.time_ns()}"
+        if (document_task or soft_budget_limit)
+        else None
+    )
     if document_task and request_task_id and skip_paths:
         register_doc_skip(request_task_id, skip_paths)
+    if request_task_id and soft_budget_limit:
+        soft_budget_mod.register(
+            request_task_id,
+            soft_budget_limit,
+            skill=usage_skill,
+            token_reader=lambda: _read_agent_tokens(agent_holder[-1] if agent_holder else None),
+        )
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
     # 即使没有文档计划也收集（用于"读到哪些就预热哪些"）。
     evidence = ReadEvidenceCollector()
@@ -915,9 +973,9 @@ async def trade_chat(
     def _sync_tool_complete(tc_id, name, args, result):
         tools.on_complete(name, args, result)
         evidence.on_complete(tc_id, name, args, result)
+        if request_task_id and soft_budget_limit and agent_holder:
+            soft_budget_mod.sync_tokens(request_task_id, _read_agent_tokens(agent_holder[-1]))
 
-    # 超时后主线程要靠它中断仍在跑的 agent；列表用于跨线程传引用
-    agent_holder: list = []
     cancelled = threading.Event()
 
     def _summarize_after_tools(reason: str) -> tuple[str, str]:
@@ -941,11 +999,13 @@ async def trade_chat(
             agent_holder.append(agent)
             if cancelled.is_set():
                 return "", "failed"
+            sum_start = time.monotonic()
             text = agent.chat(build_summary_prompt(query, tools))
             usage_module.record_agent_usage(
                 agent,
                 company_id=cid,
                 skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
+                duration_ms=int((time.monotonic() - sum_start) * 1000),
             )
             if text and not cancelled.is_set():
                 return text, "partial"
@@ -985,6 +1045,7 @@ async def trade_chat(
                     return "", "failed"
                 # 绑定公司身份：chat-memory 等插件工具只认服务端绑定，
                 # 不再信任模型自填的 company_id（审计 P0-2）。
+                attempt_start = time.monotonic()
                 try:
                     with bind_company(
                         cid, payload.customer_id,
@@ -997,7 +1058,7 @@ async def trade_chat(
                             for item in tools.snapshot()
                         ],
                     ):
-                        if document_task and request_task_id:
+                        if request_task_id and callable(getattr(agent, "run_conversation", None)):
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
                         else:
                             result = agent.chat(full_query)
@@ -1008,6 +1069,7 @@ async def trade_chat(
                         agent,
                         company_id=cid,
                         skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
+                        duration_ms=int((time.monotonic() - attempt_start) * 1000),
                     )
                 if cancelled.is_set():
                     # 超时后迟到的结果：用户已收到中止提示，不能再当成功回复
@@ -1113,6 +1175,10 @@ async def trade_chat(
             query=query, response=response,
             skill=current_skill or "", tools=tools,
         )
+        response = _append_soft_budget_notice(response, request_task_id)
+
+    if request_task_id and soft_budget_limit:
+        soft_budget_mod.release(request_task_id)
 
     lib_name = ""
     if payload.library_id:
@@ -1239,9 +1305,24 @@ async def trade_chat_stream(
         if request_scope != SCOPE_SUMMARY:
             skip_paths = set()
 
-    request_task_id = f"trade-doc-{cid}-{time.time_ns()}" if document_task else None
+    agent_holder: list = []  # 断连/超时时靠它中断仍在跑的 agent（见 _abort_running_agent）
+    usage_skill = _resolve_usage_skill(current_skill, context=payload.context or "")
+    soft_budget_limit = _resolve_chat_soft_budget(cid, usage_skill)
+
+    request_task_id = (
+        f"trade-doc-{cid}-{time.time_ns()}"
+        if (document_task or soft_budget_limit)
+        else None
+    )
     if document_task and request_task_id and skip_paths:
         register_doc_skip(request_task_id, skip_paths)
+    if request_task_id and soft_budget_limit:
+        soft_budget_mod.register(
+            request_task_id,
+            soft_budget_limit,
+            skill=usage_skill,
+            token_reader=lambda: _read_agent_tokens(agent_holder[-1] if agent_holder else None),
+        )
     # 回调收集的证据：公开版 Hermes 没有对外读取快照接口，靠这个兜底。
     # 即使没有文档计划也收集（用于"读到哪些就预热哪些"）。
     evidence = ReadEvidenceCollector()
@@ -1293,6 +1374,8 @@ async def trade_chat_stream(
         tools.on_complete(name, args, result)
         if evidence is not None:
             evidence.on_complete(tc_id, name, args, result)
+        if request_task_id and soft_budget_limit and agent_holder:
+            soft_budget_mod.sync_tokens(request_task_id, _read_agent_tokens(agent_holder[-1]))
         preview = ""
         if isinstance(result, str):
             preview = result[:300]
@@ -1310,7 +1393,6 @@ async def trade_chat_stream(
 
     _MAX_AGENT_RETRIES = 2
     cancel_event = threading.Event()  # 客户端断连时置位，阻止重试继续浪费 token
-    agent_holder: list = []  # 断连/超时时靠它中断仍在跑的 agent（见 _abort_running_agent）
 
     # ── 未完成报告（P0-5）───────────────────────────────────────────────
     partial_lock = threading.Lock()
@@ -1369,11 +1451,13 @@ async def trade_chat_stream(
             agent_holder.append(agent)
             if cancel_event.is_set():
                 return None
+            sum_start = time.monotonic()
             text = agent.chat(build_summary_prompt(query, tools))
             usage_module.record_agent_usage(
                 agent,
                 company_id=cid,
                 skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
+                duration_ms=int((time.monotonic() - sum_start) * 1000),
             )
             if text and not cancel_event.is_set():
                 return text
@@ -1458,6 +1542,7 @@ async def trade_chat_stream(
                 query=query, response=result,
                 skill=current_skill or "", tools=tools,
             )
+            result = _append_soft_budget_notice(result, request_task_id)
 
         # W10：先剥 trade-json 围栏，再入库并推 SSE（失败静默为纯文本）
         reply_text = result or "Agent 返回了空响应。"
@@ -1544,6 +1629,7 @@ async def trade_chat_stream(
                 if cancel_event.is_set():
                     return None
                 start = time.time()
+                attempt_start = time.monotonic()
                 # 同同步端点：把公司身份绑进本次 agent 调用的上下文。
                 try:
                     with bind_company(
@@ -1557,7 +1643,7 @@ async def trade_chat_stream(
                             for item in tools.snapshot()
                         ],
                     ):
-                        if document_task and request_task_id:
+                        if request_task_id and callable(getattr(agent, "run_conversation", None)):
                             result = agent.run_conversation(full_query, task_id=request_task_id)["final_response"]
                         else:
                             result = agent.chat(full_query)
@@ -1567,6 +1653,7 @@ async def trade_chat_stream(
                         agent,
                         company_id=cid,
                         skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
+                        duration_ms=int((time.monotonic() - attempt_start) * 1000),
                     )
                 elapsed = time.time() - start
 
@@ -1691,13 +1778,18 @@ async def trade_chat_stream(
                 except (asyncio.CancelledError, Exception):
                     pass
             # 线程里的 release 可能赶在 error 事件之后才执行；这里兜底一次，
-            # 保证流结束（异常/断连/超时）时跳过集合一定被释放。
+            # 保证流结束（异常/断连/超时）时跳过集合与软预算状态一定被释放。
             if document_task and request_task_id:
                 try:
                     release_read_coverage(request_task_id)
                     release_doc_skip(request_task_id)
                 except Exception:
                     _log.exception("release read coverage / doc skip failed")
+            if request_task_id and soft_budget_limit:
+                try:
+                    soft_budget_mod.release(request_task_id)
+                except Exception:
+                    _log.exception("release soft budget failed")
             # 没有正常下发回答（超时 / 断连 / 用户停止 / Agent 报错）但已有
             # 工具结果 → 补一份未完成报告进历史（幂等：超时分支可能已写过）。
             if not delivered["ok"]:

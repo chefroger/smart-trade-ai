@@ -324,6 +324,10 @@ async def osint_full_check(
     lookup_domain = _extract_lookup_domain(target, target_type, domain_from_email)
 
     # ── M1：公共平台域名分类（公共邮箱/B2B 平台/建站子域/社媒平台不查自有域名专属层）──
+    # P2-5：当目标是邮箱时（如 buyer@walmart.com / sales@amazon.com），大买家自身域名可能出现在
+    # b2b_marketplace / research_press 中；对邮箱目标仅 free_mail 与 site_builder_subdomain 跳过域名层，
+    # b2b_marketplace 等类别仍用于 URL 分类打标签。
+    _EMAIL_SKIP_DOMAIN_CATEGORIES = frozenset({"free_mail", "site_builder_subdomain"})
     domain_class: dict[str, Any] | None = None
     is_platform_domain = False
     platform_reason = ""
@@ -332,7 +336,12 @@ async def osint_full_check(
         # 网址目标传完整 target（保留路径，如 linkedin.com/company/x 视为企业主页）
         classify_input = target if target_type == "url" else lookup_domain
         domain_class = classify_domain_or_url(classify_input)
-        if domain_class["category"] in PLATFORM_SKIP_DOMAIN_CATEGORIES:
+        skip_cats = (
+            _EMAIL_SKIP_DOMAIN_CATEGORIES
+            if target_type == "email"
+            else PLATFORM_SKIP_DOMAIN_CATEGORIES
+        )
+        if domain_class["category"] in skip_cats:
             is_platform_domain = True
             platform_reason = domain_class["reason"]
             inferred_store_name = domain_class.get("inferred_store_name")
@@ -531,8 +540,16 @@ async def osint_full_check(
                 "status": "skipped",  # 只生成指令，需人工/浏览器实际执行
                 "ms": int((time.monotonic() - started) * 1000),
             })
+    elif include_linkedin and is_platform_domain:
+        # 公共平台域名：LinkedIn 验证不适用，显式标 not_applicable（P3-15）
+        report["layers"]["linkedin"] = {
+            "status": "not_applicable",
+            "not_applicable": True,
+            "skipped": True,
+            "reason": platform_reason,
+        }
     else:
-        # 用户关闭 LinkedIn 验证、缺少域名或属于公共平台域名，跳过此层
+        # 用户关闭 LinkedIn 验证或缺少域名，跳过此层
         report["layers"]["linkedin"] = None
 
     # ── 核验完整性 + 综合评分（fail-closed，工单 P0-2）────────────────
@@ -699,7 +716,7 @@ async def _await_layers(
         if task in finished:
             value = finished[task]
             if isinstance(value, BaseException):
-                results[name] = _failure_layer(name, "error", detail=str(value))
+                results[name] = _failure_layer(name, "error", detail=str(value), exc=value)
             else:
                 results[name] = value
         else:
@@ -737,7 +754,7 @@ async def _run_layer(
             result = _failure_layer(source, "timeout", timeout)
             status = "timeout"
         except Exception as exc:  # noqa: BLE001 —— 单层失败不拖垮整份报告
-            result = _failure_layer(source, "error", detail=str(exc))
+            result = _failure_layer(source, "error", detail=str(exc), exc=exc)
             status = "error"
 
     if on_event:
@@ -785,9 +802,20 @@ def _status_for(source: str, layer: dict) -> str:
     return "miss"
 
 
-def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str = "") -> dict:
+def _failure_layer(
+    source: str,
+    kind: str,
+    timeout: float = 0.0,
+    *,
+    detail: str = "",
+    exc: BaseException | None = None,
+) -> dict:
     """构造失败层的返回桩（形状与正常结果一致；原始异常不直接透出给用户）。"""
-    from trade.osint.sources.base import ERROR_CODE_META, redact_error_detail
+    from trade.osint.sources.base import (
+        ERROR_CODE_META,
+        classify_exception,
+        redact_error_detail,
+    )
 
     error_code: str | None = None
     retryable = False
@@ -804,7 +832,7 @@ def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str 
         error_code = None
         retryable = False
     else:
-        # 原始异常只写日志脱敏；公开来源一律返回中文错误码文案，不透出原始异常
+        # 原始异常只写日志脱敏；按异常类型准确分类，不再把未知程序异常误标为 network（P2-9）
         if detail:
             import logging
 
@@ -813,12 +841,12 @@ def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str 
                 source,
                 redact_error_detail(detail),
             )
-        error_code = "network"
-        default_msg, retryable = ERROR_CODE_META["network"]
-        if source in SOURCE_LABELS or "urlopen error" in detail.lower() or "traceback" in detail.lower():
-            reason = default_msg
+        if exc is not None:
+            error_code, retryable, default_msg = classify_exception(exc)
         else:
-            reason = redact_error_detail(detail) if detail else default_msg
+            error_code = "unknown"
+            default_msg, retryable = ERROR_CODE_META["unknown"]
+        reason = default_msg
 
     stub: dict = {
         "error": reason,
@@ -1160,3 +1188,111 @@ def _resolve_entity_name(domain: str | None, *, fetcher=None) -> str | None:
     except Exception:
         pass
     return None
+
+
+async def retry_single_source(
+    target: str,
+    source: str,
+    *,
+    timeout: float | None = None,
+    on_event: EventCallback | None = None,
+    source_fetcher=None,
+) -> dict:
+    """单独重试某个背调数据源或内置层（P2-4：供「重试该层」接口调用）。"""
+    src_key = str(source or "").strip()
+    target, forced_type = _split_type_prefix(target)
+    target, forced_username = _split_username_prefix(target)
+    target_type = forced_type or _detect_target_type(target)
+    username_hint = forced_username or _extract_username(target, target_type)
+
+    domain_from_email = target.split("@", 1)[1] if target_type == "email" else None
+    lookup_domain = _extract_lookup_domain(target, target_type, domain_from_email)
+
+    _EMAIL_SKIP_DOMAIN_CATEGORIES = frozenset({"free_mail", "site_builder_subdomain"})
+    is_platform_domain = False
+    inferred_store_name: str | None = None
+    if lookup_domain:
+        classify_input = target if target_type == "url" else lookup_domain
+        domain_class = classify_domain_or_url(classify_input)
+        skip_cats = (
+            _EMAIL_SKIP_DOMAIN_CATEGORIES
+            if target_type == "email"
+            else PLATFORM_SKIP_DOMAIN_CATEGORIES
+        )
+        if domain_class["category"] in skip_cats:
+            is_platform_domain = True
+            inferred_store_name = domain_class.get("inferred_store_name")
+
+    effective_domain = None if is_platform_domain else lookup_domain
+    layer_timeout = (
+        float(timeout)
+        if timeout is not None
+        else float(_LAYER_TIMEOUTS.get(src_key, 15.0))
+    )
+
+    # 1) 内置层
+    if src_key == "email_registration":
+        return await _run_layer(
+            src_key, email_intel.email_background_check, target,
+            timeout=layer_timeout, on_event=on_event,
+        )
+    if src_key == "email_verification":
+        return await _run_layer(
+            src_key, verify_corporate_email, target,
+            timeout=layer_timeout, on_event=on_event,
+        )
+    if src_key == "domain_intel":
+        if not effective_domain:
+            return {"status": "not_applicable", "skipped": True, "reason": "目标无可用自有域名"}
+        return await _run_layer(
+            src_key, domain_whois, effective_domain,
+            timeout=layer_timeout, on_event=on_event,
+        )
+    if src_key == "tech_stack":
+        if not effective_domain:
+            return {"status": "not_applicable", "skipped": True, "reason": "目标无可用自有域名"}
+        return await _run_layer(
+            src_key, detect_tech_stack, f"https://{effective_domain}",
+            timeout=layer_timeout, on_event=on_event,
+        )
+    if src_key == "sanctions":
+        sanctions_fallback = (
+            inferred_store_name
+            if (is_platform_domain and inferred_store_name)
+            else (target if is_platform_domain else (domain_from_email or target))
+        )
+        return await _run_layer(
+            src_key, _sanctions_and_screen, effective_domain, sanctions_fallback,
+            timeout=layer_timeout, on_event=on_event,
+        )
+
+    # 2) 公开来源
+    public_mod = next((m for m in PUBLIC_SOURCES if m.NAME == src_key), None)
+    if public_mod is None:
+        raise ValueError(f"unknown source: {src_key}")
+
+    contact_email = ""
+    try:
+        from trade.agent_context import current_company_id
+
+        _cid = current_company_id()
+        if _cid:
+            from trade.company import crud as _company_crud
+
+            _row = _company_crud.get(_cid)
+            contact_email = str((_row or {}).get("contact_email") or "").strip()
+    except Exception:
+        contact_email = ""
+
+    ctx = TargetContext(
+        target=target,
+        target_type=target_type,
+        domain=effective_domain,
+        email=target if target_type == "email" else None,
+        person_name=target if target_type == "person" else None,
+        company_name=target if target_type == "company" else inferred_store_name,
+        username=username_hint,
+        contact_email=contact_email,
+    )
+    fn = functools.partial(_run_public_source, public_mod, ctx, source_fetcher)
+    return await _run_layer(src_key, fn, timeout=layer_timeout, on_event=on_event)

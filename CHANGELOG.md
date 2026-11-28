@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## Unreleased — 2026-11-28
+
+- **行为变更（M4 / G4 背调评级）**：当全部公开数据源均调用失败（超时 / 限流 / 网络或上游异常）时，背调总评由 `limited` 改为 `incomplete`（「未完成核验」），避免将未查通的数据源误读为无风险。
+- **数据安全（M3 凭据擦除收窄）**：软删除公司时不再对整个目录做宽泛子串匹配或误删 Keynote `.key` / `Company Credentials *.pptx` / `Secretary_*.xlsx` 及 `libraries/`、`clients/` 业务子目录；仅精确擦除已知凭据文件与 PEM 格式私钥，并在审计日志记录相对路径。
+- **M7 软预算与历史预估接线**：补齐 `chat.py` 同步/流式对话的软 token 预算注册、实时用量同步与释放，补传真实 `duration_ms`，修正 `skill_history_stats` 价格窗口标签与措辞。
+- **背调单层重试（P2-4）**：新增 `POST /osint/jobs/{id}/retry-source` 接口并接入 `TradeWait`「重试该层」按钮及样式。
+- **背调分类、错误码与账本口径**：邮箱背调不再将 `walmart.com`/`amazon.com` 等大型买家自有域名当作公共平台跳过域名层；`registries_misc` / `usernames` 全失败改返 `error_result`；未知异常归类 `unknown` 不再误报 `network`；`pricing.toml` 补官方别名并对未知模型记 `unknown_model`；文档库预热抽取透传 `company_id`。
+- **前端与文档**：DOMPurify 白名单放开 `details`/`summary` 以支持折叠「其他来源」；移除供应商抽取面板写死的 `budget: 180`；对齐 6 层背调顺序文档。
+
 ## v0.9.62 — 2026-11-27
 
 - 拍摄工单 P0–P8/U1–U4 与全项目代码审计 P0 修复

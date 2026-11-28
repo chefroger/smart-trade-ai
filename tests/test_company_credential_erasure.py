@@ -57,13 +57,29 @@ def test_soft_delete_and_purge_preserve_global_mailboxes_and_erase_company_secre
 
     alpha_dir = trade_home / "fictional-alpha"
     alpha_dir.mkdir(parents=True, exist_ok=True)
-    # 应被擦除的公司凭据文件
+    # 应被擦除的公司凭据文件（根目录下的精确凭据文件 + PEM 格式 .key）
     (alpha_dir / ".env").write_text(f"CUSTOM_KEY={fake_env_key}\n", encoding="utf-8")
     (alpha_dir / "api_key.txt").write_text(fake_api_key, encoding="utf-8")
-    (alpha_dir / "secret-notes.txt").write_text(fake_secret_note, encoding="utf-8")
-    # 不应被误删的正常业务文件（A5：含 token 字样的付款条款文件 + 业务记忆）
+    (alpha_dir / "secrets.json").write_text(
+        json.dumps({"secret": fake_secret_note}), encoding="utf-8"
+    )
+    (alpha_dir / "deploy.key").write_text(
+        "-----BEGIN " + "FICTIONAL TEST KEY-----\nDUMMY-TEST-BODY\n",
+        encoding="utf-8",
+    )
+    # 不应被误删的正常业务文件（含 token / credential / secret / Keynote .key 及业务子目录）
     (alpha_dir / "token-payment-terms.pdf").write_bytes(b"%PDF-1.4 fictional payment terms")
+    (alpha_dir / "Company Credentials 2026.pptx").write_bytes(b"PK\x03\x04 fake pptx")
+    (alpha_dir / "Annual Pitch.key").write_bytes(b"PK\x03\x04 fake keynote deck")
+    (alpha_dir / "Secretary_List.xlsx").write_bytes(b"PK\x03\x04 fake xlsx")
+    (alpha_dir / "secret-recipe-NDA.docx").write_bytes(b"PK\x03\x04 fake docx")
+    (alpha_dir / "Confidential Supplier Credential Letter.pdf").write_bytes(b"%PDF-1.4")
     (alpha_dir / "MEMORY.md").write_text("# 正常业务记忆保留 30 天\n", encoding="utf-8")
+    # libraries/ 与 clients/ 业务子目录内的任何文件绝不被凭据扫描触碰
+    (alpha_dir / "libraries" / "docs").mkdir(parents=True, exist_ok=True)
+    (alpha_dir / "libraries" / "docs" / ".env").write_text("SAMPLE=1\n", encoding="utf-8")
+    (alpha_dir / "clients" / "acme").mkdir(parents=True, exist_ok=True)
+    (alpha_dir / "clients" / "acme" / "api_key.txt").write_text("client-doc", encoding="utf-8")
 
     # 写入两个全局邮箱：一个匹配公司 A 的 contact_email，一个仅有归属公司 A 的邮件行
     conn = db_mod.get_connection()
@@ -123,17 +139,27 @@ def test_soft_delete_and_purge_preserve_global_mailboxes_and_erase_company_secre
     assert soft_del_entries, "审计日志中应包含该公司 soft_delete 记录"
     detail = str(soft_del_entries[-1].get("detail", ""))
     assert "邮箱凭据" not in detail
-    assert "凭据文件 3 个" in detail
+    assert "凭据文件 4 个" in detail
+    assert "fictional-alpha/.env" in detail
+    assert "fictional-alpha/deploy.key" in detail
 
     # A3：活跃 session 已解绑
     assert deps_mod._ACTIVE_COMPANY.get("tok-session-a") is None
 
-    # A5：三类凭据文件已擦除，token-payment-terms.pdf 与 MEMORY.md 完好保留
+    # A5：精确凭据文件已擦除；外贸业务文件、Keynote .key、业务子目录内文件全部完好保留
     assert not (alpha_dir / ".env").exists()
     assert not (alpha_dir / "api_key.txt").exists()
-    assert not (alpha_dir / "secret-notes.txt").exists()
+    assert not (alpha_dir / "secrets.json").exists()
+    assert not (alpha_dir / "deploy.key").exists()
     assert (alpha_dir / "token-payment-terms.pdf").exists()
+    assert (alpha_dir / "Company Credentials 2026.pptx").exists()
+    assert (alpha_dir / "Annual Pitch.key").exists()
+    assert (alpha_dir / "Secretary_List.xlsx").exists()
+    assert (alpha_dir / "secret-recipe-NDA.docx").exists()
+    assert (alpha_dir / "Confidential Supplier Credential Letter.pdf").exists()
     assert (alpha_dir / "MEMORY.md").exists()
+    assert (alpha_dir / "libraries" / "docs" / ".env").exists()
+    assert (alpha_dir / "clients" / "acme" / "api_key.txt").exists()
 
     # ── 2) purge 公司 A ──
     assert company_mod.purge(cid_a) is True

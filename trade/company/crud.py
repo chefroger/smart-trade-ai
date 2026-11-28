@@ -336,20 +336,54 @@ def update(
 
 
 # 软删时即刻擦除的公司目录内凭据文件名/后缀特征（业务数据留 30 天，凭据不留）
-# 注意：不含独立的 'token'，避免误删外贸业务文件（如 token-payment-terms.pdf）
-_CREDENTIAL_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx"})
-_CREDENTIAL_KEYWORDS = ("secret", "credential", "apikey", "api_key")
+# 严格采用精确文件名与证书后缀匹配，绝不做宽泛子串匹配，避免误删外贸业务文件
+# （如 Company Credentials 2026.pptx、Secretary_List.xlsx、Keynote .key 等）
+_CREDENTIAL_EXACT_SUFFIXES = frozenset({".pem", ".p12", ".pfx"})
+_CREDENTIAL_EXACT_NAMES = frozenset({
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+    "api_key",
+    "api_key.txt",
+    "apikey",
+    "apikey.txt",
+    "secrets.json",
+    "secrets.yaml",
+    "secrets.yml",
+    "credentials.json",
+    "credentials.yaml",
+    "credentials.yml",
+})
+# 公司数据目录下存放用户业务文档的子目录，凭据扫描绝不进入
+_BUSINESS_SUBDIRS = frozenset({"libraries", "clients"})
+
+
+def _is_pem_key_file(path: Path) -> bool:
+    """判断 .key 文件是否为 PEM 格式私钥（避免误删 macOS Keynote 演示文稿 .key）。"""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(256)
+        return b"-----BEGIN " in head
+    except OSError:
+        return False
 
 
 def _is_credential_file(path: Path) -> bool:
     """判断公司数据目录内的文件是否属于应随删除即刻擦除的凭据文件。"""
     name_lower = path.name.lower()
+    # 1) .env / .env.* 环境变量文件
     if name_lower == ".env" or name_lower.startswith(".env."):
         return True
-    if path.suffix.lower() in _CREDENTIAL_SUFFIXES:
+    # 2) 精确已知凭据文件名
+    if name_lower in _CREDENTIAL_EXACT_NAMES:
         return True
-    if any(kw in name_lower for kw in _CREDENTIAL_KEYWORDS):
+    # 3) 证书/私钥后缀：.pem / .p12 / .pfx 直接认定，.key 仅在文件头为 PEM 时认定
+    suffix_lower = path.suffix.lower()
+    if suffix_lower in _CREDENTIAL_EXACT_SUFFIXES:
         return True
+    if suffix_lower == ".key":
+        return _is_pem_key_file(path)
     return False
 
 
@@ -358,18 +392,19 @@ def _erase_company_credentials(
     *,
     slug: str | None = None,
     data_dir_str: str | None = None,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """擦除归属指定公司的凭据文件并解绑活跃会话（删除即擦凭据，保留期不留 Key）。
 
     邮箱属于用户本人全局资产（全局只绑一次，不归属单家公司），本函数绝不触碰
     mailboxes 表及 mailbox_secrets.json。
 
     覆盖范围：
-      1. 公司数据目录（严格限定在 TRADE_HOME 下的 data_dir / {slug}，跳过软链）内的
-         .env / *.pem / *.key / *.p12 / *.pfx 及含 secret/credential/apikey/api_key 的文件；
+      1. 公司数据目录（严格限定在 TRADE_HOME 下的 data_dir / {slug}，跳过软链与
+         libraries/clients 业务子目录）内的精确凭据文件（.env / .env.* / 已知凭据文件名 /
+         *.pem / *.p12 / *.pfx / PEM 格式 *.key）；
       2. 解除进程内绑向该公司的活跃 session 映射。
     """
-    erased = {"credential_files": 0}
+    erased_paths: list[str] = []
 
     # 1) 擦除公司数据目录内（严格限定在 TRADE_HOME 下）的凭据文件
     dirs_to_scan: list[Path] = []
@@ -384,11 +419,19 @@ def _erase_company_credentials(
         if not d.exists() or not d.is_dir():
             continue
         try:
-            d.resolve().relative_to(trade_root)
+            d_resolved = d.resolve()
+            d_resolved.relative_to(trade_root)
         except ValueError:
             continue
         for f in d.rglob("*"):
             if f.is_symlink() or not f.is_file():
+                continue
+            # 跳过 libraries/ 与 clients/ 业务文档目录，绝不触碰用户业务资料
+            try:
+                rel_to_dir = f.resolve().relative_to(d_resolved)
+            except ValueError:
+                continue
+            if rel_to_dir.parts and rel_to_dir.parts[0].lower() in _BUSINESS_SUBDIRS:
                 continue
             key = str(f.resolve())
             if key in seen_files:
@@ -397,7 +440,8 @@ def _erase_company_credentials(
             if _is_credential_file(f):
                 try:
                     f.unlink(missing_ok=True)
-                    erased["credential_files"] += 1
+                    rel_to_root = str(f.resolve().relative_to(trade_root))
+                    erased_paths.append(rel_to_root)
                 except OSError:
                     pass
 
@@ -411,7 +455,7 @@ def _erase_company_credentials(
     except Exception:
         pass
 
-    return erased
+    return {"credential_files": len(erased_paths), "erased_paths": erased_paths}
 
 
 def delete(company_id: int) -> bool:
@@ -449,11 +493,13 @@ def delete(company_id: int) -> bool:
                 slug=slug,
                 data_dir_str=data_dir_str,
             )
-            # 写入审计日志留痕（物理清理需管理员显式执行 purge）
+            # 写入审计日志留痕（记录被擦除的相对路径，物理清理需管理员显式执行 purge）
+            erased_list = erased.get("erased_paths") or []
+            paths_note = f"：{', '.join(erased_list)}" if erased_list else ""
             _write_audit_log(
                 company_id,
                 "soft_delete",
-                f"公司已软删除（保留历史业务数据；已擦除凭据文件 {erased['credential_files']} 个）",
+                f"公司已软删除（保留历史业务数据；已擦除凭据文件 {erased['credential_files']} 个{paths_note}）",
             )
         return n > 0
     finally:

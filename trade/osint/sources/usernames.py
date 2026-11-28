@@ -19,6 +19,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_page_final,
     quote,
     skipped,
@@ -85,7 +86,7 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     if not sites:
         return SourceResult(NAME, "miss", error="WhatsMyName 数据集不可用")
 
-    def check(site: dict) -> dict | None:
+    def check(site: dict) -> tuple[str, dict | Exception | None]:
         uri = str(site.get("uri_check") or "")
         url = uri.replace("{account}", quote(username))
         pretty = str(site.get("uri_pretty") or uri).replace("{account}", quote(username))
@@ -96,10 +97,10 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
                 fetch=fetch,
                 headers=site.get("headers") if isinstance(site.get("headers"), dict) else None,
             )
-        except Exception:  # noqa: BLE001 —— 单站失败按未命中
-            return None
+        except Exception as exc:  # noqa: BLE001 —— 单站失败记录异常，全失败时返回 error
+            return "error", exc
         if page is None:
-            return None
+            return "miss", None
         code, text, final_url = page
         # WhatsMyName 的 e_code：账号存在时该站返回的状态码（多数 200，也有
         # 301/400/403）。此前只看 e_string，非 2xx 的站点被 HTTPError 吞掉、
@@ -120,32 +121,42 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
                 and final_url != url
             )
             if not redirect_followed:
-                return None
+                return "miss", None
         if not text:
-            return None
+            return "miss", None
         marker = str(site.get("e_string") or "")
         if marker and marker not in text:
-            return None
-        return {"site": str(site.get("name") or ""), "url": pretty}
+            return "miss", None
+        return "hit", {"site": str(site.get("name") or ""), "url": pretty}
 
     found: list[dict] = []
+    errors: list[Exception] = []
+    completed = 0
     deadline = time.monotonic() + _TOTAL_SECONDS
     executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
     try:
         futures = [executor.submit(check, site) for site in sites]
         for future in as_completed(futures, timeout=max(0.1, deadline - time.monotonic())):
             try:
-                result = future.result()
-            except Exception:  # noqa: BLE001
+                kind, payload = future.result()
+            except Exception as exc:  # noqa: BLE001
+                completed += 1
+                errors.append(exc)
                 continue
-            if result:
-                found.append(result)
+            completed += 1
+            if kind == "hit" and isinstance(payload, dict):
+                found.append(payload)
+            elif kind == "error" and isinstance(payload, Exception):
+                errors.append(payload)
     except TimeoutError:
         pass  # 到总时限就返回已收集的命中
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
     if not found:
+        if completed > 0 and len(errors) >= completed:
+            # 全部已返回站点均异常失败：返回 error 而非 miss（P2-6）
+            return error_result(NAME, exc=errors[0])
         return SourceResult(
             NAME, "miss",
             error=f"用户名 {username} 在已检查的 {len(sites)} 个站点中未发现公开 profile",

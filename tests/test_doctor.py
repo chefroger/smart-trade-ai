@@ -744,8 +744,12 @@ class TestLayeredLlmProbes:
             "base_url": "https://api.deepseek.com/v1",
         }
 
-    def test_l1_dns_and_tls_failures_stop_before_l2_l3(self):
+    def test_l1_dns_and_tls_failures_stop_before_l2_l3(self, monkeypatch):
         from trade.doctor import STATUS_WARN, check_llm_layered
+
+        # 无代理环境下 L1 失败应直接截断，不继续发起 L2/L3
+        for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.delenv(k, raising=False)
 
         l2_called = 0
         l3_called = 0

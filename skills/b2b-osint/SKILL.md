@@ -1,6 +1,6 @@
 ---
 name: b2b-osint
-description: 客户背景调查 — 6 层验证：WHOIS/邮箱/制裁名单/技术栈/LinkedIn/风险评分
+description: 客户背景调查 — 6 层验证：邮箱注册检测/WHOIS/邮箱验证/制裁名单/技术栈/LinkedIn
 when_to_use:
   - "用户提到「背景调查」「背调」「尽职调查」「due diligence」"
   - "用户粘贴公司名 / 域名 / 邮箱要求验证真伪"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 # 触发软预算后不再新发起的检索类工具（写作/落库/格式化等收尾工具不受限制）
@@ -37,18 +38,29 @@ class _BudgetState:
     consumed_tokens: int = 0
     tripped: bool = False
     unfinished_tools: list[str] = field(default_factory=list)
+    token_reader: Callable[[], int] | None = None
 
 
 _budgets: dict[str, _BudgetState] = {}
 
 
-def register(task_id: str, limit_tokens: int | None, *, skill: str = "") -> None:
+def register(
+    task_id: str,
+    limit_tokens: int | None,
+    *,
+    skill: str = "",
+    token_reader: Callable[[], int] | None = None,
+) -> None:
     """为指定 task_id 登记本次软 token 预算；limit_tokens 为 None 或 <=0 时不设上限。"""
     key = str(task_id or "").strip()
     if not key or limit_tokens is None or int(limit_tokens) <= 0:
         return
     with _lock:
-        _budgets[key] = _BudgetState(limit_tokens=int(limit_tokens), skill=str(skill or ""))
+        _budgets[key] = _BudgetState(
+            limit_tokens=int(limit_tokens),
+            skill=str(skill or ""),
+            token_reader=token_reader,
+        )
 
 
 def add_tokens(task_id: str, tokens: int) -> bool:
@@ -61,6 +73,23 @@ def add_tokens(task_id: str, tokens: int) -> bool:
         if st is None:
             return False
         st.consumed_tokens += max(0, int(tokens or 0))
+        if st.consumed_tokens >= st.limit_tokens:
+            st.tripped = True
+        return st.tripped
+
+
+def sync_tokens(task_id: str, total_tokens: int) -> bool:
+    """按 agent 当前累计 token 幂等同步已消耗值（取较大值，避免重复累加）。"""
+    key = str(task_id or "").strip()
+    if not key:
+        return False
+    val = max(0, int(total_tokens or 0))
+    with _lock:
+        st = _budgets.get(key)
+        if st is None:
+            return False
+        if val > st.consumed_tokens:
+            st.consumed_tokens = val
         if st.consumed_tokens >= st.limit_tokens:
             st.tripped = True
         return st.tripped
@@ -108,6 +137,18 @@ def on_pre_tool_call(tool_name: str = "", args=None, task_id: str = "", **_kw) -
         key = str(task_id or "").strip()
         if not key or tool_name not in RETRIEVAL_TOOLS:
             return None
+        with _lock:
+            st = _budgets.get(key)
+            if st is None:
+                return None
+            reader = st.token_reader
+        # 若登记了实时读取器，在判定前先同步最新累计 token（避免等工具完成后才感知超限）
+        if reader is not None:
+            try:
+                live_tokens = max(0, int(reader() or 0))
+                sync_tokens(key, live_tokens)
+            except Exception:  # noqa: BLE001 — 读取器异常不阻断工具调用
+                pass
         with _lock:
             st = _budgets.get(key)
             if st is None or st.consumed_tokens < st.limit_tokens:

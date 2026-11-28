@@ -907,7 +907,7 @@ async function onboardingStartOSINT() {
             var respDiv = document.createElement('div');
             respDiv.className = 'onboarding-response';
             var raw = marked.parse(responseText);
-            respDiv.innerHTML = DOMPurify.sanitize(raw, { ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6','blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'], ALLOWED_ATTR: ['href','target','class','src','alt','width','height'], ALLOW_DATA_ATTR: false });
+            respDiv.innerHTML = DOMPurify.sanitize(raw, { ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6','blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img','details','summary'], ALLOWED_ATTR: ['href','target','class','src','alt','width','height'], ALLOW_DATA_ATTR: false });
             if (typeof neutralizeRemoteImages === 'function') neutralizeRemoteImages(respDiv);
             resultsArea.appendChild(respDiv);
             showOnboardingActions();

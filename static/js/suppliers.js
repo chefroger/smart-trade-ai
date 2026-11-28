@@ -928,7 +928,7 @@ function _spRenderImportUpload(panel) {
             const ev = events[cursor];
             if (!ev) continue;
             if (ev.type === 'job_start') {
-                waitObj.push({ type: 'job_start', target: '共 ' + String(ev.total || 0) + ' 个可解析文件', budget: 180 });
+                waitObj.push({ type: 'job_start', target: '共 ' + String(ev.total || 0) + ' 个可解析文件' });
             } else if (ev.type === 'file_start') {
                 waitObj.push({ type: 'source_start', source: ev.source || ('f' + cursor), label: ev.label || '文档' });
             } else if (ev.type === 'file_done') {
@@ -960,9 +960,24 @@ function _spRenderImportUpload(panel) {
             _spState.extractWait = waitObj;
         }
 
+        let missCount = 0;
         const pollOnce = async function () {
             const job = await api('GET', '/api/trade/suppliers/extract/jobs/' + encodeURIComponent(jobId), null, undefined, { silent: true });
-            if (!job) return;
+            if (!job) {
+                missCount += 1;
+                // 服务重启或任务失效导致连续 404/空响应时终止轮询并恢复按钮，避免死循环（P3-17）
+                if (missCount >= 3) {
+                    _spClearExtractWait();
+                    _spState.extractJobId = null;
+                    const btn = document.getElementById('sp-extract-go-btn');
+                    if (btn) btn.disabled = false;
+                    const stEl2 = document.getElementById('sp-extract-status');
+                    if (stEl2) stEl2.textContent = '';
+                    toast('后台抽取任务已失效或中断，请重新发起');
+                }
+                return;
+            }
+            missCount = 0;
             _spState.extractEventCursor = _spFeedExtractEvents(_spState.extractWait, job.events, _spState.extractEventCursor);
             const stEl = document.getElementById('sp-extract-status');
             if (stEl && job.status === 'running') {

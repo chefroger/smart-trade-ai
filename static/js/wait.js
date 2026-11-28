@@ -36,7 +36,8 @@
     network: '网络或代理连接失败',
     parse_error: '响应格式异常',
     not_applicable: '不适用',
-    unsupported_type: '不支持的类型'
+    unsupported_type: '不支持的类型',
+    unknown: '内部错误'
   };
   // 评级代号 → 中文（审计 P0-B：limited = 只跑过制裁层，不是低风险）
   var RATING_ZH = {
@@ -466,7 +467,11 @@
       if (type === 'job_start') {
         var tgt = redact(ev.target || '—');
         this.targetEl.textContent = tgt;
-        this._log('预算 ' + (ev.budget || '?') + ' 秒', '', '任务已启动');
+        if (ev.budget != null && Number(ev.budget) > 0) {
+          this._log('预算 ' + Number(ev.budget) + ' 秒', '', '任务已启动');
+        } else {
+          this._log('正在执行', '', '任务已启动');
+        }
         if (ev.estimate && ev.estimate.message) {
           // M7：长任务历史预估（纯提示，绝不弹确认窗、不拦截执行）
           this._log(ev.estimate.message, '', '历史预估');
@@ -500,7 +505,27 @@
             var srcKey = s2.key;
             retryBtn.addEventListener('click', function () {
               retryBtn.disabled = true;
-              selfWait.opts.onRetrySource(srcKey);
+              retryBtn.textContent = '重试中…';
+              var ret = selfWait.opts.onRetrySource(srcKey);
+              if (ret && typeof ret.then === 'function') {
+                ret.then(function (res) {
+                  if (!res) {
+                    retryBtn.disabled = false;
+                    retryBtn.textContent = '重试该层';
+                    return;
+                  }
+                  var st2 = SRC_STATUS[res.status] || res.status || '完成';
+                  var ec2 = res.error_code && ERROR_CODE_ZH[res.error_code] ? ERROR_CODE_ZH[res.error_code] : '';
+                  var d2 = '重试结果：' + st2 + (ec2 ? '（' + ec2 + '）' : '') + (res.ms != null ? ' · ' + (res.ms / 1000).toFixed(1) + 's' : '');
+                  var isBad2 = res.status === 'error' || res.status === 'timeout';
+                  selfWait._log(d2, res.status === 'hit' ? 'hit' : (isBad2 ? 'bad' : ''), s2.label);
+                  retryBtn.textContent = isBad2 ? '重试该层' : '已重试';
+                  retryBtn.disabled = !isBad2;
+                }, function () {
+                  retryBtn.disabled = false;
+                  retryBtn.textContent = '重试该层';
+                });
+              }
             });
             logRow.appendChild(retryBtn);
           }

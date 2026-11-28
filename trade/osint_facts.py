@@ -125,6 +125,9 @@ def save_fact(
     source_url = str(source_url or "").strip()[:MAX_SOURCE_LEN]
     source_name = str(source_name or "").strip()[:MAX_SOURCE_LEN]
     note = str(note or "").strip()[:MAX_VALUE_LEN]
+    # not_found / failed 且 source_url 为空时，用 source_name 区分不同来源，防止唯一键互相覆盖（P3-20）
+    if norm_status != "found" and not source_url and source_name:
+        source_url = f"source:{source_name}"[:MAX_SOURCE_LEN]
     verified_flag = 1 if (verified and norm_status == "found") else 0
 
     conn = get_connection()

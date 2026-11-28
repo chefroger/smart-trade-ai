@@ -36,6 +36,8 @@ DEFAULT_DAILY_TOKEN_LIMIT = 20_000_000
 
 # 缺缓存字段时的行标记（存于 extra1）
 NO_CACHE_DATA_TAG = "no_cache_data"
+# 未在价格表匹配到模型时的行标记（存于 extra1）
+UNKNOWN_MODEL_TAG = "unknown_model"
 
 # 默认配置文件路径
 _DEFAULT_PRICING_PATH = Path(__file__).resolve().parent / "pricing.toml"
@@ -75,6 +77,30 @@ CREATE INDEX IF NOT EXISTS idx_usage_skill ON usage_ledger(skill);
 def _norm_model(model: str) -> str:
     """将模型名归一化为小写连字符形式，便于查表和匹配环境变量。"""
     return (model or "").strip().lower().replace(" ", "-").replace("_", "-")
+
+
+def _resolve_model_key(model: str, config: dict[str, Any]) -> str:
+    """解析模型查表键：支持 provider/model 前缀剥离与 pricing.toml [aliases] 映射。"""
+    raw_key = _norm_model(model)
+    if not raw_key:
+        return ""
+    models_cfg = config.get("models") if isinstance(config.get("models"), dict) else {}
+    aliases_cfg = config.get("aliases") if isinstance(config.get("aliases"), dict) else {}
+
+    # 候选顺序：完整名 → 剥离 provider/ 前缀后的基础名
+    candidates = [raw_key]
+    if "/" in raw_key:
+        candidates.append(raw_key.rsplit("/", 1)[-1])
+
+    for cand in candidates:
+        if cand in models_cfg:
+            return cand
+        alias_target = aliases_cfg.get(cand)
+        if isinstance(alias_target, str):
+            norm_target = _norm_model(alias_target)
+            if norm_target in models_cfg:
+                return norm_target
+    return candidates[-1]
 
 
 def load_pricing_config(path: Path | None = None) -> dict[str, Any]:
@@ -132,7 +158,8 @@ def resolve_price_window(
     """
     cfg = config if config is not None else load_pricing_config()
     models_cfg = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
-    m_cfg = models_cfg.get(_norm_model(model))
+    resolved_key = _resolve_model_key(model, cfg)
+    m_cfg = models_cfg.get(resolved_key)
     # 未知模型或未配置分时段组时返回空串
     if not isinstance(m_cfg, dict) or not m_cfg.get("window_group"):
         return ""
@@ -194,7 +221,8 @@ def get_tiered_price(
 
     cfg = config if config is not None else load_pricing_config()
     models_cfg = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
-    m_cfg = models_cfg.get(key)
+    resolved_key = _resolve_model_key(model, cfg)
+    m_cfg = models_cfg.get(resolved_key)
     if not isinstance(m_cfg, dict):
         return 0.0, 0.0, 0.0
 
@@ -393,6 +421,12 @@ def record_usage(
                 phit, pmiss, pout = price_override[0], price_override[0], price_override[1]
         else:
             phit, pmiss, pout = get_tiered_price(model, window=window, config=cfg)
+            # 未命中价格表且无环境变量覆盖时，标记 unknown_model，避免静默 0 元误导对账
+            if phit == 0.0 and pmiss == 0.0 and pout == 0.0 and _norm_model(model):
+                models_cfg = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
+                env_key = "TRADE_PRICE_" + _norm_model(model).upper().replace("-", "_")
+                if _resolve_model_key(model, cfg) not in models_cfg and not os.environ.get(env_key, "").strip():
+                    extra1 = f"{extra1},{UNKNOWN_MODEL_TAG}" if extra1 else UNKNOWN_MODEL_TAG
 
         cost = (
             (hit / 1_000_000) * phit
@@ -531,7 +565,13 @@ def daily_budget_state(company_id: int) -> tuple[int, int]:
         return 0, limit
 
 
-def record_agent_usage(agent, *, company_id: int = 0, skill: str = "") -> float:
+def record_agent_usage(
+    agent,
+    *,
+    company_id: int = 0,
+    skill: str = "",
+    duration_ms: int | None = None,
+) -> float:
     """把一次 agent 调用的 token 用量（含缓存命中）记入台账，返回费用（美元）。
 
     Hermes 的 ``session_*`` 计数是该 agent 实例的累计值；Trade 每个请求新建
@@ -574,6 +614,7 @@ def record_agent_usage(agent, *, company_id: int = 0, skill: str = "") -> float:
                 cache_hit_tokens=cache_hit,
                 cache_miss_tokens=cache_miss,
                 company_id=company_id,
+                duration_ms=duration_ms,
             )
         finally:
             conn.close()
@@ -582,38 +623,54 @@ def record_agent_usage(agent, *, company_id: int = 0, skill: str = "") -> float:
         return 0.0
 
 
-def summary(conn: sqlite3.Connection, days: int = 7) -> dict:
-    """近 N 天汇总：总 token、缓存命中率、估算费用、按 skill / 按模型 / 按天拆分。"""
+def summary(
+    conn: sqlite3.Connection,
+    days: int = 7,
+    *,
+    company_id: int | None = None,
+) -> dict:
+    """近 N 天汇总：总 token、缓存命中率、估算费用、按 skill / 按模型 / 按天拆分。
+
+    传入 company_id 时按公司隔离统计；为 None 时汇总全库（兼容旧调用）。
+    """
     ensure_usage_schema(conn)
     since = time.time() - days * 86400
+    where_sql = "ts >= ?"
+    params: list[Any] = [since]
+    if company_id is not None:
+        where_sql += " AND company_id = ?"
+        params.append(int(company_id))
+
     total = conn.execute(
-        """SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-                  COALESCE(SUM(cache_hit_tokens),0), COALESCE(SUM(cache_miss_tokens),0),
-                  COALESCE(SUM(cost_usd),0), COUNT(*)
-           FROM usage_ledger WHERE ts >= ?""",
-        (since,),
+        f"""SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+                   COALESCE(SUM(cache_hit_tokens),0), COALESCE(SUM(cache_miss_tokens),0),
+                   COALESCE(SUM(cost_usd),0), COUNT(*),
+                   SUM(CASE WHEN extra1 LIKE '%{UNKNOWN_MODEL_TAG}%' THEN 1 ELSE 0 END)
+            FROM usage_ledger WHERE {where_sql}""",
+        tuple(params),
     ).fetchone()
     by_skill = conn.execute(
-        """SELECT skill, SUM(prompt_tokens)+SUM(completion_tokens), SUM(cost_usd), COUNT(*)
-           FROM usage_ledger WHERE ts >= ? GROUP BY skill ORDER BY 3 DESC""",
-        (since,),
+        f"""SELECT skill, SUM(prompt_tokens)+SUM(completion_tokens), SUM(cost_usd), COUNT(*)
+            FROM usage_ledger WHERE {where_sql} GROUP BY skill ORDER BY 3 DESC""",
+        tuple(params),
     ).fetchall()
     by_model = conn.execute(
-        """SELECT model, SUM(prompt_tokens)+SUM(completion_tokens), SUM(cost_usd), COUNT(*)
-           FROM usage_ledger WHERE ts >= ? GROUP BY model ORDER BY 3 DESC""",
-        (since,),
+        f"""SELECT model, SUM(prompt_tokens)+SUM(completion_tokens), SUM(cost_usd), COUNT(*)
+            FROM usage_ledger WHERE {where_sql} GROUP BY model ORDER BY 3 DESC""",
+        tuple(params),
     ).fetchall()
     by_day = conn.execute(
-        """SELECT date(ts, 'unixepoch', 'localtime'),
-                  SUM(prompt_tokens)+SUM(completion_tokens), SUM(cost_usd), COUNT(*)
-           FROM usage_ledger WHERE ts >= ?
-           GROUP BY date(ts, 'unixepoch', 'localtime') ORDER BY 1""",
-        (since,),
+        f"""SELECT date(ts, 'unixepoch', 'localtime'),
+                   SUM(prompt_tokens)+SUM(completion_tokens), SUM(cost_usd), COUNT(*)
+            FROM usage_ledger WHERE {where_sql}
+            GROUP BY date(ts, 'unixepoch', 'localtime') ORDER BY 1""",
+        tuple(params),
     ).fetchall()
     total_prompt = int(total[0])
     total_hit = int(total[2])
     total_miss = int(total[3])
     hit_rate = round(total_hit / total_prompt, 4) if total_prompt > 0 else 0.0
+    unknown_calls = int(total[6] or 0)
     return {
         "days": days,
         "total_tokens": int(total[0] + total[1]),
@@ -623,6 +680,7 @@ def summary(conn: sqlite3.Connection, days: int = 7) -> dict:
         "total_cost_usd": round(float(total[4]), 4),
         "cost_note": "估算，以 DeepSeek 账单为准",
         "calls": int(total[5]),
+        "unknown_model_calls": unknown_calls,
         "by_skill": [
             {"skill": r[0] or "(未分类)", "tokens": int(r[1]), "cost_usd": round(float(r[2]), 4), "calls": int(r[3])}
             for r in by_skill
@@ -639,13 +697,15 @@ def summary(conn: sqlite3.Connection, days: int = 7) -> dict:
 
 
 def format_summary_text(s: dict) -> str:
-    """给前端/CLI 用的纯文本摘要（明确标注估算口径与缓存命中率）。"""
+    """给前端/CLI 用的纯文本摘要（明确标注估算口径、缓存命中率与未计价提示）。"""
     hit_pct = float(s.get("cache_hit_rate") or 0.0) * 100
     note = s.get("cost_note") or "估算，以 DeepSeek 账单为准"
+    unknown_calls = int(s.get("unknown_model_calls") or 0)
+    unknown_note = f"；含 {unknown_calls} 笔未知模型未计价" if unknown_calls > 0 else ""
     lines = [
         f"近 {s['days']} 天：{s['calls']} 次调用，{s['total_tokens']} tokens"
         f"（缓存命中率 {hit_pct:.1f}%），"
-        f"约 ${s['total_cost_usd']:.4f}（{note}）"
+        f"约 ${s['total_cost_usd']:.4f}（{note}{unknown_note}）"
     ]
     if s["by_skill"]:
         lines.append("按 skill（费用倒序）：")
@@ -674,7 +734,7 @@ def skill_history_stats(
     skill: str,
     *,
     n: int = 10,
-    model: str = "deepseek-chat",
+    model: str | None = None,
     ts: float | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -688,7 +748,8 @@ def skill_history_stats(
     ensure_usage_schema(conn)
     limit = max(1, min(int(n or 10), 100))
     rows = conn.execute(
-        """SELECT prompt_tokens + completion_tokens, duration_ms, cost_usd
+        """SELECT prompt_tokens + completion_tokens, duration_ms, cost_usd,
+                  price_window, model
            FROM usage_ledger
            WHERE company_id = ? AND skill = ?
            ORDER BY id DESC
@@ -713,20 +774,35 @@ def skill_history_stats(
     token_vals = [int(r[0] or 0) for r in rows]
     dur_vals = [int(r[1] or 0) for r in rows if int(r[1] or 0) > 0]
     cost_vals = [float(r[2] or 0.0) for r in rows]
+    hist_windows = {str(r[3] or "").strip() for r in rows if str(r[3] or "").strip()}
+    recent_model = next((str(r[4] or "").strip() for r in rows if str(r[4] or "").strip()), "")
 
     med_tokens = int(round(_median_num(token_vals)))
     med_dur_ms = int(round(_median_num(dur_vals))) if dur_vals else None
     med_cost = round(_median_num(cost_vals), 4)
 
     cfg = config if config is not None else load_pricing_config()
-    window = resolve_price_window(model, ts=ts, config=cfg)
-    window_zh = "闲时价" if window == "offpeak" else "高峰价"
+    eff_model = (model or "").strip() or recent_model
+    window = resolve_price_window(eff_model, ts=ts, config=cfg) if eff_model else ""
+
+    # 区分「历史费用所属时段」与「当前时段」，不再对不分时段模型误标「当前为高峰价」
+    note_parts = ["以 DeepSeek 账单为准"]
+    if hist_windows == {"offpeak"}:
+        note_parts.append("历史均为闲时价")
+    elif hist_windows == {"peak"}:
+        note_parts.append("历史均为高峰价")
+    elif len(hist_windows) > 1:
+        note_parts.append("历史含高峰/闲时混合")
+    if window == "offpeak":
+        note_parts.append("当前为闲时价")
+    elif window == "peak":
+        note_parts.append("当前为高峰价")
 
     tok_wan = med_tokens / 10_000.0
     parts = [f"同类任务最近 {count} 次：中位约 {tok_wan:.1f} 万 token"]
     if med_dur_ms is not None:
         parts.append(f"约 {max(1, round(med_dur_ms / 1000.0))} 秒")
-    cost_part = f"估算费用约 ${med_cost:.4f}（以 DeepSeek 账单为准；当前为{window_zh}）"
+    cost_part = f"估算费用约 ${med_cost:.4f}（{'；'.join(note_parts)}）"
     message = "、".join(parts) + f"，{cost_part}（按本机历史，仅供参考）"
 
     return {
@@ -736,7 +812,7 @@ def skill_history_stats(
         "median_tokens": med_tokens,
         "median_duration_ms": med_dur_ms,
         "median_cost_usd": med_cost,
-        "price_window": window,
+        "price_window": window or None,
         "message": message,
     }
 

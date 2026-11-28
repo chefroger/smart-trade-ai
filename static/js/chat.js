@@ -958,7 +958,8 @@ function _renderSafeMarkdownInto(targetEl, content) {
     const raw = marked.parse(content || '');
     targetEl.innerHTML = DOMPurify.sanitize(raw, {
         ALLOWED_TAGS: ['p','br','strong','em','b','i','ul','ol','li','h1','h2','h3','h4','h5','h6',
-            'blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img'],
+            'blockquote','code','pre','a','table','thead','tbody','tr','th','td','hr','span','div','img',
+            'details','summary'],
         // 不放行 style/id：模型输出不该带自定义样式与可覆盖的 DOM id（审计 P1-E）
         ALLOWED_ATTR: ['href','target','class','src','alt','width','height'],
         // S1：模型输出不得携带 data-*（可被委托层当成动作执行）
@@ -2132,6 +2133,7 @@ function _attachOsintTaskPanel(container, job) {
                 title: '背调 · BACKGROUND CHECK',
                 statusLabel: '背调进行中',
                 onCancel: function () { _cancelOsintJob(jobId); },
+                onRetrySource: function (src) { return _retryOsintSource(jobId, src); },
             });
         } catch (e) {
             console.warn('引导页内嵌背调面板挂载失败', e);
@@ -2173,6 +2175,7 @@ function _attachOsintTaskPanel(container, job) {
             title: '背调 · BACKGROUND CHECK',
             statusLabel: '背调进行中',
             onCancel: function () { _cancelOsintJob(jobId); },
+            onRetrySource: function (src) { return _retryOsintSource(jobId, src); },
         });
     } catch (e) {
         console.warn('背调 task 面板挂载失败', e);
@@ -2187,6 +2190,21 @@ function _attachOsintTaskPanel(container, job) {
     else _selectOsintJob(_osintActiveJobId);
     _updateDock();
     _watchOsintJob(jobId);
+}
+
+function _retryOsintSource(jobId, source) {
+    /** 单独重试背调任务的某个可重试来源（P2-4）。 */
+    return fetch('/api/trade/osint/jobs/' + encodeURIComponent(jobId) + '/retry-source', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Hermes-Session-Token': TOKEN,
+            'X-Company-ID': String(currentCompanyId),
+        },
+        body: JSON.stringify({source: String(source || '')}),
+    }).then(function (resp) {
+        return resp.ok ? resp.json() : null;
+    }).catch(function () { return null; });
 }
 
 function _watchOsintJob(jobId) {

@@ -37,6 +37,26 @@ def xlsx_text(value: Any) -> Any:
     return text
 
 
+def write_xlsx_text_cell(cell: Any, value: Any) -> Any:
+    """将值安全写入 openpyxl 单元格：对 `=` 开头文本直接设 data_type='s'，不留字面撇号（P3-19）。
+
+    - None、数字（不含 bool）、日期时间原样写入 cell.value；
+    - 字符串直接写入 cell.value 并显式置 cell.data_type = 's'，Excel 中显示原文本且不执行公式。
+    """
+    if value is None or isinstance(value, (date, datetime)):
+        cell.value = value
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        cell.value = value
+        return value
+    text = str(value)
+    cell.value = text
+    # 强制设为字符串类型，避免 openpyxl 把 '=' 开头文本解析为公式，同时不污染零件号显示
+    if hasattr(cell, "data_type"):
+        cell.data_type = "s"
+    return text
+
+
 def csv_cell(value: Any) -> Any:
     """安全处理写入 CSV 单元格的值，防止表格软件把外部文本当公式执行。
 

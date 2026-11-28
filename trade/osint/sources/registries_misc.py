@@ -15,6 +15,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_json,
     quote,
     skipped,
@@ -57,13 +58,17 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     cnpj = _cnpj(ctx.target)
     facts: list[dict] = []
     data: dict = {}
+    attempted = 0
+    errors: list[Exception] = []
 
     if hint:
         # 法国
+        attempted += 1
         try:
             fr = fetch_json(FR_URL.format(q=quote(hint)), fetch=fetch)
-        except Exception:  # noqa: BLE001 —— 单国失败不影响其它
+        except Exception as exc:  # noqa: BLE001 —— 单国失败不影响其它，全失败时返回 error
             fr = None
+            errors.append(exc)
         fr_rows = ((fr or {}).get("results") or [])[:2] if isinstance(fr, dict) else []
         for row in fr_rows:
             name = str(row.get("nom_complet") or row.get("nom_raison_sociale") or "")
@@ -89,10 +94,12 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
             data.setdefault("fr", []).append(row)
 
         # 挪威
+        attempted += 1
         try:
             no = fetch_json(NO_URL.format(q=quote(hint)), fetch=fetch)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             no = None
+            errors.append(exc)
         enheter = ((no or {}).get("_embedded") or {}).get("enheter") if isinstance(no, dict) else None
         for row in (enheter or [])[:2]:
             name = str(row.get("navn") or "")
@@ -116,10 +123,12 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
             data.setdefault("no", []).append(row)
 
     if cnpj:
+        attempted += 1
         try:
             br = fetch_json(BR_URL.format(cnpj=cnpj), fetch=fetch)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             br = None
+            errors.append(exc)
         if isinstance(br, dict) and br.get("razao_social"):
             parts = [f"巴西登记：{br['razao_social']}", f"CNPJ {br.get('cnpj') or cnpj}"]
             if br.get("data_inicio_atividade"):
@@ -136,4 +145,7 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
 
     if facts:
         return SourceResult(NAME, "hit", facts=facts, data=data)
+    if attempted > 0 and len(errors) >= attempted:
+        # 全部拟查登记库均报错：绝不伪装成 miss（P2-6）
+        return error_result(NAME, exc=errors[0])
     return SourceResult(NAME, "miss", error="FR/NO/BR 未查到匹配登记")

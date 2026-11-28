@@ -650,9 +650,16 @@ def check_llm_layered(
     # L1：网络与 TLS（非 fatal，避免代理环境误报阻断）
     ok1, d1 = (l1_prober or _probe_llm_l1)(base_url)
     d1 = _redact_api_key(d1, api_key)
+    has_proxy = any(
+        os.environ.get(k, "").strip()
+        for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+    )
+    if not ok1 and has_proxy:
+        # 代理环境下裸 socket 直连可能失败，但 L2/L3 会走代理，不提前截断（P3-18）
+        d1 = f"{d1}（检测到系统代理，继续执行 L2/L3 探测）"
     results.append(CheckResult("模型连通 L1 (DNS/TCP/TLS)", STATUS_OK if ok1 else STATUS_WARN, d1, fatal=False))
-    if not ok1:
-        # L1 已失败时不再继续发 L2/L3，直接给出最先失败层结论
+    if not ok1 and not has_proxy:
+        # 无代理且 L1 已失败时不再继续发 L2/L3，直接给出最先失败层结论
         return results
 
     # L2：/models 鉴权与模型名检查（零 token，非 fatal）

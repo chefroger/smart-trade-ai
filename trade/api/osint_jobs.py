@@ -25,6 +25,10 @@ class JobCreateRequest(BaseModel):
     target: str
 
 
+class SourceRetryRequest(BaseModel):
+    source: str
+
+
 @router.post("/osint/jobs")
 async def create_osint_job(
     payload: JobCreateRequest,
@@ -66,6 +70,25 @@ async def cancel_osint_job(job_id: int, cid: int = Depends(require_company)):
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return {"job_id": job_id, "status": job["status"]}
+
+
+@router.post("/osint/jobs/{job_id}/retry-source")
+async def retry_osint_job_source(
+    job_id: int,
+    payload: SourceRetryRequest,
+    cid: int = Depends(require_company),
+):
+    """单独重试某个可重试的数据源/层（P2-4）。"""
+    src = (payload.source or "").strip()
+    if not src:
+        raise HTTPException(status_code=400, detail="source is required")
+    try:
+        res = await asyncio.to_thread(osint_jobs.retry_job_source, cid, job_id, src)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if res is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return res
 
 
 @router.get("/osint/jobs/{job_id}/events")

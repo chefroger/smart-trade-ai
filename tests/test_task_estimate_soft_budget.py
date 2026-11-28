@@ -152,3 +152,63 @@ def test_soft_budget_hook_blocks_retrieval_only_after_limit_and_generates_wrapup
         assert "继续补查" in notice
     finally:
         soft_budget.release(tid)
+
+
+def test_soft_budget_live_token_reader_and_window_and_pricing_aliases(monkeypatch):
+    """验证实时 token_reader 触发拦截、窗口标签不误标高峰价、以及官方别名与未知模型标记。"""
+    from datetime import UTC, datetime
+
+    from trade.usage import UNKNOWN_MODEL_TAG, get_tiered_price
+
+    monkeypatch.setenv("TRADE_HOST", "1")
+    tid = "task-m7-live-reader"
+    live = {"tokens": 200}
+    soft_budget.register(tid, 1000, skill="b2b-osint", token_reader=lambda: live["tokens"])
+    try:
+        assert soft_budget.on_pre_tool_call("web_search", {"q": "a"}, task_id=tid) is None
+        live["tokens"] = 1200
+        blocked = soft_budget.on_pre_tool_call("web_search", {"q": "b"}, task_id=tid)
+        assert blocked is not None and blocked["action"] == "block"
+    finally:
+        soft_budget.release(tid)
+
+    # 别名与前缀归一化
+    assert get_tiered_price("deepseek-v4-flash", window="peak") == get_tiered_price(
+        "deepseek-flash", window="peak"
+    )
+    assert get_tiered_price("deepseek/deepseek-flash", window="offpeak") == get_tiered_price(
+        "deepseek-flash", window="offpeak"
+    )
+
+    # 周六闲时：deepseek-flash 正确标「闲时价」，deepseek-chat 不误标「当前为高峰价」
+    sat_ts = datetime(2026, 11, 28, 3, 0, tzinfo=UTC).timestamp()
+    conn = _mem_db()
+    for _ in range(3):
+        record_usage(
+            conn,
+            company_id=1,
+            skill="b2b-osint",
+            model="deepseek-flash",
+            prompt_tokens=100_000,
+            completion_tokens=20_000,
+            duration_ms=25_000,
+            ts=sat_ts,
+        )
+    st_flash = skill_history_stats(conn, 1, "b2b-osint", ts=sat_ts)
+    assert st_flash["price_window"] == "offpeak"
+    assert "当前为闲时价" in st_flash["message"]
+    assert "当前为高峰价" not in st_flash["message"]
+
+    # 未知模型记账打 unknown_model 标记
+    record_usage(
+        conn,
+        company_id=1,
+        skill="chat",
+        model="custom-unlisted-model-x",
+        prompt_tokens=1000,
+        completion_tokens=500,
+    )
+    row = conn.execute(
+        "SELECT extra1 FROM usage_ledger WHERE model = 'custom-unlisted-model-x'"
+    ).fetchone()
+    assert row is not None and UNKNOWN_MODEL_TAG in str(row[0])

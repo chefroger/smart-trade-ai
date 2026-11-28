@@ -39,6 +39,7 @@ ERROR_CODE_META: dict[str, tuple[str, bool]] = {
     "parse_error": ("上游响应格式异常，无法解析", False),
     "not_applicable": ("当前目标不适用此数据源", False),
     "unsupported_type": ("不支持的目标或文件类型", False),
+    "unknown": ("内部错误，已写入日志", False),
 }
 
 _SOURCE_DISPLAY_NAMES: dict[str, str] = {
@@ -124,8 +125,11 @@ def classify_exception(exc: BaseException) -> tuple[str, bool, str]:
     if "429" in low or "rate limit" in low or "quota" in low:
         msg, retryable = ERROR_CODE_META["rate_limited"]
         return "rate_limited", retryable, msg
-    msg, retryable = ERROR_CODE_META["network"]
-    return "network", retryable, msg
+    if any(tok in low for tok in ("urlopen", "connection", "ssl", "dns", "proxy", "socket", "refused", "reset")):
+        msg, retryable = ERROR_CODE_META["network"]
+        return "network", retryable, msg
+    msg, retryable = ERROR_CODE_META["unknown"]
+    return "unknown", retryable, msg
 
 
 def error_result(

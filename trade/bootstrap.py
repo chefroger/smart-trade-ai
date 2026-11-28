@@ -810,6 +810,7 @@ def _write_yaml_with_backup(path: Path, content: str) -> None:
 
 # 同一路径的损坏配置在进程内只告警一次，避免重复刷屏
 _CORRUPT_CONFIG_WARNED: set[str] = set()
+_BG_REVIEW_WARNED: set[str] = set()
 
 
 def _warn_corrupt_config_once(config_path: Path) -> None:
@@ -1175,7 +1176,10 @@ def ensure_background_review_disabled() -> bool:
             and isinstance(verified["auxiliary"].get("background_review"), dict)
             and verified["auxiliary"]["background_review"].get("enabled") is False
         ):
-            print("  ⚠️ failed to verify patched Hermes config for background_review, leaving it alone")
+            key = str(config_path)
+            if key not in _BG_REVIEW_WARNED:
+                _BG_REVIEW_WARNED.add(key)
+                print("  ⚠️ failed to verify patched Hermes config for background_review, leaving it alone")
             return False
         _write_yaml_with_backup(config_path, new_text)
         return True

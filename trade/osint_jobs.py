@@ -390,3 +390,56 @@ def _run_job(job_id: int, target: str, budget: float) -> None:
         with _cancel_lock:
             _cancelled.discard(job_id)
             _active.discard(job_id)
+
+
+def retry_job_source(company_id: int, job_id: int, source: str) -> dict | None:
+    """单独重试指定背调任务的某一个来源/层，并把结果写回任务事件流与报告（P2-4）。"""
+    job = get_job(company_id, job_id)
+    if job is None:
+        return None
+
+    src_key = str(source or "").strip()
+    if not src_key:
+        raise ValueError("source is required")
+
+    from trade.agent_context import bind_company
+    from trade.osint.orchestrator import SOURCE_LABELS, _status_for, retry_single_source
+
+    def _on_event(event: dict) -> None:
+        append_event(job_id, str(event.get("event") or "event"), event)
+
+    started = time.monotonic()
+    with bind_company(company_id):
+        result = asyncio.run(
+            retry_single_source(job["target"], src_key, on_event=_on_event)
+        )
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    # 若已有报告，则将重试结果原地合并回报告对应位置
+    report = job.get("report")
+    if isinstance(report, dict):
+        if src_key in SOURCE_LABELS:
+            report.setdefault("sources", {})[src_key] = result
+        else:
+            report.setdefault("layers", {})[src_key] = result
+        conn = get_connection()
+        try:
+            conn.execute(
+                "UPDATE osint_jobs SET report_json = ?, updated_at = datetime('now','localtime') "
+                "WHERE id = ? AND company_id = ?",
+                (json.dumps(report, ensure_ascii=False, default=str), job_id, company_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    status = _status_for(src_key, result) if isinstance(result, dict) else "error"
+    return {
+        "job_id": job_id,
+        "source": src_key,
+        "status": status,
+        "error_code": result.get("error_code") if isinstance(result, dict) else None,
+        "retryable": bool(result.get("retryable")) if isinstance(result, dict) else False,
+        "ms": elapsed_ms,
+        "result": result,
+    }
