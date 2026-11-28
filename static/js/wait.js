@@ -501,9 +501,16 @@
             var retryBtn = el('button', 'sw-retry-btn', '重试该层');
             retryBtn.type = 'button';
             retryBtn.setAttribute('data-source', s2.key);
+            // P2-B：任务运行中禁用重试，等终态后自动启用，避免重试结果被主流程最终报告覆盖
+            if (!this.final) {
+              retryBtn.disabled = true;
+              retryBtn.setAttribute('data-pending-retry', '1');
+              retryBtn.title = '本轮任务完成后可重试';
+            }
             var selfWait = this;
             var srcKey = s2.key;
             retryBtn.addEventListener('click', function () {
+              if (!selfWait.final) return;
               retryBtn.disabled = true;
               retryBtn.textContent = '重试中…';
               var ret = selfWait.opts.onRetrySource(srcKey);
@@ -519,6 +526,12 @@
                   var d2 = '重试结果：' + st2 + (ec2 ? '（' + ec2 + '）' : '') + (res.ms != null ? ' · ' + (res.ms / 1000).toFixed(1) + 's' : '');
                   var isBad2 = res.status === 'error' || res.status === 'timeout';
                   selfWait._log(d2, res.status === 'hit' ? 'hit' : (isBad2 ? 'bad' : ''), s2.label);
+                  // 重试成功后若返回了重算后的总评，同步更新底栏结论标签（P2-B）
+                  if (res.overall_rating && selfWait.verdictEl) {
+                    selfWait.verdictEl.textContent = 'CONCLUSION:';
+                    var tag2 = el('span', 'tag' + (/高|严重|high/i.test(res.overall_rating) ? '' : ' neutral'), redact(res.overall_rating));
+                    selfWait.verdictEl.appendChild(tag2);
+                  }
                   retryBtn.textContent = isBad2 ? '重试该层' : '已重试';
                   retryBtn.disabled = !isBad2;
                 }, function () {
@@ -568,6 +581,15 @@
     this.phase(o.phase || 'acquired', o.zh);
     this.final = true;
     this.root.classList.add('is-final');
+    // P2-B：任务进入终态后统一启用待重试按钮
+    if (this.logEl && typeof this.logEl.querySelectorAll === 'function') {
+      var pendingBtns = this.logEl.querySelectorAll('.sw-retry-btn[data-pending-retry="1"]');
+      for (var ri = 0; ri < pendingBtns.length; ri++) {
+        pendingBtns[ri].disabled = false;
+        pendingBtns[ri].removeAttribute('data-pending-retry');
+        pendingBtns[ri].title = '';
+      }
+    }
     this.cancelBtn.disabled = true;
     this.cancelBtn.textContent = o.phase === 'aborted' ? '已停止' : (o.phase === 'failed' ? '已失败' : '完成');
     if (this.verdictEl && o.verdict) {

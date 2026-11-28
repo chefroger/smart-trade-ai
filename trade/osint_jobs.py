@@ -393,17 +393,25 @@ def _run_job(job_id: int, target: str, budget: float) -> None:
 
 
 def retry_job_source(company_id: int, job_id: int, source: str) -> dict | None:
-    """单独重试指定背调任务的某一个来源/层，并把结果写回任务事件流与报告（P2-4）。"""
+    """单独重试指定背调任务的某一个来源/层，并重算总评写回报告（P2-4 / P2-B）。"""
     job = get_job(company_id, job_id)
     if job is None:
         return None
+    # 运行中/排队中禁止单层重试，避免结果不落库或被主流程最终报告覆盖（P2-B）
+    if job.get("status") not in TERMINAL:
+        raise ValueError("任务仍在运行中，请等待本轮完成后再重试失败层")
 
     src_key = str(source or "").strip()
     if not src_key:
         raise ValueError("source is required")
 
     from trade.agent_context import bind_company
-    from trade.osint.orchestrator import SOURCE_LABELS, _status_for, retry_single_source
+    from trade.osint.orchestrator import (
+        SOURCE_LABELS,
+        _status_for,
+        recompute_report_verdict,
+        retry_single_source,
+    )
 
     def _on_event(event: dict) -> None:
         append_event(job_id, str(event.get("event") or "event"), event)
@@ -415,13 +423,20 @@ def retry_job_source(company_id: int, job_id: int, source: str) -> dict | None:
         )
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
-    # 若已有报告，则将重试结果原地合并回报告对应位置
+    # 将重试结果合并回报告并重算总评 / unverified / 风险建议（P2-B）
     report = job.get("report")
+    overall_rating = None
+    overall_score = None
+    unverified = None
     if isinstance(report, dict):
         if src_key in SOURCE_LABELS:
             report.setdefault("sources", {})[src_key] = result
         else:
             report.setdefault("layers", {})[src_key] = result
+        recompute_report_verdict(report)
+        overall_rating = report.get("overall_rating")
+        overall_score = report.get("overall_score")
+        unverified = report.get("unverified")
         conn = get_connection()
         try:
             conn.execute(
@@ -441,5 +456,8 @@ def retry_job_source(company_id: int, job_id: int, source: str) -> dict | None:
         "error_code": result.get("error_code") if isinstance(result, dict) else None,
         "retryable": bool(result.get("retryable")) if isinstance(result, dict) else False,
         "ms": elapsed_ms,
+        "overall_rating": overall_rating,
+        "overall_score": overall_score,
+        "unverified": unverified,
         "result": result,
     }

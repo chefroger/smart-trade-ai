@@ -324,33 +324,16 @@ async def osint_full_check(
     lookup_domain = _extract_lookup_domain(target, target_type, domain_from_email)
 
     # ── M1：公共平台域名分类（公共邮箱/B2B 平台/建站子域/社媒平台不查自有域名专属层）──
-    # P2-5：当目标是邮箱时（如 buyer@walmart.com / sales@amazon.com），大买家自身域名可能出现在
-    # b2b_marketplace / research_press 中；对邮箱目标仅 free_mail 与 site_builder_subdomain 跳过域名层，
-    # b2b_marketplace 等类别仍用于 URL 分类打标签。
-    _EMAIL_SKIP_DOMAIN_CATEGORIES = frozenset({"free_mail", "site_builder_subdomain"})
-    domain_class: dict[str, Any] | None = None
-    is_platform_domain = False
-    platform_reason = ""
-    inferred_store_name: str | None = None
-    if lookup_domain:
-        # 网址目标传完整 target（保留路径，如 linkedin.com/company/x 视为企业主页）
-        classify_input = target if target_type == "url" else lookup_domain
-        domain_class = classify_domain_or_url(classify_input)
-        skip_cats = (
-            _EMAIL_SKIP_DOMAIN_CATEGORIES
-            if target_type == "email"
-            else PLATFORM_SKIP_DOMAIN_CATEGORIES
-        )
-        if domain_class["category"] in skip_cats:
-            is_platform_domain = True
-            platform_reason = domain_class["reason"]
-            inferred_store_name = domain_class.get("inferred_store_name")
-            report["domain_classification"] = domain_class
-            report["platform_domain_notice"] = f"目标使用公共平台域名：{platform_reason}"
-            if inferred_store_name:
-                # 平台店铺 URL 推断出的候选公司名，标明来源并交给公司名类公开来源
-                report["inferred_store_name"] = inferred_store_name
-                report["inferred_store_note"] = f"推断店铺名 {inferred_store_name}（推断自店铺地址）"
+    domain_class, is_platform_domain, platform_reason, inferred_store_name = (
+        _classify_platform_domain(target, target_type, lookup_domain)
+    )
+    if is_platform_domain and domain_class is not None:
+        report["domain_classification"] = domain_class
+        report["platform_domain_notice"] = f"目标使用公共平台域名：{platform_reason}"
+        if inferred_store_name:
+            # 平台店铺 URL 推断出的候选公司名，标明来源并交给公司名类公开来源
+            report["inferred_store_name"] = inferred_store_name
+            report["inferred_store_note"] = f"推断店铺名 {inferred_store_name}（推断自店铺地址）"
 
     effective_domain = None if is_platform_domain else lookup_domain
 
@@ -1190,6 +1173,126 @@ def _resolve_entity_name(domain: str | None, *, fetcher=None) -> str | None:
     return None
 
 
+# 既是零售平台本身也是大型买家的域名：仅当输入为带店铺/商品路径的 URL 时按平台跳过，
+# 直接背调其自有邮箱（buyer@walmart.com）或裸域名（walmart.com）时仍走自有域名层（P2-5）。
+_DUAL_BUYER_PLATFORM_DOMAINS = frozenset({
+    "walmart.com",
+    "amazon.com",
+    "amazon.co.uk",
+    "amazon.de",
+    "amazon.co.jp",
+    "ebay.com",
+    "etsy.com",
+})
+_EMAIL_SKIP_DOMAIN_CATEGORIES = frozenset({"free_mail", "site_builder_subdomain"})
+
+
+def _classify_platform_domain(
+    target: str,
+    target_type: str,
+    lookup_domain: str | None,
+) -> tuple[dict[str, Any] | None, bool, str, str | None]:
+    """统一判断目标域名是否属于应跳过自有域名层的公共平台（osint_full_check 与 retry 共用）。"""
+    if not lookup_domain:
+        return None, False, "", None
+    classify_input = target if target_type == "url" else lookup_domain
+    domain_class = classify_domain_or_url(classify_input)
+    skip_cats = (
+        _EMAIL_SKIP_DOMAIN_CATEGORIES
+        if target_type == "email"
+        else PLATFORM_SKIP_DOMAIN_CATEGORIES
+    )
+    if domain_class["category"] not in skip_cats:
+        return domain_class, False, "", None
+    # 大型零售买家域名在非 URL（裸域名/邮箱）或无路径 URL 时不跳过自有域名检测
+    norm_dom = lookup_domain.lower().removeprefix("www.")
+    if norm_dom in _DUAL_BUYER_PLATFORM_DOMAINS and target_type != "url":
+        return domain_class, False, "", None
+    return (
+        domain_class,
+        True,
+        str(domain_class.get("reason") or ""),
+        domain_class.get("inferred_store_name"),
+    )
+
+
+def recompute_report_verdict(report: dict) -> dict:
+    """在单层重试更新 layers/sources 后，重算 flags / unverified / overall_rating / recommendations（P2-B）。"""
+    layers = report.get("layers") or {}
+    sources = report.get("sources") or {}
+    target_type = str(report.get("target_type") or "domain")
+
+    # 1) 重新汇总红旗
+    flags: list[str] = []
+    di = layers.get("domain_intel")
+    if isinstance(di, dict) and not di.get("error") and not di.get("skipped") and not di.get("not_applicable"):
+        if di.get("age_category") == "new":
+            flags.append("domain_age_new")
+        if di.get("days_old") and di["days_old"] > 3650:
+            flags.append("domain_age_old")
+    ev = layers.get("email_verification")
+    if isinstance(ev, dict):
+        flags.extend(_map_email_flags(ev.get("risk_flags") or []))
+    ts = layers.get("tech_stack")
+    if isinstance(ts, dict) and ts.get("is_free_platform"):
+        flags.append("free_platform")
+    sa = layers.get("sanctions")
+    if isinstance(sa, dict) and sa.get("is_sanctioned"):
+        flags.append("sanctioned")
+    report["flags"] = flags
+
+    # 2) 判断是否存在自有域名与是否请求了制裁筛查
+    has_domain = bool(
+        isinstance(di, dict) and not di.get("skipped") and not di.get("not_applicable")
+    )
+    sanctions_requested = sa is not None
+
+    report["unverified"] = assess_verification(
+        layers,
+        has_domain=has_domain,
+        sanctions_requested=sanctions_requested,
+    )
+    public_hits, registry_hits = _public_hit_counts(sources)
+    all_sources_failed = _all_public_sources_failed(sources)
+    score, rating, provisional = compute_verdict(
+        report["flags"],
+        report["unverified"],
+        target_type=target_type,
+        has_domain=has_domain,
+        public_hits=public_hits,
+        all_sources_failed=all_sources_failed,
+    )
+    report["overall_score"] = score
+    report["overall_rating"] = rating
+    report["provisional_score"] = provisional
+
+    if all_sources_failed:
+        report["rating_note"] = (
+            "公开来源全部没查成（多半是网络或代理问题），本次结论不可用；"
+            "请检查网络或代理设置后稍后重试。"
+        )
+    elif rating == "limited":
+        dates = _registry_formation_dates(sources)
+        if registry_hits:
+            places = _registry_jurisdictions(sources)
+            where = "、".join(places[:2]) or "公开登记库"
+            basis = f"{where}，成立于 {'、'.join(dates[:2])}" if dates else f"{where}，成立日期未提供"
+            report["rating_note"] = (
+                f"已查到公司登记（{basis}）；登记只证明主体存在，"
+                "不证明经营真实性。补充官网、域名或其它核验来源后再评级。"
+            )
+        else:
+            report["rating_note"] = (
+                "仅完成制裁筛查：目标没有可查询域名，公开来源也没有实质核验命中；"
+                "这不是低风险结论。补到官网或公司注册信息后请重新背调。"
+            )
+    else:
+        report.pop("rating_note", None)
+
+    report["recommendations"] = generate_recommendations(report)
+    return report
+
+
 async def retry_single_source(
     target: str,
     source: str,
@@ -1208,20 +1311,9 @@ async def retry_single_source(
     domain_from_email = target.split("@", 1)[1] if target_type == "email" else None
     lookup_domain = _extract_lookup_domain(target, target_type, domain_from_email)
 
-    _EMAIL_SKIP_DOMAIN_CATEGORIES = frozenset({"free_mail", "site_builder_subdomain"})
-    is_platform_domain = False
-    inferred_store_name: str | None = None
-    if lookup_domain:
-        classify_input = target if target_type == "url" else lookup_domain
-        domain_class = classify_domain_or_url(classify_input)
-        skip_cats = (
-            _EMAIL_SKIP_DOMAIN_CATEGORIES
-            if target_type == "email"
-            else PLATFORM_SKIP_DOMAIN_CATEGORIES
-        )
-        if domain_class["category"] in skip_cats:
-            is_platform_domain = True
-            inferred_store_name = domain_class.get("inferred_store_name")
+    _dc, is_platform_domain, _reason, inferred_store_name = _classify_platform_domain(
+        target, target_type, lookup_domain
+    )
 
     effective_domain = None if is_platform_domain else lookup_domain
     layer_timeout = (

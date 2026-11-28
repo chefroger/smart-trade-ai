@@ -199,3 +199,87 @@ def test_p3_20_osint_facts_not_found_empty_url_distinct_by_source_name(tmp_path,
     rows = osint_facts.list_facts(1, "acme.org")
     assert len(rows) == 2
 
+
+def test_p2_a_soft_budget_no_false_notice_when_no_tool_blocked(monkeypatch):
+    """P2-A：即使显式开启软预算且累计 token 超限，若未真正拦截工具，不得给完整报告贴假收尾提示。"""
+    from trade.api.chat import _append_soft_budget_notice
+    from trade.hermes_chat_memory_plugin import soft_budget
+
+    monkeypatch.setenv("TRADE_HOST", "1")
+    tid = "task-p2a-no-block"
+    soft_budget.register(tid, 1000, skill="b2b-osint")
+    try:
+        # 仅超限同步 token，未发生任何工具拦截
+        assert soft_budget.sync_tokens(tid, 2500) is True
+        assert _append_soft_budget_notice("完整报告，已全部完成", tid) == "完整报告，已全部完成"
+
+        # 真正拦截一次检索工具后，才补提前收尾说明
+        blocked = soft_budget.on_pre_tool_call("web_search", {"q": "x"}, task_id=tid)
+        assert blocked is not None and blocked["action"] == "block"
+        out = _append_soft_budget_notice("部分报告", tid)
+        assert "因达到本次预算提前收尾" in out
+        assert "web_search" in out
+    finally:
+        soft_budget.release(tid)
+
+
+def test_p2_b_retry_job_source_recomputes_verdict_and_rejects_running(tmp_path, monkeypatch):
+    """P2-B：重试单层成功后重算 overall_rating/unverified；运行中任务拒绝单层重试。"""
+    import json
+
+    from trade import database as db_mod
+    from trade import osint_jobs
+
+    db_path = tmp_path / "jobs.db"
+    monkeypatch.setattr(db_mod, "_get_db_path", lambda: db_path)
+    db_mod.init_db()
+    conn = db_mod.get_connection()
+    try:
+        conn.execute("INSERT INTO companies (id, name, slug) VALUES (1, 'Acme', 'acme')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 1) 运行中任务禁止重试
+    running_job, _ = osint_jobs.create_job(1, "acme-corp.org")
+    with pytest.raises(ValueError, match="仍在运行中"):
+        osint_jobs.retry_job_source(1, running_job["id"], "domain_intel")
+
+    # 2) 已完成但 domain_intel 失败导致 incomplete 的任务：重试成功后应重算总评并清空 unverified
+    initial_report = {
+        "target": "acme-corp.org",
+        "target_type": "domain",
+        "overall_rating": "incomplete",
+        "overall_score": None,
+        "flags": [],
+        "unverified": ["domain_intel"],
+        "layers": {
+            "domain_intel": {"error": "网络或代理连接失败", "error_code": "network", "retryable": True},
+            "sanctions": {"is_sanctioned": False, "hits": [], "coverage": {"degraded": False}},
+            "tech_stack": {"technologies": ["nginx"]},
+            "email_registration": None,
+            "email_verification": None,
+            "linkedin": None,
+        },
+        "sources": {},
+        "recommendations": [],
+    }
+    osint_jobs._update_status(running_job["id"], "done", initial_report)
+    monkeypatch.setattr(
+        "trade.osint.orchestrator.domain_whois",
+        lambda dom: {"domain": dom, "registered": True, "days_old": 4000, "age_category": "old"},
+    )
+
+    res = osint_jobs.retry_job_source(1, running_job["id"], "domain_intel")
+    assert res is not None
+    assert res["status"] == "hit"
+    assert res["overall_rating"] == "low"
+    assert res["unverified"] == []
+
+    saved = osint_jobs.get_job(1, running_job["id"])
+    assert saved is not None
+    assert saved["report"]["overall_rating"] == "low"
+    assert saved["report"]["unverified"] == []
+    assert json.loads(json.dumps(saved["report"]))["layers"]["domain_intel"]["registered"] is True
+
+
