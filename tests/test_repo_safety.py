@@ -2,11 +2,38 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "repo_safety.sh"
+
+
+def _find_bash() -> str:
+    """跨平台定位可用 bash；Windows 避开 System32\\bash.exe（WSL 占位桩），优先取 Git Bash。"""
+    if os.name != "nt":
+        return shutil.which("bash") or "bash"
+
+    candidates: list[Path] = []
+    git_bin = shutil.which("git")
+    if git_bin:
+        git_root = Path(git_bin).resolve().parent.parent
+        candidates.extend([
+            git_root / "bin" / "bash.exe",
+            git_root / "usr" / "bin" / "bash.exe",
+        ])
+    candidates.extend([
+        Path(r"C:\Program Files\Git\bin\bash.exe"),
+        Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+    ])
+    for cand in candidates:
+        if cand.is_file():
+            return str(cand)
+    pytest.skip("Git Bash unavailable on Windows")
 
 
 def _init_temp_repo(tmp_path: Path) -> Path:
@@ -28,10 +55,15 @@ def _init_temp_repo(tmp_path: Path) -> Path:
 
 def _run_gate(repo: Path) -> subprocess.CompletedProcess:
     """对指定仓库运行安全闸门脚本。"""
+    bash = _find_bash()
+    script_arg = SCRIPT.as_posix() if os.name == "nt" else str(SCRIPT)
+    repo_arg = repo.as_posix() if os.name == "nt" else str(repo)
     return subprocess.run(
-        ["bash", str(SCRIPT), str(repo)],
+        [bash, script_arg, repo_arg],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
 
