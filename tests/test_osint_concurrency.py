@@ -139,7 +139,11 @@ class TestLayerTimeout:
             include_linkedin=False,
         )
 
-        assert report["layers"]["domain_intel"]["error"] == "whois 炸了"
+        # P2-9：原始异常只写日志，对外返回统一中文错误码文案（不拖垮其它层）
+        di = report["layers"]["domain_intel"]
+        assert di["error"]
+        assert di["error_code"] == "unknown"
+        assert di["retryable"] is False
         assert report["layers"]["tech_stack"]["technologies"] == ["nginx"]
 
     @pytest.mark.asyncio
