@@ -4,7 +4,7 @@ const I18N = {
         // nav
         'nav.daily':'对话','nav.lead':'客户开发','nav.platform':'网站诊断',
         'nav.social':'社媒营销','nav.linkedin':'LinkedIn','nav.customs':'海关数据',
-        'nav.customers':'客户管理','nav.mailboxes':'邮箱','nav.docs':'文档库','nav.docgen':'文档生成',
+        'nav.customers':'客户管理','nav.suppliers':'供应商','nav.mailboxes':'邮箱','nav.docs':'文档库','nav.docgen':'文档生成',
         'nav.osint':'客户背调','nav.tasks':'定时任务','nav.history':'对话记录','nav.visit':'验厂计划',
         'top.status.0':'B2B 外贸助手 · TRADE',
         'top.status.1':'客户开发 · LEAD GEN',
@@ -361,7 +361,7 @@ const I18N = {
     en: {
         'nav.daily':'Chat','nav.lead':'Lead Gen','nav.platform':'Site Audit',
         'nav.social':'Social','nav.linkedin':'LinkedIn','nav.customs':'Customs',
-        'nav.customers':'Customers','nav.mailboxes':'Mailboxes','nav.docs':'Documents','nav.docgen':'Doc Gen',
+        'nav.customers':'Customers','nav.suppliers':'Suppliers','nav.mailboxes':'Mailboxes','nav.docs':'Documents','nav.docgen':'Doc Gen',
         'nav.osint':'Due Diligence','nav.tasks':'Tasks','nav.history':'History','nav.visit':'Site Visit',
         'top.status.0':'B2B TRADE ASSISTANT · TRADE',
         'top.status.1':'LEAD GENERATION · LEADS',
@@ -754,7 +754,7 @@ function _updateSidebarLabels() {
         'social':'nav.social','linkedin':'nav.linkedin','customs':'nav.customs',
         'docs':'nav.docs','docgen':'nav.docgen','osint':'nav.osint',
     };
-    var viewMap = {'customers':'nav.customers','mailboxes':'nav.mailboxes','tasks':'nav.tasks','history':'nav.history'};
+    var viewMap = {'customers':'nav.customers','suppliers':'nav.suppliers','mailboxes':'nav.mailboxes','tasks':'nav.tasks','history':'nav.history'};
     document.querySelectorAll('.nav-item').forEach(function(el) {
         var ctx = el.getAttribute('data-chat-context');
         var view = el.getAttribute('data-view');
