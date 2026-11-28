@@ -370,9 +370,9 @@ def check_tavily(*, searcher=None) -> list[CheckResult]:
     try:
         search = searcher or _probe_tavily_live
         ok, detail = search(key)
-        return [CheckResult("Tavily 搜索", STATUS_OK if ok else STATUS_WARN, detail)]
+        return [CheckResult("Tavily 搜索", STATUS_OK if ok else STATUS_WARN, _redact_api_key(detail, key))]
     except Exception as e:
-        return [CheckResult("Tavily 搜索", STATUS_WARN, f"探测失败：{e}")]
+        return [CheckResult("Tavily 搜索", STATUS_WARN, f"探测失败：{_redact_api_key(str(e), key)}")]
 
 
 def _probe_tavily_live(api_key: str) -> tuple[bool, str]:
@@ -444,16 +444,236 @@ def _probe_db() -> tuple[bool, str]:
 
 
 def _probe_chat_live() -> tuple[bool, str]:
-    """走一次真实 agent 回合 —— 空回复即失败。"""
+    """走一次真实 agent 回合 —— 校验返回包含约定内容且非空。"""
     from trade.helpers import create_agent
 
     agent = create_agent()
     start = time.time()
     reply = agent.chat("请只回复两个字：正常")
     elapsed = time.time() - start
-    if reply and str(reply).strip():
+    text = str(reply or "").strip()
+    if text and "正常" in text:
+        return True, f"收到约定回复（{elapsed:.1f}s）"
+    if text:
         return True, f"收到回复（{elapsed:.1f}s）"
     return False, "agent 返回空回复 —— 这正是客户机上那种「Agent 未返回有效回复」的表现"
+
+
+# ── 检查 4b：主 LLM 通道分层探测（L1 连通 / L2 鉴权与模型 / L3 最小真实生成）──
+# 分层探测思路参考了开源项目 TokHub（Apache-2.0），全部自研实现。
+
+_L3_EXPECTED_TOKEN = "TRADE-OK"
+
+
+def _resolve_llm_probe_config() -> dict:
+    """读取当前主 LLM 配置（provider / model / api_key / base_url）。"""
+    from trade.helpers import get_agent_kwargs
+
+    kwargs = get_agent_kwargs()
+    provider = str(kwargs.get("provider") or "").strip()
+    model = str(kwargs.get("model") or "").strip()
+    api_key = str(kwargs.get("api_key") or "").strip()
+    base_url = str(kwargs.get("base_url") or "").strip()
+    if not base_url and provider.lower() == "openai":
+        base_url = "https://api.openai.com/v1"
+    return {
+        "provider": provider,
+        "model": model,
+        "api_key": api_key,
+        "base_url": base_url,
+    }
+
+
+def _probe_llm_l1(base_url: str, *, timeout: float = 8.0) -> tuple[bool, str]:
+    """L1（零 token）：检查 base_url 的 DNS 解析、TCP 连接与 TLS 握手。"""
+    import socket
+    import ssl
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    if not host:
+        return False, "base_url 无效，无法解析主机名"
+    scheme = (parsed.scheme or "https").lower()
+    port = parsed.port or (443 if scheme == "https" else 80)
+
+    # 1) DNS 解析
+    try:
+        socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        return False, f"DNS 解析失败（{host}，可能是网络或系统代理问题）：{exc}"
+
+    # 2) TCP 连接
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError as exc:
+        return False, f"TCP 连接失败（{host}:{port}，可能是网络或系统代理问题）：{exc}"
+
+    if scheme != "https":
+        sock.close()
+        return True, f"TCP 连接正常（{host}:{port}）"
+
+    # 3) TLS 握手并读取证书到期日
+    try:
+        ctx = ssl.create_default_context()
+        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+            cert = ssock.getpeercert() or {}
+            not_after = str(cert.get("notAfter") or "").strip()
+            suffix = f"，证书到期 {not_after}" if not_after else ""
+            return True, f"DNS/TCP/TLS 正常（{host}{suffix}）"
+    except Exception as exc:  # noqa: BLE001 — 证书或握手失败需明确指出 TLS 层问题
+        try:
+            sock.close()
+        except OSError:
+            pass
+        return False, f"TLS 握手失败（{host}，常见于系统代理或抓包软件拦截）：{exc}"
+
+
+def _probe_llm_l2(
+    base_url: str,
+    api_key: str,
+    model: str,
+    *,
+    timeout: float = 12.0,
+) -> tuple[str, str]:
+    """L2（零 token）：调用 GET {base_url}/models 校验鉴权与模型名。
+
+    Returns:
+        (STATUS_OK | STATUS_WARN, detail)
+    """
+    url = base_url.rstrip("/") + "/models"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — 用户配置的模型 API 地址
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return STATUS_WARN, f"API Key 无效或没有权限（HTTP {exc.code}），请检查 API Key 配置"
+        if exc.code == 404:
+            return STATUS_WARN, "该服务不支持模型列表（HTTP 404），已跳过"
+        return STATUS_WARN, _redact_api_key(f"模型列表接口返回 HTTP {exc.code}", api_key)
+    except Exception as exc:  # noqa: BLE001 — 网络或解析异常不阻断主流程
+        return STATUS_WARN, _redact_api_key(f"模型列表查询失败：{exc}", api_key)
+
+    items = body.get("data") if isinstance(body, dict) else None
+    if isinstance(items, list) and model:
+        ids = {str(it.get("id") or "").strip() for it in items if isinstance(it, dict)}
+        if ids and model not in ids:
+            return STATUS_WARN, f"模型名可能写错：服务商模型列表中未找到 {model}"
+    return STATUS_OK, f"鉴权通过，模型 {model or '(默认)'} 在可用列表中"
+
+
+def _probe_llm_l3(
+    base_url: str,
+    api_key: str,
+    model: str,
+    *,
+    expected_text: str = _L3_EXPECTED_TOKEN,
+) -> tuple[bool, str]:
+    """L3（仅深度自检）：发最小真实生成请求，校验返回包含约定内容。"""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            # 至少 400：防止推理模型被思考过程吃光预算导致正文为空
+            max_tokens=400,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"请只原样回复以下标记，不要附加其他内容：{expected_text}",
+                }
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 — 脱敏后返回可读失败信息
+        return False, f"L3 生成请求失败：{_redact_api_key(str(exc), api_key)}"
+
+    choice = resp.choices[0] if getattr(resp, "choices", None) else None
+    content = str(getattr(getattr(choice, "message", None), "content", "") or "").strip()
+    if expected_text in content:
+        return True, f"{model} 真实生成通过（已校验约定内容）"
+    if not content and getattr(choice, "finish_reason", "") == "length":
+        return False, "L3 生成正文为空（推理耗尽 token 预算），请检查 max_tokens 或模型配置"
+    return False, f"L3 生成未返回约定内容（实际返回：{_redact_api_key(content[:60], api_key)!r}）"
+
+
+def check_llm_layered(
+    *,
+    deep: bool = True,
+    config_loader=None,
+    l1_prober=None,
+    l2_prober=None,
+    l3_prober=None,
+) -> list[CheckResult]:
+    """主 LLM 通道 L1/L2/L3 分层探测（快速自检只跑 L1+L2 零 token；深度自检加跑 L3）。"""
+    try:
+        cfg = (config_loader or _resolve_llm_probe_config)()
+    except Exception as exc:  # noqa: BLE001 — 读取配置失败记 WARN
+        return [CheckResult("模型通道探测", STATUS_WARN, f"读取模型配置失败：{exc}", fatal=False)]
+
+    provider = str(cfg.get("provider") or "").strip()
+    model = str(cfg.get("model") or "").strip()
+    api_key = str(cfg.get("api_key") or "").strip()
+    base_url = str(cfg.get("base_url") or "").strip()
+
+    if not (provider and model and api_key and base_url):
+        return [
+            CheckResult(
+                "模型通道探测",
+                STATUS_WARN,
+                "模型或 API Key 尚未配置完整，已跳过 L1/L2/L3 探测",
+                fatal=False,
+            )
+        ]
+
+    # 防泄露硬护栏：非 OpenAI Provider 严禁把 Key 发往 api.openai.com
+    if provider.lower() != "openai" and _is_openai_default_endpoint(base_url):
+        return [
+            CheckResult(
+                "模型通道探测",
+                STATUS_WARN,
+                f"{provider} 的 base_url 未解析，已拒绝把当前 Key 发到 OpenAI",
+                fatal=False,
+            )
+        ]
+
+    results: list[CheckResult] = []
+
+    # L1：网络与 TLS（非 fatal，避免代理环境误报阻断）
+    ok1, d1 = (l1_prober or _probe_llm_l1)(base_url)
+    d1 = _redact_api_key(d1, api_key)
+    results.append(CheckResult("模型连通 L1 (DNS/TCP/TLS)", STATUS_OK if ok1 else STATUS_WARN, d1, fatal=False))
+    if not ok1:
+        # L1 已失败时不再继续发 L2/L3，直接给出最先失败层结论
+        return results
+
+    # L2：/models 鉴权与模型名检查（零 token，非 fatal）
+    st2, d2 = (l2_prober or _probe_llm_l2)(base_url, api_key, model)
+    d2 = _redact_api_key(d2, api_key)
+    results.append(CheckResult("模型鉴权 L2 (/models)", st2, d2, fatal=False))
+
+    # L3：仅深度自检执行最小真实生成请求并校验约定内容
+    if deep:
+        ok3, d3 = (l3_prober or _probe_llm_l3)(base_url, api_key, model)
+        d3 = _redact_api_key(d3, api_key)
+        results.append(
+            CheckResult(
+                "模型生成 L3 (真实回复)",
+                STATUS_OK if ok3 else STATUS_FAIL,
+                d3,
+                fatal=not ok3,
+            )
+        )
+
+    return results
 
 
 # ── 编排、持久化、报告 ────────────────────────────────────────────────────
@@ -671,6 +891,7 @@ def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     results += check_estop()
     results += check_skills()
     results += check_post_install()
+    results += check_llm_layered(deep=deep)
     if deep:
         results += check_vision()
         results += check_tavily()
@@ -797,7 +1018,10 @@ def save_doctor_result(results: list[CheckResult], *, deep: bool = True) -> None
             "deep": deep,
             "at": datetime.now().isoformat(timespec="seconds"),
             "fingerprint": _fingerprint(),
-            "results": [asdict(r) for r in results],
+            "results": [
+                {**asdict(r), "detail": _redact_api_key(r.detail)}
+                for r in results
+            ],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass  # 自检结果落盘失败不该影响任何主流程
