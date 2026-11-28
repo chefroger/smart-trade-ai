@@ -185,6 +185,7 @@
       var kv = el('div', 'sw-kv');
       kv.appendChild(el('span', 'k', 'TARGET')); this.targetEl = el('span', 'v', '—'); kv.appendChild(this.targetEl);
       kv.appendChild(el('span', 'k', 'STATUS')); this.statusEl = el('span', 'v', '—'); kv.appendChild(this.statusEl);
+      kv.appendChild(el('span', 'k', 'ESTIMATE')); this.estimateEl = el('span', 'v sw-estimate', '—'); kv.appendChild(this.estimateEl);
       kv.appendChild(el('span', 'k', 'PROGRESS'));
       var pw = el('span', 'v'); this.progTxt = el('span', '', '0 / 0'); var pb = el('div', 'sw-prog'); this.progFill = el('i');
       pb.appendChild(this.progFill); pw.appendChild(this.progTxt); pw.appendChild(pb); kv.appendChild(pw);
@@ -466,6 +467,11 @@
         var tgt = redact(ev.target || '—');
         this.targetEl.textContent = tgt;
         this._log('预算 ' + (ev.budget || '?') + ' 秒', '', '任务已启动');
+        if (ev.estimate && ev.estimate.message) {
+          // M7：长任务历史预估（纯提示，绝不弹确认窗、不拦截执行）
+          this._log(ev.estimate.message, '', '历史预估');
+          if (this.estimateEl) this.estimateEl.textContent = redact(ev.estimate.message);
+        }
         this.phase('searching', '目标：' + tgt);
       }
       else if (type === 'source_start') {
