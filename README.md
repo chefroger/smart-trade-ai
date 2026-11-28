@@ -669,7 +669,7 @@ python server.py
 
 ### 仓库安全检查
 
-CI 与本地均提供 `bash scripts/repo_safety.sh` 安全闸门，用于拦截密钥、私有域名及敏感样本误入版本库。
+CI 与本地均提供 `bash scripts/repo_safety.sh` 安全闸门，用于拦截疑似密钥/私钥内容、敏感路径及非白名单数据文件误入版本库。
 
 ---
 

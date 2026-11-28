@@ -129,14 +129,17 @@ def build_workbook(spec: dict) -> tuple[Workbook, list[str]]:
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     try:
-        from trade.sheet_safe import xlsx_text
+        from trade.sheet_safe import write_xlsx_text_cell
     except ImportError:
         # 脚本脱离 trade 包独立运行时内联同逻辑（权威实现见 trade/sheet_safe.py）
-        def xlsx_text(value):  # type: ignore[misc]
+        def write_xlsx_text_cell(cell, value):  # type: ignore[misc]
             if value is None or isinstance(value, (int, float)) and not isinstance(value, bool):
+                cell.value = value
                 return value
-            text = str(value)
-            return ("'" + text) if text.lstrip().startswith("=") else text
+            cell.value = str(value)
+            if hasattr(cell, "data_type"):
+                cell.data_type = "s"
+            return cell.value
 
     warnings: list[str] = []
     for idx, row in enumerate(rows, start=1):
@@ -149,19 +152,25 @@ def build_workbook(spec: dict) -> tuple[Workbook, list[str]]:
         excel_row = idx + 1  # 数据从第 2 行开始
         ws.append(
             [
-                xlsx_text(row.get("no", idx)),
-                xlsx_text(row.get("part_no", "")),
-                xlsx_text(row.get("name_src", "")),
-                xlsx_text(name_zh),
+                None,
+                None,
+                None,
+                None,
                 qty,
                 weight,
                 None,  # 总重：下面按需写公式
-                xlsx_text(row.get("material", "") if not skeleton else "按图纸"),
+                None,
                 None,  # 单价：留空
                 None,  # 总价：留空
                 None,  # 交货期：留空
             ]
         )
+        # P3-19：文本列通过 write_xlsx_text_cell 置 data_type='s'，防公式执行且不留字面撇号
+        write_xlsx_text_cell(ws.cell(excel_row, 1), row.get("no", idx))
+        write_xlsx_text_cell(ws.cell(excel_row, 2), row.get("part_no", ""))
+        write_xlsx_text_cell(ws.cell(excel_row, 3), row.get("name_src", ""))
+        write_xlsx_text_cell(ws.cell(excel_row, 4), name_zh)
+        write_xlsx_text_cell(ws.cell(excel_row, 8), row.get("material", "") if not skeleton else "按图纸")
 
         # 总重 = 数量 × 单重（公式）。单重不是数字时留空，避免 #VALUE!
         if isinstance(weight, (int, float)) and isinstance(qty, (int, float)):
