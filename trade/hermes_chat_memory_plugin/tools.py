@@ -216,18 +216,25 @@ OSINT_JOB_START_SCHEMA = _schema(
 
 OSINT_FACT_SAVE_SCHEMA = _schema(
     "osint_fact_save",
-    "登记一条背调事实（字段 / 值 / 来源），存进本公司的背调事实库。"
-    "**查到就登记**：下次同目标背调会直接复用，不必再赌一次反爬。"
+    "登记一条背调事实（字段 / 值 / 状态 / 来源），存进本公司的背调事实库。"
+    "**查到就登记**（status=found）；查过但确认未检索到可记为 status=not_found（默认 3 天内下次沿用，避免重复白查）；"
+    "查询出错可记为 status=failed。"
     "同一字段查到不同值时照实再登记一次，系统会标为冲突（报告要并列写出，不要挑一个）。"
-    "只登记有来源的事实；没有来源的推测不要登记。",
+    "只登记公开查询结果，不登记客户索要信息或没有来源的推测。",
     {
         "target": _str("这条事实属于哪个目标（公司名 / 域名 / 人名）"),
         "field": _str("字段名，如「注册资本」「法定代表人」「统一社会信用代码」「员工人数」"),
-        "value": _str("字段值，照抄来源原文"),
+        "value": _str("字段值（status=found 时必填，照抄来源原文；not_found/failed 时可留空）"),
+        "status": {
+            "type": "string",
+            "enum": ["found", "not_found", "failed"],
+            "description": "查询状态：found（已检索到，默认）/ not_found（已查询未检索到）/ failed（查询失败）",
+        },
         "source_url": _str("来源 URL（有就填，没有留空）"),
-        "source_name": _str("来源站点名，如「企查查」「阿里巴巴」"),
+        "source_name": _str("来源站点名，如「企查查」「阿里巴巴」「RDAP」"),
+        "note": _str("补充说明（可选，如已查过的渠道列表）"),
     },
-    ["target", "field", "value"],
+    ["target", "field"],
 )
 
 OSINT_FACT_LIST_SCHEMA = _schema(
@@ -309,14 +316,16 @@ def handle_osint_job_start(args: dict[str, Any], **_kw) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(f"创建背调任务失败：{exc}")
 
-    # 同目标此前核实过的事实：让模型先看它，别重复查（也不必再赌一次反爬）
+    # 同目标此前核实过的事实与近期已查未检索到的字段（M8）：减少重复白查
     known: dict = {}
     unverified: dict = {}
+    not_found: dict = {}
     try:
         from trade import osint_facts
 
         known = osint_facts.known_facts(company_id, target)
         unverified = osint_facts.unverified_facts(company_id, target)
+        not_found = osint_facts.not_found_facts(company_id, target)
     except Exception:  # noqa: BLE001 —— 事实库是增强项，读不到不影响背调
         known = {}
 
@@ -328,16 +337,25 @@ def handle_osint_job_start(args: dict[str, Any], **_kw) -> str:
         "known_facts": known,
         # 上次未能核实的事实：可以重新查，但不能当结论直接引用
         "unverified_facts": unverified,
+        # M8：N 天内已查询未检索到的字段（提示：如需重查可以重查，否则直接沿用）
+        "not_found_facts": not_found,
+        "not_found_hint": (
+            "not_found_facts 中的字段在近期已查询未检索到；如需重查（或用户明确要求重查）可以重查，否则直接沿用并标注日期与来源。"
+            if not_found else ""
+        ),
     })
 
 
 def handle_osint_fact_save(args: dict[str, Any], **_kw) -> str:
-    """登记一条背调事实（供下次复用）。"""
+    """登记一条背调事实（支持 found / not_found / failed，供下次复用）。"""
     target = str(args.get("target") or "").strip()
     field = str(args.get("field") or "").strip()
+    status = str(args.get("status") or "found").strip().lower()
+    if status not in {"found", "not_found", "failed"}:
+        status = "found"
     value = str(args.get("value") or "").strip()
-    if not target or not field or not value:
-        return _err("target / field / value 都是必填")
+    if not target or not field or (status == "found" and not value):
+        return _err("target / field 必填，且 status=found 时 value 必填")
     company_id = _bound_company()
     if company_id is None:
         return _err("没有公司上下文，拒绝登记事实")
@@ -350,8 +368,10 @@ def handle_osint_fact_save(args: dict[str, Any], **_kw) -> str:
             company_id, target, field, value,
             source_url=source_url,
             source_name=str(args.get("source_name") or ""),
+            note=str(args.get("note") or ""),
             # 来源必须在本轮已完成工具结果里出现过才算核实（P1-D）
             verified=_source_url_verified(source_url),
+            status=status,
         )
     except Exception as exc:  # noqa: BLE001
         return _err(f"登记事实失败：{exc}")

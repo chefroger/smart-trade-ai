@@ -21,7 +21,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+from datetime import datetime, timedelta
 
 from trade.database import get_connection
 
@@ -37,6 +39,30 @@ _PREFIX_RE = re.compile(
 MAX_FIELD_LEN = 40
 MAX_VALUE_LEN = 500
 MAX_SOURCE_LEN = 300
+
+# M8：合法事实状态与否定事实默认复用天数（默认 3 天，可通过环境变量调整）
+VALID_FACT_STATUSES = frozenset({"found", "not_found", "failed"})
+DEFAULT_NOT_FOUND_TTL_DAYS = 3
+
+
+def not_found_ttl_days() -> int:
+    """返回「已查询未检索到」事实的默认复用天数（环境变量 TRADE_OSINT_NOT_FOUND_TTL_DAYS，默认 3 天）。"""
+    raw = os.environ.get("TRADE_OSINT_NOT_FOUND_TTL_DAYS", "").strip()
+    if raw:
+        try:
+            val = int(raw)
+            if val >= 0:
+                return val
+        except ValueError:
+            pass
+    return DEFAULT_NOT_FOUND_TTL_DAYS
+
+
+def _ensure_status_column(conn) -> None:
+    """幂等确保 osint_facts.status 列存在（兼容跳过 init_db 的老库测试）。"""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(osint_facts)")}
+    if cols and "status" not in cols:
+        conn.execute("ALTER TABLE osint_facts ADD COLUMN status TEXT NOT NULL DEFAULT 'found'")
 
 
 def normalize_subject(target: str) -> str:
@@ -60,48 +86,67 @@ def save_fact(
     company_id: int,
     target: str,
     field: str,
-    value: str,
+    value: str = "",
     *,
     source_url: str = "",
     source_name: str = "",
     note: str = "",
     verified: bool = False,
+    status: str = "found",
 ) -> dict | None:
-    """登记一条事实（同公司 + 同 subject + 同字段 + 同来源 → 覆盖更新）。
+    """登记一条事实（同公司 + 同 subject + 同字段 + 同值 + 同来源 → 覆盖更新）。
+
+    Args:
+        status: "found"（已检索到，默认，value 必填）| "not_found"（已查询未检索到，value 存空串）
+                | "failed"（查询失败，value 存空串）
 
     verified=True 表示 source_url 在本轮已完成工具证据里出现过（P1-D）。
     未核实的事实仍保存，但 known_facts 不会返回它。
 
     Returns:
-        {"id", "subject", "field", "value", ...}；参数不合法或写入失败返回 None。
+        {"id", "subject", "field", "value", "status", ...}；参数不合法或写入失败返回 None。
     """
     subject = normalize_subject(target)
     field = str(field or "").strip()[:MAX_FIELD_LEN]
-    value = str(value if value is not None else "").strip()[:MAX_VALUE_LEN]
-    if not subject or not field or not value:
-        return None
+    norm_status = str(status or "found").strip().lower()
+    if norm_status not in VALID_FACT_STATUSES:
+        norm_status = "found"  # 非法状态回退默认 found
+
+    if norm_status == "found":
+        value = str(value if value is not None else "").strip()[:MAX_VALUE_LEN]
+        if not subject or not field or not value:
+            return None
+    else:
+        # not_found / failed：value 统一存空字符串，避免与真实值混淆
+        value = ""
+        if not subject or not field:
+            return None
+
     source_url = str(source_url or "").strip()[:MAX_SOURCE_LEN]
     source_name = str(source_name or "").strip()[:MAX_SOURCE_LEN]
     note = str(note or "").strip()[:MAX_VALUE_LEN]
+    verified_flag = 1 if (verified and norm_status == "found") else 0
 
     conn = get_connection()
     try:
+        _ensure_status_column(conn)
         conn.execute(
             "INSERT INTO osint_facts(company_id, subject, subject_raw, field, value,"
-            " source_url, source_name, note, verified) VALUES (?,?,?,?,?,?,?,?,?)"
+            " source_url, source_name, note, verified, status) VALUES (?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(company_id, subject, field, value, source_url)"
             " DO UPDATE SET observed_at = datetime('now','localtime'),"
             " source_name = excluded.source_name, note = excluded.note,"
+            " status = excluded.status,"
             # 一旦核实过就不降级：同一行后续用无证据的保存覆盖时保持 1
             " verified = CASE WHEN osint_facts.verified = 1 OR excluded.verified = 1"
             " THEN 1 ELSE 0 END",
             (company_id, subject, str(target or "").strip()[:200], field, value,
-             source_url, source_name, note, 1 if verified else 0),
+             source_url, source_name, note, verified_flag, norm_status),
         )
         conn.commit()
         row = conn.execute(
             "SELECT id, subject, field, value, source_url, source_name, note,"
-            " verified, observed_at FROM osint_facts"
+            " verified, status, observed_at FROM osint_facts"
             " WHERE company_id=? AND subject=? AND field=? AND value=? AND source_url=?"
             " ORDER BY id DESC LIMIT 1",
             (company_id, subject, field, value, source_url),
@@ -124,18 +169,19 @@ def list_facts(
     limit = max(1, min(int(limit), 1000))
     conn = get_connection()
     try:
+        _ensure_status_column(conn)
         if target:
             subject = normalize_subject(target)
             rows = conn.execute(
                 "SELECT id, subject, subject_raw, field, value, source_url, source_name,"
-                " note, verified, observed_at FROM osint_facts"
+                " note, verified, status, observed_at FROM osint_facts"
                 " WHERE company_id=? AND subject=? ORDER BY field, id DESC LIMIT ?",
                 (company_id, subject, limit),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT id, subject, subject_raw, field, value, source_url, source_name,"
-                " note, verified, observed_at FROM osint_facts"
+                " note, verified, status, observed_at FROM osint_facts"
                 " WHERE company_id=? ORDER BY subject, field, id DESC LIMIT ?",
                 (company_id, limit),
             ).fetchall()
@@ -165,7 +211,7 @@ def _group(rows: list[dict]) -> dict:
 
 
 def known_facts(company_id: int, target: str | None = None) -> dict:
-    """按字段汇总**已核实**的事实；同一字段多值标 `conflict: true`。
+    """按字段汇总**已核实**的事实（仅 status='found' 且 verified=1）；同一字段多值标 `conflict: true`。
 
     2026-11-23 审计 P1-D：只返回 verified=1 —— 模型自报、来源 URL 没在
     本轮工具证据里出现过的事实不算「已核实」，不能下次直接复用。
@@ -173,19 +219,86 @@ def known_facts(company_id: int, target: str | None = None) -> dict:
     Returns:
         {field: {"values": [...], "conflict": bool, "sources": [...]}}
     """
-    rows = [row for row in list_facts(company_id, target) if int(row.get("verified") or 0)]
+    rows = [
+        row for row in list_facts(company_id, target)
+        if (row.get("status") or "found") == "found" and int(row.get("verified") or 0)
+    ]
     return _group(rows)
 
 
 def unverified_facts(company_id: int, target: str | None = None) -> dict:
-    """未核实事实（单独列出，报告应注明「上次未能核实」）。"""
+    """未核实事实（仅 status='found' 且 verified=0，单独列出，报告应注明「已检索到（未核实）」）。"""
     rows = [
         row for row in list_facts(company_id, target)
-        if not int(row.get("verified") or 0)
+        if (row.get("status") or "found") == "found" and not int(row.get("verified") or 0)
     ]
     grouped = _group(rows)
     for bucket in grouped.values():
         bucket["note"] = "上次未能核实"
+    return grouped
+
+
+def not_found_facts(
+    company_id: int,
+    target: str | None = None,
+    *,
+    max_age_days: int | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """返回 N 天内「已查询未检索到」（status='not_found'）的字段，供下次背调沿用或按需重查。
+
+    规则：
+      - 若同一字段已有 status='found' 的记录（无论是否已核实），则该字段不再出现在 not_found_facts
+        中（报告优先显示 found，同时保留历史行）；
+      - 超过 max_age_days（默认 3 天）的否定记录不再推荐沿用。
+    """
+    ttl = not_found_ttl_days() if max_age_days is None else max(0, int(max_age_days))
+    ref_now = now or datetime.now()
+    cutoff = ref_now - timedelta(days=ttl)
+
+    all_rows = list_facts(company_id, target)
+    found_fields = {
+        row["field"]
+        for row in all_rows
+        if (row.get("status") or "found") == "found" and str(row.get("value") or "").strip()
+    }
+
+    grouped: dict[str, dict] = {}
+    for row in all_rows:
+        if (row.get("status") or "found") != "not_found":
+            continue
+        field = row["field"]
+        # 同一字段已有 found 值时优先展示 found，历史 not_found 行仍留在表内
+        if field in found_fields:
+            continue
+        obs_str = str(row.get("observed_at") or "").strip()
+        if obs_str:
+            try:
+                obs_dt = datetime.fromisoformat(obs_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                if obs_dt < cutoff:
+                    continue  # 超过 TTL 天数，不再作为近期未检索到提示
+            except ValueError:
+                pass
+        bucket = grouped.setdefault(
+            field,
+            {
+                "status": "not_found",
+                "label": "已查询未检索到",
+                "sources": [],
+                "observed_at": obs_str,
+                "note": row.get("note") or "",
+                "hint": f"近 {ttl} 天内已查询未检索到；如需重查可以重查，否则直接沿用",
+            },
+        )
+        src = {
+            "url": row.get("source_url") or "",
+            "name": row.get("source_name") or "",
+            "observed_at": obs_str,
+        }
+        if src not in bucket["sources"]:
+            bucket["sources"].append(src)
+        if obs_str and (not bucket["observed_at"] or obs_str > bucket["observed_at"]):
+            bucket["observed_at"] = obs_str
     return grouped
 
 
