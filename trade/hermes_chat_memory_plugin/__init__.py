@@ -23,6 +23,7 @@ from trade.hermes_chat_memory_plugin.doc_skip import on_pre_tool_call as on_doc_
 from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call, report_hook_support
 from trade.hermes_chat_memory_plugin.tools import (
     CHAT_MEMORY_LIST_SCHEMA,
+    CLASSIFY_URLS_SCHEMA,
     OSINT_FACT_LIST_SCHEMA,
     OSINT_FACT_SAVE_SCHEMA,
     OSINT_JOB_RESULT_SCHEMA,
@@ -33,6 +34,7 @@ from trade.hermes_chat_memory_plugin.tools import (
     SUPPLIER_LIST_SCHEMA,
     SUPPLIER_QUOTE_SEARCH_SCHEMA,
     handle_chat_memory_list,
+    handle_classify_urls,
     handle_osint_fact_list,
     handle_osint_fact_save,
     handle_osint_job_result,
@@ -64,6 +66,7 @@ if os.environ.get("TRADE_HOST") == "1":
         ("supplier_compare", SUPPLIER_COMPARE_SCHEMA, handle_supplier_compare, "⚖️"),
         ("supplier_list", SUPPLIER_LIST_SCHEMA, handle_supplier_list, "📋"),
         ("supplier_delivery_alerts", SUPPLIER_DELIVERY_ALERTS_SCHEMA, handle_supplier_delivery_alerts, "⏰"),
+        ("classify_urls", CLASSIFY_URLS_SCHEMA, handle_classify_urls, "🏷️"),
     )
 
 
