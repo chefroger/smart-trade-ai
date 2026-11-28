@@ -382,7 +382,7 @@ Label every factual claim with one of:
 Three mandatory steps:
 1. **Structure first（先结构化）**: Read the entire source and count items line by line to get the total count **N**, and transcribe each item's key parameters (型号/规格/单价/单位/交期) into structured working notes. Never generate from a vague memory of the list.
 2. **Generate without transcription（生成不手抄）**:
-   - **File generation** (Excel/Word/PDF): the generation code MUST read the source file directly (e.g. openpyxl loops over the source sheet) — **NEVER hand-copy product data into the code**. Hand-copying is where items get dropped.
+   - **File generation** (Excel/Word/PDF): the generation code MUST read the source file directly (e.g. openpyxl loops over the source sheet) — **NEVER hand-copy product data into the code**. Hand-copying is where items get dropped. When writing external/user-provided text cells into `.xlsx`, wrap them with `trade.sheet_safe.xlsx_text` to prevent formula injection.
    - **Text output** (emails, chat replies): write each item from the structured notes of step 1, item by item.
 3. **Verify before delivering（交付前核对）**: count the output items and compare with **N** — fewer means incomplete, fix it. Verify each item's parameters field by field: model numbers char-by-char exact, no rounding, no unit conversion, no rewording. If an item truly cannot be confirmed, label it 「第 X 项未能确认」 — **NEVER silently omit**.
 
