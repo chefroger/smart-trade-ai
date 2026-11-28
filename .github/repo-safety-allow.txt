@@ -1,0 +1,10 @@
+# 仓库安全闸门路径白名单（修改本文件需走正常代码评审）
+# 每行一条相对路径或通配符模式，# 开头为注释。
+
+# 官方导入模板
+static/trade-customer-template.csv
+static/trade-supplier-template.csv
+static/trade-templates.xlsx
+
+# 制裁筛查离线单测夹具（虚构/脱敏测试样例）
+tests/fixtures/osint/sanctions/*.csv
