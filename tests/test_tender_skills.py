@@ -919,3 +919,48 @@ class TestProbe9Generalization:
         assert "<your-email@example.com>" in example
         assert "<imap.example.com>" in example
         assert "<IMAP 授权码>" in example
+
+
+def test_build_inquiry_sheet_neutralizes_formula_injection():
+    """虚构招标夹具含 =HYPERLINK 时，生成的 xlsx 单元格为文本而非公式，数值与汇总公式正常。"""
+    import importlib.util
+    from pathlib import Path
+
+    script_path = (
+        Path(__file__).resolve().parent.parent
+        / "skills"
+        / "b2b-tender-processing"
+        / "scripts"
+        / "build_inquiry_sheet.py"
+    )
+    spec_obj = importlib.util.spec_from_file_location("build_inquiry_sheet_mod", script_path)
+    mod = importlib.util.module_from_spec(spec_obj)
+    assert spec_obj.loader is not None
+    spec_obj.loader.exec_module(mod)
+
+    # 虚构招标测试夹具（非真实项目）
+    fictional_spec = {
+        "project": "FICTIONAL-TENDER-01",
+        "rows": [
+            {
+                "no": 1,
+                "part_no": '=HYPERLINK("http://x","a")',
+                "name_src": "=CMD|'/C calc'!A0",
+                "name_zh": "虚构阀体",
+                "qty": 10,
+                "unit_weight": 2.5,
+                "material": "=1+1",
+            }
+        ],
+    }
+    wb, _warnings = mod.build_workbook(fictional_spec)
+    ws = wb.active
+    # 文本列不能是公式类型 'f'
+    assert ws["B2"].data_type == "s"
+    assert ws["C2"].data_type == "s"
+    assert ws["H2"].data_type == "s"
+    # 数量、单重保持数字；总重与汇总仍为公式
+    assert ws["E2"].value == 10
+    assert ws["F2"].value == 2.5
+    assert ws["G2"].data_type == "f"
+    assert ws["G3"].data_type == "f"

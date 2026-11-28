@@ -128,6 +128,16 @@ def build_workbook(spec: dict) -> tuple[Workbook, list[str]]:
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
+    try:
+        from trade.sheet_safe import xlsx_text
+    except ImportError:
+        # 脚本脱离 trade 包独立运行时内联同逻辑（权威实现见 trade/sheet_safe.py）
+        def xlsx_text(value):  # type: ignore[misc]
+            if value is None or isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+            text = str(value)
+            return ("'" + text) if text.lstrip().startswith("=") else text
+
     warnings: list[str] = []
     for idx, row in enumerate(rows, start=1):
         qty, note = _row_quantity(row, skeleton)
@@ -139,14 +149,14 @@ def build_workbook(spec: dict) -> tuple[Workbook, list[str]]:
         excel_row = idx + 1  # 数据从第 2 行开始
         ws.append(
             [
-                row.get("no", idx),
-                row.get("part_no", ""),
-                row.get("name_src", ""),
-                name_zh,
+                xlsx_text(row.get("no", idx)),
+                xlsx_text(row.get("part_no", "")),
+                xlsx_text(row.get("name_src", "")),
+                xlsx_text(name_zh),
                 qty,
                 weight,
                 None,  # 总重：下面按需写公式
-                row.get("material", "") if not skeleton else "按图纸",
+                xlsx_text(row.get("material", "") if not skeleton else "按图纸"),
                 None,  # 单价：留空
                 None,  # 总价：留空
                 None,  # 交货期：留空
