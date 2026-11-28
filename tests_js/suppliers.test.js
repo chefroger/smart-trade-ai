@@ -12,7 +12,7 @@ function loadSuppliersUi() {
     const esc = (s) => String(s || '').replace(/[&<>"']/g, (ch) => escMap[ch]);
     return loadRegion(
         'suppliers-ui',
-        '{ _spBuildDirectoryRowsHtml, _spBuildCompareGroupsHtml, _spFormatSelfProduced, _spFormatPriceCell, _spFormatQuotedAt, _spBuildRfqRowsHtml, _spBuildRfqResponsesHtml, _spFormatRfqStatus, _spBuildPoRowsHtml, _spFormatCutoffBadge, _spBuildConsolidationCardsHtml, _spBuildPoolRowsHtml, _spBuildDeliveryAlertsBriefHtml, _spBuildOrderLinkedPosHtml }',
+        '{ _spBuildDirectoryRowsHtml, _spBuildCompareGroupsHtml, _spFormatSelfProduced, _spFormatPriceCell, _spFormatQuotedAt, _spBuildRfqRowsHtml, _spBuildRfqResponsesHtml, _spFormatRfqStatus, _spBuildPoRowsHtml, _spFormatCutoffBadge, _spBuildConsolidationCardsHtml, _spBuildPoolRowsHtml, _spBuildDeliveryAlertsBriefHtml, _spBuildOrderLinkedPosHtml, _spFormatExtractError, _spBuildExtractResultHtml }',
         { esc },
     );
 }
@@ -286,4 +286,33 @@ test('采购单与拼柜看板：列表/倒计时徽标/待拼池/今日简报�
     ]);
     assert.match(linkedHtml, /PO5/);
     assert.match(linkedHtml, /顺达厂/);
+});
+
+test('工单 #2 & #4：AI 抽取结果框展示未处理扫描件原因，草稿编辑弹窗含 MOQ 输入框', () => {
+    const ui = loadSuppliersUi();
+    const { SRC } = require('./_extract');
+
+    // #2：结果框展示失败/跳过文件名与中文原因
+    const html = ui._spBuildExtractResultHtml({
+        files_processed: 3,
+        drafts_created: 6,
+        failed: [{ file: '/tmp/quotes/scan_01.jpg', error: 'unsupported_type' }],
+    });
+    assert.match(html, /scan_01\.jpg/);
+    assert.match(html, /OCR/);
+
+    // #4：草稿卡片与编辑弹窗都包含 MOQ
+    const modalIdx = SRC.indexOf('function _spOpenDraftEditModal');
+    assert.ok(modalIdx !== -1, '找不到 _spOpenDraftEditModal');
+    const modalBody = SRC.slice(modalIdx, modalIdx + 3000);
+    assert.match(modalBody, /id="spd-moq"/, '编辑弹窗必须包含 MOQ 输入框');
+    assert.match(modalBody, /moq:\s*document\.getElementById\('spd-moq'\)/, '保存草稿必须提交 moq 字段');
+});
+
+test('工单 #5：AI 抽取复用 TradeWait 长任务等待组件，结束后销毁并展示结果', () => {
+    const { SRC } = require('./_extract');
+    assert.match(SRC, /id="sp-extract-wait-host"/, '缺少 TradeWait 挂载容器');
+    assert.match(SRC, /TradeWait\.mount\(host,\s*\{[\s\S]*?mode:\s*'task'/, '必须复用 TradeWait(mode=task)');
+    assert.match(SRC, /\/api\/trade\/suppliers\/extract\/jobs/, '应通过后台抽取作业接口获取真实进度');
+    assert.match(SRC, /_spState\.extractWait\.destroy\(\)/, '结束后必须销毁并移除等待组件');
 });

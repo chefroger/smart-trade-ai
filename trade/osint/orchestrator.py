@@ -143,6 +143,83 @@ _PROGRESS_LABELS = {**_LAYER_LABELS, **SOURCE_LABELS}
 EventCallback = Callable[[dict], None]
 
 
+# RFC 2606 / RFC 6761 保留示例与测试域名（不可用于真实背调）
+_RESERVED_TLDS = frozenset({"example", "test", "invalid", "localhost"})
+_RESERVED_SECOND_LEVEL_EXACT = frozenset({"example.com", "example.net", "example.org"})
+# 从自由文本（含公司名+括号域名、URL、邮箱）中抽取候选域名 token
+_DOMAIN_TOKEN_RE = re.compile(
+    r"(?:https?://)?(?:[a-z0-9._%+-]+@)?([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)",
+    re.IGNORECASE,
+)
+
+
+def is_reserved_domain(domain: str) -> bool:
+    """判断单个域名是否属于 RFC 2606 / RFC 6761 保留示例或测试域名。
+
+    命中规则：
+      - 裸 `localhost` 或任意 `.example` / `.test` / `.invalid` / `.localhost` 后缀；
+      - `example.com` / `example.net` / `example.org` 及其任意子域名；
+      - `example.<2字母国家码>`（如 `example.sa`、`foo.example.sa`）及其子域名。
+
+    不会误判 `example-trading.com`、`myexample.sa` 等仅含 example 子串的真实域名。
+    """
+    raw = (domain or "").strip().lower().rstrip(".")
+    if not raw:
+        return False
+    if raw == "localhost":
+        return True
+    labels = [lb for lb in raw.split(".") if lb]
+    if len(labels) < 2:
+        return False
+    tld = labels[-1]
+    # RFC 2606 / 6761 保留顶级域
+    if tld in _RESERVED_TLDS:
+        return True
+    base2 = f"{labels[-2]}.{tld}"
+    # RFC 2606 保留二级域名及其任意子域
+    if base2 in _RESERVED_SECOND_LEVEL_EXACT:
+        return True
+    # 国家码下的 example.<cc>（如 foo.example.sa / example.cn）
+    if labels[-2] == "example" and len(tld) == 2 and tld.isalpha():
+        return True
+    return False
+
+
+def detect_reserved_domain(target: str) -> str | None:
+    """从背调目标文本中检测是否包含保留示例/测试域名，命中返回该域名，否则 None。"""
+    text = (target or "").strip()
+    if not text:
+        return None
+    # 裸 localhost（不带点）
+    if text.lower() == "localhost":
+        return "localhost"
+    for match in _DOMAIN_TOKEN_RE.finditer(text):
+        cand = match.group(1).lower().rstrip(".")
+        if is_reserved_domain(cand):
+            return cand
+    return None
+
+
+def _build_reserved_domain_report(target: str, target_type: str, reserved_domain: str) -> dict:
+    """构造命中保留示例/测试域名时的确定性背调报告（零公网检索、零模型调用）。"""
+    reason = f"目标包含保留示例或测试域名（{reserved_domain}），这是示例或测试域名，无法背调。"
+    return {
+        "target": target,
+        "target_type": target_type,
+        "overall_rating": "incomplete",
+        "overall_score": None,
+        "reserved_domain": reserved_domain,
+        "blocked_reason": reason,
+        "flags": [reason],
+        "unverified": [],
+        "layers": {},
+        "sources": {},
+        "recommendations": [
+            "这是示例或测试域名，无法背调。请核对并输入真实的客户官网域名或公司名称后再试。"
+        ],
+    }
+
+
 async def osint_full_check(
     target: str,
     *,
@@ -201,6 +278,11 @@ async def osint_full_check(
     target, forced_username = _split_username_prefix(target)
     target_type = forced_type or _detect_target_type(target)
     username_hint = forced_username or _extract_username(target, target_type)
+
+    # 工单 #6：编排层确定性拦截 RFC 2606 / 6761 保留示例或测试域名，绝不进入公网检索与实体匹配
+    reserved_dom = detect_reserved_domain(target)
+    if reserved_dom is not None:
+        return _build_reserved_domain_report(target, target_type, reserved_dom)
 
     report: dict = {
         "target": target,

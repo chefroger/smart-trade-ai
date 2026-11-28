@@ -388,6 +388,33 @@ function _spBuildOrderLinkedPosHtml(pos) {
         }).join('') + '</tbody></table>';
 }
 
+function _spFormatExtractError(errCode, filePath) {
+    const code = String(errCode || '');
+    const lower = String(filePath || '').toLowerCase();
+    if (code === 'unsupported_type') {
+        if (/\.(jpe?g|png|gif|webp|bmp|tiff?|heic)$/i.test(lower)) {
+            return '图片 / 扫描件暂不支持，需要先 OCR';
+        }
+        return '文件格式暂不支持（目前支持 txt/md/csv/tsv/xlsx/docx/pdf）';
+    }
+    if (code === 'needs_ocr') return '扫描版 PDF 暂不支持，需要先 OCR';
+    if (code === 'file_not_found') return '文件或路径不存在';
+    if (code === 'empty') return '文件内容为空';
+    if (code === 'truncated') return '文件内容过长被截断，未自动抽取';
+    return code || '未知错误';
+}
+
+function _spBuildExtractResultHtml(er) {
+    if (!er) return '';
+    const failed = Array.isArray(er.failed) ? er.failed : [];
+    const failRows = failed.map(function (f) {
+        return '<tr><td>' + esc(f.file || '') + '</td><td style="color:var(--accent);">' + esc(_spFormatExtractError(f.error, f.file)) + '</td></tr>';
+    }).join('');
+    return '<div class="sp-warn-box" style="margin-top:8px;">'
+        + '已处理文件：<b>' + esc(String(er.files_processed || 0)) + '</b>，生成待确认草稿：<b>' + esc(String(er.drafts_created || 0)) + '</b> 条，失败/跳过：<b>' + esc(String(failed.length)) + '</b> 个。'
+        + ' <button type="button" class="sp-lnk" id="sp-go-drafts-btn">前往确认区审核 →</button></div>'
+        + (failRows ? '<table class="sp-mini"><thead><tr><th>未处理 / 失败文件</th><th>原因</th></tr></thead><tbody>' + failRows + '</tbody></table>' : '');
+}
 // #endregion suppliers-ui
 
 function renderSuppliersViewInto(container) {
@@ -823,15 +850,7 @@ function _spRenderImportUpload(panel) {
 
     let extResHtml = '';
     if (_spState.extractResult) {
-        const er = _spState.extractResult;
-        const failRows = (er.failed || []).map(function (f) {
-            return '<tr><td>' + esc(f.file) + '</td><td style="color:var(--accent);">' + esc(f.error) + '</td></tr>';
-        }).join('');
-        extResHtml =
-            '<div class="sp-warn-box" style="margin-top:8px;">'
-            + '已处理文件：<b>' + esc(String(er.files_processed || 0)) + '</b>，生成待确认草稿：<b>' + esc(String(er.drafts_created || 0)) + '</b> 条，失败：<b>' + esc(String((er.failed || []).length)) + '</b> 个。'
-            + ' <button type="button" class="sp-lnk" id="sp-go-drafts-btn">前往确认区审核 →</button></div>'
-            + (failRows ? '<table class="sp-mini"><thead><tr><th>失败文件</th><th>原因</th></tr></thead><tbody>' + failRows + '</tbody></table>' : '');
+        extResHtml = _spBuildExtractResultHtml(_spState.extractResult);
     }
 
     panel.innerHTML =
@@ -854,6 +873,7 @@ function _spRenderImportUpload(panel) {
         + '<button type="button" class="btn btn-primary" id="sp-extract-go-btn">开始 AI 抽取</button>'
         + '<span id="sp-extract-status" class="sp-mut" style="font-size:12px;"></span>'
         + '</div>'
+        + '<div id="sp-extract-wait-host" style="margin-top:10px;"></div>'
         + extResHtml
         + '</div>'
         + '</div>';
@@ -890,6 +910,91 @@ function _spRenderImportUpload(panel) {
         }
     });
 
+    function _spClearExtractWait() {
+        if (_spState.extractPollTimer) {
+            clearInterval(_spState.extractPollTimer);
+            _spState.extractPollTimer = null;
+        }
+        if (_spState.extractWait) {
+            try { _spState.extractWait.destroy(); } catch (e) {}
+            _spState.extractWait = null;
+        }
+    }
+
+    function _spFeedExtractEvents(waitObj, events, startIndex) {
+        if (!waitObj || !Array.isArray(events)) return startIndex;
+        let cursor = startIndex || 0;
+        for (; cursor < events.length; cursor++) {
+            const ev = events[cursor];
+            if (!ev) continue;
+            if (ev.type === 'job_start') {
+                waitObj.push({ type: 'job_start', target: '共 ' + String(ev.total || 0) + ' 个可解析文件', budget: 180 });
+            } else if (ev.type === 'file_start') {
+                waitObj.push({ type: 'source_start', source: ev.source || ('f' + cursor), label: ev.label || '文档' });
+            } else if (ev.type === 'file_done') {
+                waitObj.push({ type: 'source_done', source: ev.source || ('f' + cursor), status: ev.status || 'hit', ms: ev.ms });
+            }
+        }
+        return cursor;
+    }
+
+    function _spAttachExtractJob(jobId) {
+        _spClearExtractWait();
+        _spState.extractJobId = jobId;
+        _spState.extractEventCursor = 0;
+        const host = document.getElementById('sp-extract-wait-host');
+        const goBtnEl = document.getElementById('sp-extract-go-btn');
+        if (goBtnEl) goBtnEl.disabled = true;
+
+        let waitObj = null;
+        if (host && typeof TradeWait !== 'undefined' && typeof TradeWait.mount === 'function') {
+            host.innerHTML = '';
+            waitObj = TradeWait.mount(host, {
+                mode: 'task',
+                title: 'TRADE · SUPPLIER EXTRACT  ///  报价抽取',
+                statusLabel: '报价抽取',
+                onCancel: function () {
+                    api('POST', '/api/trade/suppliers/extract/jobs/' + encodeURIComponent(jobId) + '/cancel', null, undefined, { silent: true });
+                },
+            });
+            _spState.extractWait = waitObj;
+        }
+
+        const pollOnce = async function () {
+            const job = await api('GET', '/api/trade/suppliers/extract/jobs/' + encodeURIComponent(jobId), null, undefined, { silent: true });
+            if (!job) return;
+            _spState.extractEventCursor = _spFeedExtractEvents(_spState.extractWait, job.events, _spState.extractEventCursor);
+            const stEl = document.getElementById('sp-extract-status');
+            if (stEl && job.status === 'running') {
+                stEl.textContent = job.total ? ('已完成 ' + job.done + ' / ' + job.total + (job.current_file ? ' · ' + job.current_file : '')) : '正在扫描目录...';
+            }
+            if (job.status === 'done' || job.status === 'cancelled' || job.status === 'failed') {
+                _spClearExtractWait();
+                _spState.extractJobId = null;
+                if (stEl) stEl.textContent = '';
+                if (job.result) {
+                    _spState.extractResult = job.result;
+                    await _spRefreshPendingCount();
+                    toast(job.status === 'cancelled' ? '抽取已取消（已保留已完成草稿）' : ('抽取完成：生成 ' + (job.result.drafts_created || 0) + ' 条草稿'));
+                } else if (job.error) {
+                    toast('抽取失败：' + job.error);
+                }
+                const curPanel = document.getElementById('sp-imp-panel');
+                if (curPanel && _spState.tab === 'import' && _spState.importSub === 'upload') {
+                    _spRenderImportUpload(curPanel);
+                }
+            }
+        };
+
+        pollOnce();
+        _spState.extractPollTimer = setInterval(pollOnce, 600);
+    }
+
+    // 离开页面再切回时，若后台抽取作业仍在跑，自动恢复 TradeWait 进度与最终结果
+    if (_spState.extractJobId) {
+        _spAttachExtractJob(_spState.extractJobId);
+    }
+
     panel.querySelector('#sp-extract-go-btn').addEventListener('click', async function () {
         const raw = document.getElementById('sp-extract-paths')?.value || '';
         const paths = raw.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
@@ -897,15 +1002,10 @@ function _spRenderImportUpload(panel) {
             toast('请先输入至少一个文件或文件夹路径');
             return;
         }
-        const stEl = document.getElementById('sp-extract-status');
-        if (stEl) stEl.textContent = '正在抽取，请稍候...';
-        const res = await api('POST', '/api/trade/suppliers/extract', { paths: paths });
-        if (stEl) stEl.textContent = '';
-        if (res) {
-            _spState.extractResult = res;
-            await _spRefreshPendingCount();
-            toast('抽取完成：生成 ' + res.drafts_created + ' 条草稿');
-            _spRenderImportUpload(panel);
+        _spState.extractResult = null;
+        const job = await api('POST', '/api/trade/suppliers/extract/jobs', { paths: paths });
+        if (job && job.job_id) {
+            _spAttachExtractJob(job.job_id);
         }
     });
 
@@ -979,6 +1079,7 @@ function _spRenderDraftsList(panel) {
                 + '<div><div class="k">币种</div><div class="v">' + esc(d.currency || 'CNY') + '</div></div>'
                 + '<div><div class="k">不含税价</div><div class="v">' + _spFormatPriceCell(d.price_excl_tax, d.currency, false) + '</div></div>'
                 + '<div><div class="k">含税价</div><div class="v">' + _spFormatPriceCell(d.price_incl_tax, d.currency, false) + '</div></div>'
+                + '<div><div class="k">起订量 (MOQ)</div><div class="v">' + (d.moq != null ? esc(String(d.moq)) : '—') + '</div></div>'
                 + '<div><div class="k">报价日期</div><div class="v">' + _spFormatQuotedAt(d.quoted_at) + '</div></div>'
                 + '<div><div class="k">有效期</div><div class="v">' + esc(d.valid_until || '—') + '</div></div>'
                 + '</div>'
@@ -1279,6 +1380,7 @@ function _spOpenDraftEditModal(d) {
         + '<div class="form-group"><label>单位</label><input type="text" id="spd-unit" value="' + esc(d.unit || '') + '"></div>'
         + '<div class="form-group"><label>不含税价</label><input type="text" id="spd-excl" value="' + (d.price_excl_tax != null ? esc(String(d.price_excl_tax)) : '') + '"></div>'
         + '<div class="form-group"><label>含税价</label><input type="text" id="spd-incl" value="' + (d.price_incl_tax != null ? esc(String(d.price_incl_tax)) : '') + '"></div>'
+        + '<div class="form-group"><label>起订量 (MOQ)</label><input type="text" id="spd-moq" value="' + (d.moq != null ? esc(String(d.moq)) : '') + '"></div>'
         + '</div>'
         + '<div class="form-row">'
         + '<div class="form-group"><label>报价日期</label><input type="text" id="spd-date" value="' + esc(d.quoted_at || '') + '"></div>'
@@ -1295,6 +1397,7 @@ function _spOpenDraftEditModal(d) {
             unit: document.getElementById('spd-unit').value.trim(),
             price_excl_tax: document.getElementById('spd-excl').value.trim() || null,
             price_incl_tax: document.getElementById('spd-incl').value.trim() || null,
+            moq: document.getElementById('spd-moq').value.trim() || null,
             quoted_at: document.getElementById('spd-date').value.trim(),
             valid_until: document.getElementById('spd-valid').value.trim(),
         };

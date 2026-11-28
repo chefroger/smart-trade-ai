@@ -365,6 +365,8 @@ def _run_job(job_id: int, target: str, budget: float) -> None:
             return
         append_event(job_id, "verdict", {
             "rating": report.get("overall_rating"),
+            "reserved_domain": report.get("reserved_domain"),
+            "message": report.get("blocked_reason") or "",
             "unverified": report.get("unverified") or [],
             "ms": int((time.time() - started) * 1000),
         })
