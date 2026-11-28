@@ -824,11 +824,11 @@ def resolve_soft_token_budget(
     *,
     env_value: str | None = None,
 ) -> int | None:
-    """解析长任务软 token 预算（默认 auto = 历史中位数 2 倍；0 表示关闭；历史不足 3 次返回 None）。"""
+    """解析长任务软 token 预算（默认 0 关闭拦截，不打扰用户；显式设为 auto=2x 历史中位数或正整数才启用）。"""
     raw = (
         env_value
         if env_value is not None
-        else os.environ.get("TRADE_TASK_SOFT_TOKEN_BUDGET", "auto")
+        else os.environ.get("TRADE_TASK_SOFT_TOKEN_BUDGET", "0")
     )
     text = str(raw or "").strip().lower()
     if text in ("0", "off", "false", "none", ""):

@@ -64,7 +64,7 @@ def register(
 
 
 def add_tokens(task_id: str, tokens: int) -> bool:
-    """累加本次任务已消耗 token 数；返回当前是否已达到或超过软预算。"""
+    """累加本次任务已消耗 token 数；返回当前是否已达到或超过软预算（不单独置 tripped）。"""
     key = str(task_id or "").strip()
     if not key:
         return False
@@ -73,13 +73,11 @@ def add_tokens(task_id: str, tokens: int) -> bool:
         if st is None:
             return False
         st.consumed_tokens += max(0, int(tokens or 0))
-        if st.consumed_tokens >= st.limit_tokens:
-            st.tripped = True
-        return st.tripped
+        return st.consumed_tokens >= st.limit_tokens
 
 
 def sync_tokens(task_id: str, total_tokens: int) -> bool:
-    """按 agent 当前累计 token 幂等同步已消耗值（取较大值，避免重复累加）。"""
+    """按 agent 当前累计 token 幂等同步已消耗值（取较大值，不单独置 tripped，仅实际拦截工具时才置）。"""
     key = str(task_id or "").strip()
     if not key:
         return False
@@ -90,9 +88,7 @@ def sync_tokens(task_id: str, total_tokens: int) -> bool:
             return False
         if val > st.consumed_tokens:
             st.consumed_tokens = val
-        if st.consumed_tokens >= st.limit_tokens:
-            st.tripped = True
-        return st.tripped
+        return st.consumed_tokens >= st.limit_tokens
 
 
 def get_state(task_id: str) -> dict | None:
@@ -114,11 +110,11 @@ def get_state(task_id: str) -> dict | None:
 
 
 def format_wrapup_notice(task_id: str) -> str:
-    """生成提前收尾说明（未触发软预算时返回空串）。"""
+    """生成提前收尾说明（仅当确实拦截过工具调用时返回，避免对完整报告贴假提示）。"""
     snap = get_state(task_id)
-    if not snap or not snap["tripped"]:
+    if not snap or not snap["tripped"] or not snap["unfinished_tools"]:
         return ""
-    unfinished = "、".join(snap["unfinished_tools"]) if snap["unfinished_tools"] else "后续扩展检索"
+    unfinished = "、".join(snap["unfinished_tools"])
     return f"因达到本次预算提前收尾，未完成：{unfinished}。如需更深入核查，可点击「继续补查」。"
 
 

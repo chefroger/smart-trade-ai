@@ -116,6 +116,8 @@ def test_resolve_soft_token_budget_modes():
             prompt_tokens=100_000,
             completion_tokens=20_000,
         )
+    # 未显式开启时默认关闭软预算（不打扰用户）
+    assert resolve_soft_token_budget(conn, 1, "b2b-osint") is None
     assert resolve_soft_token_budget(conn, 1, "b2b-osint", env_value="auto") == 240_000
     assert resolve_soft_token_budget(conn, 1, "b2b-osint", env_value="0") is None
 
@@ -135,8 +137,9 @@ def test_soft_budget_hook_blocks_retrieval_only_after_limit_and_generates_wrapup
         assert soft_budget.add_tokens(tid, 600) is False
         assert soft_budget.on_pre_tool_call("web_search", {"q": "a"}, task_id=tid) is None
 
-        # 超过软预算
+        # 超过软预算但尚未拦截任何工具时，不得生成「提前收尾」假提示（P2-A）
         assert soft_budget.add_tokens(tid, 500) is True
+        assert soft_budget.format_wrapup_notice(tid) == ""
         # 检索类工具被温和拦截并要求基于已有材料收尾
         blocked = soft_budget.on_pre_tool_call("web_search", {"q": "b"}, task_id=tid)
         assert blocked is not None
