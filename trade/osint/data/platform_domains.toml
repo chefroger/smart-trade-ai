@@ -1,0 +1,90 @@
+# Trade 公共平台与非目标官网域名分类清单（自研维护）
+#
+# 说明：
+#   - 域名均按「可注册后缀标签」精确匹配（如 alibaba.com 命中 abc.en.alibaba.com，
+#     但绝不误判 notalibaba.com）。
+#   - 用户可在 ~/.trade/platform_domains.toml 中通过 [add] / [remove] 追加或覆盖，
+#     格式示例：
+#       [add]
+#       directory = ["my-custom-dir.example"]
+#       [remove]
+#       b2b_marketplace = ["some-site.com"]
+#   - 读取失败或格式损坏时自动回退内置默认清单，绝不阻断背调。
+
+[domains]
+free_mail = [
+  "gmail.com", "googlemail.com", "yahoo.com", "ymail.com",
+  "hotmail.com", "outlook.com", "live.com", "msn.com",
+  "aol.com", "icloud.com", "me.com",
+  "qq.com", "foxmail.com", "163.com", "126.com", "yeah.net",
+  "sina.com", "sohu.com", "tom.com", "139.com", "wo.cn", "189.cn",
+  "mail.com", "gmx.com", "protonmail.com", "proton.me",
+  "yandex.com", "zoho.com", "fastmail.com", "tutanota.com",
+  "inbox.com", "mail.ru",
+]
+
+b2b_marketplace = [
+  "alibaba.com", "1688.com", "made-in-china.com", "globalsources.com",
+  "dhgate.com", "indiamart.com", "tradeindia.com", "tradekey.com",
+  "ec21.com", "ecplaza.net", "europages.com", "europages.co.uk",
+  "kompass.com", "thomasnet.com", "directindustry.com",
+  "amazon.com", "amazon.co.uk", "amazon.de", "amazon.co.jp",
+  "ebay.com", "aliexpress.com", "etsy.com", "walmart.com",
+  "mercadolibre.com", "shopee.com", "lazada.com",
+  "ozon.ru", "wildberries.ru", "faire.com",
+]
+
+trade_data = [
+  "importyeti.com", "panjiva.com", "importgenius.com", "volza.com",
+  "tendata.cn", "tridge.com", "eximpedia.app", "zauba.com",
+  "exportgenius.in", "datamyne.com", "tradesparq.com", "seair.co.in",
+  "customsinfo.com", "52wmb.com",
+]
+
+directory = [
+  "yellowpages.com", "yelp.com", "dnb.com", "crunchbase.com",
+  "zoominfo.com", "apollo.io", "opencorporates.com", "bbb.org",
+  "manta.com", "hotfrog.com", "cylex.us.com", "yell.com",
+  "trustpilot.com", "bizapedia.com", "f6s.com",
+  "qcc.com", "tianyancha.com", "qixin.com", "aiqicha.baidu.com",
+]
+
+research_press = [
+  "statista.com", "grandviewresearch.com", "marketsandmarkets.com",
+  "fortunebusinessinsights.com", "mordorintelligence.com",
+  "researchandmarkets.com", "imarcgroup.com", "precedenceresearch.com",
+  "globenewswire.com", "prnewswire.com", "businesswire.com",
+  "reuters.com", "bloomberg.com", "wikipedia.org",
+  "medium.com", "substack.com", "forbes.com", "techcrunch.com",
+]
+
+site_builder_subdomain = [
+  "wixsite.com", "blogspot.com", "wordpress.com", "weebly.com",
+  "myshopify.com", "squarespace.com", "webflow.io", "strikingly.com",
+  "carrd.co", "tilda.ws", "tilda.cc", "webnode.com", "site123.me",
+  "github.io", "pages.dev", "netlify.app", "vercel.app",
+  "notion.site", "sites.google.com", "linktr.ee", "about.me",
+]
+
+social_hosts = [
+  "linkedin.com", "facebook.com", "instagram.com",
+  "x.com", "twitter.com", "youtube.com", "tiktok.com",
+  "reddit.com", "pinterest.com", "weibo.com", "zhihu.com", "quora.com",
+]
+
+recruitment_hosts = [
+  "indeed.com", "glassdoor.com", "monster.com", "ziprecruiter.com",
+  "bosszhipin.com", "zhaopin.com", "51job.com", "liepin.com",
+  "lever.co", "greenhouse.io", "workday.com", "myworkdayjobs.com",
+]
+
+[paths]
+recruitment = [
+  "/careers", "/career", "/jobs", "/job",
+  "/hiring", "/join-us", "/vacancies", "/recruitment", "/open-positions",
+]
+
+social_content = [
+  "/posts", "/post", "/feed", "/reel", "/reels",
+  "/status", "/watch", "/shorts", "/p", "/groups", "/r", "/comments", "/pulse",
+]
