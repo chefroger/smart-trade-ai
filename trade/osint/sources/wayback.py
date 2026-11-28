@@ -9,6 +9,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_json,
     quote,
     skipped,
@@ -28,10 +29,12 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     try:
         payload = fetch_json(CDX.format(domain=quote(domain)), fetch=fetch)
     except Exception as exc:  # noqa: BLE001
-        return SourceResult(NAME, "error", error=f"Wayback 查询失败：{exc}")
+        return error_result(NAME, exc)
     if payload is None:
-        return SourceResult(NAME, "error", error="Wayback 无响应或返回非 JSON")
-    if not isinstance(payload, list) or len(payload) < 2:
+        return error_result(NAME, code="parse_error", detail="Wayback 无响应或返回非 JSON")
+    if not isinstance(payload, list):
+        return error_result(NAME, code="parse_error", detail="Wayback 返回非列表结构")
+    if len(payload) < 2:
         return SourceResult(NAME, "miss", error="Wayback 无快照")
 
     rows = [row for row in payload[1:] if isinstance(row, list) and len(row) >= 3]

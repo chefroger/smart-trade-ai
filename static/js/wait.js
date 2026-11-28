@@ -24,7 +24,19 @@
   };
   var SRC_STATUS = {
     hit: '命中', candidate: '同名候选', miss: '未命中',
-    error: '出错', timeout: '超时', skipped: '跳过', done: '完成'
+    error: '出错', timeout: '超时', skipped: '跳过', not_applicable: '不适用', done: '完成'
+  };
+  // M4：数据源统一错误码 → 中文提示（与 trade/osint/sources/base.py ERROR_CODE_META 一致）
+  var ERROR_CODE_ZH = {
+    timeout: '请求超时',
+    rate_limited: '接口限流或配额用尽',
+    unauthorized: '鉴权失败或拒绝访问',
+    bad_request: '请求参数不被接受',
+    upstream_unavailable: '上游服务暂不可用',
+    network: '网络或代理连接失败',
+    parse_error: '响应格式异常',
+    not_applicable: '不适用',
+    unsupported_type: '不支持的类型'
   };
   // 评级代号 → 中文（审计 P0-B：limited = 只跑过制裁层，不是低风险）
   var RATING_ZH = {
@@ -415,6 +427,7 @@
     this.logEl.appendChild(row);
     while (this.logEl.children.length > 200) this.logEl.removeChild(this.logEl.firstChild);
     if (stick) this.logEl.scrollTop = this.logEl.scrollHeight;
+    return row;
   };
 
   /** 追加一条任务读数（Hermes 升级日志等）。文字由调用方负责过滤敏感内容。 */
@@ -466,9 +479,25 @@
         var s2 = this._src(String(ev.source || ''));
         if (s2) {
           s2.status = ev.status || 'done';
+          s2.errorCode = ev.error_code || null;
+          s2.retryable = !!ev.retryable;
           var bad = s2.status === 'error' || s2.status === 'timeout';
           var st = SRC_STATUS[s2.status] || s2.status;
-          this._log(st + (ev.ms != null ? ' · ' + (ev.ms / 1000).toFixed(1) + 's' : ''), s2.status === 'hit' ? 'hit' : (bad ? 'bad' : ''), s2.label);
+          var errZh = s2.errorCode && ERROR_CODE_ZH[s2.errorCode] ? ERROR_CODE_ZH[s2.errorCode] : '';
+          var detail = st + (errZh ? '（' + errZh + '）' : '') + (ev.ms != null ? ' · ' + (ev.ms / 1000).toFixed(1) + 's' : '');
+          var logRow = this._log(detail, s2.status === 'hit' ? 'hit' : (bad ? 'bad' : ''), s2.label);
+          if (bad && s2.retryable && logRow && typeof this.opts.onRetrySource === 'function') {
+            var retryBtn = el('button', 'sw-retry-btn', '重试该层');
+            retryBtn.type = 'button';
+            retryBtn.setAttribute('data-source', s2.key);
+            var selfWait = this;
+            var srcKey = s2.key;
+            retryBtn.addEventListener('click', function () {
+              retryBtn.disabled = true;
+              selfWait.opts.onRetrySource(srcKey);
+            });
+            logRow.appendChild(retryBtn);
+          }
           var running = this.sources.some(function (x) { return x.status === 'running'; });
           // 完成一个来源后，文案停在刚返回的来源与结果上；全部返回才进入整理阶段
           this.phase(running ? 'correlating' : 'composing', st + '：' + s2.label);

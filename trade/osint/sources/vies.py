@@ -11,6 +11,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_json,
     quote,
     skipped,
@@ -52,9 +53,9 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     try:
         payload = fetch_json(url, fetch=fetch)
     except Exception as exc:  # noqa: BLE001
-        return SourceResult(NAME, "error", error=f"VIES 查询失败：{exc}")
+        return error_result(NAME, exc)
     if not isinstance(payload, dict):
-        return SourceResult(NAME, "miss", error="VIES 无有效响应")
+        return error_result(NAME, code="parse_error", detail="VIES 无有效 JSON 响应")
 
     valid = bool(payload.get("isValid"))
     name = str(payload.get("name") or "").strip()

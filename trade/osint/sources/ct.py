@@ -47,8 +47,8 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     earliest = ""
     count = 0
 
-    primary_error = ""
-    fallback_error = ""
+    primary_exc: BaseException | None = None
+    fallback_exc: BaseException | None = None
 
     # 主源：certspotter（可配 CERTSPOTTER_TOKEN 提高配额）
     try:
@@ -59,7 +59,7 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
         )
     except Exception as exc:  # noqa: BLE001 —— 主源失败走备用源
         payload = None
-        primary_error = f"{type(exc).__name__}: {exc}"
+        primary_exc = exc
 
     if isinstance(payload, list) and payload:
         for entry in payload:
@@ -80,7 +80,7 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
             fallback = fetch_json(CRT_SH.format(domain=quote(domain)), fetch=fetch)
         except Exception as exc:  # noqa: BLE001
             fallback = None
-            fallback_error = f"{type(exc).__name__}: {exc}"
+            fallback_exc = exc
         if isinstance(fallback, list) and fallback:
             for entry in fallback:
                 if not isinstance(entry, dict):
@@ -95,12 +95,11 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
                         names.add(name)
 
     if not names:
-        if primary_error or fallback_error:
-            detail = "；".join(filter(None, [
-                f"certspotter {primary_error}" if primary_error else "",
-                f"crt.sh {fallback_error}" if fallback_error else "",
-            ]))
-            return SourceResult(NAME, "error", error=f"CT 查询失败（{detail}）")
+        if primary_exc is not None or fallback_exc is not None:
+            from trade.osint.sources.base import error_result
+
+            # 原始异常只写脱敏日志，用户提示走统一错误码中文文案
+            return error_result(NAME, fallback_exc or primary_exc)
         return SourceResult(NAME, "miss", error="未查到证书记录")
 
     # 只保留本域的子域（crt.sh 会带回其它域的共享证书）

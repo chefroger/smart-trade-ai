@@ -10,6 +10,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_text,
     quote,
     skipped,
@@ -30,16 +31,19 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     try:
         text = fetch_text(url, fetch=fetch)
     except Exception as exc:  # noqa: BLE001
-        return SourceResult(NAME, "error", error=f"被动 DNS 查询失败：{exc}")
+        return error_result(NAME, exc)
     if text is None:
-        return SourceResult(NAME, "error", error="被动 DNS 无响应")
+        return error_result(NAME, code="network", detail="被动 DNS 无响应")
     if not text.strip():
         return SourceResult(NAME, "miss", error="未查到子域名记录")
 
     lowered = text.strip().lower()
-    if lowered.startswith("error") or lowered.startswith("api count exceeded"):
-        # HackerTarget 的配额提示也走 200，必须显式识别
-        return SourceResult(NAME, "miss", error=f"被动 DNS 不可用：{text.strip()[:120]}")
+    if lowered.startswith("api count exceeded"):
+        # HackerTarget 配额用尽走 HTTP 200 纯文本，归类为限流 error 且可重试，绝不误报 miss
+        return error_result(NAME, code="rate_limited", detail=text.strip()[:120])
+    if lowered.startswith("error"):
+        # 服务方返回 error 文本说明未查成，按上游不可用 error 处理
+        return error_result(NAME, code="upstream_unavailable", detail=text.strip()[:120])
 
     subdomains: list[str] = []
     ips: list[str] = []

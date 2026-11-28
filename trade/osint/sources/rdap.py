@@ -12,6 +12,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_json,
     skipped,
 )
@@ -45,11 +46,12 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     try:
         payload = fetch_json(url, fetch=fetch)
     except Exception as exc:  # noqa: BLE001 —— 单来源失败不影响其它来源
-        return SourceResult(NAME, "error", error=f"RDAP 查询失败：{exc}")
+        return error_result(NAME, exc)
     if payload is None:
-        return SourceResult(NAME, "error", error="RDAP 无响应或返回非 JSON")
+        return error_result(NAME, code="parse_error", detail="RDAP 无响应或返回非 JSON")
     if not isinstance(payload, dict):
-        return SourceResult(NAME, "miss", error="RDAP 返回结构异常")
+        # 返回非 dict 说明响应结构异常，属于解析失败 error，不可误报 miss
+        return error_result(NAME, code="parse_error", detail=f"unexpected type {type(payload).__name__}")
 
     events = {
         str(event.get("eventAction") or "").strip().lower(): event.get("eventDate")
