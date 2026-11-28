@@ -884,6 +884,47 @@ def check_skills(*, package_dir: Path | None = None, installed_dir: Path | None 
     )]
 
 
+def check_pricing_freshness() -> list[CheckResult]:
+    """检查 trade/pricing.toml 的价格核对日期是否超过 90 天（不联网，仅提醒）。"""
+    try:
+        from trade.usage import pricing_freshness_info
+
+        info = pricing_freshness_info()
+    except Exception as exc:  # noqa: BLE001 — 检查异常不阻断自检
+        return [CheckResult("模型价格表时效", STATUS_WARN, f"读取失败：{exc}", fatal=False)]
+
+    verified_at = info.get("verified_at") or ""
+    age_days = info.get("age_days")
+    stale_days = int(info.get("stale_days") or 90)
+    # 超过阈值天数时给非致命提醒，提示人工核对官方价格页
+    if info.get("is_stale"):
+        return [
+            CheckResult(
+                "模型价格表时效",
+                STATUS_WARN,
+                f"trade/pricing.toml 上次核对为 {verified_at}（已过 {age_days} 天，超过 {stale_days} 天），请对照官方价格页更新",
+                fatal=False,
+            )
+        ]
+    if not verified_at or age_days is None:
+        return [
+            CheckResult(
+                "模型价格表时效",
+                STATUS_WARN,
+                "trade/pricing.toml 缺少合法的 verified_at 日期",
+                fatal=False,
+            )
+        ]
+    return [
+        CheckResult(
+            "模型价格表时效",
+            STATUS_OK,
+            f"上次核对 {verified_at}（{age_days} 天前，阈值 {stale_days} 天）",
+            fatal=False,
+        )
+    ]
+
+
 def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     """跑全部检查。deep=False 时跳过所有真实请求（快检，零 token）。"""
     results: list[CheckResult] = []
@@ -891,6 +932,7 @@ def run_doctor(*, deep: bool = True) -> list[CheckResult]:
     results += check_estop()
     results += check_skills()
     results += check_post_install()
+    results += check_pricing_freshness()
     results += check_llm_layered(deep=deep)
     if deep:
         results += check_vision()

@@ -28,3 +28,12 @@ test('U2: topMeta 支持回退 topMeta[v]，避免带 chatCtx 切到邮箱/定�
     const uiSrc = fs.readFileSync(path.join(ROOT, 'static/js/ui.js'), 'utf8');
     assert.match(uiSrc, /topMeta\[v \+ \(ctx \? '-' \+ ctx : ''\)\] \|\| topMeta\[v\]/);
 });
+
+test('侧栏与顶栏「供应商」走 i18n（中英文切换不残留中文）', () => {
+    const uiSrc = fs.readFileSync(path.join(ROOT, 'static/js/ui.js'), 'utf8');
+    const i18nSrc = fs.readFileSync(path.join(ROOT, 'static/js/i18n.js'), 'utf8');
+    assert.match(i18nSrc, /'nav\.suppliers':'供应商'/);
+    assert.match(i18nSrc, /'nav\.suppliers':'Suppliers'/);
+    assert.match(i18nSrc, /viewMap\s*=\s*\{[^}]*'suppliers'\s*:\s*'nav\.suppliers'/);
+    assert.match(uiSrc, /'suppliers':\s*\[t\('nav\.suppliers'\)/);
+});

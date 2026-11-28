@@ -167,7 +167,7 @@ class TestW7OrderLogistics:
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (2, 'order_logistics_and_events')"
         )
-        # v3~v5 与订单物流无关，但「已是最新」的判定要求已知迁移均已在册
+        # v3~v7 与订单物流无关，但「已是最新」的判定要求已知迁移均已在册
         conn.execute(
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (3, 'scrub_visit_plan_profile_reminders')"
@@ -179,6 +179,14 @@ class TestW7OrderLogistics:
         conn.execute(
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (5, 'todos_reason')"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (6, 'usage_ledger_cache_and_window')"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (7, 'supplier_quote_drafts_moq')"
         )
         conn.commit()
 

@@ -492,23 +492,74 @@ def _check_chat_rate_limit(company_id: int) -> bool:
         return True
 
 
-def _extract_and_cache_skill(cid: int, full_query: str, skill_hint: str | None) -> str | None:
-    """从 build_query 输出中提取当前匹配的 skill 名称并缓存。
+def _extract_and_cache_skill(
+    cid: int,
+    full_query: str,
+    skill_hint: str | None,
+    *,
+    raw_query: str = "",
+) -> str | None:
+    """提取本次请求实际注入/匹配的 skill 名称并缓存（工单 #7）。
 
-    同步和流式端点共享此逻辑，避免重复 ~10 行 regex 提取代码。
-    OSINT 场景：skill_hint 中有 "## 当前技能：{name}"
-    非 OSINT 场景：full_query 中有 "## 技能触发：{name}"
+    优先级：
+      1. skill_hint 中的 "## 当前技能：{name}"（OSINT 等系统层注入）；
+      2. 若传入 raw_query，直接使用 skill_router.match_skill_routed(raw_query) 的真实路由结果，
+         避免从拼入历史对话的 full_query 里正则误抓上一轮技能名；
+      3. 兜底从 full_query 匹配 "## 技能触发：{name}"。
     """
     import re as _re
-    _skill_match = (
-        _re.search(r'##\s*当前技能[：:]\s*(\S+)', skill_hint or '') or
-        _re.search(r'##\s*技能触发[：:]\s*(\S+)', full_query)
-    )
-    current_skill = _skill_match.group(1) if _skill_match else None
+
+    current_skill: str | None = None
+    hint_match = _re.search(r'##\s*当前技能[：:]\s*(\S+)', skill_hint or '')
+    if hint_match:
+        current_skill = hint_match.group(1)
+    elif raw_query:
+        try:
+            from trade import skill_router as _sr
+
+            matched = _sr.match_skill_routed(raw_query)
+            if isinstance(matched, dict) and matched.get("name"):
+                current_skill = str(matched["name"]).strip()
+        except Exception:  # noqa: BLE001 — 路由异常退回正则兜底
+            current_skill = None
+    if not current_skill:
+        trigger_match = _re.search(r'##\s*技能触发[：:]\s*(\S+)', full_query)
+        if trigger_match:
+            current_skill = trigger_match.group(1)
+
     with _skill_cache_lock:
         if current_skill:
             _last_skill_per_company[cid] = current_skill
     return current_skill
+
+
+def _resolve_usage_skill(
+    current_skill: str | None,
+    *,
+    context: str = "",
+    tools_tracker: CompletedToolTracker | None = None,
+) -> str:
+    """确定写入 usage_ledger 的最终 skill 名称，杜绝空串与背调误归类（工单 #7）。
+
+    规则：
+      - 若本轮实际调用了背调工具（osint_job_start / osint_job_result）或请求 context='osint'，
+        统一记为 'b2b-osint'；
+      - 否则使用实际注入的 current_skill；
+      - 未命中任何技能的普通对话 / 跟进邮件统一记为 'chat'（绝不记空串）。
+    """
+    ctx = (context or "").strip().lower()
+    if ctx == "osint":
+        return "b2b-osint"
+    if tools_tracker is not None:
+        used_names = {
+            str(item.get("name") or "")
+            for item in tools_tracker.snapshot()
+        }
+        # 本轮实际执行了背调作业工具时，无论前置路由结果如何都归类为 b2b-osint
+        if used_names & _OSINT_TOOL_NAMES:
+            return "b2b-osint"
+    cleaned = (current_skill or "").strip()
+    return cleaned if cleaned else "chat"
 
 def _validate_scope(payload, cid: int) -> None:
     """校验 payload 里的 customer_id / library_id 属于当前公司。
@@ -813,7 +864,7 @@ async def trade_chat(
         skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
-    current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
+    current_skill = _extract_and_cache_skill(cid, full_query, skill_hint, raw_query=query)
     request_scope = detect_request_scope(query)
     gate_required = bool(payload.library_id and should_enforce_document_gate(query))
     # 概览/定位只把缓存摘要当上下文，不参与门禁（2026-11-09 审计 P1-1）。
@@ -892,7 +943,9 @@ async def trade_chat(
                 return "", "failed"
             text = agent.chat(build_summary_prompt(query, tools))
             usage_module.record_agent_usage(
-                agent, company_id=cid, skill=current_skill or "",
+                agent,
+                company_id=cid,
+                skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
             )
             if text and not cancelled.is_set():
                 return text, "partial"
@@ -952,7 +1005,9 @@ async def trade_chat(
                     # 不论成功/失败（含被中断）都把这次尝试的 token 记账：
                     # 失败的重试同样烧钱，漏记会让额度形同虚设（审计 P1-16）。
                     usage_module.record_agent_usage(
-                        agent, company_id=cid, skill=current_skill or "",
+                        agent,
+                        company_id=cid,
+                        skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
                     )
                 if cancelled.is_set():
                     # 超时后迟到的结果：用户已收到中止提示，不能再当成功回复
@@ -1151,7 +1206,7 @@ async def trade_chat_stream(
         skill_hint = (skill_hint or "") + "\n\n" + _external_paths_hint(user_paths)
 
     # 从 full_query 或 skill_hint 中提取当前匹配的 skill 名称并缓存
-    current_skill = _extract_and_cache_skill(cid, full_query, skill_hint)
+    current_skill = _extract_and_cache_skill(cid, full_query, skill_hint, raw_query=query)
     request_scope = detect_request_scope(query)
     gate_required = bool(payload.library_id and should_enforce_document_gate(query))
     # 概览/定位只把缓存摘要当上下文，不参与门禁（2026-11-09 审计 P1-1）。
@@ -1316,7 +1371,9 @@ async def trade_chat_stream(
                 return None
             text = agent.chat(build_summary_prompt(query, tools))
             usage_module.record_agent_usage(
-                agent, company_id=cid, skill=current_skill or "",
+                agent,
+                company_id=cid,
+                skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
             )
             if text and not cancel_event.is_set():
                 return text
@@ -1507,7 +1564,9 @@ async def trade_chat_stream(
                 finally:
                     # 断连/失败同样记账：本次尝试的 token 已经花掉了（审计 P1-16）
                     usage_module.record_agent_usage(
-                        agent, company_id=cid, skill=current_skill or "",
+                        agent,
+                        company_id=cid,
+                        skill=_resolve_usage_skill(current_skill, context=payload.context or "", tools_tracker=tools),
                     )
                 elapsed = time.time() - start
 

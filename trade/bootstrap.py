@@ -808,6 +808,110 @@ def _write_yaml_with_backup(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+# 同一路径的损坏配置在进程内只告警一次，避免重复刷屏
+_CORRUPT_CONFIG_WARNED: set[str] = set()
+
+
+def _warn_corrupt_config_once(config_path: Path) -> None:
+    """检测到损坏的 Hermes config.yaml 时只打印一次提示并给出 .bak 路径。"""
+    key = str(config_path)
+    # 同一路径在当前进程已告警过则不再重复打印
+    if key in _CORRUPT_CONFIG_WARNED:
+        return
+    _CORRUPT_CONFIG_WARNED.add(key)
+    bak = config_path.with_suffix(config_path.suffix + ".bak")
+    # 存在 .bak 备份时明确提示备份路径，方便用户手工恢复
+    if bak.is_file():
+        print(
+            f"  ⚠️ Hermes config ({config_path}) 存在 YAML 语法错误，已跳过写入。"
+            f"请检查修复或参考备份：{bak}"
+        )
+    else:
+        print(
+            f"  ⚠️ Hermes config ({config_path}) 存在 YAML 语法错误，已跳过写入。"
+            f"备份路径（若已生成）：{bak}"
+        )
+
+
+def _indent_of(line: str) -> str:
+    """返回一行的前导空白字符。"""
+    body = line.lstrip()
+    return line[: len(line) - len(body)]
+
+
+def _split_yaml_key(stripped: str) -> tuple[str, str] | None:
+    """若行以 `key:` 开头（非注释、非列表项），返回 (key, rest_without_comment)。"""
+    # 注释行或列表项不是映射键
+    if not stripped or stripped.startswith("#") or stripped.startswith("-"):
+        return None
+    colon = stripped.find(":")
+    # 没有冒号或冒号在行首均不是合法键
+    if colon <= 0:
+        return None
+    key = stripped[:colon].strip()
+    after = stripped[colon + 1:]
+    # YAML 要求冒号后为空白或行尾
+    if after and after[0] not in (" ", "\t", "\r", "\n"):
+        return None
+    # 去掉行尾注释（简单场景：空白后跟 #）
+    inline = after.strip()
+    if inline.startswith("#"):
+        inline = ""
+    return key, inline
+
+
+def _find_yaml_block(
+    lines: list[str],
+    start: int,
+    end: int,
+    key: str,
+    expected_indent: int | None = None,
+) -> tuple[int, int, str, str] | None:
+    """在 lines[start:end] 中查找指定 key 及其子块范围。
+
+    Returns:
+        (key_line_idx, block_end_idx, indent_str, inline_val) 或 None。
+    """
+    for i in range(start, end):
+        ln = lines[i]
+        stripped = ln.lstrip()
+        parsed = _split_yaml_key(stripped)
+        # 非映射键行跳过
+        if parsed is None:
+            continue
+        k, inline = parsed
+        # 键名不匹配跳过
+        if k != key:
+            continue
+        indent = _indent_of(ln)
+        # 指定了缩进约束时必须精确匹配，避免误撞其他层级同名键
+        if expected_indent is not None and len(indent) != expected_indent:
+            continue
+        # 扫描子块结束位置：遇到缩进 <= 当前键的非空非注释行（除同缩进列表项外）即结束
+        block_end = end
+        for j in range(i + 1, end):
+            jstrip = lines[j].lstrip()
+            # 空行或纯注释行不终止子块
+            if not jstrip or jstrip.startswith("#"):
+                continue
+            jindent = _indent_of(lines[j])
+            # 同缩进的 `- ` 在 YAML 中属于合法的无缩进块序列，仍属于本键子块
+            if len(jindent) == len(indent) and (jstrip.startswith("- ") or jstrip.rstrip() == "-"):
+                continue
+            # 缩进小于或等于当前键的其他内容表示子块结束
+            if len(jindent) <= len(indent):
+                block_end = j
+                break
+        return i, block_end, indent, inline
+    return None
+
+
+def _ensure_trailing_newline(lines: list[str], idx: int) -> None:
+    """确保 lines[idx] 以换行符结尾，避免插入新行时拼接到同一行。"""
+    if 0 <= idx < len(lines) and not lines[idx].endswith("\n"):
+        lines[idx] = lines[idx] + "\n"
+
+
 def _patch_yaml_list(text: str, key_path: tuple[str, ...], value: str) -> str:
     """在 yaml 文本里把 key_path 路径下的 list 追加 value；**不改动其它任何内容**。
 
@@ -815,40 +919,55 @@ def _patch_yaml_list(text: str, key_path: tuple[str, ...], value: str) -> str:
       - **只在值确实是 list 时追加**；值是 dict / 标量 / 形态不明 → 原样返回
         （宁可不生效，也不能破坏用户配置 —— 在 dict 后面混一个 list 会直接产出非法 yaml）；
       - 文本级追加（不重新 dump yaml）→ 保留用户的注释、键顺序、缩进风格；
+      - 识别 YAML 合法的「无缩进块序列」（`- item` 与父 key 同缩进），避免重复插入；
       - 目标 key 不存在时，只在**父 key 存在且为空值**时插一行；父 key 也不存在 → 原样返回
         （由调用方决定整块追加）。
 
-    支持的两种 list 形态（`~/.hermes/config.yaml` 的实际形态）：
+    支持的 list 形态：
         key: [a, b]           ← 行内
         key:
           - a
-          - b                 ← 多行
+          - b                 ← 缩进多行
+        key:
+        - a
+        - b                   ← 无缩进多行（PyYAML safe_dump 默认输出）
     """
-    if not text:
+    if not text or not key_path:
         return text
 
     lines = text.splitlines(keepends=True)
     target = key_path[-1]
 
-    def _indent_of(line: str) -> str:
-        body = line.lstrip()
-        return line[: len(line) - len(body)]
+    # 定位父块范围：若传入多级路径（如 ("plugins", "enabled")），限定只在父块内查找，
+    # 防止误匹配到其他段里的同名键（如 auxiliary.background_review.enabled）。
+    search_start, search_end = 0, len(lines)
+    parent_info: tuple[int, int, str, str] | None = None
+    if len(key_path) >= 2:
+        parent = key_path[-2]
+        parent_info = _find_yaml_block(lines, 0, len(lines), parent, expected_indent=0)
+        # 父 key 不存在时原样返回（交由调用方决定是否整块追加）
+        if parent_info is None:
+            return text
+        p_idx, p_end, _p_indent, p_inline = parent_info
+        # 父 key 行内已有值（如 plugins: {...}）时不冒险改写
+        if p_inline:
+            return text
+        search_start, search_end = p_idx + 1, p_end
 
     # ① 目标 key 已存在 → 按它的值形态决定
-    for i, ln in enumerate(lines):
-        stripped = ln.lstrip()
-        if stripped.rstrip() != target + ":" and not stripped.startswith(target + ":"):
-            continue
-        indent = _indent_of(ln)
-        inline = stripped[len(target) + 1:].strip()
+    target_info = _find_yaml_block(lines, search_start, search_end, target)
+    if target_info is not None:
+        i, block_end, indent, inline = target_info
 
         # 行内 list：key: [a, b]
         if inline.startswith("["):
-            if value in inline:
-                return text  # 已存在 → 幂等
             if not inline.endswith("]"):
                 return text  # 跨行/畸形 → 不动
             inner = inline[1:-1].strip().rstrip(",")
+            items = [x.strip().strip("'\"") for x in inner.split(",") if x.strip()] if inner else []
+            # 目标值已在行内列表中 → 幂等返回
+            if value in items:
+                return text
             body = f"[{inner}, {value}]" if inner else f"[{value}]"
             lines[i] = f"{indent}{target}: {body}\n"
             return "".join(lines)
@@ -857,54 +976,142 @@ def _patch_yaml_list(text: str, key_path: tuple[str, ...], value: str) -> str:
         if inline:
             return text
 
-        # 多行：由**第一个子行**决定形态
+        # 多行：由第一个非空非注释子行决定形态（允许同缩进的无缩进块序列 `- item`）
         block_indent: str | None = None
         existing: list[str] = []
-        insert_at: int | None = None
-        for j in range(i + 1, len(lines)):
+        last_item_end: int | None = None
+        for j in range(i + 1, block_end):
             jl = lines[j]
             jstrip = jl.lstrip()
-            if not jstrip:
+            # 跳过空行与注释行
+            if not jstrip or jstrip.startswith("#"):
                 continue
             child_indent = _indent_of(jl)
-            if len(child_indent) <= len(indent):
-                insert_at = j  # 子块结束（空值 / 同级 key）
-                break
+            is_list_item = jstrip.startswith("- ") or jstrip.rstrip() == "-"
             if block_indent is None:
-                if not jstrip.startswith("- "):
-                    return text  # 第一个子行不是 list item → 是 dict/嵌套，不动
+                # 缩进更深但不是列表项 → 说明是 dict/嵌套结构，不动
+                if not is_list_item:
+                    return text
+                # 允许 child_indent >= indent（兼容有缩进与无缩进块序列）
+                if len(child_indent) < len(indent):
+                    break
                 block_indent = child_indent
+            # 缩进回退到列表项缩进之前 → 列表块结束
             if len(child_indent) < len(block_indent):
-                insert_at = j  # 缩进回退 → list 块到此结束
+                break
+            # 同缩进的非列表项（如紧跟的同级键）→ 列表块结束
+            if len(child_indent) == len(block_indent) and not is_list_item:
                 break
             if len(child_indent) == len(block_indent) and jstrip.startswith("- "):
-                existing.append(jstrip[2:].strip())
+                raw_item = jstrip[2:].strip()
+                # 去掉简单行尾注释与引号，准确做幂等去重
+                if " #" in raw_item:
+                    raw_item = raw_item.split(" #", 1)[0].strip()
+                existing.append(raw_item.strip("'\""))
+            last_item_end = j + 1
+
+        # 已存在目标项 → 幂等返回
         if value in existing:
-            return text  # 幂等
-        # 没有子行（`key:` 后直接是同级 key 或文件末尾）→ 按"空 list"处理，
-        # 插一个 list item，把它变成 `[value]`
+            return text
+        # 空值（`key:` 后无任何子项）按空列表处理，使用父缩进 +2
         if block_indent is None:
             block_indent = indent + "  "
-        if insert_at is None:
-            insert_at = len(lines)
+            insert_at = i + 1
+        else:
+            insert_at = last_item_end if last_item_end is not None else i + 1
+        _ensure_trailing_newline(lines, insert_at - 1)
         lines.insert(insert_at, f"{block_indent}- {value}\n")
         return "".join(lines)
 
-    # ② 目标 key 不存在 → 只在**父 key 是顶层且空值**时插一行
-    if len(key_path) < 2:
-        return text
-    parent = key_path[-2]
-    for i, ln in enumerate(lines):
-        stripped = ln.lstrip()
-        if stripped.rstrip() != parent + ":" and not stripped.startswith(parent + ":"):
-            continue
-        if _indent_of(ln):
-            return text  # 父 key 不是顶层（我们的用法是顶层 plugins:）→ 不动
-        if stripped[len(parent) + 1:].strip():
-            return text  # plugins: {...} 行内有值 → 不动
-        lines.insert(i + 1, f"  {target}: [{value}]\n")
+    # ② 目标 key 不存在 → 父 key 存在且为空值时在父 key 下一行插入
+    if parent_info is not None:
+        p_idx = parent_info[0]
+        _ensure_trailing_newline(lines, p_idx)
+        lines.insert(p_idx + 1, f"  {target}: [{value}]\n")
         return "".join(lines)
     return text
+
+
+def _patch_yaml_nested_bool(
+    text: str,
+    top_key: str,
+    sub_key: str,
+    leaf_key: str,
+    value: bool,
+) -> str:
+    """文本级设置三层布尔键（如 auxiliary.background_review.enabled: false），保留原注释与格式。"""
+    bool_str = "true" if value else "false"
+    lines = text.splitlines(keepends=True)
+
+    top_info = _find_yaml_block(lines, 0, len(lines), top_key, expected_indent=0)
+    # 顶层键不存在 → 文件末尾整块追加
+    if top_info is None:
+        sep = "" if (not text or text.endswith("\n")) else "\n"
+        return f"{text}{sep}{top_key}:\n  {sub_key}:\n    {leaf_key}: {bool_str}\n"
+
+    t_idx, t_end, _t_indent, t_inline = top_info
+    # 顶层键是空行内映射（如 auxiliary: {}）→ 展开为块映射
+    if t_inline == "{}":
+        lines[t_idx] = f"{top_key}:\n"
+        lines.insert(t_idx + 1, f"  {sub_key}:\n    {leaf_key}: {bool_str}\n")
+        return "".join(lines)
+    # 顶层键是其他行内值（非块映射）→ 不冒险改写
+    if t_inline:
+        return text
+
+    sub_info = _find_yaml_block(lines, t_idx + 1, t_end, sub_key)
+    # 二级键不存在 → 在顶层键下方插入二级与三级键
+    if sub_info is None:
+        # 复用已有二级子键缩进（若无则默认 2 空格）
+        sub_indent = "  "
+        for j in range(t_idx + 1, t_end):
+            jstrip = lines[j].lstrip()
+            if jstrip and not jstrip.startswith("#"):
+                cand = _indent_of(lines[j])
+                if len(cand) > 0:
+                    sub_indent = cand
+                    break
+        _ensure_trailing_newline(lines, t_idx)
+        lines.insert(t_idx + 1, f"{sub_indent}{sub_key}:\n{sub_indent}  {leaf_key}: {bool_str}\n")
+        return "".join(lines)
+
+    s_idx, s_end, s_indent, s_inline = sub_info
+    # 二级键是空行内映射（如 background_review: {}）→ 展开为块映射
+    if s_inline == "{}":
+        lines[s_idx] = f"{s_indent}{sub_key}:\n"
+        lines.insert(s_idx + 1, f"{s_indent}  {leaf_key}: {bool_str}\n")
+        return "".join(lines)
+    # 二级键是其他行内值 → 不冒险改写
+    if s_inline:
+        return text
+
+    leaf_info = _find_yaml_block(lines, s_idx + 1, s_end, leaf_key)
+    # 三级键不存在 → 在二级键下方插入
+    if leaf_info is None:
+        leaf_indent = s_indent + "  "
+        for j in range(s_idx + 1, s_end):
+            jstrip = lines[j].lstrip()
+            if jstrip and not jstrip.startswith("#"):
+                cand = _indent_of(lines[j])
+                if len(cand) > len(s_indent):
+                    leaf_indent = cand
+                    break
+        _ensure_trailing_newline(lines, s_idx)
+        lines.insert(s_idx + 1, f"{leaf_indent}{leaf_key}: {bool_str}\n")
+        return "".join(lines)
+
+    l_idx, _l_end, l_indent, _l_inline = leaf_info
+    # 保留该行原有的行尾注释（若有）
+    raw_line = lines[l_idx].rstrip("\r\n")
+    comment = ""
+    colon_pos = raw_line.find(":")
+    if colon_pos != -1:
+        after_colon = raw_line[colon_pos + 1:]
+        hash_pos = after_colon.find(" #")
+        if hash_pos != -1:
+            comment = after_colon[hash_pos:]
+    lines[l_idx] = f"{l_indent}{leaf_key}: {bool_str}{comment}\n"
+    return "".join(lines)
 
 
 _CHAT_MEMORY_PLUGIN_KEY = "chat-memory"
@@ -921,8 +1128,10 @@ def ensure_background_review_disabled() -> bool:
     """默认关闭 Hermes 的 auxiliary.background_review，避免对话结束后静默改写技能文件（U4）。
 
     - 显式设置环境变量 ``TRADE_ALLOW_SKILL_SELF_IMPROVE=1`` 时跳过（保留可开启能力）；
-    - 仅修改 ``HERMES_HOME/config.yaml`` 的 ``auxiliary.background_review.enabled``，不动 Hermes 源码；
-    - 写盘前留 ``.bak`` 备份，解析或写盘异常只记警告不阻断启动。
+    - 文本级局部修改 ``HERMES_HOME/config.yaml`` 的 ``auxiliary.background_review.enabled``，
+      保留用户注释、键顺序与缩进，绝不整份 safe_dump；
+    - 写盘前用 PyYAML 校验结果合法且目标键已为 False，校验失败不写盘并告警；
+    - 写盘前留 ``.bak`` 备份，损坏文件不写入，仅提示一次。
 
     Returns:
         实际写入修改返回 True，否则 False。
@@ -940,7 +1149,9 @@ def ensure_background_review_disabled() -> bool:
         return False
 
     data = _try_load_yaml(original)
+    # 已有文件无法解析为 mapping（可能已损坏）→ 绝不写入，仅提示一次
     if not isinstance(data, dict):
+        _warn_corrupt_config_once(config_path)
         return False
 
     aux = data.get("auxiliary")
@@ -950,14 +1161,22 @@ def ensure_background_review_disabled() -> bool:
             return False  # 已经显式关闭，无需改动
 
     try:
-        import yaml
-
-        if not isinstance(data.get("auxiliary"), dict):
-            data["auxiliary"] = {}
-        if not isinstance(data["auxiliary"].get("background_review"), dict):
-            data["auxiliary"]["background_review"] = {}
-        data["auxiliary"]["background_review"]["enabled"] = False
-        new_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        new_text = _patch_yaml_nested_bool(
+            original, "auxiliary", "background_review", "enabled", False
+        )
+        # 未产生文本变化（例如遇到不可安全改写的行内映射）→ 不写盘
+        if new_text == original:
+            return False
+        # 写盘前二次解析校验：确保 YAML 合法且目标键确实为 False
+        verified = _try_load_yaml(new_text)
+        if not (
+            isinstance(verified, dict)
+            and isinstance(verified.get("auxiliary"), dict)
+            and isinstance(verified["auxiliary"].get("background_review"), dict)
+            and verified["auxiliary"]["background_review"].get("enabled") is False
+        ):
+            print("  ⚠️ failed to verify patched Hermes config for background_review, leaving it alone")
+            return False
         _write_yaml_with_backup(config_path, new_text)
         return True
     except Exception as exc:
@@ -983,6 +1202,7 @@ def ensure_chat_memory_plugin_enabled() -> None:
       - 先用 PyYAML **只读**地确认值形态：是 list 或缺失才继续；是 dict/标量 → 不动；
       - `plugins.disabled` 含 chat-memory → 直接跳过（deny-list 总是赢）；
       - 文本级追加（不重新 dump yaml）→ 保留用户的注释、键顺序、缩进；
+      - 写盘前二次校验 YAML 合法且 `plugins.enabled` 确含 chat-memory，校验失败不写盘；
       - 写盘前留 `.bak`（只留最旧一份，多轮调用不反复覆盖）；
       - 任何失败只打印警告 —— 写不了配置不能挡住 trade 启动（插件降级为"不生效"）。
 
@@ -1004,10 +1224,10 @@ def ensure_chat_memory_plugin_enabled() -> None:
             print(f"  ⚠️ failed to write Hermes config: {exc}")
         return
 
-    # ── 只读地确认当前值形态（解析失败一律不动）────────────────────────────
+    # ── 只读地确认当前值形态（解析失败一律不动，并只告警一次）───────────────
     data = _try_load_yaml(original)
     if not isinstance(data, dict):
-        print("  Hermes config: not parseable as a mapping, leaving it alone")
+        _warn_corrupt_config_once(config_path)
         return
     plugins = data.get("plugins")
     if isinstance(plugins, dict):
@@ -1038,6 +1258,17 @@ def ensure_chat_memory_plugin_enabled() -> None:
 
     if new_text == original:
         print("  Hermes config: chat-memory already enabled, no change")
+        return
+
+    # 写盘前二次解析校验：确保新文本可被 YAML 解析且 plugins.enabled 确实是包含目标值的 list
+    verified = _try_load_yaml(new_text)
+    if not (
+        isinstance(verified, dict)
+        and isinstance(verified.get("plugins"), dict)
+        and isinstance(verified["plugins"].get("enabled"), list)
+        and _CHAT_MEMORY_PLUGIN_KEY in verified["plugins"]["enabled"]
+    ):
+        print("  ⚠️ failed to verify patched Hermes config for plugins.enabled, leaving it alone")
         return
 
     try:

@@ -290,7 +290,7 @@ async def extract_document(
     )
     messages = [{"role": "user", "content": prompt}]
     try:
-        raw = await _call_model(
+        raw, usage_obj = await _call_model_with_usage(
             messages,
             provider=provider,
             model=model,
@@ -299,6 +299,9 @@ async def extract_document(
     except Exception as exc:  # 模型调用边界：网络/超时/服务商错误一律降级为 failed
         _log.warning("文档提取模型调用失败：%s", exc)
         return _failed("model_error")
+
+    # 文档库抽取同步记账（失败只打日志，不影响抽取）
+    _record_extract_usage(usage_obj, skill="doc-extract", provider=provider, model=model)
 
     obj = _parse_json_object(raw)
     if obj is None:
@@ -368,6 +371,11 @@ def to_cache_entry(
 
 # ── 模型调用 ────────────────────────────────────────────────────────────────
 
+# 保存最近一次 _call_model 拿到的响应 usage（协程隔离），既兼容旧签名又支持记账
+from contextvars import ContextVar as _ContextVar
+
+_LAST_CALL_USAGE: _ContextVar[Any] = _ContextVar("doc_extract_last_call_usage", default=None)
+
 
 async def _call_model(messages: list, *, provider: str, model: str, timeout: float) -> str:
     """走 Hermes 辅助 LLM 通道；provider/model 显式给出，thinking 强制 low。"""
@@ -382,7 +390,44 @@ async def _call_model(messages: list, *, provider: str, model: str, timeout: flo
         timeout=timeout,
         reasoning_config={"enabled": True, "effort": "low"},
     )
+    usage_obj = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+    _LAST_CALL_USAGE.set(usage_obj)
     return _response_text(response)
+
+
+async def _call_model_with_usage(
+    messages: list, *, provider: str, model: str, timeout: float
+) -> tuple[str, Any]:
+    """调用抽取模型并同时返回 (文本, response.usage)，兼容对 _call_model 的测试打桩。"""
+    _LAST_CALL_USAGE.set(None)
+    text = await _call_model(messages, provider=provider, model=model, timeout=timeout)
+    usage_obj = _LAST_CALL_USAGE.get()
+    _LAST_CALL_USAGE.set(None)
+    return text, usage_obj
+
+
+def _record_extract_usage(
+    usage_obj: Any,
+    *,
+    skill: str,
+    provider: str,
+    model: str,
+    company_id: int = 0,
+) -> float:
+    """将抽取调用的 usage 写入账本；记账异常只打日志，绝不影响抽取主流程。"""
+    try:
+        from trade import usage as usage_mod
+
+        return usage_mod.record_response_usage(
+            usage_obj,
+            skill=skill,
+            provider=provider,
+            model=model,
+            company_id=company_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — 旁路记账不得影响抽取
+        _log.warning("抽取用量记账失败（skill=%s）：%s", skill, exc)
+        return 0.0
 
 
 def _response_text(response: Any) -> str:

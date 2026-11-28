@@ -713,3 +713,333 @@ def test_b11_o_fixes_compare_sort_range_and_draft_date(env):
 
     approved = supplier_mod.approve_draft(draft_id, cid)
     assert approved["quote"]["quoted_at"] == ""
+
+
+# ==============================================================================
+# 工单 #3：供应商 AI 抽取 token 记账
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_extract_records_usage_ledger(env, monkeypatch, tmp_path):
+    """给 async_call_llm 打桩返回带 usage 对象，断言账本出现 skill='supplier-extract' 行。"""
+    import sys as _sys
+    import types as _types
+    from types import SimpleNamespace
+
+    from trade import usage as usage_mod
+
+    cid = env["co_a"]["id"]
+    # 虚构测试报价单文件（仅用于单元测试）
+    sample = tmp_path / "fictional_quote.txt"
+    sample.write_text("虚构测试厂\n测试件A 单价 12 元/件\n", encoding="utf-8")
+
+    fake_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "quotes": [
+                                {
+                                    "supplier_name": "虚构测试厂",
+                                    "product_name": "测试件A",
+                                    "unit": "件",
+                                    "price_excl_tax": 12.0,
+                                    "price_incl_tax": None,
+                                    "currency": "CNY",
+                                    "raw_excerpt": "测试件A 单价 12 元/件",
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=1500,
+            completion_tokens=200,
+            prompt_cache_hit_tokens=1200,
+            prompt_cache_miss_tokens=300,
+        ),
+    )
+
+    async def _fake_async_call_llm(**_kwargs):
+        return fake_response
+
+    fake_agent_pkg = _types.ModuleType("agent")
+    fake_aux_mod = _types.ModuleType("agent.auxiliary_client")
+    fake_aux_mod.async_call_llm = _fake_async_call_llm
+    monkeypatch.setitem(_sys.modules, "agent", fake_agent_pkg)
+    monkeypatch.setitem(_sys.modules, "agent.auxiliary_client", fake_aux_mod)
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+
+    res = await supplier_mod.extract_files_to_drafts(cid, [str(sample)])
+    assert res["drafts_created"] == 1
+
+    conn = db_mod.get_connection()
+    try:
+        assert usage_mod.tokens_today(conn, cid) == 1700
+        row = conn.execute(
+            "SELECT skill, provider, model, prompt_tokens, completion_tokens, "
+            "cache_hit_tokens, cache_miss_tokens FROM usage_ledger WHERE company_id = ?",
+            (cid,),
+        ).fetchone()
+        assert tuple(row) == ("supplier-extract", "deepseek", "deepseek-flash", 1500, 200, 1200, 300)
+    finally:
+        conn.close()
+
+
+# ==============================================================================
+# 工单 #2：按文件夹抽取时不支持文件不静默跳过，系统隐藏文件安静忽略
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_extract_folder_reports_unsupported_and_ignores_system_files(env, monkeypatch, tmp_path):
+    """混合目录（txt + jpg + .DS_Store + ~$temp.xlsx）：jpg 进 failed，系统/临时文件不出现。"""
+    cid = env["co_a"]["id"]
+    folder = tmp_path / "fictional_mixed_dir"
+    folder.mkdir()
+    # 虚构测试报价与占位图片
+    (folder / "quote.txt").write_text("虚构工厂\n测试件B 10元/个\n", encoding="utf-8")
+    jpg_file = folder / "scan_quote.jpg"
+    jpg_file.write_bytes(b"\xff\xd8\xff\xe0fakejpg")
+    (folder / ".DS_Store").write_bytes(b"macos-meta")
+    (folder / "Thumbs.db").write_bytes(b"win-meta")
+    (folder / "~$quote.xlsx").write_bytes(b"office-lock")
+
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+    monkeypatch.setattr(
+        doc_extract,
+        "_call_model",
+        AsyncMock(
+            return_value=json.dumps(
+                {
+                    "quotes": [
+                        {
+                            "supplier_name": "虚构工厂",
+                            "product_name": "测试件B",
+                            "unit": "个",
+                            "price_excl_tax": 10.0,
+                            "moq": None,
+                            "raw_excerpt": "测试件B 10元/个",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
+
+    dir_res = await supplier_mod.extract_files_to_drafts(cid, [str(folder)])
+    assert dir_res["files_processed"] == 1
+    assert dir_res["drafts_created"] == 1
+    assert len(dir_res["failed"]) == 1
+    assert dir_res["failed"][0]["file"].endswith("scan_quote.jpg")
+    assert dir_res["failed"][0]["error"] == "unsupported_type"
+
+    # 单文件路径与文件夹路径对同一种文件给出同样的错误码
+    single_res = await supplier_mod.extract_files_to_drafts(cid, [str(jpg_file)])
+    assert len(single_res["failed"]) == 1
+    assert single_res["failed"][0]["error"] == dir_res["failed"][0]["error"] == "unsupported_type"
+
+
+# ==============================================================================
+# 工单 #4：确认区草稿 MOQ 字段（迁移 + 抽取 → 编辑 → 批准全链路）
+# ==============================================================================
+
+
+def test_draft_moq_migration_preserves_old_drafts(tmp_path):
+    """老库升级：给旧结构 supplier_quote_drafts 补 moq 列，旧草稿数据不丢且 moq 为 NULL。"""
+    db_path = tmp_path / "legacy_drafts.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE supplier_quote_drafts (
+            id                INTEGER PRIMARY KEY,
+            company_id        INTEGER NOT NULL,
+            supplier_id       INTEGER,
+            supplier_name_raw TEXT DEFAULT '',
+            product_name      TEXT DEFAULT '',
+            spec_model        TEXT DEFAULT '',
+            unit              TEXT DEFAULT '',
+            price_excl_tax    REAL,
+            price_incl_tax    REAL,
+            currency          TEXT DEFAULT 'CNY',
+            quoted_at         TEXT DEFAULT '',
+            valid_until       TEXT DEFAULT '',
+            source_file       TEXT NOT NULL,
+            raw_excerpt       TEXT DEFAULT '',
+            status            TEXT DEFAULT 'pending'
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO supplier_quote_drafts (company_id, supplier_name_raw, product_name, source_file) "
+        "VALUES (1, '旧厂', '旧件', '/tmp/old.txt')"
+    )
+    conn.commit()
+
+    db_mod._migrate_supplier_drafts_moq_v7(conn)
+    conn.commit()
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(supplier_quote_drafts)").fetchall()}
+    assert "moq" in cols
+    row = conn.execute("SELECT product_name, moq FROM supplier_quote_drafts").fetchone()
+    assert row == ("旧件", None)
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_extract_draft_edit_and_approve_preserves_moq(env, monkeypatch, tmp_path):
+    """含 MOQ 的虚构样例走完抽取→编辑→批准，正式报价 MOQ 正确；无 MOQ 为 None。"""
+    cid = env["co_a"]["id"]
+    client = env["client"]
+    headers = env["headers"](cid)
+
+    sample = tmp_path / "fictional_moq.txt"
+    sample.write_text("虚构MOQ厂\n件X MOQ 500 个 8元\n件Y 无起订 9元\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+    monkeypatch.setattr(
+        doc_extract,
+        "_call_model",
+        AsyncMock(
+            return_value=json.dumps(
+                {
+                    "quotes": [
+                        {
+                            "supplier_name": "虚构MOQ厂",
+                            "product_name": "件X",
+                            "unit": "个",
+                            "price_excl_tax": 8.0,
+                            "moq": 500,
+                            "raw_excerpt": "件X MOQ 500 个 8元",
+                        },
+                        {
+                            "supplier_name": "虚构MOQ厂",
+                            "product_name": "件Y",
+                            "unit": "个",
+                            "price_excl_tax": 9.0,
+                            "moq": None,
+                            "raw_excerpt": "件Y 无起订 9元",
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
+
+    ext = await supplier_mod.extract_files_to_drafts(cid, [str(sample)])
+    assert ext["drafts_created"] == 2
+    d_x = next(d for d in ext["drafts"] if d["product_name"] == "件X")
+    d_y = next(d for d in ext["drafts"] if d["product_name"] == "件Y")
+    assert d_x["moq"] == 500.0
+    assert d_y["moq"] is None
+
+    # 通过编辑接口修改 MOQ 为 800
+    upd = client.put(
+        f"/api/trade/supplier-quote-drafts/{d_x['id']}",
+        headers=headers,
+        json={"moq": 800},
+    )
+    assert upd.status_code == 200
+    assert upd.json()["moq"] == 800.0
+
+    # 批准入正式库后 MOQ 正确保留
+    app_x = supplier_mod.approve_draft(d_x["id"], cid)
+    app_y = supplier_mod.approve_draft(d_y["id"], cid)
+    assert app_x["quote"]["moq"] == 800.0
+    assert app_y["quote"]["moq"] is None
+
+
+# ==============================================================================
+# 工单 #5：AI 抽取后台作业接口（真实逐文件进度 + 取消 + 公司隔离）
+# ==============================================================================
+
+
+def test_extract_background_job_progress_and_isolation(env, monkeypatch, tmp_path):
+    """后台抽取 5 个虚构文件：轮询可见真实进度事件，完成后产出结果，跨公司查询 404。"""
+    import time as _time
+
+    cid_a = env["co_a"]["id"]
+    cid_b = env["co_b"]["id"]
+    client = env["client"]
+
+    folder = tmp_path / "fictional_batch5"
+    folder.mkdir()
+    for i in range(1, 6):
+        (folder / f"quote_{i}.txt").write_text(f"虚构厂{i}\n件{i} 1{i}元/个\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        doc_extract, "resolve_extraction_model", lambda: ("deepseek", "deepseek-flash", "k")
+    )
+
+    async def _fake_model(messages, **_kw):
+        return json.dumps(
+            {
+                "quotes": [
+                    {
+                        "supplier_name": "虚构批量厂",
+                        "product_name": "批量测试件",
+                        "unit": "个",
+                        "price_excl_tax": 10.0,
+                        "moq": 100,
+                        "raw_excerpt": "批量测试件 10元/个",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(doc_extract, "_call_model", _fake_model)
+
+    start_resp = client.post(
+        "/api/trade/suppliers/extract/jobs",
+        headers=env["headers"](cid_a),
+        json={"paths": [str(folder)]},
+    )
+    assert start_resp.status_code == 200
+    job_id = start_resp.json()["job_id"]
+
+    # 跨公司查作业必须 404（先解除会话公司绑定再以公司 B 身份请求）
+    deps_mod._ACTIVE_COMPANY.clear()
+    cross = client.get(
+        f"/api/trade/suppliers/extract/jobs/{job_id}",
+        headers=env["headers"](cid_b),
+    )
+    assert cross.status_code == 404
+    deps_mod._ACTIVE_COMPANY.clear()
+
+    # 轮询直到完成
+    final_job = None
+    deadline = _time.time() + 10.0
+    while _time.time() < deadline:
+        st = client.get(
+            f"/api/trade/suppliers/extract/jobs/{job_id}",
+            headers=env["headers"](cid_a),
+        )
+        assert st.status_code == 200
+        data = st.json()
+        if data["status"] in ("done", "failed", "cancelled"):
+            final_job = data
+            break
+        _time.sleep(0.05)
+
+    assert final_job is not None
+    assert final_job["status"] == "done"
+    assert final_job["total"] == 5
+    assert final_job["done"] == 5
+    assert final_job["result"]["drafts_created"] == 5
+    ev_types = [e["type"] for e in final_job["events"]]
+    assert ev_types.count("file_start") == 5
+    assert ev_types.count("file_done") == 5

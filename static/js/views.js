@@ -728,10 +728,40 @@ function onboardingGoToStep2() {
     setTimeout(function() { var inp = $('onboarding-osint-input'); if (inp) inp.focus(); }, 100);
 }
 
+function _detectReservedExampleDomain(text) {
+    // 工单 #6：识别 RFC 2606 / RFC 6761 保留示例或测试域名，避免发起无效背调与模型调用
+    const raw = String(text || '').trim().toLowerCase();
+    if (!raw) return null;
+    if (raw === 'localhost') return 'localhost';
+    const re = /(?:https?:\/\/)?(?:[a-z0-9._%+-]+@)?([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)/gi;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+        const dom = m[1].replace(/\.+$/, '');
+        const labels = dom.split('.').filter(Boolean);
+        if (labels.length < 2) continue;
+        const tld = labels[labels.length - 1];
+        const prev = labels[labels.length - 2];
+        if (tld === 'example' || tld === 'test' || tld === 'invalid' || tld === 'localhost') return dom;
+        if (prev === 'example' && (tld === 'com' || tld === 'net' || tld === 'org' || /^[a-z]{2}$/.test(tld))) return dom;
+    }
+    return null;
+}
+
 async function onboardingStartOSINT() {
     var input = $('onboarding-osint-input');
     var query = input.value.trim();
     if (!query) { toast(t('toast.enter_company')); return; }
+    var reservedDom = _detectReservedExampleDomain(query);
+    if (reservedDom) {
+        var resArea = $('onboarding-results-area');
+        if (resArea) {
+            resArea.innerHTML = '<div class="onboarding-result-card" style="border-left:3px solid var(--accent-red);padding:12px 14px;">'
+                + '<strong>这是示例或测试域名（' + esc(reservedDom) + '），无法背调。</strong>'
+                + '<div style="margin-top:6px;color:var(--text-secondary);font-size:13px;">请输入真实的客户官网域名或公司名称后再试。</div>'
+                + '</div>';
+        }
+        return;
+    }
     _onboardingInputText = query;
     input.disabled = true;
     $('onboarding-send-btn').disabled = true;

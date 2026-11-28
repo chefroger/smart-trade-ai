@@ -7,6 +7,13 @@ on:
     branches: [main]
 
 jobs:
+  repo-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Repository safety gate (secrets & data files)
+        run: bash scripts/repo_safety.sh
+
   lint:
     runs-on: ubuntu-latest
     steps:
