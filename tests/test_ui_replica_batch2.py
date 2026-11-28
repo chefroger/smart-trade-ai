@@ -188,6 +188,10 @@ class TestW7OrderLogistics:
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (7, 'supplier_quote_drafts_moq')"
         )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (8, 'usage_ledger_duration_ms')"
+        )
         conn.commit()
 
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}

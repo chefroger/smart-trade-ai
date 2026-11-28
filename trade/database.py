@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     price_window      TEXT    NOT NULL DEFAULT '',
     currency          TEXT    NOT NULL DEFAULT 'USD',
     cost_usd          REAL    NOT NULL DEFAULT 0,
+    duration_ms       INTEGER NOT NULL DEFAULT 0,
     extra1            TEXT    NOT NULL DEFAULT '',
     extra2            TEXT    NOT NULL DEFAULT '',
     extra3            TEXT    NOT NULL DEFAULT ''
@@ -1029,7 +1030,7 @@ _EXPECTED_TABLES = frozenset({
 })
 
 # 已知迁移版本集合；_needs_schema_work 与 _apply_pending_migrations 共用
-_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
+_KNOWN_MIGRATION_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
 
 
 def _needs_schema_work(conn: sqlite3.Connection) -> bool:
@@ -1208,6 +1209,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
         (6, "usage_ledger_cache_and_window", ""),
         # v7：supplier_quote_drafts 补 moq 列（工单 #4）
         (7, "supplier_quote_drafts_moq", ""),
+        # v8：usage_ledger 补 duration_ms 列（M7 长任务历史耗时预估）
+        (8, "usage_ledger_duration_ms", ""),
     ]
 
     # 获取已应用的版本
@@ -1231,6 +1234,8 @@ def _apply_pending_migrations(conn: sqlite3.Connection) -> int:
             _migrate_usage_ledger_pricing_v6(conn)
         elif version == 7:
             _migrate_supplier_drafts_moq_v7(conn)
+        elif version == 8:
+            _migrate_usage_ledger_duration_v8(conn)
         else:
             conn.executescript(sql)
         conn.execute(
@@ -1399,6 +1404,17 @@ def _migrate_supplier_drafts_moq_v7(conn: sqlite3.Connection) -> None:
     # 表尚未创建或已含 moq 列时跳过，保证幂等
     if cols and "moq" not in cols:
         conn.execute("ALTER TABLE supplier_quote_drafts ADD COLUMN moq REAL")
+
+
+def _migrate_usage_ledger_duration_v8(conn: sqlite3.Connection) -> None:
+    """迁移 8：usage_ledger 补 duration_ms 列（M7 长任务历史耗时预估）。"""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(usage_ledger)")}
+    except sqlite3.Error:
+        return
+    # 表尚未创建或已含 duration_ms 列时跳过，保证幂等
+    if cols and "duration_ms" not in cols:
+        conn.execute("ALTER TABLE usage_ledger ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0")
 
 
 def init_db() -> Path:
