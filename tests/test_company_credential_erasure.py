@@ -1,23 +1,29 @@
 """
-公司软删 → purge 全路径凭据擦除验收测试（M3 / W3）。
+公司软删 → purge 全路径凭据擦除与全局邮箱保护验收测试（PR #32 修正口径 A1–A5）。
 
 验收口径：
-  建测试公司 → 填入可辨认的虚构假 Key 文件与假邮箱凭证 →
-  1) 软删公司：凭据即刻擦除（保留期不留 Key），业务记忆仍保留，另一家活跃公司凭据不受影响；
-  2) 执行 purge：全盘（TRADE_HOME 与临时库）搜索不到该假 Key 与假邮箱凭证的任何片段。
+  - A1 软删后：mailbox_secrets.json 中全部邮箱授权码保持不变（含 contact_email 命中、
+       含邮件仅关联该公司的邮箱），mailboxes 表行数不变；
+  - A2 purge 后：同 A1；公司自有凭据文件零残留；
+  - A3 进程内活跃 session 解绑行为不变；
+  - A4 软删审计日志文案不再声称擦除邮箱凭据；
+  - A5 名为 token-payment-terms.pdf 的业务文件不被误删；api_key.txt / .env / secret-notes.txt 仍被擦除。
 """
 
 from __future__ import annotations
 
+import json
+
 from trade import company as company_mod
 from trade import database as db_mod
 from trade import mailbox_store
+from trade.api import deps as deps_mod
 
 
-def test_soft_delete_erases_credentials_immediately_and_purge_leaves_zero_trace(
+def test_soft_delete_and_purge_preserve_global_mailboxes_and_erase_company_secrets(
     tmp_path, monkeypatch
 ):
-    """软删即擦凭据，purge 后全盘无任何假 Key 与假邮箱凭证残留，且不误伤其他活跃公司。"""
+    """覆盖 A1–A5：全局邮箱不动、公司凭据即擦、token 业务文件不误删、session 解绑、审计文案准确。"""
     trade_home = tmp_path / "trade_home"
     trade_home.mkdir(parents=True, exist_ok=True)
     db_path = trade_home / "data" / "trade.db"
@@ -35,65 +41,118 @@ def test_soft_delete_erases_credentials_immediately_and_purge_leaves_zero_trace(
     monkeypatch.setattr(company_mod.workdir, "_setup_work_directory", _fake_work_dir)
     db_mod.init_db()
 
-    # 建两家虚构测试公司（A 待删，B 保持活跃）
     co_a = company_mod.create(
         name="Fictional Alpha Co",
         slug="fictional-alpha",
-        contact_email="alpha@fictional-alpha.invalid",
+        contact_email="boss@fictional-alpha.invalid",
     )
-    company_mod.create(
-        name="Fictional Beta Co",
-        slug="fictional-beta",
-        contact_email="beta@fictional-beta.invalid",
-    )
+    cid_a = int(co_a["id"])
 
-    # 构造可辨认的虚构假凭据（仅用于单元测试）
-    fake_api_key = "FICTIONAL-TEST-KEY-ALPHA-99887766"
-    fake_mail_secret_a = "FICTIONAL-IMAP-SECRET-ALPHA-554433"
-    fake_mail_secret_b = "FICTIONAL-IMAP-SECRET-BETA-112233"
+    # 构造可辨认的虚构公司凭据与全局邮箱授权码（仅用于单元测试）
+    fake_env_key = "FICTIONAL-ENV-KEY-ALPHA-99887766"
+    fake_api_key = "FICTIONAL-API-KEY-ALPHA-11223344"
+    fake_secret_note = "FICTIONAL-SECRET-NOTE-ALPHA-55667788"
+    fake_mail_secret_contact = "FICTIONAL-IMAP-SECRET-CONTACT-111111"
+    fake_mail_secret_linked = "FICTIONAL-IMAP-SECRET-LINKED-222222"
 
-    # 在公司 A 数据目录写入凭据文件与正常业务记忆文件
     alpha_dir = trade_home / "fictional-alpha"
     alpha_dir.mkdir(parents=True, exist_ok=True)
-    (alpha_dir / ".env").write_text(f"CUSTOM_KEY={fake_api_key}\n", encoding="utf-8")
+    # 应被擦除的公司凭据文件
+    (alpha_dir / ".env").write_text(f"CUSTOM_KEY={fake_env_key}\n", encoding="utf-8")
+    (alpha_dir / "api_key.txt").write_text(fake_api_key, encoding="utf-8")
+    (alpha_dir / "secret-notes.txt").write_text(fake_secret_note, encoding="utf-8")
+    # 不应被误删的正常业务文件（A5：含 token 字样的付款条款文件 + 业务记忆）
+    (alpha_dir / "token-payment-terms.pdf").write_bytes(b"%PDF-1.4 fictional payment terms")
     (alpha_dir / "MEMORY.md").write_text("# 正常业务记忆保留 30 天\n", encoding="utf-8")
 
-    # 在 mailboxes + mailbox_secrets.json 写入公司 A 与公司 B 的绑定邮箱凭证
+    # 写入两个全局邮箱：一个匹配公司 A 的 contact_email，一个仅有归属公司 A 的邮件行
     conn = db_mod.get_connection()
     try:
-        cur_a = conn.execute(
+        cur1 = conn.execute(
             "INSERT INTO mailboxes (preset, email_address, host, port, username) "
-            "VALUES ('custom', 'alpha@fictional-alpha.invalid', 'imap.invalid', 993, 'alpha')"
+            "VALUES ('custom', 'boss@fictional-alpha.invalid', 'imap.invalid', 993, 'boss')"
         )
-        mid_a = int(cur_a.lastrowid)
-        cur_b = conn.execute(
+        mid1 = int(cur1.lastrowid)
+        cur2 = conn.execute(
             "INSERT INTO mailboxes (preset, email_address, host, port, username) "
-            "VALUES ('custom', 'beta@fictional-beta.invalid', 'imap.invalid', 993, 'beta')"
+            "VALUES ('custom', 'sales@fictional-other.invalid', 'imap.invalid', 993, 'sales')"
         )
-        mid_b = int(cur_b.lastrowid)
+        mid2 = int(cur2.lastrowid)
+        conn.execute(
+            "INSERT INTO emails (mailbox_id, message_id, company_id, subject) "
+            "VALUES (?, '<msg-1@invalid>', ?, 'Test')",
+            (mid2, cid_a),
+        )
         conn.commit()
     finally:
         conn.close()
 
-    mailbox_store.set_secret(mid_a, fake_mail_secret_a)
-    mailbox_store.set_secret(mid_b, fake_mail_secret_b)
+    mailbox_store.set_secret(mid1, fake_mail_secret_contact)
+    mailbox_store.set_secret(mid2, fake_mail_secret_linked)
 
-    # 1) 软删公司 A：凭据必须即刻擦除，业务记忆仍保留，公司 B 凭据不受影响
-    assert company_mod.delete(int(co_a["id"])) is True
+    # A3：预先绑定活跃 session 到公司 A
+    deps_mod.set_active_company("tok-session-a", cid_a)
+    assert deps_mod._ACTIVE_COMPANY.get("tok-session-a") == cid_a
+
+    # ── 1) 软删公司 A ──
+    assert company_mod.delete(cid_a) is True
+
+    # A1：全局邮箱凭据与 mailboxes 表行数丝毫未动
+    assert mailbox_store.get_secret(mid1) == fake_mail_secret_contact
+    assert mailbox_store.get_secret(mid2) == fake_mail_secret_linked
+    conn = db_mod.get_connection()
+    try:
+        mb_count = conn.execute("SELECT COUNT(*) FROM mailboxes").fetchone()[0]
+        assert mb_count == 2
+    finally:
+        conn.close()
+
+    # A4：软删审计日志（JSONL）不再声称擦除邮箱凭据
+    audit_files = sorted((trade_home / "audit").glob("*.jsonl"))
+    assert audit_files, "软删后应写入审计日志 JSONL 文件"
+    audit_entries = [
+        json.loads(line)
+        for f in audit_files
+        for line in f.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    soft_del_entries = [
+        e for e in audit_entries
+        if e.get("company_id") == cid_a and e.get("action") == "soft_delete"
+    ]
+    assert soft_del_entries, "审计日志中应包含该公司 soft_delete 记录"
+    detail = str(soft_del_entries[-1].get("detail", ""))
+    assert "邮箱凭据" not in detail
+    assert "凭据文件 3 个" in detail
+
+    # A3：活跃 session 已解绑
+    assert deps_mod._ACTIVE_COMPANY.get("tok-session-a") is None
+
+    # A5：三类凭据文件已擦除，token-payment-terms.pdf 与 MEMORY.md 完好保留
     assert not (alpha_dir / ".env").exists()
+    assert not (alpha_dir / "api_key.txt").exists()
+    assert not (alpha_dir / "secret-notes.txt").exists()
+    assert (alpha_dir / "token-payment-terms.pdf").exists()
     assert (alpha_dir / "MEMORY.md").exists()
-    assert mailbox_store.get_secret(mid_a) is None
-    assert mailbox_store.get_secret(mid_b) == fake_mail_secret_b
 
-    # 2) 执行 purge：全盘（整个 trade_home 下所有文件）grep 不到任何假 Key 与假邮箱凭证片段
-    assert company_mod.purge(int(co_a["id"])) is True
+    # ── 2) purge 公司 A ──
+    assert company_mod.purge(cid_a) is True
     assert not alpha_dir.exists()
+
+    # A2：全局邮箱凭据与 mailboxes 表行数仍保持不变
+    assert mailbox_store.get_secret(mid1) == fake_mail_secret_contact
+    assert mailbox_store.get_secret(mid2) == fake_mail_secret_linked
+    conn = db_mod.get_connection()
+    try:
+        mb_count_after = conn.execute("SELECT COUNT(*) FROM mailboxes").fetchone()[0]
+        assert mb_count_after == 2
+    finally:
+        conn.close()
+
+    # A2：全盘搜索不到任何公司自有假 Key 残留
     for p in trade_home.rglob("*"):
         if not p.is_file():
             continue
         raw = p.read_bytes()
-        assert fake_api_key.encode() not in raw, f"发现残留假 API Key：{p}"
-        assert fake_mail_secret_a.encode() not in raw, f"发现残留假邮箱凭证：{p}"
-
-    # 确认公司 B 的邮箱凭证依然完好
-    assert mailbox_store.get_secret(mid_b) == fake_mail_secret_b
+        for leaked in (fake_env_key, fake_api_key, fake_secret_note):
+            assert leaked.encode() not in raw, f"发现残留公司凭据：{p}"

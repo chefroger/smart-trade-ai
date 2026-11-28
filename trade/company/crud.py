@@ -336,8 +336,9 @@ def update(
 
 
 # 软删时即刻擦除的公司目录内凭据文件名/后缀特征（业务数据留 30 天，凭据不留）
+# 注意：不含独立的 'token'，避免误删外贸业务文件（如 token-payment-terms.pdf）
 _CREDENTIAL_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx"})
-_CREDENTIAL_KEYWORDS = ("secret", "credential", "apikey", "api_key", "token")
+_CREDENTIAL_KEYWORDS = ("secret", "credential", "apikey", "api_key")
 
 
 def _is_credential_file(path: Path) -> bool:
@@ -352,100 +353,25 @@ def _is_credential_file(path: Path) -> bool:
     return False
 
 
-def _find_exclusive_company_mailbox_ids(conn, company_id: int) -> list[int]:
-    """找出仅归属当前公司（不被其他活跃公司共用）的邮箱 ID 列表。"""
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(mailboxes)").fetchall()}
-    except Exception:
-        return []
-    if not cols:
-        return []
-
-    candidate_ids: set[int] = set()
-
-    # 1) 匹配当前公司的 contact_email，且没有其他活跃公司使用同一邮箱地址
-    co_row = conn.execute(
-        "SELECT contact_email FROM companies WHERE id = ?",
-        (company_id,),
-    ).fetchone()
-    contact_email = str(co_row["contact_email"] or "").strip().lower() if co_row else ""
-    if contact_email:
-        shared_by_other = conn.execute(
-            "SELECT 1 FROM companies WHERE id != ? AND is_active = 1 AND LOWER(TRIM(contact_email)) = ?",
-            (company_id, contact_email),
-        ).fetchone()
-        if not shared_by_other:
-            for r in conn.execute(
-                "SELECT id FROM mailboxes WHERE LOWER(TRIM(email_address)) = ?",
-                (contact_email,),
-            ).fetchall():
-                candidate_ids.add(int(r["id"]))
-
-    # 2) 在 emails 表中关联到该公司，且未关联到其他活跃公司的邮箱
-    try:
-        for r in conn.execute(
-            "SELECT DISTINCT mailbox_id FROM emails WHERE company_id = ?",
-            (company_id,),
-        ).fetchall():
-            mid = int(r["mailbox_id"])
-            other_use = conn.execute(
-                "SELECT 1 FROM emails e JOIN companies c ON c.id = e.company_id "
-                "WHERE e.mailbox_id = ? AND e.company_id != ? AND c.is_active = 1 LIMIT 1",
-                (mid, company_id),
-            ).fetchone()
-            if not other_use:
-                candidate_ids.add(mid)
-    except Exception:
-        pass
-
-    return sorted(candidate_ids)
-
-
 def _erase_company_credentials(
     company_id: int,
     *,
-    conn=None,
     slug: str | None = None,
     data_dir_str: str | None = None,
-    remove_mailbox_rows: bool = False,
 ) -> dict[str, int]:
-    """擦除归属指定公司的全部凭据（删除即擦凭据，业务数据保留期不留 Key）。
+    """擦除归属指定公司的凭据文件并解绑活跃会话（删除即擦凭据，保留期不留 Key）。
+
+    邮箱属于用户本人全局资产（全局只绑一次，不归属单家公司），本函数绝不触碰
+    mailboxes 表及 mailbox_secrets.json。
 
     覆盖范围：
-      1. 仅归属该公司的邮箱在 mailbox_secrets.json 中的授权码/密码；
-      2. 公司数据目录（TRADE_HOME 下 data_dir / {slug}）内的 .env / *.pem / *.key / *secret* 等文件；
-      3. 解除进程内绑向该公司的活跃 session 映射。
+      1. 公司数据目录（严格限定在 TRADE_HOME 下的 data_dir / {slug}，跳过软链）内的
+         .env / *.pem / *.key / *.p12 / *.pfx 及含 secret/credential/apikey/api_key 的文件；
+      2. 解除进程内绑向该公司的活跃 session 映射。
     """
-    erased = {"mailbox_secrets": 0, "credential_files": 0}
-    own_conn = conn is None
-    if own_conn:
-        conn = get_connection()
-    try:
-        # 1) 擦除仅归属该公司的邮箱凭据
-        mids = _find_exclusive_company_mailbox_ids(conn, company_id)
-        if mids:
-            try:
-                from trade import mailbox_store
+    erased = {"credential_files": 0}
 
-                for mid in mids:
-                    if mailbox_store.get_secret(mid) is not None:
-                        mailbox_store.delete_secret(mid)
-                        erased["mailbox_secrets"] += 1
-            except Exception:
-                pass
-            # purge 时连同独占邮箱记录一并清理
-            if remove_mailbox_rows:
-                for mid in mids:
-                    try:
-                        conn.execute("DELETE FROM mailboxes WHERE id = ?", (mid,))
-                    except Exception:
-                        pass
-                conn.commit()
-    finally:
-        if own_conn:
-            conn.close()
-
-    # 2) 擦除公司数据目录内（严格限定在 TRADE_HOME 下）的凭据文件
+    # 1) 擦除公司数据目录内（严格限定在 TRADE_HOME 下）的凭据文件
     dirs_to_scan: list[Path] = []
     if data_dir_str:
         dirs_to_scan.append(Path(data_dir_str))
@@ -475,7 +401,7 @@ def _erase_company_credentials(
                 except OSError:
                     pass
 
-    # 3) 清理进程内仍绑定在该公司上的 session
+    # 2) 清理进程内仍绑定在该公司上的 session
     try:
         from trade.api import deps as _deps
 
@@ -489,11 +415,11 @@ def _erase_company_credentials(
 
 
 def delete(company_id: int) -> bool:
-    """软删除公司：将 companies 与 trade_companies 的 is_active 置 0，并立即擦除公司凭据。
+    """软删除公司：将 companies 与 trade_companies 的 is_active 置 0，并立即擦除公司凭据文件。
 
     软删除保留业务数据库与磁盘文件以防误删，但遵循「删除即擦凭据，保留期不留 Key」原则，
-    立即清除该公司独占邮箱凭证与数据目录内凭据文件；如需彻底物理清理，由管理员执行
-    `trade company purge <slug|id> --yes`（调用下方 purge()）。
+    立即清除该公司数据目录内的凭据文件并解绑活跃会话（全局邮箱凭据不归属单家公司，保持不变）；
+    如需彻底物理清理，由管理员执行 `trade company purge <slug|id> --yes`（调用下方 purge()）。
     返回 True 表示软删除成功，False 表示公司不存在或已删除。
     """
     tc = get_trade_company(company_id)
@@ -517,19 +443,17 @@ def delete(company_id: int) -> bool:
         )
         conn.commit()
         if n > 0:
-            # 删除即擦凭据：业务数据可保留 30 天，凭据不留
+            # 删除即擦凭据：业务数据可保留 30 天，凭据文件不留
             erased = _erase_company_credentials(
                 company_id,
-                conn=conn,
                 slug=slug,
                 data_dir_str=data_dir_str,
-                remove_mailbox_rows=False,
             )
             # 写入审计日志留痕（物理清理需管理员显式执行 purge）
             _write_audit_log(
                 company_id,
                 "soft_delete",
-                f"公司已软删除（保留历史业务数据；已擦除邮箱凭据 {erased['mailbox_secrets']} 项、凭据文件 {erased['credential_files']} 个）",
+                f"公司已软删除（保留历史业务数据；已擦除凭据文件 {erased['credential_files']} 个）",
             )
         return n > 0
     finally:
@@ -568,13 +492,11 @@ def purge(company_id: int) -> bool:
 
     conn = get_connection()
     try:
-        # 先在删 companies 行之前完成凭据与独占邮箱擦除（避免删行后丢 contact_email 关联）
+        # 兜底擦除公司自有凭据文件并解绑活跃会话（绝不触碰全局邮箱）
         _erase_company_credentials(
             company_id,
-            conn=conn,
             slug=slug,
             data_dir_str=data_dir_str,
-            remove_mailbox_rows=True,
         )
         n = conn.execute(
             "DELETE FROM companies WHERE id = ?", (company_id,)
