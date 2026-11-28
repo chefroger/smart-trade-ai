@@ -440,7 +440,7 @@ def _erase_company_credentials(
             if _is_credential_file(f):
                 try:
                     f.unlink(missing_ok=True)
-                    rel_to_root = str(f.resolve().relative_to(trade_root))
+                    rel_to_root = f.resolve().relative_to(trade_root).as_posix()
                     erased_paths.append(rel_to_root)
                 except OSError:
                     pass
