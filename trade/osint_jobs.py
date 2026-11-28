@@ -322,20 +322,14 @@ def _run_job(job_id: int, target: str, budget: float) -> None:
         if not acquired or _is_cancelled(job_id):
             return
         _update_status(job_id, "running")
-        append_event(job_id, "job_start", {"target": target, "budget": budget})
-
-        def _on_event(event: dict) -> None:
-            if _is_cancelled(job_id):
-                return
-            append_event(job_id, str(event.get("event") or "event"), event)
-
-        from trade.osint.orchestrator import osint_full_check
 
         # 绑定公司上下文：EDGAR 等官方接口要取当前公司的 contact_email
-        # （2026-11-23 审计 P2-3）。后台线程不会继承请求线程的 ContextVar。
+        # （2026-11-23 审计 P2-3），同时在 job_start 附上同类任务历史预估（M7）。
         company_id = None
+        estimate: dict | None = None
         try:
             from trade.database import get_connection
+            from trade.usage import skill_history_stats
 
             conn = get_connection()
             try:
@@ -343,14 +337,28 @@ def _run_job(job_id: int, target: str, budget: float) -> None:
                     "SELECT company_id FROM osint_jobs WHERE id = ?", (job_id,)
                 ).fetchone()
                 company_id = int(row[0]) if row else None
+                if company_id is not None:
+                    estimate = skill_history_stats(conn, company_id, "b2b-osint")
             finally:
                 conn.close()
-        except Exception:  # noqa: BLE001 —— 取不到就退回环境变量
+        except Exception:  # noqa: BLE001 —— 取不到就降级为无预估
             company_id = None
+            estimate = None
+
+        start_payload: dict = {"target": target, "budget": budget}
+        if estimate is not None:
+            start_payload["estimate"] = estimate
+        append_event(job_id, "job_start", start_payload)
+
+        def _on_event(event: dict) -> None:
+            if _is_cancelled(job_id):
+                return
+            append_event(job_id, str(event.get("event") or "event"), event)
 
         from contextlib import nullcontext
 
         from trade.agent_context import bind_company
+        from trade.osint.orchestrator import osint_full_check
 
         started = time.time()
         with (bind_company(company_id) if company_id is not None else nullcontext()):

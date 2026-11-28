@@ -11,6 +11,7 @@ from trade.osint.sources.base import (
     Fetcher,
     SourceResult,
     TargetContext,
+    error_result,
     fetch_json,
     skipped,
 )
@@ -35,7 +36,7 @@ def run(ctx: TargetContext, fetch: Fetcher | None = None) -> SourceResult:
     except Exception as exc:  # noqa: BLE001
         if "404" in str(exc):
             return SourceResult(NAME, "miss", error="该邮箱没有 Gravatar 公开资料")
-        return SourceResult(NAME, "error", error=f"Gravatar 查询失败：{exc}")
+        return error_result(NAME, exc)
     if not isinstance(payload, dict):
         return SourceResult(NAME, "miss", error="该邮箱没有 Gravatar 公开资料")
 

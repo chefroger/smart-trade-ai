@@ -135,9 +135,17 @@ def assess_verification(
                 required=True,
             ))
 
-    # ── 域名情报（关键，前提是目标里有域名）──
+    # ── 域名情报（关键，前提是目标里有自有域名）──
     di = layers.get("domain_intel")
-    if not has_domain:
+    if di and (di.get("status") == "not_applicable" or di.get("not_applicable")):
+        # 公共平台域名（邮箱/B2B 平台/建站子域/社媒）：不适用域名情报，不计为关键层失败
+        out.append(_unverified_entry(
+            "domain_intel",
+            str(di.get("reason") or "目标使用公共平台域名，域名情报不适用"),
+            required=False,
+            status="not_applicable",
+        ))
+    elif not has_domain:
         out.append(_unverified_entry(
             "domain_intel",
             "目标不含可查询域名（公司名需先发现官网）",
@@ -180,6 +188,7 @@ def compute_verdict(
     target_type: str | None = None,
     has_domain: bool = True,
     public_hits: int = 0,
+    all_sources_failed: bool = False,
 ) -> tuple[int | None, str, int]:
     """fail-closed 汇总：关键层没查成、或只有制裁一层核验过时不给数字结论。
 
@@ -208,9 +217,14 @@ def compute_verdict(
         # 不输出数字：未核验时任何分数都会被读成「结论」
         return None, "incomplete", score
 
-    # 无域名 + 公开来源零命中：只跑过制裁这一层，rating 不能是 low/medium
+    if all_sources_failed:
+        # M4：公开来源全部报错或超时（多半为网络或代理问题），结论不可用，评级为 incomplete 而非 limited
+        return None, "incomplete", score
+
+    # 无自有域名（含人名/公司名无域名，或目标仅含公共平台域名）+ 公开来源零实质命中：
+    # 不能给 low/medium 的绿色结论（2026-11-23 审计 P0-B；M1 公共平台域名一致口径）
     if (
-        target_type in ("person", "company")
+        target_type in ("person", "company", "email", "url", "domain")
         and not has_domain
         and int(public_hits or 0) <= 0
     ):

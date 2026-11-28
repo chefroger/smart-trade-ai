@@ -773,3 +773,60 @@ def handle_supplier_delivery_alerts(args: dict[str, Any], **_kw) -> str:
     except Exception as exc:  # noqa: BLE001
         _log.exception("handle_supplier_delivery_alerts failed")
         return _err(f"查询采购交期提醒失败：{exc}")
+
+
+# ==============================================================================
+# 候选网址与域名分类工具（M1：纯函数，不写库，无需公司上下文）
+# ==============================================================================
+
+CLASSIFY_URLS_SCHEMA: dict[str, Any] = {
+    "name": "classify_urls",
+    "description": (
+        "对候选网址或域名列表进行确定性分类与打标（企业官网 / B2B 平台 / 贸易数据站 / "
+        "企业目录 / 研究报告 / 招聘页 / 社媒内容页 / 免费建站子域 / 公共邮箱 / 保留域名）。"
+        "本工具只打标签与分组，绝不删除任何条目。"
+        "找客户（purpose=customer）时，非企业官网条目归入折叠的「其他来源」；"
+        "找供应商（purpose=supplier）时，B2B 平台店铺标为「平台店铺」正常展示。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "urls": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "待分类的网址或域名列表",
+            },
+            "purpose": {
+                "type": "string",
+                "enum": ["customer", "supplier"],
+                "description": "业务用途：customer（找客户，默认）或 supplier（找供应商）",
+            },
+        },
+        "required": ["urls"],
+    },
+}
+
+
+def handle_classify_urls(args: dict[str, Any], **_kw) -> str:
+    """纯函数工具：批量分类候选网址并按用途返回分组与标签（无需公司上下文）。"""
+    raw_urls = args.get("urls")
+    if not isinstance(raw_urls, list):
+        # 容错：未传列表时返回清晰错误提示
+        return _err("urls must be a list of strings")
+
+    purpose = str(args.get("purpose") or "customer").strip().lower()
+    if purpose not in {"customer", "supplier"}:
+        # 未知用途回退默认找客户口径
+        purpose = "customer"
+
+    try:
+        from trade.osint.domain_class import classify_urls_batch
+
+        result = classify_urls_batch(
+            [str(u or "") for u in raw_urls],
+            purpose=purpose,
+        )
+        return _json(result)
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("handle_classify_urls failed")
+        return _err(f"网址分类失败：{exc}")

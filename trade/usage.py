@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
     price_window      TEXT    NOT NULL DEFAULT '',
     currency          TEXT    NOT NULL DEFAULT 'USD',
     cost_usd          REAL    NOT NULL DEFAULT 0,
+    duration_ms       INTEGER NOT NULL DEFAULT 0,
     extra1            TEXT    NOT NULL DEFAULT '',
     extra2            TEXT    NOT NULL DEFAULT '',
     extra3            TEXT    NOT NULL DEFAULT ''
@@ -325,6 +326,7 @@ def ensure_usage_schema(conn: sqlite3.Connection) -> None:
         ("cache_miss_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("price_window", "TEXT NOT NULL DEFAULT ''"),
         ("currency", "TEXT NOT NULL DEFAULT 'USD'"),
+        ("duration_ms", "INTEGER NOT NULL DEFAULT 0"),
     ]
     for col, col_def in additions:
         # 老库缺列时自动补齐
@@ -346,6 +348,7 @@ def record_usage(
     company_id: int = 0,
     price_override: tuple[float, float] | tuple[float, float, float] | None = None,
     ts: float | None = None,
+    duration_ms: int | None = None,
     config: dict[str, Any] | None = None,
     holidays: set[str] | list[str] | None = None,
 ) -> float:
@@ -396,13 +399,14 @@ def record_usage(
             + (miss / 1_000_000) * pmiss
             + (completion / 1_000_000) * pout
         )
+        dur_ms = max(0, int(duration_ms or 0))
         conn.execute(
             """INSERT INTO usage_ledger
                (ts, company_id, skill, provider, model,
                 prompt_tokens, completion_tokens,
                 cache_hit_tokens, cache_miss_tokens,
-                price_window, currency, cost_usd, extra1)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                price_window, currency, cost_usd, duration_ms, extra1)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 now_ts,
                 company_id,
@@ -416,6 +420,7 @@ def record_usage(
                 window,
                 currency,
                 cost,
+                dur_ms,
                 extra1,
             ),
         )
@@ -647,3 +652,118 @@ def format_summary_text(s: dict) -> str:
         for r in s["by_skill"][:10]:
             lines.append(f"  - {r['skill']}: {r['calls']} 次 / ${r['cost_usd']:.4f}")
     return "\n".join(lines)
+
+
+# ==============================================================================
+# 长任务历史预估与软预算（M7：只读统计本机账本，不造假数据，不拦截执行）
+# ==============================================================================
+
+
+def _median_num(values: list[float | int]) -> float:
+    """计算非空数值列表的中位数（偶数取中间两项均值）。"""
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return float(ordered[mid])
+    return (float(ordered[mid - 1]) + float(ordered[mid])) / 2.0
+
+
+def skill_history_stats(
+    conn: sqlite3.Connection,
+    company_id: int,
+    skill: str,
+    *,
+    n: int = 10,
+    model: str = "deepseek-chat",
+    ts: float | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """统计本公司某 skill 最近 n 次调用的历史中位数，供等待面板纯提示使用。
+
+    说明：
+      - 账本 usage_ledger 当前未区分任务成败列，因此统计的是本机已落账的最近 n 条记录；
+      - 历史不足 3 次时返回 has_history=False 与「暂无足够历史」，绝不编造默认数字；
+      - 跨公司严格按 company_id 隔离。
+    """
+    ensure_usage_schema(conn)
+    limit = max(1, min(int(n or 10), 100))
+    rows = conn.execute(
+        """SELECT prompt_tokens + completion_tokens, duration_ms, cost_usd
+           FROM usage_ledger
+           WHERE company_id = ? AND skill = ?
+           ORDER BY id DESC
+           LIMIT ?""",
+        (int(company_id), str(skill or ""), limit),
+    ).fetchall()
+
+    count = len(rows)
+    if count < 3:
+        # 历史样本不足 3 次：明确告知暂无足够历史，不给任何捏造数字
+        return {
+            "has_history": False,
+            "count": count,
+            "skill": str(skill or ""),
+            "median_tokens": None,
+            "median_duration_ms": None,
+            "median_cost_usd": None,
+            "price_window": None,
+            "message": "暂无足够历史（按本机记录，仅供参考）",
+        }
+
+    token_vals = [int(r[0] or 0) for r in rows]
+    dur_vals = [int(r[1] or 0) for r in rows if int(r[1] or 0) > 0]
+    cost_vals = [float(r[2] or 0.0) for r in rows]
+
+    med_tokens = int(round(_median_num(token_vals)))
+    med_dur_ms = int(round(_median_num(dur_vals))) if dur_vals else None
+    med_cost = round(_median_num(cost_vals), 4)
+
+    cfg = config if config is not None else load_pricing_config()
+    window = resolve_price_window(model, ts=ts, config=cfg)
+    window_zh = "闲时价" if window == "offpeak" else "高峰价"
+
+    tok_wan = med_tokens / 10_000.0
+    parts = [f"同类任务最近 {count} 次：中位约 {tok_wan:.1f} 万 token"]
+    if med_dur_ms is not None:
+        parts.append(f"约 {max(1, round(med_dur_ms / 1000.0))} 秒")
+    cost_part = f"估算费用约 ${med_cost:.4f}（以 DeepSeek 账单为准；当前为{window_zh}）"
+    message = "、".join(parts) + f"，{cost_part}（按本机历史，仅供参考）"
+
+    return {
+        "has_history": True,
+        "count": count,
+        "skill": str(skill or ""),
+        "median_tokens": med_tokens,
+        "median_duration_ms": med_dur_ms,
+        "median_cost_usd": med_cost,
+        "price_window": window,
+        "message": message,
+    }
+
+
+def resolve_soft_token_budget(
+    conn: sqlite3.Connection,
+    company_id: int,
+    skill: str,
+    *,
+    env_value: str | None = None,
+) -> int | None:
+    """解析长任务软 token 预算（默认 auto = 历史中位数 2 倍；0 表示关闭；历史不足 3 次返回 None）。"""
+    raw = (
+        env_value
+        if env_value is not None
+        else os.environ.get("TRADE_TASK_SOFT_TOKEN_BUDGET", "auto")
+    )
+    text = str(raw or "").strip().lower()
+    if text in ("0", "off", "false", "none", ""):
+        return None  # 显式关闭软预算：行为与改动前完全一致
+    if text == "auto":
+        stats = skill_history_stats(conn, company_id, skill)
+        if not stats["has_history"] or not stats["median_tokens"]:
+            return None  # 历史不足 3 次时不设上限，照常执行
+        return int(stats["median_tokens"]) * 2
+    try:
+        parsed = int(text)
+    except ValueError:
+        return None  # 非法配置值降级为不设上限，不阻塞执行
+    return parsed if parsed > 0 else None

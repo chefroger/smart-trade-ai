@@ -23,6 +23,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from trade import email_intel
+from trade.osint.domain_class import (
+    PLATFORM_SKIP_DOMAIN_CATEGORIES,
+    classify_domain_or_url,
+)
 from trade.osint.email_verify import verify_corporate_email
 from trade.osint.linkedin_verify import linkedin_company_verify
 from trade.osint.sanctions import check_sanctions
@@ -46,6 +50,8 @@ from trade.osint.whois import domain_whois
 
 # 登记类来源（W3）：只证明登记存在，不构成经营/身份核验
 _REGISTRY_SOURCES = frozenset({"us_states", "gleif", "vies", "registries_misc"})
+# 仅对「目标自有域名」有意义的公开来源（公共平台域名需跳过并标 not_applicable）
+_DOMAIN_ONLY_PUBLIC_SOURCES = ("rdap", "ct", "wayback", "pdns")
 
 
 def _public_hit_counts(sources: dict) -> tuple[int, int]:
@@ -60,6 +66,18 @@ def _public_hit_counts(sources: dict) -> tuple[int, int]:
         else:
             substantive += 1
     return substantive, registry
+
+
+def _all_public_sources_failed(sources: dict) -> bool:
+    """判断已执行的公开来源是否全部报错或超时（排除 skipped / not_applicable）。"""
+    executed = [
+        item
+        for item in (sources or {}).values()
+        if isinstance(item, dict) and item.get("status") not in ("skipped", "not_applicable", None)
+    ]
+    if not executed:
+        return False  # 无任何已执行公开来源时不判「全部报错」
+    return all(item.get("status") in ("error", "timeout") for item in executed)
 
 
 def _registry_formation_dates(sources: dict) -> list[str]:
@@ -305,6 +323,28 @@ async def osint_full_check(
 
     lookup_domain = _extract_lookup_domain(target, target_type, domain_from_email)
 
+    # ── M1：公共平台域名分类（公共邮箱/B2B 平台/建站子域/社媒平台不查自有域名专属层）──
+    domain_class: dict[str, Any] | None = None
+    is_platform_domain = False
+    platform_reason = ""
+    inferred_store_name: str | None = None
+    if lookup_domain:
+        # 网址目标传完整 target（保留路径，如 linkedin.com/company/x 视为企业主页）
+        classify_input = target if target_type == "url" else lookup_domain
+        domain_class = classify_domain_or_url(classify_input)
+        if domain_class["category"] in PLATFORM_SKIP_DOMAIN_CATEGORIES:
+            is_platform_domain = True
+            platform_reason = domain_class["reason"]
+            inferred_store_name = domain_class.get("inferred_store_name")
+            report["domain_classification"] = domain_class
+            report["platform_domain_notice"] = f"目标使用公共平台域名：{platform_reason}"
+            if inferred_store_name:
+                # 平台店铺 URL 推断出的候选公司名，标明来源并交给公司名类公开来源
+                report["inferred_store_name"] = inferred_store_name
+                report["inferred_store_note"] = f"推断店铺名 {inferred_store_name}（推断自店铺地址）"
+
+    effective_domain = None if is_platform_domain else lookup_domain
+
     # ── 规划各层：互不依赖，全部并发 ────────────────────────────────────
     # 每项: (阻塞函数, 位置参数)。真正的执行统一走 _run_layer（超时 + 进度）。
     planned: dict[str, tuple[Callable, tuple]] = {}
@@ -315,24 +355,29 @@ async def osint_full_check(
         # Layer 3: 企业邮箱验证（DNS MX）
         planned["email_verification"] = (verify_corporate_email, (target,))
 
-    if lookup_domain:
-        # Layer 2: WHOIS 域名情报
-        planned["domain_intel"] = (domain_whois, (lookup_domain,))
+    if effective_domain:
+        # Layer 2: WHOIS 域名情报（仅目标自有域名执行）
+        planned["domain_intel"] = (domain_whois, (effective_domain,))
 
         if include_tech_stack:
-            # Layer 4: 技术栈检测（依赖域名，不依赖 WHOIS 结果）
-            planned["tech_stack"] = (detect_tech_stack, (f"https://{lookup_domain}",))
+            # Layer 4: 技术栈检测（依赖自有域名，不依赖 WHOIS 结果）
+            planned["tech_stack"] = (detect_tech_stack, (f"https://{effective_domain}",))
 
     if include_sanctions:
         # Layer 5: 制裁筛查。公司名解析（抓官网 title）与名单比对合成一个
-        # 阻塞任务，整体受本层超时约束。
+        # 阻塞任务，整体受本层超时约束。公共平台域名不抓平台官网 title。
+        sanctions_fallback = (
+            inferred_store_name
+            if (is_platform_domain and inferred_store_name)
+            else (target if is_platform_domain else (domain_from_email or target))
+        )
         planned["sanctions"] = (
             _sanctions_and_screen,
-            (lookup_domain, domain_from_email or target),
+            (effective_domain, sanctions_fallback),
         )
 
     # ── 公开来源（P2-2）：RDAP / CT / Wayback / GitHub ─────────────────
-    # 与 6 层并发；RDAP/CT/Wayback 必须有域名，GitHub 按域名/人名/公司名搜索。
+    # 与 6 层并发；RDAP/CT/Wayback/pDNS 必须有目标自有域名，GitHub 等按公司名/人名搜索。
     public_planned: dict[str, Callable] = {}
     if sources_enabled():
         # EDGAR 等官方接口要求真实联系邮箱：优先当前公司的 contact_email，
@@ -352,10 +397,10 @@ async def osint_full_check(
         ctx = TargetContext(
             target=target,
             target_type=target_type,
-            domain=lookup_domain,
+            domain=effective_domain,
             email=target if target_type == "email" else None,
             person_name=target if target_type == "person" else None,
-            company_name=target if target_type == "company" else None,
+            company_name=target if target_type == "company" else inferred_store_name,
             username=username_hint,
             contact_email=contact_email,
         )
@@ -393,13 +438,31 @@ async def osint_full_check(
         )
     results = await _await_layers(tasks, should_cancel)
     report["sources"] = {name: results[name] for name in public_planned}
+    if is_platform_domain and sources_enabled():
+        # 公共平台域名跳过自有域名专属公开来源，显式标 not_applicable 并写明原因
+        for src_name in _DOMAIN_ONLY_PUBLIC_SOURCES:
+            report["sources"][src_name] = {
+                "status": "not_applicable",
+                "reason": platform_reason,
+                "facts": [],
+                "data": {},
+                "error": None,
+            }
 
-    # ── 落报告：未规划的层写 None / skipped ─────────────────────────────
+    # ── 落报告：未规划的层写 None / skipped / not_applicable ─────────────
     report["layers"]["email_registration"] = (
         results.get("email_registration") if target_type == "email" else None
     )
-    if lookup_domain:
+    if effective_domain:
         report["layers"]["domain_intel"] = results["domain_intel"]
+    elif is_platform_domain:
+        # 公共平台域名：WHOIS 不代表目标公司，标 not_applicable
+        report["layers"]["domain_intel"] = {
+            "status": "not_applicable",
+            "not_applicable": True,
+            "skipped": True,
+            "reason": platform_reason,
+        }
     else:
         # 人名/公司名无法直接提取域名（需先用搜索发现官网）
         report["layers"]["domain_intel"] = {
@@ -409,7 +472,16 @@ async def osint_full_check(
     report["layers"]["email_verification"] = (
         results.get("email_verification") if target_type == "email" else None
     )
-    report["layers"]["tech_stack"] = results.get("tech_stack")
+    if is_platform_domain and include_tech_stack:
+        # 公共平台域名：技术栈检测不适用，显式标 not_applicable
+        report["layers"]["tech_stack"] = {
+            "status": "not_applicable",
+            "not_applicable": True,
+            "skipped": True,
+            "reason": platform_reason,
+        }
+    else:
+        report["layers"]["tech_stack"] = results.get("tech_stack")
     report["layers"]["sanctions"] = results.get("sanctions")
 
     # RDAP 补位：WHOIS 失败/无日期时用 RDAP 注册信息（P2-2）
@@ -441,9 +513,9 @@ async def osint_full_check(
         report["flags"].append("sanctioned")
 
     # ── Layer 6: LinkedIn 验证（纯本地生成 browser_navigate 指令）──────
-    if include_linkedin and lookup_domain:
-        # 当 target 不是公司名时（如 email），用域名作为公司名线索
-        _company_hint = target if target_type == "company" else lookup_domain
+    if include_linkedin and effective_domain:
+        # 当 target 不是公司名时（如 email），用自有域名作为公司名线索
+        _company_hint = target if target_type == "company" else effective_domain
         if on_event:
             on_event({
                 "event": "source_start",
@@ -451,7 +523,7 @@ async def osint_full_check(
                 "label": _LAYER_LABELS.get("linkedin", "linkedin"),
             })
         started = time.monotonic()
-        report["layers"]["linkedin"] = linkedin_company_verify(lookup_domain, _company_hint)
+        report["layers"]["linkedin"] = linkedin_company_verify(effective_domain, _company_hint)
         if on_event:
             on_event({
                 "event": "source_done",
@@ -460,7 +532,7 @@ async def osint_full_check(
                 "ms": int((time.monotonic() - started) * 1000),
             })
     else:
-        # 用户关闭 LinkedIn 验证或缺少域名，跳过此层
+        # 用户关闭 LinkedIn 验证、缺少域名或属于公共平台域名，跳过此层
         report["layers"]["linkedin"] = None
 
     # ── 核验完整性 + 综合评分（fail-closed，工单 P0-2）────────────────
@@ -469,23 +541,31 @@ async def osint_full_check(
     # 避免「没查成」被当成「没风险」。
     report["unverified"] = assess_verification(
         report["layers"],
-        has_domain=bool(lookup_domain),
+        has_domain=bool(effective_domain),
         sanctions_requested=include_sanctions,
     )
     # 公开来源按「登记类 / 实质核验」分开计数（W3）：
     # us_states/GLEIF/VIES 只证明“注册过”，壳公司也能拿 low/100。
     public_hits, registry_hits = _public_hit_counts(report["sources"])
+    all_sources_failed = _all_public_sources_failed(report["sources"])
     score, rating, provisional = compute_verdict(
         report["flags"],
         report["unverified"],
         target_type=target_type,
-        has_domain=bool(lookup_domain),
+        has_domain=bool(effective_domain),
         public_hits=public_hits,
+        all_sources_failed=all_sources_failed,
     )
     report["overall_score"] = score          # None = 未完成核验/仅完成制裁筛查
     report["overall_rating"] = rating
     report["provisional_score"] = provisional  # 仅供诊断，不是对外结论
-    if rating == "limited":
+    if all_sources_failed:
+        # M4：公开来源全部报错/超时，首屏明确提示网络或代理问题，结论不可用
+        report["rating_note"] = (
+            "公开来源全部没查成（多半是网络或代理问题），本次结论不可用；"
+            "请检查网络或代理设置后稍后重试。"
+        )
+    elif rating == "limited":
         dates = _registry_formation_dates(report["sources"])
         if registry_hits:
             # S9：有登记类命中时如实写「已查到公司登记」，不再说「没有实质
@@ -661,12 +741,18 @@ async def _run_layer(
             status = "error"
 
     if on_event:
-        on_event({
+        ev_payload: dict[str, Any] = {
             "event": "source_done",
             "source": source,
             "status": status,
             "ms": int((time.monotonic() - started) * 1000),
-        })
+        }
+        if isinstance(result, dict):
+            if result.get("error_code"):
+                ev_payload["error_code"] = result["error_code"]
+            if "retryable" in result:
+                ev_payload["retryable"] = bool(result["retryable"])
+        on_event(ev_payload)
     return result
 
 
@@ -700,20 +786,50 @@ def _status_for(source: str, layer: dict) -> str:
 
 
 def _failure_layer(source: str, kind: str, timeout: float = 0.0, *, detail: str = "") -> dict:
-    """构造失败层的返回桩（形状与正常结果一致）。"""
+    """构造失败层的返回桩（形状与正常结果一致；原始异常不直接透出给用户）。"""
+    from trade.osint.sources.base import ERROR_CODE_META, redact_error_detail
+
+    error_code: str | None = None
+    retryable = False
     if kind == "timeout":
-        reason = f"超时（{timeout:.0f} 秒）"
+        reason = f"请求超时（{timeout:.0f} 秒），可以稍后重试"
+        error_code = "timeout"
+        retryable = True
     elif kind == "budget":
-        reason = "预算耗尽，未执行"
+        reason = "预算耗尽，未执行，可以稍后重试"
+        error_code = "timeout"
+        retryable = True
     elif kind == "cancelled":
         reason = "已取消（用户中止）"
+        error_code = None
+        retryable = False
     else:
-        reason = detail or "未知错误"
+        # 原始异常只写日志脱敏；公开来源一律返回中文错误码文案，不透出原始异常
+        if detail:
+            import logging
 
-    stub: dict = {"error": reason, "timed_out": kind in ("timeout", "budget", "cancelled")}
+            logging.getLogger(__name__).warning(
+                "osint layer %s failed: %s",
+                source,
+                redact_error_detail(detail),
+            )
+        error_code = "network"
+        default_msg, retryable = ERROR_CODE_META["network"]
+        if source in SOURCE_LABELS or "urlopen error" in detail.lower() or "traceback" in detail.lower():
+            reason = default_msg
+        else:
+            reason = redact_error_detail(detail) if detail else default_msg
+
+    stub: dict = {
+        "error": reason,
+        "error_code": error_code,
+        "retryable": retryable,
+        "timed_out": kind in ("timeout", "budget", "cancelled"),
+    }
     if source in SOURCE_LABELS:
         # 公开来源桩：字段与 SourceResult.to_dict() 对齐
         stub.update({
+            "source": source,
             "status": "timeout" if kind in ("timeout", "budget") else "error",
             "facts": [],
             "data": {},

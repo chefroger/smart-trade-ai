@@ -304,7 +304,9 @@ class TestPdns:
             ctx(domain="cloudflare.com"),
             fetch=lambda *a, **k: "API count exceeded - Increase Quota with Membership",
         )
-        assert result.status == "miss"
+        assert result.status == "error"
+        assert result.error_code == "rate_limited"
+        assert result.retryable is True
 
     def test_no_domain_is_skipped(self):
         assert pdns.run(ctx(domain=None), fetch=fake_fetch).status == "skipped"

@@ -21,8 +21,12 @@ from trade.cron_binding import on_post_tool_call as on_cron_post_tool_call
 from trade.cron_binding import on_pre_tool_call as on_cron_pre_tool_call
 from trade.hermes_chat_memory_plugin.doc_skip import on_pre_tool_call as on_doc_skip_pre_tool_call
 from trade.hermes_chat_memory_plugin.guardrails import on_pre_tool_call, report_hook_support
+from trade.hermes_chat_memory_plugin.soft_budget import (
+    on_pre_tool_call as on_soft_budget_pre_tool_call,
+)
 from trade.hermes_chat_memory_plugin.tools import (
     CHAT_MEMORY_LIST_SCHEMA,
+    CLASSIFY_URLS_SCHEMA,
     OSINT_FACT_LIST_SCHEMA,
     OSINT_FACT_SAVE_SCHEMA,
     OSINT_JOB_RESULT_SCHEMA,
@@ -33,6 +37,7 @@ from trade.hermes_chat_memory_plugin.tools import (
     SUPPLIER_LIST_SCHEMA,
     SUPPLIER_QUOTE_SEARCH_SCHEMA,
     handle_chat_memory_list,
+    handle_classify_urls,
     handle_osint_fact_list,
     handle_osint_fact_save,
     handle_osint_job_result,
@@ -64,6 +69,7 @@ if os.environ.get("TRADE_HOST") == "1":
         ("supplier_compare", SUPPLIER_COMPARE_SCHEMA, handle_supplier_compare, "⚖️"),
         ("supplier_list", SUPPLIER_LIST_SCHEMA, handle_supplier_list, "📋"),
         ("supplier_delivery_alerts", SUPPLIER_DELIVERY_ALERTS_SCHEMA, handle_supplier_delivery_alerts, "⏰"),
+        ("classify_urls", CLASSIFY_URLS_SCHEMA, handle_classify_urls, "🏷️"),
     )
 
 
@@ -91,6 +97,8 @@ def register(ctx) -> None:
         _register_hook("pre_tool_call", on_pre_tool_call)
         # 缓存命中文件：硬拦截重复读取（只在本进程有跳过集合时生效）
         _register_hook("pre_tool_call", on_doc_skip_pre_tool_call)
+        # 长任务软预算：达到软预算后拦截新增检索，引导基于已有材料收尾（M7）
+        _register_hook("pre_tool_call", on_soft_budget_pre_tool_call)
         # cron job 公司归属：拦截跨公司操作 + 创建后记录 job_id→公司（P1-17）
         _register_hook("pre_tool_call", on_cron_pre_tool_call)
         _register_hook("post_tool_call", on_cron_post_tool_call)

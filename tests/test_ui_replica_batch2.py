@@ -190,6 +190,10 @@ class TestW7OrderLogistics:
         )
         conn.execute(
             "INSERT INTO schema_migrations (version, name) "
+            "VALUES (8, 'usage_ledger_duration_ms')"
+        )
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name) "
             "VALUES (9, 'osint_facts_status')"
         )
         conn.commit()
